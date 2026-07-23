@@ -1,0 +1,17 @@
+# 凭证绝不入库（红线）
+.env
+.env.local
+
+# 本地运行态 / checkpointer / 关联表
+*.sqlite
+*.sqlite-*
+*.db
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/

@@ -1,0 +1,18 @@
+# 缺陷生命周期模板 · 第一段（人主干 + G5 验证门禁）
+# 节点契约（SPEC + 本段补白 on_fail / signal）:
+#   id / label / type(tool|llm|human) / role / gate(达标条件, 无=-) / deps
+#   on_fail: 带 gate 节点的回边目标节点 id（gate 不达标 → 环回它 + 其下游重跑）
+#   signal:  human 节点完成信号来自哪个 EventKey（task_complete | card_action）
+# 第二段回填 ci_test(真 CI) / code_review / release_note，补全 11 节点（ADR-009）。
+id: defect_lifecycle
+name: 缺陷生命周期
+segment: 1
+nodes:
+  - {id: intake,        label: 受理登记,                 type: tool,  role: "-",     gate: "-",     deps: []}
+  - {id: triage_ai,     label: AI分诊(定级/定类/建议负责人), type: llm,   role: "-",     gate: "-",     deps: [intake]}
+  - {id: triage_review, label: 分诊复核(确认定级与负责人),   type: human, role: 负责人,   gate: "-",     deps: [triage_ai],     signal: card_action}
+  - {id: reproduce,     label: 复现确认,                 type: human, role: QA,      gate: 可复现,   deps: [triage_review], signal: card_action, on_fail: triage_review}
+  - {id: assign,        label: 派单(定开发负责人),         type: tool,  role: "-",     gate: "-",     deps: [reproduce]}
+  - {id: fix,           label: 修复,                     type: human, role: 开发,    gate: "-",     deps: [assign],        signal: task_complete}
+  - {id: qa_verify,     label: 验证(G5门禁·可reopen打回),  type: human, role: QA,      gate: 验证通过, deps: [fix],           signal: card_action, on_fail: fix}
+  - {id: close,         label: 收口(归档+通知上报人),       type: tool,  role: "-",     gate: "-",     deps: [qa_verify]}

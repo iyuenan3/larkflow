@@ -1,0 +1,26 @@
+[project]
+name = "larkflow"
+version = "0.0.1"
+description = "飞书原生的 AI 工作流编排引擎（LangGraph 驱动）"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=1.2,<2",
+    "langgraph-checkpoint-sqlite",
+    "pyyaml>=6",
+    # 真飞书阶段才用；本地骨架走 stub，不强制在测试路径引入
+    "openai>=1.40",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["larkflow*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
