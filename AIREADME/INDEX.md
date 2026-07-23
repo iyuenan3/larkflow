@@ -1,7 +1,7 @@
 # larkflow · 飞流 · AIREADME
 > 飞书原生的 AI 工作流编排引擎（LangGraph 驱动，落到人）｜ 生命周期: 立项 pre-code
-> last-synced: pre-code · 2026-07-23
-<!-- 首个真实 commit 后，下次 update 把 pre-code 翻成真 SHA，否则漂移雷达永久跳过 -->
+> last-synced: 4146145 · 2026-07-23
+<!-- 立项 baseline SHA；check.sh --drift 据此算 AIREADME 落后 HEAD 多少 commit -->
 
 ## 状态
 | 文件 | 状态 | 摘要 |
