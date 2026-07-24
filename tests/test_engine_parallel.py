@@ -13,7 +13,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from larkflow.config import RoleResolver
 from larkflow.engine import Executors, build_graph
-from larkflow.io import MockLarkIO
+from larkflow.io import FakeDeliverableStore, MockLarkIO
 from larkflow.model.template import validate_template
 
 # 节点顺序刻意 [T,A,G,H]：这正是旧实现让 A 陈旧 done 获胜的顺序（回归守卫）
@@ -48,7 +48,7 @@ def test_diamond_reopen_reruns_sibling_against_fresh_upstream():
         return {"passed": runs["G_attempts"] >= 2}  # 第一次失败，第二次通过
 
     ex = Executors(
-        io=MockLarkIO(), resolver=RoleResolver(),
+        io=MockLarkIO(), resolver=RoleResolver(), deliverables=FakeDeliverableStore(),
         tool_handlers={"T": t_tool, "G": g_gate}, llm_handlers={"A": a_llm},
     )
     conn = sqlite3.connect(":memory:", check_same_thread=False)

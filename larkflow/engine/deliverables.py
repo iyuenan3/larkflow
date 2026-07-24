@@ -49,6 +49,24 @@ def materialize(io: DeliverableIO, node: dict, state: dict, *, content: str,
     return {"ok": True, HANDLE_KEY: handle.to_dict()}
 
 
+def ensure_container(io: DeliverableIO, node: dict, state: dict, *, placeholder: str) -> dict:
+    """备好交付物容器给人写：已登记 / 已声明则原样返回，**绝不覆盖**。
+
+    human 节点 interrupt 之前的代码在 resume 时会重跑，覆盖会抹掉人写的内容。
+    """
+    node_id = node["id"]
+    handle = prior_handle(state.get("outputs") or {}, node_id) or declared_container(node)
+    if handle is None:
+        meta = state.get("meta") or {}
+        handle = io.create(
+            title=node.get("label") or node_id,
+            content=placeholder,
+            region=(node.get(HANDLE_KEY) or {}).get("region", WHOLE),
+            idem_key=f"{meta.get('instance_id', '')}:{node_id}:create",
+        )
+    return {HANDLE_KEY: handle.to_dict()}
+
+
 def read_upstream(io: DeliverableIO, state: dict, node: dict) -> dict[str, str]:
     """下游消费：按 deps 从权威登记表取 handle 再 fetch 正文（ADR-016 consume）。
 

@@ -79,7 +79,11 @@ class LarkFlowService:
             return {"resumed": interrupt_id}
 
     def status(self, instance_id: str) -> dict:
-        return (self.graph.get_state(self._cfg(instance_id)).values or {}).get("status", {})
+        return self._values(instance_id).get("status", {})
+
+    def outputs(self, instance_id: str) -> dict:
+        """节点产出 + 交付物 handle 权威登记表（ADR-020）。"""
+        return self._values(instance_id).get("outputs", {})
 
     # ---------- 内部 ----------
     def _cfg(self, instance_id: str) -> dict:
@@ -139,10 +143,12 @@ class LarkFlowService:
         return self.resolver.resolve(assignee_role)
 
     def _criteria(self, v: dict) -> str:
-        label = v.get("label", "")
+        label, url = v.get("label", ""), v.get("deliverable_url")
         if v.get("role") == "gate":
-            return f"审核「{label}」：通过或打回上游重做。"
-        return f"{label}：完成后在飞书任务上点「完成」。"
+            body = f"审核「{label}」：通过或打回上游重做。"
+        else:
+            body = f"{label}：完成后在飞书任务上点「完成」。"
+        return f"{body}\n交付物：{url}" if url else body
 
     def _buttons(self, instance_id: str, iid: str, nid: str, v: dict) -> list[Button]:
         base = {"thread_id": instance_id, "interrupt_id": iid, "node_id": nid}

@@ -4,6 +4,7 @@
 这就是 PRD 的第一个 win 的本地判定版：证「门禁真打回」+「流程真穿过」。
 """
 from larkflow.app import build_defect_service
+from larkflow.io import FakeDeliverableStore
 from larkflow.io.events import CARD_ACTION, TASK_UPDATE
 
 NODES = ["intake", "triage_ai", "triage_review", "reproduce",
@@ -52,6 +53,30 @@ def test_win_g5_reopen_once_then_close():
 
     # 自动收口 + 通知上报人
     assert any(n["target"] == "ou_reporter" for n in io.notifications), io.notifications
+
+
+def test_deliverable_handles_stable_across_reopen():
+    """打回重算不新建交付物：handle 跨 overwrite 稳定 = 旁支复用旧产出的实证基础。"""
+    store = FakeDeliverableStore()
+    svc, io = build_defect_service(deliverables=store)
+    iid = "wf-3"
+    svc.start(instance_id=iid, reporter="ou_r", bug={"title": "登录崩溃"})
+
+    svc.resume_from_event(_card_event(io, "triage_review", "通过"))
+    svc.resume_from_event(_card_event(io, "reproduce", "通过"))
+    svc.resume_from_event(_task_event(io))
+    fix_handle = svc.outputs(iid)["fix"]["deliverable"]
+
+    svc.resume_from_event(_card_event(io, "qa_verify", "打回"))   # 打回 → fix 重跑
+    svc.resume_from_event(_task_event(io))
+    svc.resume_from_event(_card_event(io, "qa_verify", "通过"))
+
+    outs = svc.outputs(iid)
+    assert outs["fix"]["deliverable"] == fix_handle               # 重跑复用同一 handle
+    # 5 个 produce 节点各一份交付物，打回没新建第 6 份
+    assert len(store.docs) == 5, store.docs
+    for nid in ("intake", "triage_ai", "assign", "fix", "close"):
+        assert outs[nid]["deliverable"]["token"], nid
 
 
 def test_stale_resume_is_noop():

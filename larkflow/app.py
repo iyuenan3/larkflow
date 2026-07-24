@@ -12,7 +12,8 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from .config import RoleResolver
 from .engine import Executors, build_graph
-from .io import Correlations, MockLarkIO
+from .io import Correlations, FakeDeliverableStore, MockLarkIO
+from .io.deliverable import DeliverableIO
 from .io.lark_io import LarkIO
 from .llm import LLMClient, StubLLM
 from .model import load_template
@@ -26,6 +27,7 @@ def build_defect_service(
     io: LarkIO | None = None,
     llm: LLMClient | None = None,
     resolver: RoleResolver | None = None,
+    deliverables: DeliverableIO | None = None,
 ):
     """返回 (service, io)。默认本地栈。"""
     conn = conn or sqlite3.connect(":memory:", check_same_thread=False)
@@ -35,15 +37,18 @@ def build_defect_service(
     io = io or MockLarkIO()
     llm = llm or StubLLM()
     resolver = resolver or RoleResolver()
+    deliverables = deliverables or FakeDeliverableStore()
     dag = load_template("defect")
 
     executors = Executors(
         io=io,
         resolver=resolver,
         llm=llm,
+        deliverables=deliverables,
         tool_handlers=DEFECT_TOOL_HANDLERS,
         llm_handlers=DEFECT_LLM_HANDLERS,
     )
+    executors.validate_coverage(dag)   # 装配期自检，别跑到一半才炸
     graph = build_graph(executors, saver)
     corr = Correlations(conn)
     service = LarkFlowService(graph=graph, io=io, correlations=corr, resolver=resolver, dag=dag)

@@ -59,7 +59,10 @@ def build_graph(executors: Executors, checkpointer):
     def human_worker(state: dict) -> dict:
         nid, dag = state["node_id"], state["dag"]
         node = node_by_id(dag, nid)
-        # 纯挂起：只把人要看的信息交出去；飞书任务/卡由驱动层在 __interrupt__ 后建。
+        # produce 先备好交付物容器（人去飞书里写）；只创建不覆盖，resume 重跑安全。
+        prepared = executors.prepare_human(node, state)
+        handle = prepared.get("deliverable") or {}
+        # 随后纯挂起：只把人要看的信息交出去；飞书任务/卡由驱动层在 __interrupt__ 后建。
         answer = interrupt(
             {
                 "kind": "human_node",
@@ -69,9 +72,10 @@ def build_graph(executors: Executors, checkpointer):
                 "assignee_role": node.get("assignee_role"),  # 派给谁
                 "approval_policy": node.get("approval_policy"),
                 "signal": node.get("signal"),
+                "deliverable_url": handle.get("url"),        # 对人 = 一条文档链接
             }
         )
-        return finish(dag, nid, answer)
+        return finish(dag, nid, {**prepared, **(answer or {})})
 
     b = StateGraph(OrchestratorState)
     b.add_node("dispatch", dispatch)
