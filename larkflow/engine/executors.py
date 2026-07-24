@@ -124,11 +124,16 @@ def assert_gate_policy_supported(node: dict) -> None:
 
 
 def build_prompt(node: dict, state: dict, upstream: dict[str, str]) -> str:
-    """节点 prompt + 项目要素 + 上游交付物正文，拼成一次调用的输入。"""
+    """节点 prompt + 项目要素 + 上游交付物正文，拼成一次调用的输入。
+
+    扇入（merge）就是多 deps 的这一条路径：每个上游按 label 标注来源，引擎无需
+    「merge 节点类型」。
+    """
+    labels = {n["id"]: n.get("label", n["id"]) for n in (state.get("dag") or [])}
     parts = [node["prompt"]]
     inputs = (state.get("meta") or {}).get("inputs")
     if inputs:
         parts.append("## 项目要素\n" + json.dumps(inputs, ensure_ascii=False, indent=2))
     for dep, text in upstream.items():
-        parts.append(f"## 上游交付物 · {dep}\n{text}")
+        parts.append(f"## 上游交付物 · {labels.get(dep, dep)}（{dep}）\n{text}")
     return "\n\n".join(parts)
