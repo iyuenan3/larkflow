@@ -12,6 +12,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from .config import RoleResolver
 from .engine import Executors, build_graph
+from .engine.support import assert_v1_supported
 from .io import Correlations, FakeDeliverableStore, MockLarkIO
 from .io.deliverable import DeliverableIO
 from .io.lark_io import LarkIO
@@ -48,6 +49,7 @@ def build_defect_service(
         tool_handlers=DEFECT_TOOL_HANDLERS,
         llm_handlers=DEFECT_LLM_HANDLERS,
     )
+    assert_v1_supported(dag)           # 模板别用引擎 v1 还没实现的语义（宁可不跑，不静默降级）
     executors.validate_coverage(dag)   # 装配期自检，别跑到一半才炸
     graph = build_graph(executors, saver)
     corr = Correlations(conn)

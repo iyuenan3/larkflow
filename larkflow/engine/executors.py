@@ -18,6 +18,7 @@ from typing import Callable
 
 from ..model.node import is_gate, is_produce
 from .deliverables import ensure_container, materialize, read_upstream
+from .support import V1_POLICIES, UnsupportedInV1
 
 Handler = Callable[[dict, dict, "Executors"], dict]
 
@@ -72,6 +73,10 @@ class Executors:
 
         **只创建不覆盖**：interrupt 之前的代码在 resume 时会重跑，覆盖会抹掉人写的内容。
         """
+        if is_gate(node):
+            # auto 门不该走到人（护栏③已保证 auto=tool）；会签 / 阈值 runtime 落 v1.3
+            assert_gate_policy_supported(node)
+            return {}
         if not is_produce(node):
             return {}
         return ensure_container(
@@ -109,6 +114,13 @@ class Executors:
         return (f"# {node.get('label', node['id'])}\n\n"
                 f"> 待 {who} 填写。写完后按约定信号（{node.get('signal')}）发出定稿信号，"
                 f"引擎不会因为「文档不动了」判定稿。\n")
+
+
+def assert_gate_policy_supported(node: dict) -> None:
+    if node.get("approval_policy") not in V1_POLICIES:
+        raise UnsupportedInV1(
+            f"{node['id']} approval_policy={node.get('approval_policy')}：会签 / 投票阈值落 v1.3"
+        )
 
 
 def build_prompt(node: dict, state: dict, upstream: dict[str, str]) -> str:
