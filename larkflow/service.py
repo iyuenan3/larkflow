@@ -17,6 +17,7 @@ import threading
 
 from langgraph.types import Command
 
+from .engine.gates import illegal_reopen
 from .io.correlations import Correlation, Correlations
 from .io.events import CARD_ACTION, TASK_UPDATE
 from .io.lark_io import Button, LarkIO
@@ -67,7 +68,15 @@ class LarkFlowService:
 
     def resume(self, *, instance_id: str, interrupt_id: str, value: dict, node_id: str | None = None) -> dict:
         with self._thread_lock(instance_id):  # 同 thread_id 串行（修 E）
-            status = self._values(instance_id).get("status", {})
+            values = self._values(instance_id)
+            # 打回合法域在**引擎权威侧**算，不信前端 / 卡片回传（ADR-014 / ADR-023）。
+            # 用运行时 dag（活图会改它），不用装配期模板。
+            reopen = (value or {}).get("reopen")
+            if reopen and node_id:
+                bad = illegal_reopen(values.get("dag") or self.dag, node_id, reopen)
+                if bad:
+                    return {"rejected": "illegal_reopen", "illegal": bad, "node_id": node_id}
+            status = values.get("status", {})
             pending = {i.id for i in self._pending_interrupts(instance_id)}
             # 修 F：并行下已 resume 的中断会滞留在 get_state().interrupts（直到同批兄弟也 resolve）。
             # 交叉核对节点自身状态：done 即已答复，配合 interrupt_id 仍 pending 才 resume，陈旧 no-op。
@@ -154,9 +163,12 @@ class LarkFlowService:
         base = {"thread_id": instance_id, "interrupt_id": iid, "node_id": nid}
         if v.get("role") != "gate":  # human-produce（定稿确认）：单按钮
             return [Button(DONE_LABEL, {**base, "verdict": "pass"}, "primary_filled")]
+        # 打回按钮带默认目标组；多选 reopen 的卡片视觉 schema 待 dev app（见 SPEC 待填），
+        # 前端 / app 可用同一自描述封套回传任意合法目标组，引擎侧再校验一次。
+        reopen = {"reopen": v.get("reopen_default")} if v.get("reopen_default") else {}
         return [
             Button(PASS_LABEL, {**base, "verdict": "pass"}, "primary_filled"),
-            Button(REOPEN_LABEL, {**base, "verdict": "fail"}, "danger_filled"),
+            Button(REOPEN_LABEL, {**base, "verdict": "fail", **reopen}, "danger_filled"),
         ]
 
     def _route(self, event: dict) -> dict | None:
@@ -165,12 +177,19 @@ class LarkFlowService:
             av = event.get("action_value") or {}
             if "thread_id" not in av or "interrupt_id" not in av:
                 return None
+            passed = av.get("verdict") == "pass"
+            value = {"passed": passed, "verdict": av.get("verdict"),
+                     "by": event.get("operator_id")}
+            if not passed:   # 打回才带目标组 + 意见（放行时的 reopen 是噪音，丢弃）
+                if av.get("reopen"):
+                    value["reopen"] = list(av["reopen"])
+                if av.get("comment"):
+                    value["comment"] = av["comment"]
             return {
                 "instance_id": av["thread_id"],
                 "interrupt_id": av["interrupt_id"],
                 "node_id": av.get("node_id"),
-                "value": {"passed": av.get("verdict") == "pass", "verdict": av.get("verdict"),
-                          "by": event.get("operator_id")},
+                "value": value,
             }
         if key == TASK_UPDATE:
             ev = event.get("event", {})

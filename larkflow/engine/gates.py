@@ -1,7 +1,11 @@
 """就绪判定 + 门禁 + 打回（纯函数，无副作用，可单测）。"""
 from __future__ import annotations
 
-from ..model.node import is_gate, node_by_id
+from ..model.node import deps_ancestors, is_gate, node_by_id
+
+
+class ReopenError(RuntimeError):
+    """打回目标越出合法域（机制层：每个目标须 ⊆ gate 的 deps 传递祖先，ADR-014）。"""
 
 
 def ready_nodes(dag: list[dict], status: dict) -> list[dict]:
@@ -53,13 +57,28 @@ def stale_downstream(dag: list[dict], target: str) -> set[str]:
 def reopen_targets(node: dict, result: dict) -> list[str]:
     """gate 打回的目标组：运行时手选（ADR-014），缺省 = 它把关的直接上游。
 
-    缺省来自 ADR-025「reopen 默认 = 把关的上游」；合法域校验（⊆ 传递祖先）在
-    reopen_resets 里做，不信调用方。
+    缺省来自 ADR-025「reopen 默认 = 把关的上游」；合法域校验（⊆ 传递祖先）由
+    illegal_reopen / reopen_resets 做，不信调用方。
     """
     picked = (result or {}).get("reopen")
     if picked:
         return list(picked)
     return list(node.get("deps", []))
+
+
+def reopen_candidates(dag: list[dict], gate_id: str) -> list[str]:
+    """机制层合法的打回候选 = gate 的 deps 传递祖先（权限层过滤见 ADR-023）。"""
+    return sorted(deps_ancestors(dag, gate_id))
+
+
+def illegal_reopen(dag: list[dict], gate_id: str, targets) -> list[str]:
+    """越出合法域的目标（空表示合法）。打回目标须是 gate 的传递祖先：
+
+    ① 语义上「打回」只能回到把关范围内的上游；
+    ② 结构上目标是祖先 ⇒ gate ∈ 目标的传递下游 ⇒ gate 必被重置 ⇒ 打回环必终止。
+    """
+    ancestors = deps_ancestors(dag, gate_id)
+    return [t for t in (targets or []) if t not in ancestors]
 
 
 def finish(dag: list[dict], nid: str, result: dict) -> dict:
@@ -91,7 +110,12 @@ def reopen_resets(dag: list[dict], status: dict, outputs: dict | None = None) ->
     for n in dag:
         if status.get(n["id"]) != "failed":
             continue
-        for target in reopen_targets(n, outputs.get(n["id"])):
+        targets = reopen_targets(n, outputs.get(n["id"]))
+        bad = illegal_reopen(dag, n["id"], targets)
+        if bad:
+            # 入口（service.resume）已挡一道；到这里说明 state 里已有非法值，属不变量破裂
+            raise ReopenError(f"{n['id']} 的打回目标越出合法域（须 ⊆ 传递祖先）: {bad}")
+        for target in targets:
             for m in {target} | stale_downstream(dag, target) | {n["id"]}:
                 resets[m] = "pending"
     return resets

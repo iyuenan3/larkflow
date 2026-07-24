@@ -15,9 +15,9 @@ from __future__ import annotations
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
-from ..model.node import node_by_id
+from ..model.node import is_gate, node_by_id
 from .executors import Executors
-from .gates import finish, ready_nodes, reopen_resets
+from .gates import finish, ready_nodes, reopen_candidates, reopen_resets
 from .state import OrchestratorState
 
 _WORKER = {"tool": "tool_worker", "llm": "llm_worker", "human": "human_worker"}
@@ -73,6 +73,9 @@ def build_graph(executors: Executors, checkpointer):
                 "approval_policy": node.get("approval_policy"),
                 "signal": node.get("signal"),
                 "deliverable_url": handle.get("url"),        # 对人 = 一条文档链接
+                # 打回是运行时手选一组（ADR-014）：候选 = 机制合法域，默认 = 把关的直接上游
+                "reopen_candidates": reopen_candidates(dag, nid) if is_gate(node) else None,
+                "reopen_default": list(node.get("deps", [])) if is_gate(node) else None,
             }
         )
         return finish(dag, nid, {**prepared, **(answer or {})})

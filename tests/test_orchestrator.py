@@ -3,9 +3,12 @@
 模板护栏与 v1 节点契约的单测在 tests/test_model_v1.py。
 """
 from larkflow.engine.gates import (
+    ReopenError,
     all_done,
     finish,
+    illegal_reopen,
     ready_nodes,
+    reopen_candidates,
     reopen_resets,
     reopen_targets,
     stale_downstream,
@@ -79,6 +82,37 @@ def test_reopen_resets_uses_runtime_picked_set():
     assert resets == {k: "pending" for k in
                       ["triage_ai", "triage_review", "reproduce", "assign", "fix",
                        "qa_verify", "close"]}
+
+
+def test_reopen_candidates_are_transitive_ancestors():
+    assert reopen_candidates(DAG, "qa_verify") == sorted(
+        ["intake", "triage_ai", "triage_review", "reproduce", "assign", "fix"])
+    assert reopen_candidates(DAG, "intake") == []
+
+
+def test_illegal_reopen_detects_non_ancestors():
+    assert illegal_reopen(DAG, "qa_verify", ["fix", "assign"]) == []
+    assert illegal_reopen(DAG, "qa_verify", ["close"]) == ["close"]      # 自己的下游
+    assert illegal_reopen(DAG, "qa_verify", ["qa_verify"]) == ["qa_verify"]  # 自己
+    assert illegal_reopen(DAG, "qa_verify", ["nope"]) == ["nope"]
+
+
+def test_reopen_resets_rejects_illegal_targets_in_state():
+    """入口已挡一道；state 里仍出现非法值 = 不变量破裂，宁可炸不静默。"""
+    import pytest
+
+    with pytest.raises(ReopenError, match="合法域"):
+        reopen_resets(DAG, {"qa_verify": "failed"},
+                      {"qa_verify": {"passed": False, "reopen": ["close"]}})
+
+
+def test_reopen_always_resets_the_gate_itself_so_the_loop_terminates():
+    """目标是祖先 ⇒ gate ∈ 目标的传递下游 ⇒ gate 必被重置 ⇒ 打回环结构性终止。"""
+    for target in reopen_candidates(DAG, "qa_verify"):
+        resets = reopen_resets(DAG, {"qa_verify": "failed"},
+                               {"qa_verify": {"passed": False, "reopen": [target]}})
+        assert resets.get("qa_verify") == "pending", target
+        assert resets.get(target) == "pending", target
 
 
 def test_all_done():

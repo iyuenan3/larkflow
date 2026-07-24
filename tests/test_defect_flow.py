@@ -79,6 +79,72 @@ def test_deliverable_handles_stable_across_reopen():
         assert outs[nid]["deliverable"]["token"], nid
 
 
+def _reopen_event(io, node_id, **override):
+    """点「打回」并当场手选一组目标（前端 / app 用同一自描述封套回传）。"""
+    av = dict(io.button_value(node_id, "打回"), **override)
+    return {"key": CARD_ACTION, "action_value": av, "operator_id": "ou_op"}
+
+
+def test_runtime_picked_reopen_target_reruns_deeper_branch():
+    """打回目标是审核当场选的一组，不在模板里预声明（ADR-014）。"""
+    svc, io = build_defect_service()
+    iid = "wf-4"
+    svc.start(instance_id=iid, reporter="ou_r", bug={"title": "登录崩溃"})
+    svc.resume_from_event(_card_event(io, "triage_review", "通过"))
+    svc.resume_from_event(_card_event(io, "reproduce", "通过"))
+    svc.resume_from_event(_task_event(io))
+
+    # 默认打回目标是 fix；这次手选更深的 triage_ai
+    svc.resume_from_event(_reopen_event(io, "qa_verify", reopen=["triage_ai"]))
+
+    st = svc.status(iid)
+    assert st["triage_ai"] == "done"          # 重跑完（llm 自动节点）
+    assert st["triage_review"] == "pending"   # 挂在人工复核，等人重新确认
+    assert st["fix"] == "pending" and st["qa_verify"] == "pending"
+
+    # 走完剩下的路：整链仍能收口（打回环终止）
+    svc.resume_from_event(_card_event(io, "triage_review", "通过"))
+    svc.resume_from_event(_card_event(io, "reproduce", "通过"))
+    svc.resume_from_event(_task_event(io))
+    svc.resume_from_event(_card_event(io, "qa_verify", "通过"))
+    assert all(svc.status(iid).get(n) == "done" for n in NODES), svc.status(iid)
+
+
+def test_illegal_reopen_is_rejected_at_ingress():
+    """打回合法域在引擎权威侧算、不信前端：非法目标不得进 state。"""
+    svc, io = build_defect_service()
+    iid = "wf-5"
+    svc.start(instance_id=iid, reporter="ou_r", bug={"title": "x"})
+    svc.resume_from_event(_card_event(io, "triage_review", "通过"))
+    svc.resume_from_event(_card_event(io, "reproduce", "通过"))
+    svc.resume_from_event(_task_event(io))
+
+    res = svc.resume_from_event(_reopen_event(io, "qa_verify", reopen=["close"]))  # 下游，非祖先
+
+    assert res["rejected"] == "illegal_reopen" and res["illegal"] == ["close"]
+    # 中断仍挂着、未被裁决（status 无键 = 从未跑完，默认 pending）
+    assert svc.status(iid).get("qa_verify", "pending") == "pending"
+    assert "qa_verify" not in svc.outputs(iid)
+    # 再点一次合法的打回仍然生效（拒绝没把中断弄坏）
+    assert "resumed" in svc.resume_from_event(_reopen_event(io, "qa_verify"))
+
+
+def test_default_reopen_target_comes_from_gated_upstream():
+    svc, io = build_defect_service()
+    iid = "wf-6"
+    svc.start(instance_id=iid, reporter="ou_r", bug={"title": "x"})
+    svc.resume_from_event(_card_event(io, "triage_review", "通过"))
+    assert io.button_value("reproduce", "打回")["reopen"] == ["triage_review"]
+
+
+def test_reopen_comment_is_recorded_in_outputs():
+    svc, io = build_defect_service()
+    iid = "wf-7"
+    svc.start(instance_id=iid, reporter="ou_r", bug={"title": "x"})
+    svc.resume_from_event(_reopen_event(io, "triage_review", comment="定级偏低，重判"))
+    assert svc.outputs(iid)["triage_review"]["comment"] == "定级偏低，重判"
+
+
 def test_stale_resume_is_noop():
     """同一张卡重复点击（飞书 at-least-once）→ 第二次是陈旧中断，no-op。"""
     svc, io = build_defect_service()
