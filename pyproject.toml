@@ -1,7 +1,7 @@
 [project]
 name = "larkflow"
 version = "0.0.1"
-description = "飞书原生的 AI 工作流编排引擎（LangGraph 驱动）"
+description = "飞书原生的交付物流转工作流引擎（LangGraph 驱动）"
 requires-python = ">=3.11"
 dependencies = [
     "langgraph>=1.2,<2",
