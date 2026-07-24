@@ -13,8 +13,9 @@
   deps:     string[]                      # 前置节点 id（依赖解锁）
   # produce 专属
   deliverable: { container?: handle, region: "whole" | {section: selector} }  # 交付物落点（ADR-016）
-  prompt:   string                        # llm-produce 的生成指令
-  model_role: string                      # llm-produce 路由到哪个 LLM 角色（ADR-017）
+  # llm 专属（produce 或 gate 皆可，ADR-017）
+  prompt:   string                        # 生成 / 评分指令
+  model_role: string                      # 路由到哪个 LLM 角色
   # gate 专属
   approval_policy: "auto" | "single" | "any" | "all"   # 放行策略（auto = bypass）
   # human 专属
@@ -24,7 +25,7 @@
 ```
 - 边由 `deps` 表达。**打回不在模板里预声明单目标**：gate 节点运行时产出 `{passed, reopen: [节点 id…], comment}`，`reopen` 是当场手选的一组；引擎把该组 + 其传递下游重置 `pending`（选择性重算，`larkflow/engine/gates.py` 的 `stale_downstream`）。
 - 生成新模板走 few-shot 护栏（三型齐全 / 每 gate 配回边 / 放行节点强制 human / human 声明 signal），校验落 `larkflow/model/template.py`（ADR-010）。
-- seg-1 首个实例化模板 = 缺陷生命周期（`larkflow/templates/defect.yaml`，8 节点，退化特例，ADR-009 / ADR-012）。
+- seg-1 首个实例化模板 = 缺陷生命周期（`larkflow/templates/defect.yaml`，8 节点 = ADR-009 完整 11 节点计划的 as-built 退化子集，seg-2 回填 ci_test/code_review/release_note；ADR-009 / ADR-012）。
 
 ## 交付物产出 / 消费协议（ADR-016，产出闭环已实测）
 - 交付物 = 飞书 handle（doc token / 云盘 file token），模型 `(容器, region)`。
@@ -39,7 +40,7 @@
 - human 节点纯挂起（`interrupt()` 只传数据）；飞书任务 / 卡由驱动层 `LarkFlowService` 在 `__interrupt__` 后建，`idem_key` 含 `interrupt.id`（重放去重、reopen 出新单）。`durability="sync"`。
 
 ## 飞书事件订阅 EventKey（研究证实为静态常量，不需 dev app 上下文）
-- `card.action.trigger`（仅 bot）：卡片按钮点击。路由键塞按钮 `behaviors[].callback.value`，原样回传为 `action_value`（自描述 `{thread_id, interrupt_id, node_id, verdict/reopen}`）。⚠️ dev app 须在开发者后台开「事件与回调 → 回调配置」，否则静默零事件。
+- `card.action.trigger`（仅 bot）：卡片按钮点击。路由键塞按钮 `behaviors[].callback.value`，原样回传为 `action_value`（自描述 `{thread_id, interrupt_id, node_id, passed, reopen}`，与 gate 产出的 `passed`/`reopen` 逐字对齐）。⚠️ dev app 须在开发者后台开「事件与回调 → 回调配置」，否则静默零事件。
 - `task.task.update_user_access_v2`（user|bot）：任务事件。完成 = `.event.event_types[]` 含 `task_completed_update`（自行 filter）；`.event.task_guid` 经关联表回映射到 `(thread_id, interrupt_id)`。
 - human-produce 定稿信号（发消息）：走 IM 消息事件（待 dev app 定确切 EventKey）。
 

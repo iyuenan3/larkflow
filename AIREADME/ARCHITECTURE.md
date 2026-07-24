@@ -20,13 +20,13 @@
 - **executor**：`tool`（确定性程序）/ `llm`（AI）/ `human`（人）。
 - **role**：`produce`（往交付物上写）/ `gate`（把关，放行或打回一组节点）。
 - 「AI 收集」「AI 起草」「AI 整合（fan-in）」都是 `(llm, produce)` + 不同配置，引擎不为业务新增节点类型。
-- gate 的 `approval_policy`：`auto`（bypass 自动放行）/ `single`（单人）/ `any`（任一）/ `all`（全员会签）。gate 产出 = `{放行?, 打回哪几个节点, 意见}`；意见可落成飞书文档评论。
+- gate 有放行策略配置（含 bypass 自动放行）+ 运行时多选打回；意见可落成飞书文档评论。字段枚举与产出 schema 见 SPEC。
 
 ## 交付物：(容器, region) 统一飞书文档 handle（ADR-016）
-- 交付物 = 带 type 的 handle（飞书 doc token / 云盘 file token）；内容在飞书，引擎只存指针 + 元数据。**对人**是文档链接（可看 / 协同 / 评论审），**对下游 llm** 消费时 fetch 正文喂 prompt。
-- 模型 = `(容器 handle, region)`：`whole`（独立 doc，markdown，整篇 overwrite，故事一）/ `section`（共享 doc 一段，docx block 级 + 飞书原生协同，故事二）。选择性重算复用粒度随之推广到「doc 内其他段」。
-- **版本靠飞书原生**：稳定 handle + overwrite，飞书自带版本史 + 回滚作审计，引擎不自建版本。
-- **统一产出协议**：produce 节点末步「物化到飞书（写 doc / 传云盘），交回 handle」。视频 / 二进制只做终态交付物，不进 AI 中间流转。
+- 交付物 = 带 type 的飞书 handle（doc token / 云盘 file token）；内容在飞书（投影），引擎只存指针 + 元数据。**对人**是文档链接（可看 / 协同 / 评论审），**对下游 llm** 是可 fetch 的正文。
+- 模型 = `(容器 handle, region)`：独立 doc 与共享 doc 一段是同一抽象的两个粒度，选择性重算复用粒度随之从「整个 doc」推广到「doc 内其他段」。
+- **版本靠飞书原生**（稳定 handle + overwrite + 飞书 history），引擎不自建版本。
+- 具体 region 枚举、produce/consume 命令协议见 SPEC；理由见 DECISIONS ADR-016。
 
 ## 组件
 - **引擎服务**：Python + LangGraph + SQLite checkpointer（宿主 alicloud-sh，见 DEPLOYMENT / DECISIONS ADR-007）。含固定编排器图 + 模板注册表 + 节点执行器（tool/llm/human）+ 驱动层 `LarkFlowService`。
@@ -44,7 +44,7 @@
 7. 收口：全 done → 交付物定稿 + 汇总卡 + 通知发起人。
 
 ## 首个工作流与 seg-1
-- **seg-1 已建**：8 节点缺陷流本地引擎（`larkflow/templates/defect.yaml`，LangGraph + SQLite，15 测试绿）= 交付物流转的**退化特例**（交付物 = 修复，图固定单链），验证了 interrupt/resume + 打回 + checkpointer。
+- **seg-1 已建**：8 节点缺陷流本地引擎（`larkflow/templates/defect.yaml`，LangGraph + SQLite，15 测试绿）= 交付物流转的**退化特例**（交付物 = 修复，图固定单链），验证了 interrupt/resume + 打回 + checkpointer。（8 节点 = as-built，含 reproduce 门禁；ADR-009 原规划完整缺陷流 11 节点、seg-2 回填 ci_test/code_review/release_note，as-built 未落这三节点。）
 - **v1 目标**：一个「各自产出再合并」形态的真实交付物流转项目（独立 doc 拓扑，合同类，ADR-018）。
 
 ## 关键选型（理由见 DECISIONS）

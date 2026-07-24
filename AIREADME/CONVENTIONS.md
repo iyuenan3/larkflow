@@ -20,10 +20,8 @@
 - 生成图仍过人审门。
 
 ## 禁用模式
-- 不 per-instance 现编译新 LangGraph 图（用固定编排器 + 数据驱动派发）。
-- 不在 LangGraph state 里存业务真相源（真相源 = checkpointer，飞书 = 投影）。
-- 不改历史：受控活图只改 pending 子图，不原地改写已完成节点产出。
-- LLM 不直连厂商专有 SDK，走 OpenAI 兼容多角色路由。入口不接飞书 SDK，只用 lark-cli event consume。
+- 架构级不变式（固定编排器 / state 不存真相源 / 只改未来不改历史 / 入口不接飞书 SDK）见 ARCHITECTURE 禁改项，不在此复述。
+- 编码层：LLM 不直连厂商专有 SDK，走 OpenAI 兼容多角色路由（从 env 按角色读 `(base_url, api_key, model)`）。
 
 ## 写作
 - 中文产出不使用破折号，用逗号 / 句号 / 冒号 / 括号代替（继承全局规范）。

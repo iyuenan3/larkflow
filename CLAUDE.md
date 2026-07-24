@@ -1,6 +1,6 @@
 # CLAUDE.md · larkflow（飞流）· router
 
-> 飞书原生的 AI 工作流编排引擎（LangGraph 驱动）。本文件是 router；详细真相源在 `AIREADME/`（先读 `AIREADME/INDEX.md`）。
+> 飞书原生的交付物流转工作流引擎（LangGraph 驱动）。本文件是 router；详细真相源在 `AIREADME/`（先读 `AIREADME/INDEX.md`）。
 > 当前：立项 · 第一段引擎已跑通（2026-07-24）；第二轮设计定（交付物流转，ADR-012..018）。
 
 ## 状态
