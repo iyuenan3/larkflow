@@ -53,5 +53,6 @@ def build_defect_service(
     executors.validate_coverage(dag)   # 装配期自检，别跑到一半才炸
     graph = build_graph(executors, saver)
     corr = Correlations(conn)
-    service = LarkFlowService(graph=graph, io=io, correlations=corr, resolver=resolver, dag=dag)
+    service = LarkFlowService(graph=graph, io=io, correlations=corr, resolver=resolver,
+                              dag=dag, executors=executors)
     return service, io

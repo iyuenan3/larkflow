@@ -18,9 +18,12 @@ import threading
 from langgraph.types import Command
 
 from .engine.gates import illegal_reopen
+from .engine.livegraph import GraphEditError, apply_ops
+from .engine.support import assert_v1_supported
 from .io.correlations import Correlation, Correlations
 from .io.events import CARD_ACTION, TASK_UPDATE
 from .io.lark_io import Button, LarkIO
+from .model.template import validate_template
 
 PASS_LABEL = "通过"
 REOPEN_LABEL = "打回"
@@ -28,12 +31,14 @@ DONE_LABEL = "完成"
 
 
 class LarkFlowService:
-    def __init__(self, *, graph, io: LarkIO, correlations: Correlations, resolver, dag: list[dict]):
+    def __init__(self, *, graph, io: LarkIO, correlations: Correlations, resolver,
+                 dag: list[dict], executors=None):
         self.graph = graph
         self.io = io
         self.corr = correlations
         self.resolver = resolver
         self.dag = dag
+        self.executors = executors   # 改图后复查 tool handler 覆盖（可选）
         # 每 DAG 层约 2 super-step；给回边重跑留余量，防默认 recursion_limit=25 中途崩（修 C 之belt）
         self._recursion_limit = 2 * len(dag) + 25
         # per-thread_id 串行化：EventPump 多线程（每 EventKey 一线程），防同实例并发 resume 丢更新（修 E）
@@ -78,6 +83,9 @@ class LarkFlowService:
                     return {"rejected": "illegal_reopen", "illegal": bad, "node_id": node_id}
             status = values.get("status", {})
             pending = {i.id for i in self._pending_interrupts(instance_id)}
+            # 改图会让挂起中断换 id；顺迁移链把旧卡 / 旧任务上的 id 重绑到当前中断
+            interrupt_id = self.corr.resolve_interrupt(
+                instance_id, interrupt_id, is_live=lambda i: i in pending)
             # 修 F：并行下已 resume 的中断会滞留在 get_state().interrupts（直到同批兄弟也 resolve）。
             # 交叉核对节点自身状态：done 即已答复，配合 interrupt_id 仍 pending 才 resume，陈旧 no-op。
             resolved = node_id is not None and status.get(node_id) == "done"
@@ -86,6 +94,41 @@ class LarkFlowService:
             self.graph.invoke(Command(resume={interrupt_id: value}), self._run_cfg(instance_id), durability="sync")
             self._handle(instance_id)
             return {"resumed": interrupt_id}
+
+    def edit_graph(self, instance_id: str, ops: list[dict]) -> dict:
+        """受控活图：运行中改未来（ADR-013）。校验 → 写回 dag channel → 触发下一次 dispatch。
+
+        校验一律在**引擎权威侧**做，不信前端（ADR-019 / ADR-023）：
+          ① ops 只触 pending 子图（apply_ops 的冻结线）
+          ② 新图仍过 validate_template（仍是 DAG / 不悬挂 / 全部护栏）
+          ③ 新图不用引擎 v1 未实现的语义；新增 tool 节点得有 handler
+        """
+        with self._thread_lock(instance_id):
+            values = self._values(instance_id)
+            if not values:
+                raise GraphEditError(f"实例不存在: {instance_id}")
+            # 「在跑」= 已派出去还没回来的节点。tool/llm 在一个 super-step 内跑完（本方法
+            # 又与 invoke 同锁），故唯一会长时间在飞的是挂起的 human 节点：把它们当 running
+            # 并入冻结线，落地 ADR-013「不删在跑节点」。
+            in_flight = {(i.value or {}).get("node_id"): "running"
+                         for i in self._pending_interrupts(instance_id)}
+            frontier = {**values.get("status", {}), **{k: v for k, v in in_flight.items() if k}}
+            new_dag = apply_ops(values["dag"], frontier, ops)
+            validate_template(new_dag)
+            assert_v1_supported(new_dag)
+            if self.executors is not None:
+                self.executors.validate_coverage(new_dag)
+
+            before = {i.id: (i.value or {}).get("node_id")
+                      for i in self._pending_interrupts(instance_id)}
+            self.graph.update_state(self._cfg(instance_id), {"dag": new_dag})
+            # 改完立刻推一步：新就绪的未来节点当场跑起来（唯一真环边照旧）
+            self.graph.invoke(None, self._run_cfg(instance_id), durability="sync")
+
+            remapped = self._remap_interrupts(instance_id, before)
+            self._handle(instance_id, skip=remapped)
+            return {"edited": len(ops), "nodes": [n["id"] for n in new_dag],
+                    "remapped": len(remapped)}
 
     def status(self, instance_id: str) -> dict:
         return self._values(instance_id).get("status", {})
@@ -115,10 +158,27 @@ class LarkFlowService:
             out.extend(getattr(t, "interrupts", ()) or ())
         return out
 
-    def _handle(self, instance_id: str) -> None:
+    def _handle(self, instance_id: str, skip: set[str] | None = None) -> None:
         for it in self._pending_interrupts(instance_id):
+            if skip and it.id in skip:
+                continue   # 只是改图导致的换 id：卡 / 任务还在人手里，别重复派
             self._provision(instance_id, it)
         self._project(instance_id)
+
+    def _remap_interrupts(self, instance_id: str, before: dict[str, str]) -> set[str]:
+        """改图后中断换了 id：按 node_id 对上号，记下迁移链，让旧卡 / 旧任务继续有效。
+
+        只记「同一节点、未重跑」的迁移；打回产生的新中断不在此列（那本就该出新单）。
+        """
+        after = {(i.value or {}).get("node_id"): i.id
+                 for i in self._pending_interrupts(instance_id)}
+        remapped: set[str] = set()
+        for old_id, node_id in before.items():
+            new_id = after.get(node_id)
+            if new_id and new_id != old_id:
+                self.corr.put_remap(instance_id, old_id, new_id)
+                remapped.add(new_id)
+        return remapped
 
     def _provision(self, instance_id: str, it) -> None:
         v = it.value or {}
