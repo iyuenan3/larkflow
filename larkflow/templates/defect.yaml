@@ -1,18 +1,78 @@
-# 缺陷生命周期模板 · 第一段（人主干 + G5 验证门禁）
-# 节点契约（SPEC + 本段补白 on_fail / signal）:
-#   id / label / type(tool|llm|human) / role / gate(达标条件, 无=-) / deps
-#   on_fail: 带 gate 节点的回边目标节点 id（gate 不达标 → 环回它 + 其下游重跑）
-#   signal:  human 节点完成信号来自哪个 EventKey（task_complete | card_action）
-# 第二段回填 ci_test(真 CI) / code_review / release_note，补全 11 节点（ADR-009）。
+# 缺陷生命周期模板 · seg-1 载体，已迁 v1「交付物流转」契约（SPEC 模板节点契约 / ADR-015）
+#   executor: tool | llm | human      谁执行
+#   role:     produce | gate          干啥（产出交付物 / 把关放行或打回）
+#   produce → deliverable{region}     交付物落点（ADR-016，v1 只做 whole）
+#   llm     → prompt + model_role     多角色 LLM 路由（ADR-017）
+#   gate    → approval_policy         auto=确定性机检 bypass / single=单人拍板
+#   human   → assignee_role + signal  派给谁 + 完成信号（结构化，绝不猜定稿）
+# 打回不在模板里预声明：gate 运行时产出 {passed, reopen:[…]}（ADR-014），故无 on_fail。
+# 这张图是交付物流转的**退化特例**（交付物 = 修复、图固定单链），v1.0 的 win 用合同图。
 id: defect_lifecycle
 name: 缺陷生命周期
 segment: 1
 nodes:
-  - {id: intake,        label: 受理登记,                 type: tool,  role: "-",     gate: "-",     deps: []}
-  - {id: triage_ai,     label: AI分诊(定级/定类/建议负责人), type: llm,   role: "-",     gate: "-",     deps: [intake]}
-  - {id: triage_review, label: 分诊复核(确认定级与负责人),   type: human, role: 负责人,   gate: "-",     deps: [triage_ai],     signal: card_action}
-  - {id: reproduce,     label: 复现确认,                 type: human, role: QA,      gate: 可复现,   deps: [triage_review], signal: card_action, on_fail: triage_review}
-  - {id: assign,        label: 派单(定开发负责人),         type: tool,  role: "-",     gate: "-",     deps: [reproduce]}
-  - {id: fix,           label: 修复,                     type: human, role: 开发,    gate: "-",     deps: [assign],        signal: task_complete}
-  - {id: qa_verify,     label: 验证(G5门禁·可reopen打回),  type: human, role: QA,      gate: 验证通过, deps: [fix],           signal: card_action, on_fail: fix}
-  - {id: close,         label: 收口(归档+通知上报人),       type: tool,  role: "-",     gate: "-",     deps: [qa_verify]}
+  - id: intake
+    label: 受理登记
+    executor: tool
+    role: produce
+    deps: []
+    deliverable: {region: whole}
+
+  - id: triage_ai
+    label: AI分诊(定级/定类/建议负责人)
+    executor: llm
+    role: produce
+    deps: [intake]
+    prompt: 依据缺陷描述定级(P0-P3)、定类、建议负责人，输出分诊结论。
+    model_role: triage
+    deliverable: {region: whole}
+
+  - id: triage_review
+    label: 分诊复核(确认定级与负责人)
+    executor: human
+    role: gate
+    deps: [triage_ai]
+    assignee_role: 负责人
+    signal: card_action
+    approval_policy: single
+
+  - id: reproduce
+    label: 复现确认
+    executor: human
+    role: gate
+    deps: [triage_review]
+    assignee_role: QA
+    signal: card_action
+    approval_policy: single
+
+  - id: assign
+    label: 派单(定开发负责人)
+    executor: tool
+    role: produce
+    deps: [reproduce]
+    deliverable: {region: whole}
+
+  - id: fix
+    label: 修复
+    executor: human
+    role: produce
+    deps: [assign]
+    assignee_role: 开发
+    signal: task_complete
+    deliverable: {region: whole}
+
+  - id: qa_verify
+    label: 验证(G5门禁·可reopen打回)
+    executor: human
+    role: gate
+    deps: [fix]
+    assignee_role: QA
+    signal: card_action
+    approval_policy: single
+
+  - id: close
+    label: 收口(归档+通知上报人)
+    executor: tool
+    role: produce
+    deps: [qa_verify]
+    deliverable: {region: whole}

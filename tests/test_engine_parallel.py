@@ -1,10 +1,10 @@
-"""并行扇出 + 回边竞争回归测试（修 A）。
+"""并行扇出 + 打回竞争回归测试（修 A）。
 
-钻石 DAG：T →(A, G)，G 是同步 tool 门禁 on_fail=T，H join。
-G 第一次失败触发回边：T 重跑（gen 变），兄弟 A 必须也重跑、看到 T 的新产出。
+钻石 DAG：T →(A, G)，G 是 auto 门（tool 机检，打回目标缺省 = 其直接上游 T），H join。
+G 第一次不放行触发打回：T 重跑（gen 变），兄弟 A 必须也重跑、看到 T 的新产出。
 旧实现（worker 写全下游 status + last-write-wins reducer）在节点顺序 [T,A,G,H] 下
-会让 A 的 done 覆盖回边的 pending → A 不重跑、用陈旧 T 产出（静默损坏）。
-修 A 后：worker 只写自己键、回边由 dispatch 单点做，A 必重跑。断言 A 两次看到的
+会让 A 的 done 覆盖打回的 pending → A 不重跑、用陈旧 T 产出（静默损坏）。
+修 A 后：worker 只写自己键、打回由 dispatch 单点做，A 必重跑。断言 A 两次看到的
 generation = [1, 2]。
 """
 import sqlite3
@@ -18,15 +18,19 @@ from larkflow.model.template import validate_template
 
 # 节点顺序刻意 [T,A,G,H]：这正是旧实现让 A 陈旧 done 获胜的顺序（回归守卫）
 DIAMOND = [
-    {"id": "T", "label": "上游", "type": "tool", "role": "-", "gate": "-", "deps": []},
-    {"id": "A", "label": "兄弟", "type": "llm", "role": "-", "gate": "-", "deps": ["T"]},
-    {"id": "G", "label": "门禁", "type": "tool", "role": "-", "gate": "ok", "deps": ["T"], "on_fail": "T"},
-    {"id": "H", "label": "汇合", "type": "human", "role": "QA", "gate": "-", "deps": ["A", "G"], "signal": "task_complete"},
+    {"id": "T", "label": "上游", "executor": "tool", "role": "produce", "deps": [],
+     "deliverable": {"region": "whole"}},
+    {"id": "A", "label": "兄弟", "executor": "llm", "role": "produce", "deps": ["T"],
+     "prompt": "读上游写一段", "model_role": "writer", "deliverable": {"region": "whole"}},
+    {"id": "G", "label": "机检门", "executor": "tool", "role": "gate", "deps": ["T"],
+     "approval_policy": "auto"},
+    {"id": "H", "label": "汇合", "executor": "human", "role": "produce", "deps": ["A", "G"],
+     "assignee_role": "QA", "signal": "task_complete", "deliverable": {"region": "whole"}},
 ]
 
 
 def test_diamond_reopen_reruns_sibling_against_fresh_upstream():
-    validate_template(DIAMOND)  # 合法（三型齐全 / on_fail=T 是 G 的祖先）
+    validate_template(DIAMOND)  # 合法（三型齐全 / G 有可回退祖先 T / auto 门是 tool）
 
     runs = {"T": 0, "A_saw": [], "G_attempts": 0}
 

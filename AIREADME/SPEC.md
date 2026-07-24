@@ -13,7 +13,7 @@
   deps:     string[]                      # 前置节点 id（依赖解锁）
   # produce 专属
   deliverable: { container?: handle, region: "whole" | {section: selector} }  # 交付物落点（ADR-016）
-  # llm 专属（produce 或 gate 皆可，ADR-017）
+  # llm 专属（ADR-017；v1 护栏③只允许 llm 当 produce，见下）
   prompt:   string                        # 生成 / 评分指令
   model_role: string                      # 路由到哪个 LLM 角色
   # gate 专属
@@ -32,8 +32,10 @@
 - **打回权限契约（ADR-023）**：某人可见的打回候选 = 机制合法（⊆ 传递祖先）∩ 权限允许。权限 = 纯函数 `allowed_reopen(dag, actor_openid, project_owner, node_assignees, from_node) -> set[node_id]`：owner 全域；参与人限「重算集不牵连别的人工节点」的责任段；集体投票（A 类）另算。审核卡 / 画布据此过滤候选。
 - **条件分支 skip / ready（ADR-025）**：节点 `skipped` ⟺ `when` 守卫失配 或 所有 deps 都 skipped；节点 ready ⟺ pending 且 deps 全 done/skipped 且 ≥1 dep done 且守卫通过。分支从 deps + 守卫涌现。打回决策节点 → 其 skipped 下游复活为 pending。
 - 生成新模板走 few-shot 护栏（三型齐全 / 每 gate 有可回退祖先 / 放行节点强制 human / human 声明 signal / human 节点 ≥1 负责人 / 多人节点须 1 主负责人 / 条件分支决策取值域被分支守卫全覆盖或留默认支），校验落 `larkflow/model/template.py`（ADR-010 / ADR-023 / ADR-025）。
+- **护栏③ as-built 判据（v1 已实现）**：`approval_policy=="auto"` 的 gate 只能是 `tool`（确定性机检 bypass）；其余 policy 的 gate 只能是 `human`（人拍板）。推论：**`llm` 在 v1 校验下不能当 gate**（红线「绝不让 LLM 自动放行」，CONVENTIONS 护栏③）；AI 评审须落成 `(llm, produce)` 出意见 + `human` gate 拍板，同构 ADR-021/022「AI 提议 + 人拍板」。v2 若要真 AI-gate 需改本护栏并记 ADR。
+- 护栏⑤ as-built 只校验「守卫可求值」（`when` 的决策节点须是本节点传递祖先）；「决策取值域被守卫全覆盖或留默认支」需决策节点声明取值域，字段待 v1.3 定（见〈待填〉）。
 - seg-1 首个实例化模板 = 缺陷生命周期（`larkflow/templates/defect.yaml`，8 节点 = ADR-009 完整 11 节点计划的 as-built 退化子集，seg-2 回填 ci_test/code_review/release_note；ADR-009 / ADR-012）。
-- **as-built vs v1 字段名（迁移待 step 1）**：现 `node.py` / `defect.yaml` / `gates.py` 仍用 seg-1 旧契约，须迁到本节 v1 schema：`type` → `executor`；seg-1 的 `role`（业务指派串，如 负责人/QA/开发）→ 本节 `assignee_role`，v1 新增的 `role` ∈ {produce, gate} 是正交维（消解撞名）；门禁判据从 `gate` 字符串 + 静态 `on_fail` 单目标 → `role=="gate"` + `approval_policy` + 运行时 `reopen`。
+- **as-built vs v1 字段名（step 1 已迁完）**：`node.py` / `template.py` / `defect.yaml` / `gates.py` 已在本节 v1 schema 上：`type` → `executor`；seg-1 的 `role`（业务指派串，如 负责人/QA/开发）→ `assignee_role`，`role` ∈ {produce, gate} 是正交维（消解撞名）；门禁判据从 `gate` 字符串 + 静态 `on_fail` 单目标 → `role=="gate"` + `approval_policy` + 运行时 `reopen`。旧字段（`type`/`on_fail`/`gate`）留在模板里会被 `validate_template` 显式拒绝（防静默失效）。缺陷流三个人工确认节点随之归为 `gate`（`single`），tool/llm/human-produce 节点各声明 `deliverable`。
 
 ## 交付物产出 / 消费协议（ADR-016，产出闭环已实测）
 - 交付物 = 飞书 handle（doc token / 云盘 file token），模型 `(容器, region)`。
@@ -54,6 +56,7 @@
 - human-produce 定稿信号：优先用 `task_complete` / `card_action` 结构化信号（ADR-021，无歧义）；发消息（message）变体走 IM 消息事件、推迟（待 dev app 定确切 EventKey，且消息无自描述封套、到中断的关联需另设计）。
 
 ## 待填（dev app 建好后验）
+- 条件分支决策节点的**取值域声明字段**（护栏⑤全覆盖判据的前提，v1.3 定；v1 只校验守卫引用祖先）。
 - 卡片视觉 schema（派单卡 / 门禁卡通过·打回·多选 reopen / 定稿确认卡的排版），assignee_role → open_id 通讯录解析。
 - 共享协同拓扑的 docx block_id 跨 update 稳定性（v2）。
 - 引擎读 / 命令 API（供前端，ADR-019；形态待原型后定）：

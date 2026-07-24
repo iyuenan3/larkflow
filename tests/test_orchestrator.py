@@ -1,9 +1,17 @@
-"""引擎纯逻辑单测：就绪判定 / 回边 / 传递下游 / 模板护栏。"""
-import pytest
+"""引擎纯逻辑单测：就绪判定 / 门禁 / 选择性重算（打回）/ 传递下游。
 
-from larkflow.engine.gates import all_done, finish, ready_nodes, reopen_resets, stale_downstream
+模板护栏与 v1 节点契约的单测在 tests/test_model_v1.py。
+"""
+from larkflow.engine.gates import (
+    all_done,
+    finish,
+    ready_nodes,
+    reopen_resets,
+    reopen_targets,
+    stale_downstream,
+)
 from larkflow.model import load_template, validate_template
-from larkflow.model.template import TemplateError
+from larkflow.model.node import node_by_id
 
 DAG = load_template("defect")
 
@@ -27,33 +35,50 @@ def test_ready_nodes_start_and_progress():
 def test_stale_downstream_of_fix():
     # fix 的传递下游 = qa_verify + close
     assert stale_downstream(DAG, "fix") == {"qa_verify", "close"}
-    # reproduce 回边到 triage_review：下游是它之后的一整串
     assert stale_downstream(DAG, "triage_review") == {
         "reproduce", "assign", "fix", "qa_verify", "close"}
 
 
 def test_finish_gate_fail_marks_failed_only():
-    # 修 A：worker 只标自己 failed（写不相交键，无并行竞争）；回边由 dispatch 做
+    # 修 A：worker 只标自己 failed（写不相交键，无并行竞争）；打回由 dispatch 做
     delta = finish(DAG, "qa_verify", {"passed": False})
     assert delta["status"] == {"qa_verify": "failed"}
 
 
-def test_reopen_resets_reopens_upstream_chain():
-    # dispatch 单点回边：qa_verify failed → fix + qa_verify + close 回 pending
+def test_finish_gate_pass_marks_done():
+    assert finish(DAG, "qa_verify", {"passed": True})["status"] == {"qa_verify": "done"}
+
+
+def test_finish_produce_marks_done_regardless():
+    # produce 节点不看 passed（它不把关）
+    assert finish(DAG, "fix", {"anything": 1})["status"] == {"fix": "done"}
+
+
+def test_reopen_targets_defaults_to_gated_upstream():
+    qa = node_by_id(DAG, "qa_verify")
+    assert reopen_targets(qa, {"passed": False}) == ["fix"]          # 缺省 = 把关的直接上游
+    assert reopen_targets(qa, {"passed": False, "reopen": ["assign"]}) == ["assign"]  # 运行时手选
+
+
+def test_reopen_resets_default_targets_gated_upstream():
+    # dispatch 单点打回：qa_verify failed 且未手选 → fix + qa_verify + close 回 pending
     resets = reopen_resets(DAG, {"qa_verify": "failed"})
     assert resets == {"fix": "pending", "qa_verify": "pending", "close": "pending"}
     # 无 failed → 空
     assert reopen_resets(DAG, {"fix": "done"}) == {}
 
 
-def test_finish_gate_pass_marks_done():
-    delta = finish(DAG, "qa_verify", {"passed": True})
-    assert delta["status"] == {"qa_verify": "done"}
-
-
-def test_finish_no_gate_marks_done():
-    delta = finish(DAG, "fix", {"passed": True, "anything": 1})
-    assert delta["status"] == {"fix": "done"}
+def test_reopen_resets_uses_runtime_picked_set():
+    """打回目标是审核当场手选的一组（ADR-014），不在模板里预声明。"""
+    resets = reopen_resets(
+        DAG,
+        {"qa_verify": "failed"},
+        {"qa_verify": {"passed": False, "reopen": ["triage_ai"]}},
+    )
+    # triage_ai + 其全部传递下游 + gate 自身
+    assert resets == {k: "pending" for k in
+                      ["triage_ai", "triage_review", "reproduce", "assign", "fix",
+                       "qa_verify", "close"]}
 
 
 def test_all_done():
@@ -61,44 +86,3 @@ def test_all_done():
     assert all_done(DAG, status)
     status["close"] = "pending"
     assert not all_done(DAG, status)
-
-
-def test_guardrails_reject_gate_without_on_fail():
-    bad = [
-        {"id": "a", "label": "A", "type": "tool", "role": "-", "gate": "-", "deps": []},
-        {"id": "b", "label": "B", "type": "llm", "role": "-", "gate": "-", "deps": ["a"]},
-        {"id": "c", "label": "C", "type": "human", "role": "QA", "gate": "过", "deps": ["b"], "signal": "card_action"},
-    ]  # c 有门禁但缺 on_fail
-    with pytest.raises(TemplateError, match="护栏②"):
-        validate_template(bad)
-
-
-def test_guardrails_reject_missing_node_type():
-    bad = [
-        {"id": "a", "label": "A", "type": "tool", "role": "-", "gate": "-", "deps": []},
-        {"id": "b", "label": "B", "type": "human", "role": "QA", "gate": "-", "deps": ["a"], "signal": "task_complete"},
-    ]  # 缺 llm
-    with pytest.raises(TemplateError, match="护栏①"):
-        validate_template(bad)
-
-
-def test_guardrails_reject_non_ancestor_on_fail():
-    bad = [
-        {"id": "a", "label": "A", "type": "tool", "role": "-", "gate": "-", "deps": []},
-        {"id": "b", "label": "B", "type": "llm", "role": "-", "gate": "-", "deps": ["a"]},
-        {"id": "g", "label": "G", "type": "human", "role": "QA", "gate": "过", "deps": ["b"],
-         "signal": "card_action", "on_fail": "x"},  # x 是 g 的下游，非祖先
-        {"id": "x", "label": "X", "type": "tool", "role": "-", "gate": "-", "deps": ["g"]},
-    ]
-    with pytest.raises(TemplateError, match="护栏②b"):
-        validate_template(bad)
-
-
-def test_guardrails_reject_human_without_signal():
-    bad = [
-        {"id": "a", "label": "A", "type": "tool", "role": "-", "gate": "-", "deps": []},
-        {"id": "b", "label": "B", "type": "llm", "role": "-", "gate": "-", "deps": ["a"]},
-        {"id": "c", "label": "C", "type": "human", "role": "QA", "gate": "-", "deps": ["b"]},
-    ]  # human 缺 signal
-    with pytest.raises(TemplateError, match="护栏④"):
-        validate_template(bad)

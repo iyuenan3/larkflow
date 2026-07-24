@@ -27,9 +27,9 @@ def build_graph(executors: Executors, checkpointer):
     """编译固定编排器图。executors 注入 tool/llm 行为；human 走 interrupt。"""
 
     def dispatch(state: OrchestratorState) -> dict:
-        # 回边单点执行：把 failed 门禁的 on_fail + 下游重置 pending（修 A：单写者无竞争）。
+        # 打回单点执行：把 failed gate 的 reopen 组 + 下游重置 pending（修 A：单写者无竞争）。
         # 随后 route 在重置后的 status 上算 ready。dispatch 不扇出，故此写无并发。
-        resets = reopen_resets(state["dag"], state.get("status", {}))
+        resets = reopen_resets(state["dag"], state.get("status", {}), state.get("outputs", {}))
         return {"status": resets} if resets else {}
 
     def route(state: OrchestratorState):
@@ -42,7 +42,7 @@ def build_graph(executors: Executors, checkpointer):
             "outputs": state.get("outputs", {}),
         }
         return [
-            Send(_WORKER[n["type"]], {"node_id": n["id"], **payload_base})
+            Send(_WORKER[n["executor"]], {"node_id": n["id"], **payload_base})
             for n in ready
         ]
 
@@ -65,8 +65,9 @@ def build_graph(executors: Executors, checkpointer):
                 "kind": "human_node",
                 "node_id": nid,
                 "label": node["label"],
-                "role": node.get("role"),
-                "gate": node.get("gate", "-"),
+                "role": node.get("role"),                    # produce | gate
+                "assignee_role": node.get("assignee_role"),  # 派给谁
+                "approval_policy": node.get("approval_policy"),
                 "signal": node.get("signal"),
             }
         )

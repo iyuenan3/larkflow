@@ -20,7 +20,10 @@ from langgraph.types import Command
 from .io.correlations import Correlation, Correlations
 from .io.events import CARD_ACTION, TASK_UPDATE
 from .io.lark_io import Button, LarkIO
-from .model.node import NO_GATE
+
+PASS_LABEL = "通过"
+REOPEN_LABEL = "打回"
+DONE_LABEL = "完成"
 
 
 class LarkFlowService:
@@ -106,10 +109,10 @@ class LarkFlowService:
 
     def _provision(self, instance_id: str, it) -> None:
         v = it.value or {}
-        nid, role, signal = v["node_id"], v.get("role"), v.get("signal")
+        nid, signal = v["node_id"], v.get("signal")
         iid = it.id
         idem = f"{instance_id}:{nid}:{iid}"  # 含中断 id：重放去重、reopen 出新单
-        assignee = self._assignee(instance_id, nid, role)
+        assignee = self._assignee(instance_id, nid, v.get("assignee_role"))
         if signal == "task_complete":
             guid = self.io.create_task(
                 assignee=assignee,
@@ -127,30 +130,27 @@ class LarkFlowService:
             )
             self.corr.put(Correlation(msg, instance_id, iid, nid, "card"))
 
-    def _assignee(self, instance_id: str, nid: str, role: str) -> str:
-        # fix 的执行人优先用 assign 节点定的 owner
+    def _assignee(self, instance_id: str, nid: str, assignee_role: str) -> str:
+        # fix 的执行人优先用 assign 节点定的 owner（seg-1 遗留硬编码，step 8 泛化）
         if nid == "fix":
             owner = (self._values(instance_id).get("outputs", {}).get("assign") or {}).get("owner")
             if owner:
                 return owner
-        return self.resolver.resolve(role)
+        return self.resolver.resolve(assignee_role)
 
     def _criteria(self, v: dict) -> str:
-        gate = v.get("gate")
-        if gate not in NO_GATE:
-            return f"验收标准：{gate}"
-        return f"{v.get('label', '')}：完成后在飞书任务上点「完成」。"
+        label = v.get("label", "")
+        if v.get("role") == "gate":
+            return f"审核「{label}」：通过或打回上游重做。"
+        return f"{label}：完成后在飞书任务上点「完成」。"
 
     def _buttons(self, instance_id: str, iid: str, nid: str, v: dict) -> list[Button]:
         base = {"thread_id": instance_id, "interrupt_id": iid, "node_id": nid}
-        gate = v.get("gate")
-        if gate in NO_GATE:  # 无门禁人节点（如分诊复核）：单确认
-            return [Button("确认", {**base, "verdict": "pass"}, "primary_filled")]
-        pass_label = str(gate)          # 可复现 / 验证通过
-        fail_label = "打回重修" if nid == "qa_verify" else "打回"
+        if v.get("role") != "gate":  # human-produce（定稿确认）：单按钮
+            return [Button(DONE_LABEL, {**base, "verdict": "pass"}, "primary_filled")]
         return [
-            Button(pass_label, {**base, "verdict": "pass"}, "primary_filled"),
-            Button(fail_label, {**base, "verdict": "fail"}, "danger_filled"),
+            Button(PASS_LABEL, {**base, "verdict": "pass"}, "primary_filled"),
+            Button(REOPEN_LABEL, {**base, "verdict": "fail"}, "danger_filled"),
         ]
 
     def _route(self, event: dict) -> dict | None:

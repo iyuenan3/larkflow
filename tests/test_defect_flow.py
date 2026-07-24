@@ -30,12 +30,12 @@ def test_win_g5_reopen_once_then_close():
     assert svc.status(iid)["intake"] == "done"
     assert svc.status(iid)["triage_ai"] == "done"
 
-    svc.resume_from_event(_card_event(io, "triage_review", "确认"))     # 分诊复核
-    svc.resume_from_event(_card_event(io, "reproduce", "可复现"))       # 复现确认
+    svc.resume_from_event(_card_event(io, "triage_review", "通过"))     # 分诊复核
+    svc.resume_from_event(_card_event(io, "reproduce", "通过"))         # 复现确认
     svc.resume_from_event(_task_event(io))                              # 修复 #1 完成
-    svc.resume_from_event(_card_event(io, "qa_verify", "打回重修"))     # G5 打回（reopen）
+    svc.resume_from_event(_card_event(io, "qa_verify", "打回"))         # G5 打回（reopen）
     svc.resume_from_event(_task_event(io))                              # 重修 #2 完成
-    svc.resume_from_event(_card_event(io, "qa_verify", "验证通过"))     # G5 通过
+    svc.resume_from_event(_card_event(io, "qa_verify", "通过"))         # G5 通过
 
     status = svc.status(iid)
     assert all(status.get(n) == "done" for n in NODES), status
@@ -60,7 +60,7 @@ def test_stale_resume_is_noop():
     iid = "wf-2"
     svc.start(instance_id=iid, reporter="ou_r", bug={"title": "x"})
 
-    ev = _card_event(io, "triage_review", "确认")
+    ev = _card_event(io, "triage_review", "通过")
     first = svc.resume_from_event(ev)
     assert "resumed" in first
     second = svc.resume_from_event(ev)  # 重放同一事件
