@@ -1,6 +1,6 @@
 # SPEC · larkflow
 
-⚑ 部分定型（节点契约 + 引擎契约 + 产出协议已定，seg-1 本地跑通 + 产出闭环实测；卡片视觉 schema 待 dev app）。
+⚑ 部分定型（节点契约含投票 / 分支 / 打回权限 + 引擎契约 + 产出协议已定，seg-1 本地跑通 + 产出闭环实测；卡片视觉 schema / 引擎前端 API / 生成契约待 dev app + 原型）。
 
 ## 模板节点契约（ADR-015：executor × role + 配置）
 一张模板 = 节点数组，节点：
@@ -17,35 +17,44 @@
   prompt:   string                        # 生成 / 评分指令
   model_role: string                      # 路由到哪个 LLM 角色
   # gate 专属
-  approval_policy: "auto" | "single" | "any" | "all"   # 放行策略（auto = bypass）
+  approval_policy: "auto" | "single" | "any" | "all" | {threshold: expr}  # 放行策略（auto=bypass；threshold=投票阈值，ADR-025）
   # human 专属
   assignee_role: string                   # 派给谁（开发 / QA / 负责人…）
   signal:   "task_complete" | "card_action" | "message"  # 完成信号来源
+  # 多人节点（投票 / 会签，ADR-025）
+  vote:    { voters: assignee_role[], primary: assignee_role, policy: expr }  # voters / 主负责人(primary) / 聚合阈值（用 assignee_role 而非 role=produce|gate）
+  # 条件分支（ADR-025）
+  when:    { <decision_node_id>: value }   # 守卫：上游决策值匹配才 eligible，否则 skipped
 }
 ```
-- 边由 `deps` 表达。**打回不在模板里预声明单目标**：gate 节点运行时产出 `{passed, reopen: [节点 id…], comment}`，`reopen` 是当场手选的一组；引擎把该组 + 其传递下游重置 `pending`（选择性重算，`larkflow/engine/gates.py` 的 `stale_downstream`）。
-- 生成新模板走 few-shot 护栏（三型齐全 / 每 gate 配回边 / 放行节点强制 human / human 声明 signal），校验落 `larkflow/model/template.py`（ADR-010）。
+- 边由 `deps` 表达。**打回不在模板里预声明单目标**：gate 节点运行时产出 `{passed, reopen: [节点 id…], comment}`，`reopen` 是当场手选的一组；引擎把该组 + 其传递下游重置 `pending`（选择性重算，`larkflow/engine/gates.py` 的 `stale_downstream`）。`reopen` 合法域（每个目标须 ⊆ gate 的 deps 传递祖先）在**运行时**校验、非法则拒（seg-1 的模板期护栏②b 随 v1 搬到运行时）。
+- **投票门 / 决策表决产出（ADR-025）**：A 类审批投票门（role:gate + 阈值 approval_policy）票到阈值 → 引擎自动判 `{passed, reopen}`（reopen 默认 = 把关的上游，主负责人可加宽）；B 类决策表决（role:produce）产出决策值到 `outputs[node]`，不自动打回。
+- **打回权限契约（ADR-023）**：某人可见的打回候选 = 机制合法（⊆ 传递祖先）∩ 权限允许。权限 = 纯函数 `allowed_reopen(dag, actor_openid, project_owner, node_assignees, from_node) -> set[node_id]`：owner 全域；参与人限「重算集不牵连别的人工节点」的责任段；集体投票（A 类）另算。审核卡 / 画布据此过滤候选。
+- **条件分支 skip / ready（ADR-025）**：节点 `skipped` ⟺ `when` 守卫失配 或 所有 deps 都 skipped；节点 ready ⟺ pending 且 deps 全 done/skipped 且 ≥1 dep done 且守卫通过。分支从 deps + 守卫涌现。打回决策节点 → 其 skipped 下游复活为 pending。
+- 生成新模板走 few-shot 护栏（三型齐全 / 每 gate 有可回退祖先 / 放行节点强制 human / human 声明 signal / human 节点 ≥1 负责人 / 多人节点须 1 主负责人 / 条件分支决策取值域被分支守卫全覆盖或留默认支），校验落 `larkflow/model/template.py`（ADR-010 / ADR-023 / ADR-025）。
 - seg-1 首个实例化模板 = 缺陷生命周期（`larkflow/templates/defect.yaml`，8 节点 = ADR-009 完整 11 节点计划的 as-built 退化子集，seg-2 回填 ci_test/code_review/release_note；ADR-009 / ADR-012）。
+- **as-built vs v1 字段名（迁移待 step 1）**：现 `node.py` / `defect.yaml` / `gates.py` 仍用 seg-1 旧契约，须迁到本节 v1 schema：`type` → `executor`；seg-1 的 `role`（业务指派串，如 负责人/QA/开发）→ 本节 `assignee_role`，v1 新增的 `role` ∈ {produce, gate} 是正交维（消解撞名）；门禁判据从 `gate` 字符串 + 静态 `on_fail` 单目标 → `role=="gate"` + `approval_policy` + 运行时 `reopen`。
 
 ## 交付物产出 / 消费协议（ADR-016，产出闭环已实测）
 - 交付物 = 飞书 handle（doc token / 云盘 file token），模型 `(容器, region)`。
+- **handle 权威登记（ADR-020）**：produce 末步把物化得到的 handle（+ region + type）写进 `state.outputs[node_id]`，它是交付物 handle 的**唯一权威登记表**；节点 schema 的 `deliverable.container` 是活图 dag 里的声明位 / create 后回填指针，非第二份权威。下游经 `outputs[dep]` 取 handle 再 fetch 正文；reopen 不清 outputs，故未重算旁支跨 overwrite 复用旧 handle。
 - **produce**：`markdown +create`（首跑）/ `+overwrite`（重跑，handle 不变、飞书自动留版本）；docx 用 `docs +create/+update`；二进制走 `drive +upload`。
 - **consume**（下游 llm 读上游正文）：`markdown +fetch` / `docs +fetch`。
 - **审计 / 版本**：`markdown +diff`、`drive +version-history`、`docs +history-*`（引擎不自建版本）。
 - 闭环已在测试组织实测通过（handle 跨 overwrite 稳定 = 选择性重算「旁支复用」的实证基础，详见 MEMORY 2026-07-24）。
 
 ## 引擎运行时契约（seg-1 本地 e2e 跑通）
-- LangGraph state（禁改项：只放执行游标 + scratch）：`{dag, status(reducer), outputs(reducer), meta}`。**`dag` 是可写 channel**，改它 = 运行时改图（受控活图，ADR-013）。业务真相源 = SQLite checkpointer（thread_id = 实例 id）；飞书 = 投影。
+- LangGraph state（禁改项：只放执行游标 + scratch）：`{dag, status(reducer), outputs(reducer), meta}`（`status` ∈ pending / running / done / failed / skipped，skipped = 条件分支未选支，ADR-025）。**`dag` 是可写 channel**，改它 = 运行时改图（受控活图，ADR-013）。业务真相源 = SQLite checkpointer（thread_id = 实例 id）；飞书 = 投影。
 - 固定编排器图：`START → dispatch → [Send(<executor>_worker, payload)…] 或 END`，`worker → dispatch`（唯一真环边）。worker 从 Send payload 读 node_id/dag（**Send 的 payload 是 worker 完整输入 state，不并入主 channel**）。
 - human 节点纯挂起（`interrupt()` 只传数据）；飞书任务 / 卡由驱动层 `LarkFlowService` 在 `__interrupt__` 后建，`idem_key` 含 `interrupt.id`（重放去重、reopen 出新单）。`durability="sync"`。
 
 ## 飞书事件订阅 EventKey（研究证实为静态常量，不需 dev app 上下文）
 - `card.action.trigger`（仅 bot）：卡片按钮点击。路由键塞按钮 `behaviors[].callback.value`，原样回传为 `action_value`（自描述 `{thread_id, interrupt_id, node_id, passed, reopen}`，与 gate 产出的 `passed`/`reopen` 逐字对齐）。⚠️ dev app 须在开发者后台开「事件与回调 → 回调配置」，否则静默零事件。
 - `task.task.update_user_access_v2`（user|bot）：任务事件。完成 = `.event.event_types[]` 含 `task_completed_update`（自行 filter）；`.event.task_guid` 经关联表回映射到 `(thread_id, interrupt_id)`。
-- human-produce 定稿信号（发消息）：走 IM 消息事件（待 dev app 定确切 EventKey）。
+- human-produce 定稿信号：优先用 `task_complete` / `card_action` 结构化信号（ADR-021，无歧义）；发消息（message）变体走 IM 消息事件、推迟（待 dev app 定确切 EventKey，且消息无自描述封套、到中断的关联需另设计）。
 
 ## 待填（dev app 建好后验）
-- 卡片视觉 schema（派单卡 / 门禁卡通过·打回·多选 reopen / 定稿确认卡的排版），role → open_id 通讯录解析。
+- 卡片视觉 schema（派单卡 / 门禁卡通过·打回·多选 reopen / 定稿确认卡的排版），assignee_role → open_id 通讯录解析。
 - 共享协同拓扑的 docx block_id 跨 update 稳定性（v2）。
 - 引擎读 / 命令 API（供前端，ADR-019；形态待原型后定）：
   - **读**：画布要整张 `dag`（节点 + 边 + pending 子图 + 状态），多维表格行式投影可能不够；定「整图读接口 + 返回字段 + 刷新 / 实时模型（轮询 / 推送）」。

@@ -97,6 +97,7 @@
 - Decision: 节点 = **executor(tool/llm/human) × role(produce/gate) + 配置**，两正交维度自由组合，业务差异全下沉配置，引擎不为业务新增节点类型。gate 一个配置轴 `approval_policy`（`auto` bypass / `single` / `any` / `all` 会签），吃掉「exec_mode / 自动通过」。**修正**：win 核心不是五维 AI 评分，而是「可换执行体（人 / AI）+ auto/会签 + 打回流转」；五维评分降为可选增强（Later）。
 - Alternatives(否决): 按业务枚举节点类型（合同 / PRD / 视频节点，爆炸、不可复用）；强制五维 AI 评分门禁（两个真实场景的门禁其实是人拍板 + 可选 AI 审，五维非刚需）。
 - Tradeoff: `human-produce` 与 `human-gate` 完成语义不同（定稿信号 vs 卡片），配置分开。**修正立项「评分门禁」为 win 卖点的表述**（CORE / PRD 已同步）。
+- → 2026-07-24：「auto / 会签」是 approval_policy 放行策略轴的卖点叙事（对比五维评分），非 v1.0 特性清单；会签(any/all/threshold) runtime 落 v1.3（ADR-025 / ROADMAP），严格 v1.0 门禁 = auto + single。
 
 ## ADR-016 · 2026-07-24 · 交付物 = (容器, region) 统一飞书文档 handle + 飞书原生版本 + produce/consume 协议
 - Problem: 交付物形态（网址 / 视频 / 文档）如何统一；两种拓扑（各自产出再合并 vs 同文档协同）如何用一个模型表达；版本化怎么做。
@@ -116,6 +117,7 @@
 - Decision: **模型统一（`(容器,region)` 盖两种）、实现分期**。v1 只做独立 doc 拓扑（`region=whole`，markdown + merge 节点，produce 闭环已实测），先落一个「各自产出再合并」真项目（合同类）。v2 做共享协同（`region=section`，docx + 预划 section + 子项目回填 + 会签 + AI-gate）。
 - Alternatives(否决): 一期同上两种拓扑（并发写 section / docx block_id 稳定性 / 子项目回填三重复杂度压 v1）；只做静态独立 doc 不留 section（模型不完整，v2 要改模型）。
 - Tradeoff: v1 首个真项目具体选哪个待定（合同最贴）；共享协同的 docx section 稳定性 v2 先验。
+- → 2026-07-24：本条 v2 bundle 里「会签」随 ADR-025 提前到 v1.3、「子项目回填」随 ADR-024 提前到 v1.2；v2 只余 region=section 共享协同拓扑本身（见 ROADMAP / CHANGELOG）。
 
 ## ADR-019 · 2026-07-24 · 前端形态：真前端（妙搭为主 / 自建 H5 备选），修订 cards-only
 - Problem: 只用卡片讲不清 larkflow 的命根子（可编辑的活图 + 打回选择性重算），需要一个能「看到整张流程、在上面点和改」的前端。
@@ -123,3 +125,50 @@
 - Decision: 做真前端。**妙搭（Miaoda）为主 + 本地开发**（飞书官方 app 平台，托管 `aiforce.cloud` + 工作台原生 + 能塞自定义 UI 承载活图画布），**开放平台自建 H5 为备选**（要完全自控 / 自托管时）。前端 = 引擎的投影 + 客户端；卡片 / 任务 / 文档仍是引擎的手（hybrid）。
 - Alternatives(否决): 守 cards-only（ADR-011：卡片讲不清活图，本 ADR 修订它）；aily（AI 智能体平台，做不了 app UI）；一上来纯自建 H5（自托管 web + 域名 + 证书最重，降级为备选）。
 - Tradeoff: **修订 ADR-011 + ADR-004 的「MVP 零自建前端」条款**（cards-only → 真前端；飞书原语复用 / hybrid 部分仍有效）；**松动 ADR-007**（引擎要暴露读 / 命令 API，或退飞书原生轨，见 DEPLOYMENT）；引入新平台依赖（妙搭）。前端↔引擎集成的一批开放问题（传输可达性 / 画布数据来源 / 改图命令回写 + 校验 + 鉴权 / cards vs app 双输入面）待原型验证 + 后续拍，记在 SPEC 待填 / DEPLOYMENT / ROADMAP（勿当已定）。
+
+## ADR-020 · 2026-07-24 · 交付物 handle 权威登记家 = state.outputs[node_id]（deliverable.container 降为声明位）
+- Problem: 交付物 = 带 type 的飞书 handle，模型 `(容器, region)`（ADR-016）。写第一个 produce 执行体前须敲定 handle 的权威登记表落在哪：`state.outputs[node_id]`（现标 scratch）还是节点 schema 的 `deliverable.container`（dag channel，活图声明位）。两者并存当权威会让 produce / merge / 选择性重算三处 churn。
+- Constraint: 单一事实源不破（业务真相源 = checkpointer，ADR-002）；选择性重算「旁支复用旧产出」依赖 handle 跨 overwrite 稳定（ADR-014 / ADR-016，已实测）。
+- Decision: **`outputs[node_id]` 是交付物 handle 的唯一权威登记表**（它在 state 里、随 checkpointer 持久，故仍 checkpointer 权威、飞书仍投影）。承接 seg-1 已验证机制：下游经 `state["outputs"].get(dep)` 读上游产出、reopen 从不清 outputs，故未重算旁支跨 overwrite 仍读旧 handle（选择性重算「旁支复用」的实证基础）。`deliverable.container` 降为**活图 dag 里的声明位 / produce create 后回填的指针**，非第二份权威；两者回填一致性由 produce 执行体末步保证。
+- Alternatives(否决): `deliverable.container` 当权威（dag channel 上另建读回机制，活图改 dag 时须防覆盖已回填 handle，churn 更大）；引擎自存交付物内容本体（破单一事实源，ADR-016 已否）。
+- Tradeoff: outputs 是 scratch reducer channel（node_id 键不相交、可交换合并），兼作登记表须守「每 worker 只写自己键 + reopen 不清 outputs」不变量（seg-1 已成立，v1 改动勿破）。**refine SPEC 产出协议 + ARCHITECTURE 交付物节 + 禁改项**（已同步）。
+
+## ADR-021 · 2026-07-24 · 入口与意图路由：结构化 + @bot NL 双入口，都收敛到 start(template, inputs)，带确认步
+- Problem: 一条飞书消息进来，引擎怎么知道要「起新项目 / 操作已有项目 / 只是问一句」？现有引擎假设「已经知道起哪个项目」（`start(template, inputs)` 被明确调用），缺一层意图识别。
+- Constraint: 单一事实源不破；ADR-003 对「AI 现场决策」持谨慎（易畸形、要兜底）。
+- Decision: 两个入口**都收敛到 `start(template, inputs)`**，引擎入口无关。① **结构化**：妙搭「新建项目」表单（选模板 + 填要素），精确 / 兜底。② **@bot NL（倾向主入口）**：pre-graph **意图路由层**（intent 分类 + 模板匹配 / 生成 + 要素抽取 + 兜底降级）产出一份「项目定义提议」→ **确认步**（人看 / 改 / 起）。定稿 / 审核优先用结构化信号（完成任务 / 点卡片），自由文本消息只当**内容**不当**信号**。
+- Alternatives(否决): 纯结构化入口（放弃 NL 自然体感）；纯 NL 无确认（赌 AI 一次对，破 ADR-003 谨慎）。
+- Tradeoff: 意图路由层是**引擎外独立一层**（v1.1 实现），引擎 headless 不依赖它。确认步把 NLU 从「赌」变「AI 提议 + 人拍板」，同构于产品 produce/gate 哲学。
+
+## ADR-022 · 2026-07-24 · 模板生成升为主路径（few-shot 种子 + 纯生成），受控活图 + 确认降低 ADR-003 生成风险
+- Problem: 用户要「主要靠 AI 现场生成业务图」，与 ADR-003「路线 1 策展起步」、ADR-010「few-shot 生成」如何合流并降险。
+- Constraint: 生成图仍须结构合法（`validate_template` 护栏）+ 不破单一事实源。
+- Decision: 生成升为**主路径**：有种子借种子（few-shot 检索最近 2-3 张）、无种子也能纯生成；两者都强制过护栏 + 确认步。准确率抓手：结构化输出 schema、护栏拒畸形自动重生成、确认 + 受控活图人工补正、**飞轮**（确认过的图回收进种子库）、多候选生成选优。
+- Alternatives(否决): 守 ADR-003「路线 1 优先」（覆盖窄、违用户诉求）；纯生成不设护栏 / 确认（易畸形，正是 ADR-003 原顾虑）。
+- Tradeoff: **softens ADR-003「路线 1 优先」与 ADR-010 定位**：ADR-003 当年怕生成，是因无确认步 / 无受控活图；二者俱在后，生成从「一次浇死」变「AI 起草图、人定稿图、运行中可改」。生成质量是独立开放轴，**v1 的 win 不押它**（win 用策展合同图，见 ROADMAP）。
+
+## ADR-023 · 2026-07-24 · 打回权限模型：机制 × 权限两层 + 防踢皮球精确判据 + 节点负责人 / 主负责人 + escalation
+- Problem: 谁能打回哪些节点？要防参与人把上游 / 同级他人的活踢回去返工（踢皮球）。
+- Constraint: 机制层已有（选择性重算 reopen ⊆ 传递祖先，ADR-014 / ADR-020）。
+- Decision: 打回 = **机制层 ∩ 权限层**。权限层：① **项目 owner** 可打回本项目任一祖先节点。② **参与人（人工节点 H 的负责人）** 可打回 N 当且仅当 N ∈ 传递祖先(H) 且**重算集(N ∪ 传递下游)里除 H 自己与 H 的下游人工节点外，不牵连任何别的人工节点**（串行时退化为「最多到上一个人工节点」）。③ 跨界打回走 **escalation**：通知 {项目 owner + 目标节点负责人（多人节点取主负责人）}，任一方同意即执行（轻量版）。**节点负责人**：每个人工节点 ≥1 负责人；多人节点设 1 名**主负责人**为手动打回权主体。打回权威两源：个人主体（owner / 主负责人 / 责任段参与人）+ 集体投票（A 类阈值自动，ADR-025）。
+- Alternatives(否决): 只按「上一个人工节点」路径判（DAG 并行分支下漏踢皮球：打回共同上游会连累旁支他人的人工节点）；人人可全域打回（破责任边界）。
+- Tradeoff: 权限层 = 纯图函数 `allowed_reopen(dag, actor, owner, assignees, from_node)`，可穷举测；候选集 = 机制合法 ∩ 权限允许，审核卡 / 画布据此过滤。escalation v1 只做「申请 + 通知 + 一键同意」。
+
+## ADR-024 · 2026-07-24 · 子项目 spawn：交付物流转递归自身 + 回填 + 边界隔离
+- **Status（暂定）**：设计草案，v1.2 首个真子项目校验前，模型级取值（回填协议 / 打回粒度 / 深度上限）视为暂定、可改。
+- Problem: 参与人接到一个节点（如「编写合同法律部分」），想把它拆成自己的一张流程图来完成。
+- Constraint: 单一事实源不破（父子各自 checkpointer 权威）；ADR-016 / ADR-020 的交付物 handle 模型。
+- Decision: **子项目 = larkflow 递归自己**。一个 produce 节点的交付物，可由「人写 / AI 写 / 一整个子项目产出」。子项目 = 独立 larkflow 项目（自己的 thread / owner / 参与人），其最终交付物 handle **回填**父节点 `outputs[node]`（ADR-020）。父节点挂起等子实例完成信号（**复用 interrupt / 挂起 + 关联表 + 幂等**，与 human 节点等人点卡同机制）。边界：父 owner 可打回父节点（= 整个子项目重开），**够不到子项目内部**；子 owner 全权管子内部，规则递归。
+- Alternatives(否决): 节点只能人 / AI 直接产出（表达不了多方接力的自然下钻）。
+- Tradeoff: 新增 spawn + 回填 + 父子关联（扩关联表）+ 防下钻失控（深度上限）。打回粒度 v1 简单：「打回节点 = 整个子项目重开」。**refine ADR-018：子项目从 v2 提到 v1.2**；子项目内部选择性重算留 v2。
+
+## ADR-025 · 2026-07-24 · 多人节点：投票门(A) / 决策表决(B) + 条件分支（when 守卫 / skipped）
+- **Status（暂定）**：设计草案，v1.3 首个真多人 / 分支项目校验前，模型级取值（默认支 / skipped 复活 / 投票阈值 / escalation 阈值）视为暂定、可改。
+- Problem: 多人节点怎么建模；「审上游交付物」与「对未来的决策表决」是两回事；条件分支怎么表达而不新增节点类型。
+- Constraint: 节点契约恒为数据、引擎不为业务新增节点类型（ADR-015 红线）。
+- Decision: 多人节点 = `human × role + vote 配置`。**投票 = 会签(any/all) 推广到阈值**。
+  - **A 类 审批投票门**（role:gate）：阈值 `approval_policy`（如 `reopen_if 反对 > 1/3`）；票到阈值 → 引擎**自动** pass / reopen（集体投票 = 打回权威，是「只有主负责人打回」的例外）；reopen 目标 = 把关的上游（默认，主负责人可加宽）。
+  - **B 类 决策表决**（role:produce）：产出决策值到 `outputs[node]`，**不自动打回**；要打回上游只能主负责人手动。
+  - **条件分支**：B 永远只产决策值；下游用法分两种 —— 当参数读 = 参数化下游（情况 1）；带 `when: {B: 值}` 守卫 = 选分支（情况 2），未匹配节点标 `skipped`（置灰）。引擎加两零件：节点 `when` 字段 + `skipped` 终态。ready 规则见 SPEC；**分支从 deps + 守卫涌现，引擎不识「分支」概念**。
+- Alternatives(否决): 按业务枚举投票 / 分支节点类型（爆炸）；单独维护「分支集」数据（deps + 守卫已能涌现，多余）。
+- Tradeoff: 三条新护栏 / 不变量 —— 决策取值域须被分支守卫全覆盖（或留默认支，否则某取值下全 skip、饿死汇合点）；打回决策 = skipped 复活（`reopen_resets` 加 skipped→pending）；**置灰 ≠ 删除**（skipped 是引擎按决策没跑、可复活；活图删除是 owner 拿掉、没了）。**extends ADR-015**（`approval_policy` 加 threshold）。投票 + 分支落 v1.3。
