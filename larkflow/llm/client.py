@@ -1,8 +1,8 @@
-"""LLM 节点（triage_ai）：只走 newapi 网关（红线），不直连厂商。
+"""LLM 节点（triage_ai）：OpenAI 兼容接口，按任务角色路由（ADR-017），不直连厂商专有 SDK。
 
-StubLLM   本地 e2e 用，固定返回，零网络。
-NewApiLLM 真调用：OpenAI 兼容，base_url=newapi /v1，key 走 env（不入库），
-          自签 TLS 靠 CA bundle 绝对路径（绝不 verify=False）。
+StubLLM         本地 e2e 用，固定返回，零网络。
+OpenAICompatLLM 真调用：从 env 按角色读 (base_url, api_key, model)（key 不入库）；
+                如供应商用自签 TLS，可传 ca_bundle（绝不 verify=False）。
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ class StubLLM(LLMClient):
         return dict(self.fixed)
 
 
-class NewApiLLM(LLMClient):
+class OpenAICompatLLM(LLMClient):
     """真飞书阶段接通。本地测试不构造它（避免引入网络 / 证书依赖）。"""
 
     SYSTEM = (

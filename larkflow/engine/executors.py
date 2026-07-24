@@ -25,7 +25,7 @@ class Executors:
     ):
         self.io = io                      # LarkIO（Mock 或 Cli）
         self.resolver = resolver          # role -> assignee(open_id)
-        self.llm = llm                    # LLMClient（stub 或 newapi）
+        self.llm = llm                    # LLMClient（stub 或真实 LLM 路由）
         self.tool_handlers = tool_handlers or {}
         self.llm_handlers = llm_handlers or {}
 

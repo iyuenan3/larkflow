@@ -1,7 +1,7 @@
 """装配：把引擎 + IO + LLM + 驱动缝成一个可用的 LarkFlowService。
 
 build_defect_service 默认全本地（MockLarkIO + StubLLM + 内存 SQLite），零外部依赖，
-供 e2e 测试与本地演示。真飞书阶段传入 CliLarkIO + NewApiLLM + 文件 checkpointer 即可，
+供 e2e 测试与本地演示。真飞书阶段传入 CliLarkIO + OpenAICompatLLM + 文件 checkpointer 即可，
 引擎 / 驱动 / 模板一行不改。
 """
 from __future__ import annotations
@@ -14,8 +14,7 @@ from .config import RoleResolver
 from .engine import Executors, build_graph
 from .io import Correlations, MockLarkIO
 from .io.lark_io import LarkIO
-from .llm import StubLLM
-from .llm.newapi import LLMClient
+from .llm import LLMClient, StubLLM
 from .model import load_template
 from .service import LarkFlowService
 from .templates import DEFECT_LLM_HANDLERS, DEFECT_TOOL_HANDLERS

@@ -18,7 +18,7 @@ def intake(node: dict, state: dict, ex: Executors) -> dict:
 
 
 def triage_ai(node: dict, state: dict, ex: Executors) -> dict:
-    """AI 分诊：定级 / 定类 / 建议负责人（走 newapi；本地用 stub）。"""
+    """AI 分诊：定级 / 定类 / 建议负责人（走多角色 LLM 路由；本地用 stub）。"""
     bug = state.get("meta", {}).get("bug", {})
     triage = ex.llm.triage(bug) if ex.llm else {}
     return {"ok": True, "triage": triage}
