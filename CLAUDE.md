@@ -4,7 +4,7 @@
 > 当前：立项 · 第一段引擎已跑通（2026-07-24）；第二轮设计定（交付物流转，ADR-012..018）。
 
 ## 状态
-第一段本地引擎已跑通（8 节点缺陷流）。定位升格为交付物流转引擎（受控活图 + 选择性重算 + 交付物 (容器,region)，见 `AIREADME/ARCHITECTURE`）。下一步：建 dev 飞书 app + v1 独立 doc 拓扑真项目跑通。
+第一段本地引擎已跑通（8 节点缺陷流）。定位升格为交付物流转引擎（受控活图 + 选择性重算 + 交付物 (容器,region)，见 `AIREADME/ARCHITECTURE`）。前端定为妙搭（本地开发，ADR-019 修订 cards-only）。下一步：妙搭前端原型验活图画布 + 建 dev 飞书 app + v1 独立 doc 真项目。
 
 ## 加载路由（任务 → 读）
 | 任务 | 读 |
@@ -30,5 +30,5 @@
 
 ## 元信息
 - git: main。slug `larkflow` / 中文名「飞流」。
-- 依赖：飞书开放平台 + lark-cli + LLM 多角色路由 + LangGraph（见 `AIREADME/RELATIONS`）。
+- 依赖：飞书开放平台 + lark-cli + 妙搭前端 + LLM 多角色路由 + LangGraph（见 `AIREADME/RELATIONS`）。
 - AIREADME 体系：`/aireadme` 触发维护；标准在 `~/.claude/skills/aireadme/`。
