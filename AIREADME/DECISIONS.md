@@ -24,6 +24,7 @@
 - Decision: 飞书当身体，复用原语：IM 机器人 + 卡片 / 任务 / 多维表格 / 云文档 / 画板 / 审批。MVP 零自建前端。
 - Alternatives(否决): 自建全套前端与待办系统（重、偏离飞书原生定位）。
 - Tradeoff: 受飞书原语能力与 API 限制。
+- → 2026-07-24：其中「MVP 零自建前端」条款被 ADR-019 修订为妙搭真前端；本 ADR 的飞书原语复用 / hybrid 部分仍有效。
 
 ## ADR-005 · 2026-07-23 · lark-cli 定位 = 出口 + 工具手；入口方案待验
 - Problem: 「深度依赖 lark-cli」的边界。
@@ -43,6 +44,7 @@
 - Decision: 引擎宿主用 alicloud-sh；checkpointer 用 **SQLite**（langgraph-checkpoint-sqlite），单租户团队 MVP 足够，省下 Postgres 内存。事件入口是出站长连接（见 ADR-005），**该机无需开任何入站端口 / 域名 / 证书**，当前只开 22 的锁死状态正合适。
 - Alternatives(否决): Postgres checkpointer（1.6G 内存吃紧）；新购云主机（现有闲置够用）。
 - Tradeoff: 内存吃紧后再升配或迁 Postgres；SQLite 并发写有限，单租户可接受。
+- → 2026-07-24：前端读 / 命令 API 需求（ADR-019）松动本条「无入站端口」；能否成立取决于妙搭云托管能否够到本机（见 DEPLOYMENT 传输可达性命门），不成立则退「命令走飞书原生轨、引擎只出站」保本条。
 
 ## ADR-008 · 2026-07-23 · 开发用独立飞书租户（clean-room 测试组织）
 - Problem: 在哪个飞书租户建、用谁的凭证。
@@ -69,6 +71,7 @@
 - Decision: MVP = app 注册到工作台 + bot + 交互卡片 + 飞书任务，近乎零前端。小程序 / H5 全局面板延后（采用证明后、需全局视图时再加）。
 - Alternatives(否决): MVP 即建小程序 dashboard 首页（不服务「先证采用 + 门禁」、增前端成本）。
 - Tradeoff: leader 暂无自建全局看板，靠飞书多维表格投影凑合。
+- → 2026-07-24：cards-only 被 ADR-019 修订为真前端（妙搭为主）；飞书原语复用 / hybrid 仍有效。
 
 ## ADR-012 · 2026-07-24 · 定位升格：从「跑固定流程」到「交付物在会变的图上流转」
 - Problem: 两个真实场景（合同起草、PRD 细化）表明「缺陷流」只是特例，通用形态是交付物在会变的图上被多方接力生产 / 审核、反复打回。
@@ -119,4 +122,4 @@
 - Constraint: 单一事实源不破（checkpointer 权威）；飞书原生；尽量少自建基建。
 - Decision: 做真前端。**妙搭（Miaoda）为主 + 本地开发**（飞书官方 app 平台，托管 `aiforce.cloud` + 工作台原生 + 能塞自定义 UI 承载活图画布），**开放平台自建 H5 为备选**（要完全自控 / 自托管时）。前端 = 引擎的投影 + 客户端；卡片 / 任务 / 文档仍是引擎的手（hybrid）。
 - Alternatives(否决): 守 cards-only（ADR-011：卡片讲不清活图，本 ADR 修订它）；aily（AI 智能体平台，做不了 app UI）；一上来纯自建 H5（自托管 web + 域名 + 证书最重，降级为备选）。
-- Tradeoff: **修订 ADR-011**（cards-only → 真前端）；**松动 ADR-007**（引擎要暴露读 / 命令 API 给前端，非纯无入站端口）；引入新平台依赖（妙搭）。前端具体架构（引擎 API 形态、cards vs app 边界、画布可行性）待妙搭原型验证后细化。第一步 = 妙搭 html 创意模式可交互原型验画布。
+- Tradeoff: **修订 ADR-011 + ADR-004 的「MVP 零自建前端」条款**（cards-only → 真前端；飞书原语复用 / hybrid 部分仍有效）；**松动 ADR-007**（引擎要暴露读 / 命令 API，或退飞书原生轨，见 DEPLOYMENT）；引入新平台依赖（妙搭）。前端↔引擎集成的一批开放问题（传输可达性 / 画布数据来源 / 改图命令回写 + 校验 + 鉴权 / cards vs app 双输入面）待原型验证 + 后续拍，记在 SPEC 待填 / DEPLOYMENT / ROADMAP（勿当已定）。

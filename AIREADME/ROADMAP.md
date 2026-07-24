@@ -5,7 +5,7 @@
 - 引擎起在 alicloud-sh：Python + LangGraph + SQLite checkpointer（ADR-007）。
 - **独立 doc 拓扑**跑通：produce/gate 节点 + 选择性重算打回 + `auto`/`single` 审核 + 交付物 = 飞书 markdown handle + merge 节点（ADR-016 / ADR-018）。
 - 接 LLM 多角色路由（OpenAI 兼容，ADR-017）。
-- **前端原型（妙搭本地开发，ADR-019）**：先做 html 创意模式可交互原型验活图画布（项目详情 + 画布 + 审核，mock 数据），部署测试组织出体感。
+- **前端原型（妙搭本地开发，ADR-019）**：先验运行时三命门（① 妙搭 app 能否 egress 够到外部引擎，或退飞书原生轨 ② 自定义可交互图库能否在妙搭 app 内跑（拖拽 / 增删节点，受 CSP / 组件约束）③ 实时数据绑定驱动画布）；创意 HTML 只作视觉稿、不作可行性依据。三命门过了再做项目详情 + 画布 + 审核体感。
 - 达成第一个 win（见 PRD）：一个真实交付物流转项目（合同类）端到端跑通、打回选择性重算、运行中改图、auto-approve。
 
 ## Next（v2 · 共享协同 + 会签 + 子项目）
@@ -23,4 +23,4 @@
 - 自建 H5 备选（若妙搭承载不了活图画布再上，ADR-019）；是否落团队租户（ADR-008）。
 
 ## 搁置
-- 见 CORE Non-Goals（通用 iPaaS / MVP 自建前端面板 / 对 C 收费·多租户 SaaS），不在此复述理由。
+- 见 CORE Non-Goals（通用 iPaaS / 从零自造客户端 / 对 C 收费·多租户 SaaS），不在此复述理由。

@@ -47,4 +47,8 @@
 ## 待填（dev app 建好后验）
 - 卡片视觉 schema（派单卡 / 门禁卡通过·打回·多选 reopen / 定稿确认卡的排版），role → open_id 通讯录解析。
 - 共享协同拓扑的 docx block_id 跨 update 稳定性（v2）。
-- 引擎读 / 命令 API（供妙搭前端读节点状态 / 交付物 + 发审核 / 改图命令，ADR-019；形态待妙搭原型后定）。
+- 引擎读 / 命令 API（供前端，ADR-019；形态待原型后定）：
+  - **读**：画布要整张 `dag`（节点 + 边 + pending 子图 + 状态），多维表格行式投影可能不够；定「整图读接口 + 返回字段 + 刷新 / 实时模型（轮询 / 推送）」。
+  - **改图命令**：报文 schema（op + 目标节点 + deps）；**校验在引擎权威侧**（复用 ADR-013：只改 pending / 仍是 DAG / 不删在跑节点）；乐观并发（命令带读取时 checkpoint 版本，冻结线已推进则拒、令前端重取）；命令经 checkpointer `update_state` 改 dag channel 并触发下一 dispatch。
+  - **鉴权**：调用方认证（服务间 token / mTLS / 飞书身份透传择一）；命令带已验证操作人 open_id，供 gate `approval_policy=any/all` 按人归因去重；最小权限（前端只能对 pending 子图与本人有权的 gate 发命令）。
+  - **cards 与 app 双输入面**：同一 interrupt 决策用统一幂等键（含 interrupt_id）跨两面去重；app 命令复用卡片自描述封套，引擎单处理器消费。
