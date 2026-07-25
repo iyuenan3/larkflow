@@ -3,7 +3,7 @@
 > 飞书原生的**交付物流转**工作流引擎（LangGraph 驱动）。
 > 在一张*项目进行中可编辑*的图上，AI、人、工具接力产出并审核一份交付物，任意打回、只重算受影响的部分，直到发起人认可后交付。全程落在飞书里。
 
-**状态**：引擎核心 + 服务层已落码（267 测绿，全程 Mock / Stub / 内存库）· **真飞书环境一次没跑过**（差 dev 应用与事件回调）。详细真相源见 [`AIREADME/`](AIREADME/INDEX.md)。
+**状态**：引擎核心 + 服务层已落码（280 测绿，全程 Mock / Stub / 内存库）· **真飞书环境一次没跑过**（差 dev 应用与事件回调）。详细真相源见 [`AIREADME/`](AIREADME/INDEX.md)。
 
 ---
 
@@ -62,7 +62,7 @@ larkflow/
   store.py           多进程共用一个 SQLite（WAL + busy_timeout + 跨进程实例锁）
   __main__.py        CLI（serve / start / status / pending / unblock / reconcile）
   demo.py            本地演示入口（不联网）
-tests/               267 e2e / 单元测试（零外部依赖）
+tests/               280 e2e / 单元测试（零外部依赖）
 ```
 
 ## 本地跑
@@ -73,7 +73,7 @@ tests/               267 e2e / 单元测试（零外部依赖）
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest -q                              # 267 passed
+pytest -q                              # 280 passed
 
 python -m larkflow.demo --auto         # 自动跑一遍合同图，打印「打回省算」的证据
 python -m larkflow.demo                # 交互式：你扮演所有的人，h 看命令

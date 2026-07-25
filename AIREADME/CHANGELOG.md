@@ -1,5 +1,19 @@
 # CHANGELOG · larkflow
 
+## v0.5.1 · 2026-07-26 · 收口上一轮没验完的 finding（假审计 / 静默失败 / 一个推进死角）
+- 背景：v0.5.0 的对抗 review 出了 20 条 finding，为控成本只验了最重的 5 条，**15 条不是低价值、只是没看**。事后抽查全中，遂逐条复现后修掉；修的过程中又撞出一个 review 没人报的引擎 bug。
+- Added: ADR-034（审计记录写在事情发生**之后**：投影侧事实与权威意图分离）、ADR-035（推进的收敛判据要看累加通道）。`tests/test_hardening.py` 13 条。
+- Fixed: **假审计**：escalation 的 `notified` 原本在通知真发出去之前就写死，飞书失败时权威 state 留下「已通知」的假记录，会让审批人停止追查。改为先发后记，未送达进 `notify_failed`（ADR-034）。
+- Fixed: **推进死角**（自查撞出，非 review 所报）：门重试再次失败时 `status` 快照前后逐字相同，`_advance` 判成「推不动了」提前返回，实例停在 `failed` 而非 `blocked`：通知不发、`unblock` 还以 `not_blocked` 拒绝它，ADR-029/030 的出口当场失效。判据补 `reopen_counts` / `attempts`（ADR-035）。
+- Fixed: `blocked` 通知的幂等键只含「已解除次数」，而 `blocked` 不是真终态（别的门打回共同祖先就能把它拖回前沿），重新卡死时键没变、本地永久幂等表把它彻底吞掉。键补轮次。
+- Fixed: `unblock` 不原子：额度只有 3 次且不可退，而重试要跑 LLM / 发飞书，基础设施抖一下就吃掉人的一次机会。失败补一条 `refund` 记录（审计仍只追加），`grants_used` / `granted_budget` 做减法，并尽力把实例推回稳定态。
+- Fixed: 停机信号在 `startup_reconcile` 里只置位不生效（几百个实例照样对完，之后还白起一次泵）；`stop()` 排空超时照样关 SQLite（在飞的事件可能正握着实例锁写 checkpointer），且自认 `errors=0`、退出码 0。改为中止对账并报出没轮到的实例、没排空就不关库 + 记 drain 故障 + 退出码非 0；`EventPump.join` 返回是否真排空。
+- Changed: 默认 DB 路径 `larkflow.sqlite`（cwd 相对）→ `~/.larkflow/larkflow.sqlite`，且 `--db` / `LARKFLOW_DB` 一律绝对化后回显。原来 systemd 起的 daemon（`WorkingDirectory=/`）与手敲的救场命令会**静默**落到两个库。
+- Changed: 全局参数（`--db` / `--json` / …）子命令两侧都能写；子解析器那份一律 `default=SUPPRESS`，否则会把顶层已解析的值覆盖回默认（argparse 经典坑）。
+- Reviewed: 11 个变异体逐个把修复退回缺陷态，**全部被测试杀掉**。第一次跑变异时基线 rc=4（`--timeout` 需要没装的插件），11/11「全抓住」是假阳性；**基线非 0 就是尺子坏了**，去掉后重跑才作数。
+- 280 tests pass（267 → 280）。仍然全程 Mock / Stub / `:memory:`。
+- 未做：15 条未验 finding 里剩下的（`escalations()` 旧记录 status 恒为 pending、锁文件与飞书侧的对账缺口等）；escalation 一键同意、`unblock` 权限层、群 assignee 无人可应答，三条留白照旧。
+
 ## v0.5.0 · 2026-07-25 · 从「跑得通的引擎」到「起得来的服务」（服务层 + 权限层 + blocked 出口）
 - Added: **常驻服务形态**（ADR-031）：`larkflow/serve.py`（启动全实例对账 + 事件泵接线 + SIGINT/SIGTERM + 优雅退出）、`larkflow/__main__.py`（CLI：`serve / start / status / pending / unblock / reconcile`，含 `--json` 与退出码约定，`[project.scripts]` 已挂）、`larkflow/store.py`（多进程共用一个 SQLite：WAL + busy_timeout + 跨进程实例 flock + daemon 单例锁）。
 - Added: **打回权限层落码**（ADR-023 as-built）：`larkflow/engine/permissions.py` 纯图函数（`allowed_reopen` / `reopen_verdict` / `collateral_humans` / `primary_owner` / `approvers_for`）+ 跨界打回 escalation 申请（新 state channel `escalations`，追加型）+ `RoleResolver.roles_of` 反向角色解析 + `pending(actor=)` 按人过滤。
