@@ -22,6 +22,8 @@
 - **executor**：`tool`（确定性程序）/ `llm`（AI）/ `human`（人）。
 - **role**：`produce`（往交付物上写）/ `gate`（把关，放行或打回一组节点）。
 - 「AI 收集」「AI 起草」「AI 整合（fan-in）」都是 `(llm, produce)` + 不同配置，引擎不为业务新增节点类型。
+- **tool 的行为同样是配置**：`tool: {kind, args}` 从与模板无关的内置能力库选取（ADR-026）。这条是「节点契约恒为数据」的兑现方式：新增业务场景 = 新增一个 yaml，零 Python，否则 ADR-022 的生成主路径不成立。
+- `produce` 的 `deliverable` 可省 = **纯动作节点**（发通知 / 调外部系统 / 确认线下动作）；强制每个 produce 都产一份飞书文档会把纯审批 / 纯通知 / 纯决策类流程整类挡在门外。
 - gate 有放行策略配置（含 bypass 自动放行）+ 运行时多选打回；意见可落成飞书文档评论。字段枚举与产出 schema 见 SPEC。
 - **assignee_role**（派给谁，业务指派角色）与 **role**(produce|gate)（干啥）正交；human 节点须 ≥1 负责人（护栏）。
 - **多人节点**（投票 / 会签，ADR-025）= `human × role + vote 配置`（voters / 阈值 / 主负责人）：**A 类审批投票门**（role:gate）票到阈值 → 引擎自动 pass / reopen（集体投票）；**B 类决策表决**（role:produce）产出决策值到 outputs、不自动打回、只主负责人手动。
@@ -38,6 +40,10 @@
 - 一个 produce 节点的交付物，可由「人写 / AI 写 / 一整个子项目产出」。子项目 = 独立 larkflow 项目（自己的 thread / owner / 参与人），其最终交付物 handle **回填**父节点 `outputs[node]`。
 - 父节点挂起等子实例完成信号，**复用 interrupt / 挂起 + 关联表 + 幂等**（与 human 节点等人点卡同机制）；关联表扩父子映射。
 - 边界隔离：父 owner 可打回父节点（= 整个子项目重开），**够不到子项目内部**；子 owner 全权管子内部，权限 / 打回规则递归。防下钻失控（深度上限）。落 v1.2。
+
+## 运行时约束：super-step 屏障（ADR-028）
+- LangGraph 的 super-step 是屏障：只要有人工节点挂在 `interrupt` 上，`dispatch` 就不再执行。后果是 ① 打回判了却落不了地 ② 不相干的并行分支一起停。**多方并行接力是本产品的定义形态**，故驱动层必须主动推进：保值写回（带上在飞的 status/outputs，否则新 checkpoint 会丢掉刚点的裁决）+ 借位重排（`as_node=<worker>` 让引擎自己的 dispatch 真跑一次），一拍一拍推到没活可干。
+- 打回不是无限的：每道门有打回预算，超了标 `blocked` 终态并通知发起人（ADR-029）。
 
 ## 组件
 - **引擎服务**：Python + LangGraph + SQLite checkpointer（宿主 alicloud-sh，见 DEPLOYMENT / DECISIONS ADR-007）。含固定编排器图 + 模板注册表 + 节点执行器（tool/llm/human）+ 驱动层 `LarkFlowService`。

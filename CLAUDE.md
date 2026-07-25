@@ -1,10 +1,10 @@
 # CLAUDE.md · larkflow（飞流）· router
 
-> 飞书原生的交付物流转工作流引擎（LangGraph 驱动）。本文件是 router；详细真相源在 `AIREADME/`（先读 `AIREADME/INDEX.md`）。
+> 飞书原生的**通用**交付物流转工作流引擎（LangGraph 驱动）。本文件是 router；详细真相源在 `AIREADME/`（先读 `AIREADME/INDEX.md`）。
 > 当前：引擎 v1.0 核心 headless 跑通（2026-07-24）；设计全定（ADR-012..025）。
 
 ## 状态
-引擎 v1.0 核心已落码跑通（v1 节点契约 + 交付物层 + 通用执行体 + 选择性重算 + auto 门 + merge 扇入 + 受控活图 + 合同图 + 真实栈代码，102 测绿，全程 Mock/Stub/`:memory:`）。**下一步 = 接真栈**：建 dev 飞书 app + 开事件回调 + 配 LLM 角色 env → 跑真 e2e（`build_real_service`）；并行轨是妙搭前端原型验三命门。已知留白见 CHANGELOG v0.3.0「未做」。
+引擎 v1.0 核心已落码跑通并做完通用性收口（v1 节点契约 + tool 数据化能力库 + 交付物层 + 选择性重算 + 打回意见回流 + 打回预算 + 受控活图 + 三张模板 + 真实栈代码，127 测绿，全程 Mock/Stub/`:memory:`）。**新增业务场景 = 只加一个 yaml，零 Python**（见 `templates/hiring.yaml`）。**下一步 = 接真栈**：建 dev 飞书 app + 开事件回调 + 配 LLM 角色 env → 跑真 e2e（`build_real_service`）；并行轨是妙搭前端原型验三命门。已知留白见 CHANGELOG v0.3.0「未做」。
 
 ## 加载路由（任务 → 读）
 | 任务 | 读 |

@@ -31,3 +31,19 @@
 - **修**：`edit_graph` 前后按 `node_id` 对齐挂起中断，把 old→new 记进 `interrupt_remap` 表（`correlations.py`），`resume` 先顺迁移链重绑；同时**跳过重复派单**（卡 / 任务还在人手里）。只记「改图导致的迁移」，**打回产生的新中断不进表**（打回本就该出新单、旧卡该失效，这是 seg-1 的幂等设计）。
 - **另一条**：status 里从没有 `running`（worker 不写），故「不删在跑节点」不能只看 status。`edit_graph` 把「有挂起中断的节点」并进冻结线当 running（tool/llm 在单个 super-step 内跑完，且与 invoke 同锁，不会长时间在飞）。
 - **避免**：任何「改 state 后旧外部对象还要能回调」的地方，别假设 LangGraph 的 interrupt id 稳定；先量。
+
+## 2026-07-25 · 通用性对抗 review：三条实测出来的「合同焊死」与两条并行缺陷
+6 维度 62 agent 对抗 review 后逐条自己复现。**全部结论都来自我亲手跑出来的输出，不是推理。**
+
+**焊死处（换业务场景就跑不了）**
+- 护栏①「三型齐全」被实现成硬校验：招聘接力（全 human）报 `缺少 executor {'llm','tool'}`、视频脚本（llm+human）报 `缺少 executor {'tool'}`，一行代码都跑不到。为凑三型补一个 tool 节点，又必然报 `tool 节点缺 handler`。**「不存在只加 yaml 就能跑的业务图」**，ADR-022 的生成主路径在 as-built 下不可能成立。
+- 跨模板 node id 撞名静默跑错业务：把那个 tool 节点改名叫 `close`，用合同装配的 service 起 —— **放行**，一张视频脚本图挂上了合同的收口逻辑，不报错不告警。
+- 打回意见结构性进不了重算：写入落 `outputs[gate]["comment"]`，全仓无读取方。实测两次 writer prompt **逐字节相同**，真 LLM temperature=0 会一字不差再生成同一份稿。**打回是空转。**
+
+**并行缺陷（合同 e2e 因为点击顺序刚好合适而全测不出来）**
+- 财务先打回、法务还没点 → `status={finance_gate: failed}`、起草次数不变、卡片不变，**商务方零通知**，直到那个不相干的人碰巧响应。
+- 上述窗口内做一次合法改图 → `outputs['finance_gate']` 变 `None`、`failed` 消失，**人的裁决连同意见被静默吞掉**，旧卡还被 remap 成有效。根因：`update_state` 落新 checkpoint 时，在飞 super-step 里已完成任务的写入尚未提交。
+- 更根本：**super-step 是屏障**。构造 `A(human) 独立 / B→C→D→E` 后实测「B done，C/D/E 一个都没跑」，全卡在毫不相干的签字上。
+- 修法与理由见 ADR-028（保值写回 + `as_node=<worker>` 借位让 dispatch 真跑）、ADR-029（打回预算 + `blocked`，auto 门反复不过会一路撞 recursion limit，实测炸过）。
+
+**避免**：给一个通用引擎写 e2e 时，别只按「顺手的顺序」点。**并行分支的应答顺序本身就是测试维度**；顺序一换就坏的东西，在真实多方协作里天天发生。

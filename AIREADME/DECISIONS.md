@@ -172,3 +172,31 @@
   - **条件分支**：B 永远只产决策值；下游用法分两种 —— 当参数读 = 参数化下游（情况 1）；带 `when: {B: 值}` 守卫 = 选分支（情况 2），未匹配节点标 `skipped`（置灰）。引擎加两零件：节点 `when` 字段 + `skipped` 终态。ready 规则见 SPEC；**分支从 deps + 守卫涌现，引擎不识「分支」概念**。
 - Alternatives(否决): 按业务枚举投票 / 分支节点类型（爆炸）；单独维护「分支集」数据（deps + 守卫已能涌现，多余）。
 - Tradeoff: 三条新护栏 / 不变量 —— 决策取值域须被分支守卫全覆盖（或留默认支，否则某取值下全 skip、饿死汇合点）；打回决策 = skipped 复活（`reopen_resets` 加 skipped→pending）；**置灰 ≠ 删除**（skipped 是引擎按决策没跑、可复活；活图删除是 owner 拿掉、没了）。**extends ADR-015**（`approval_policy` 加 threshold）。投票 + 分支落 v1.3。
+
+## ADR-026 · 2026-07-25 · tool 节点 = 数据化能力库（`tool: {kind, args}`），per-id handler 降为逃生舱
+- Problem: v1.0 as-built 里 tool 节点的行为只能靠「按 node id 注册的 Python handler」提供，装配期 `validate_coverage` 缺了就整张模板拒跑。叠加当时的护栏①（三型齐全，强制每张图都有 tool 节点），推论是：**不存在任何一张只加 yaml 就能跑的业务图**。实测两条：一张纯 llm+human 的 PRD 接力图被护栏①拒；为凑三型补一个 `archive` 节点后被 `tool 节点缺 handler` 拒。
+- Constraint: 禁改项「节点契约恒为数据，使生成 = 加 AI 作者 + 人审门、执行器一行不改」；ADR-022 把模板生成定为 v1.1 主路径，而 AI 只能生成 YAML、生不出 Python。
+- Decision: 节点契约新增 `tool: {kind, args}`。`kind` 取自一张**与模板无关**的内置能力注册表（`larkflow/engine/tools.py`，v1 实装 `record` / `summarize_links` / `notify` / `noop` / `format_check` / `expect_fields`），业务参数下沉 `args`。`validate_coverage` 只校验 kind 可解析。按 node id 注册的 handler 保留为**逃生舱**（真正一次性的确定性代码），不再是唯一路径。随之删除 `contract_handlers.py` / `defect_handlers.py`，`templates/` 目录只剩 yaml。
+- Alternatives(否决): 保持 per-id handler 只放开护栏①（新业务仍要写 Python + 改装配表，生成主路径仍不成立）；让 AI 生成 Python handler（不安全、不可审）。
+- Tradeoff: 能力库的覆盖度成为新的产品边界（不够用就得加 kind，但那是**一次性跨业务投资**，不是每个模板一份）。撞名风险同时消失：注册表按 kind 索引，不再按 node id，`close` / `checks` 这类高频命名不会跨模板串业务（as-built 曾实测放行）。**refine ADR-015 的节点契约**（SPEC 已同步）。
+
+## ADR-027 · 2026-07-25 · 护栏①「三型齐全」降级为 lint，不作运行准入
+- Problem: ADR-010 原文是「三条护栏**进生成 prompt**」，as-built 却把「每张图 tool/llm/human 三型齐全」实现成 `validate_template` 的 raise，并且经模板加载 / `start(template=…)` / **每次 `edit_graph`** 三条路径生效。
+- Constraint: 通用产品最常见的两类流程恰好不满足它 —— 纯人协作（招聘接力 / 采购审批 / 报销）与纯 AI+人（视频脚本 / PRD 初稿）。ADR-010 自己的种子库分层第一层就是「纯人协作」。
+- Decision: 从 `validate_template` 移除，改为 `lint_template(dag) -> list[str]` 的风格提示（供生成器与人审门用）。结构不变量（id 唯一 / deps 不悬挂 / 无环 / 护栏②③④⑤ / 字段级）全部保留为硬校验。
+- Alternatives(否决): 保留硬校验但给模板加豁免开关（等于承认它不是不变量，还多一个字段）。
+- Tradeoff: 生成器可能产出「没有任何把关节点」的图，故 lint 额外提示这一条；把关的必要性由人审门保证。附带修掉一个活图缺陷：运行中删掉图里最后一个 llm 节点这种日常编辑不再被拒。
+
+## ADR-028 · 2026-07-25 · 绕开 LangGraph 的 super-step 屏障：保值写回 + 借位重排
+- **Status**：实现约束（非产品决策），记下来是因为它反直觉、且踩过两次。
+- Problem: LangGraph 的 super-step 是屏障：只要有人工节点挂在 `interrupt` 上，`dispatch` 就不会再执行。实测两个后果：① gate 判了打回却落不了地（上游不重算、没人被通知，直到那个不相干的人碰巧响应）；② **完全不相干的并行分支一起停**（B 跑完，C/D/E 全卡在另一条支的签字上）。多方并行接力正是本产品的定义形态。
+- Constraint: 不 per-instance 编译新图；打回重置逻辑必须留在引擎里（不在驱动层重算）；`update_state` 会落新 checkpoint，而在飞的 super-step 里**已完成任务的写入尚未提交**，不保值就会被静默丢掉（实测：刚点的裁决连同意见变 `None`）。
+- Decision: 驱动层 `_write_state` 做两件事 —— ① **保值**：把当前观测到的 `status` / `outputs` / `dag` 原样带上再 `update_state`；② **借位**：`as_node=<某 worker>`，其唯一出边就是 `dispatch`，于是 dispatch 真的执行一次（打回逻辑仍在引擎里）。`_advance` 据「按 dag 该就绪却没在飞」的判据一拍一拍推，直到没活可干。
+- Alternatives(否决): 驱动层自己算重置写回（打回逻辑分裂成两份）；给 status 加代次计数器让 worker 直接写重置（改动 status 表示，波及全部读写方）；放弃并行（与产品定位冲突）。
+- Tradeoff: 每一拍都会让挂起中断换 id，靠已有的 `interrupt_remap` 重绑（旧卡继续有效、不重复派单）。`reopen_counts` 用累加 reducer，故保值写回**不带**它。
+
+## ADR-029 · 2026-07-25 · 打回预算 + `blocked` 终态
+- Problem: auto 机检门 + 产不出合格内容的上游 = 无限重算，单次 invoke 里 super-step 一路涨到 `recursion_limit` 才崩，实例停在半截、投影孤悬、谁也不知道发生了什么（实测于招聘图的机检门）。这是通用产品的常态：AI 未必满足得了机检。
+- Decision: 每道门记打回次数（`reopen_counts`，dispatch 单写者、累加 reducer），超预算（节点可配 `reopen_budget`，默认 3）则把该门标 `blocked` 终态而非继续重算，并通知发起人「已停下等人介入」。`blocked` 不是 `done`，下游不会解锁。
+- Alternatives(否决): 只调大 recursion_limit（推迟而非解决）；无限重试（烧 LLM 额度且永不收敛）。
+- Tradeoff: 兑现 MEMORY finding C 的推迟条件（「seg-2 回填自动化门禁时」）。人介入方式 v1 = 改要素 / 改图后重试；「手动放行 blocked 门」的命令待补。
