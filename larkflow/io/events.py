@@ -156,12 +156,16 @@ class EventPump:
                     except Exception:
                         pass
 
-    def join(self, timeout: float | None = None) -> None:
+    def join(self, timeout: float | None = None) -> bool:
         """等泵线程真正退出（优雅停的第二步：让在飞的那条事件跑完）。
 
         线程都是 daemon，join 超时也不会挂住进程；超时后未完成的写由下次启动对账兜。
+
+        **返回是否真排空了。** 调用方拿这个决定还能不能关连接：在飞的那条事件可能正握着
+        实例锁写 checkpointer，这时候把 SQLite 连接关掉，等于把桌子从人手底下抽走。
         """
         deadline = None if timeout is None else time.monotonic() + timeout
         for t in list(self._threads):
             left = None if deadline is None else max(0.0, deadline - time.monotonic())
             t.join(left)
+        return not any(t.is_alive() for t in list(self._threads))

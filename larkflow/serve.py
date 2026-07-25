@@ -121,6 +121,7 @@ class LarkFlowServer:
         self.stats = {"events": 0, "handled": 0, "skipped": 0, "errors": 0}
         self._stopped = threading.Event()
         self._stopping = False
+        self._clean_exit = True
         self._lock = threading.Lock()
 
     # ---------- 启动对账 ----------
@@ -135,11 +136,20 @@ class LarkFlowServer:
         """
         ids, degraded = list_instances(self.service.graph)
         report = {"instances": len(ids), "reconciled": [], "finished": [],
-                  "failed": [], "errors": {}, "degraded": degraded is not None}
+                  "failed": [], "errors": {}, "degraded": degraded is not None,
+                  "aborted": False, "pending": []}
         if degraded:
             report["degraded_reason"] = degraded
             self.log(f"实例枚举降级：{degraded}")
-        for iid in ids:
+        for n, iid in enumerate(ids):
+            if self._stopped.is_set():
+                # 每个实例都要发卡 / 建待办 / 推进拍，几百个实例要跑很久。收到 SIGTERM 之后
+                # 还把剩下的跑完 = 「停不下来」，而且停之前还会白起一次泵。没轮到的报出来，
+                # 别让人从 reconciled 的条数以为全对过账了。
+                report["aborted"] = True
+                report["pending"] = list(ids[n:])
+                self.log(f"收到停机信号，启动对账中止：还剩 {len(report['pending'])} 个实例没对")
+                break
             try:
                 if self._finished(iid):
                     report["finished"].append(iid)
@@ -202,30 +212,43 @@ class LarkFlowServer:
                 pass
 
     # ---------- 退出 ----------
-    def stop(self, timeout: float = 10.0, *, close_db: bool = True) -> None:
+    def stop(self, timeout: float = 10.0, *, close_db: bool = True) -> bool:
         """优雅停：先停订阅，再**等在飞的那条事件处理完**，最后才关连接。
 
         绝不硬 kill 正在处理的事件：那一刻它可能正握着实例锁写 checkpointer。
+
+        **返回是否干净收工。** 没排空就**不关连接**：在飞的那条事件正拿着这个连接写
+        checkpointer，关掉等于把桌子从它手底下抽走（写一半的实例只能等下次启动对账去救）。
+        宁可让进程退出时由 OS 收连接，也不主动制造一次半截写。同时记一笔故障 + 让退出码
+        非 0，否则运维看到的是「errors=0、exit 0」，查不出所以然。
         """
         with self._lock:
             if self._stopping:
-                return
+                return self._clean_exit
             self._stopping = True
         self._stopped.set()
+        drained = True
         pump = self.pump
         if pump is not None:
             try:
                 pump.stop()
             except Exception as exc:
                 self._error("pump.stop", exc)
+                drained = False
             join = getattr(pump, "join", None)
             if callable(join):
-                join(timeout)
-        if close_db:
+                # join 返回 None 的实现（老泵 / 替身）按「排空了」算，别凭空判脏
+                drained = join(timeout) is not False and drained
+        if not drained:
+            self._error("drain", TimeoutError(
+                f"{timeout}s 内没排空在飞的事件，连接不关（半截写留给下次启动对账兜）"))
+        elif close_db:
             self._close_db()
-        self.log(f"已停止。事件 {self.stats['events']} 条"
+        self._clean_exit = drained
+        self.log(f"已停止（{'干净' if drained else '未排空'}）。事件 {self.stats['events']} 条"
                  f"（推进 {self.stats['handled']} / 跳过 {self.stats['skipped']}"
                  f" / 故障 {self.stats['errors']}）")
+        return drained
 
     def _close_db(self) -> None:
         seen = set()
@@ -240,24 +263,26 @@ class LarkFlowServer:
             except Exception as exc:
                 self._error("close_db", exc)
 
-    def serve_forever(self) -> int:
+    def serve_forever(self, *, drain_timeout: float = 10.0) -> int:
         """装 SIGINT / SIGTERM，对账，起泵，block 到收到信号。返回进程退出码。"""
         self._install_signals()
         try:
             self.report = self.startup_reconcile()
             self._log_report(self.report)
-            self.start()
+            # 对账期间就被喊停了（几百个实例要对很久）：别再起泵，那只会起一下又立刻停。
+            if not self._stopped.is_set():
+                self.start()
         except Exception as exc:
             self._error("startup", exc)
-            self.stop()
+            self.stop(drain_timeout)
             return 1
         try:
             self._stopped.wait()
         except KeyboardInterrupt:       # 信号没装上时的兜底路径
             pass
         finally:
-            self.stop()
-        return 0
+            clean = self.stop(drain_timeout)
+        return 0 if clean else 1
 
     def _install_signals(self) -> None:
         for name in ("SIGINT", "SIGTERM"):
@@ -278,7 +303,9 @@ class LarkFlowServer:
 
     def _log_report(self, report: dict) -> None:
         self.log(f"启动对账：实例 {report['instances']}｜已对账 {len(report['reconciled'])}"
-                 f"｜已完成 {len(report['finished'])}｜失败 {len(report['failed'])}")
+                 f"｜已完成 {len(report['finished'])}｜失败 {len(report['failed'])}"
+                 + (f"｜**中止，未对账 {len(report.get('pending') or [])}**"
+                    if report.get("aborted") else ""))
         for f in report["failed"]:
             self.log(f"  对账失败 {f['instance_id']}: {f['error']}")
         for iid, errs in report.get("errors", {}).items():

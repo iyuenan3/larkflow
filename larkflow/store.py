@@ -51,6 +51,25 @@ class LockBusy(RuntimeError):
     """拿不到跨进程锁：另一个 larkflow 进程正握着同一个实例（或同一个 DB）。"""
 
 
+DEFAULT_DB = "~/.larkflow/larkflow.sqlite"
+
+
+def resolve_db_path(path: str | None = None) -> str:
+    """把库路径落成**绝对路径**，且默认值不随 cwd 漂移。
+
+    默认值曾是相对的 `larkflow.sqlite`。systemd 起的 daemon（`WorkingDirectory=/`）与你在
+    home 敲的 `larkflow unblock` 于是各开各的库：两边都不报错、都「正常」，只是各看各的
+    实例，而这个分叉没有任何症状。绝对化之后，`--db` / `LARKFLOW_DB` 给相对路径也会当场
+    落成绝对路径并原样回显，运维一眼看得出自己连的是哪个库。
+    """
+    raw = str(path if path not in (None, "") else os.environ.get("LARKFLOW_DB") or DEFAULT_DB)
+    raw = raw.strip() or DEFAULT_DB
+    if raw == ":memory:" or raw.startswith("file:"):
+        return raw
+    p = Path(raw).expanduser()
+    return str(p if p.is_absolute() else (Path.cwd() / p).resolve())
+
+
 def open_db(path: str, *, busy_timeout_ms: int = 5000) -> sqlite3.Connection:
     """打开引擎的 SQLite：多进程共用前提下该开的都开好。
 
@@ -60,6 +79,8 @@ def open_db(path: str, *, busy_timeout_ms: int = 5000) -> sqlite3.Connection:
       的默认值走：后到的那个写必须**等**，不能当场 `database is locked`。
     · `synchronous` 保持默认（FULL）：单一事实源丢不起最后几笔提交，这里不拿耐久性换吞吐。
     """
+    if path != ":memory:" and not path.startswith("file:"):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)   # 默认库在 ~/.larkflow/ 下
     conn = sqlite3.connect(path, check_same_thread=False, timeout=busy_timeout_ms / 1000)
     conn.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
     if path == ":memory:" or path.startswith("file::memory:"):

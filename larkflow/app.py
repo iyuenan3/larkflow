@@ -23,7 +23,7 @@ from .llm import LLMClient, OpenAICompatLLM, StubLLM
 from .model import load_template
 from .model.template import validate_template
 from .service import LarkFlowService
-from .store import DEFAULT_LOCK_TIMEOUT, InstanceLocks, open_db
+from .store import DEFAULT_LOCK_TIMEOUT, InstanceLocks, open_db, resolve_db_path
 
 
 def build_service(
@@ -100,7 +100,8 @@ def build_real_service(template: str = "contract", *, db_path: str | None = None
       · `open_db` 开 WAL + busy_timeout（daemon 与一次性命令同时开着这个文件）。
       · `InstanceLocks` 当 lock_factory，把「同一实例串行」从进程内扩到跨进程。
     """
-    path = db_path or env("LARKFLOW_DB", "larkflow.sqlite")
+    # 绝对化：默认库相对 cwd 的话，systemd 起的 daemon 与手敲的救场命令会静默落到两个库
+    path = resolve_db_path(db_path)
     conn = open_db(path)
     locks = InstanceLocks.for_db(
         path, timeout=DEFAULT_LOCK_TIMEOUT if lock_timeout is None else lock_timeout)

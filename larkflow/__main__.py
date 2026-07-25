@@ -22,8 +22,8 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from .config import env
-from .serve import DEFAULT_EVENT_KEYS, LarkFlowServer, instance_ids
-from .store import DEFAULT_LOCK_TIMEOUT, LockBusy, daemon_lock_for
+from .serve import DEFAULT_EVENT_KEYS, LarkFlowServer
+from .store import DEFAULT_LOCK_TIMEOUT, LockBusy, daemon_lock_for, resolve_db_path
 
 MARK = {"done": "✅", "failed": "❌", "blocked": "⛔", "pending": "…", "skipped": "⊘"}
 
@@ -37,19 +37,38 @@ def _kv(raw: str) -> tuple[str, str]:
     return k.strip(), v
 
 
+def _add_global_flags(ap: argparse.ArgumentParser, *, suppress: bool = False) -> None:
+    """全局开关。**两边都挂一份**：`larkflow status i1 --json` 是所有人的第一反应，
+    只挂顶层的话 argparse 当场 exit 2「unrecognized arguments」。
+
+    子解析器那份一律 `default=SUPPRESS`：不写这个的话，子解析器的默认值会在解析子命令时
+    把顶层已经解析出来的值**覆盖回默认**（argparse 的经典坑），于是
+    `larkflow --db X status i1` 里的 X 会被悄悄丢掉、连回默认库。
+    """
+    d = (lambda v: argparse.SUPPRESS) if suppress else (lambda v: v)
+    ap.add_argument("--db", default=d(env("LARKFLOW_DB") or None),
+                    help="SQLite 文件（checkpointer + 关联表 + 幂等表）；相对路径会落成绝对路径")
+    ap.add_argument("--template", default=d(env("LARKFLOW_TEMPLATE", "contract")),
+                    help="默认模板名（contract / defect / hiring / …）")
+    ap.add_argument("--profile", default=d(env("LARK_PROFILE")), help="lark-cli profile")
+    ap.add_argument("--identity", default=d(env("LARKFLOW_IDENTITY", "bot")),
+                    help="lark-cli 身份（bot / user）")
+    ap.add_argument("--lock-timeout", type=float, default=d(DEFAULT_LOCK_TIMEOUT),
+                    help="等另一个 larkflow 进程放开这个实例的上限（秒）")
+    ap.add_argument("--json", action="store_true", default=d(False),
+                    help="输出 JSON（给脚本读）")
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="larkflow", description="飞流：飞书原生的交付物流转工作流引擎")
-    ap.add_argument("--db", default=env("LARKFLOW_DB", "larkflow.sqlite"),
-                    help="SQLite 文件（checkpointer + 关联表 + 幂等表）")
-    ap.add_argument("--template", default=env("LARKFLOW_TEMPLATE", "contract"),
-                    help="默认模板名（contract / defect / hiring / …）")
-    ap.add_argument("--profile", default=env("LARK_PROFILE"), help="lark-cli profile")
-    ap.add_argument("--identity", default=env("LARKFLOW_IDENTITY", "bot"),
-                    help="lark-cli 身份（bot / user）")
-    ap.add_argument("--lock-timeout", type=float, default=DEFAULT_LOCK_TIMEOUT,
-                    help="等另一个 larkflow 进程放开这个实例的上限（秒）")
-    ap.add_argument("--json", action="store_true", help="输出 JSON（给脚本读）")
-    sub = ap.add_subparsers(dest="cmd", metavar="{serve,start,status,pending,unblock,reconcile}")
+    _add_global_flags(ap)
+    common = argparse.ArgumentParser(add_help=False)
+    _add_global_flags(common, suppress=True)
+    subs = ap.add_subparsers(dest="cmd", metavar="{serve,start,status,pending,unblock,reconcile}")
+
+    class sub:                      # 每个子命令都带上 common，少写一遍 parents=
+        add_parser = staticmethod(
+            lambda name, **kw: subs.add_parser(name, parents=[common], **kw))
 
     p = sub.add_parser("serve", help="常驻：启动对账 + 起事件泵 + block 到收到信号")
     p.add_argument("--event-key", action="append", default=None,
@@ -238,6 +257,8 @@ def main(argv=None, *, factory=None, server_factory=LarkFlowServer) -> int:
     if not getattr(ns, "cmd", None):
         parser.print_help()
         return 2
+    # 绝对化后回显：运维一眼看得出自己连的是哪个库（默认库不随 cwd 漂移，见 store 顶部）
+    ns.db = resolve_db_path(getattr(ns, "db", None))
     try:
         return HANDLERS[ns.cmd](ns, factory or _real_service, server_factory)
     except LockBusy as exc:

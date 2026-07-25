@@ -133,21 +133,26 @@ class LarkFlowService:
         return value
 
     def _tell(self, instance_id: str, target: str | None, text: str, idem_key: str,
-              *, node_id: str | None = None, what: str = "notify") -> None:
-        """给某个人发一条通知（投影侧动作，失败只记不抛）。
+              *, node_id: str | None = None, what: str = "notify") -> bool:
+        """给某个人发一条通知（投影侧动作，失败只记不抛）。**返回是否真送到了。**
 
         走 `_once`：通知的 idem_key 一样是「一件事」的标识（`:{seq}` / `:{used}` /
         `:{attempt}` 已经把该区分的都区分了），只押飞书那 1 小时窗口的话，每次重启都会
         把「卡死了」「有人申请打回」原样再播一遍。
+
+        返回值是给**要把「通知过谁」写进权威 state** 的调用方用的（见 `_escalate`）：
+        把没送到的人记成「已通知」，等于在审计里造一条假事实。
         """
         if not target:
-            return
+            return False
         try:
             self._once(f"notify:{idem_key}:{target}",
                        lambda: self.io.notify(target=target, text=text, idem_key=idem_key))
+            return True
         except Exception as exc:
             self.provision_errors.setdefault(instance_id, []).append(
                 {"node_id": node_id, "error": f"{what} {type(exc).__name__}: {exc}"})
+            return False
 
     def _notify_owner(self, instance_id: str, text: str, idem_key: str) -> None:
         self._tell(instance_id, (self._values(instance_id).get("meta") or {}).get("reporter"),
@@ -385,7 +390,28 @@ class LarkFlowService:
                 "attempts": {k: 1 for k in resets},
                 "unblocks": {node_id: [record]},
             }, reset=set(resets))
-            self._advance(instance_id, skip=remapped)
+            try:
+                self._advance(instance_id, skip=remapped)
+            except Exception as exc:
+                # 额度只有 MAX_UNBLOCK_GRANTS 次、不可退，而重试这一拍要跑 LLM / 发飞书：
+                # 基础设施抖一下就吃掉人的一次机会，几次之后这道门就再也解不开了。
+                # 审计只追加不改写，所以退法是**补一条 refund 记录**（`grants_used` /
+                # `granted_budget` 做减法），历史那笔 grant 原样留着，看得出「试过、失败了」。
+                try:
+                    self._write_state(instance_id, {"unblocks": {node_id: [
+                        {**record, "refund": True, "at": _now(),
+                         "error": f"{type(exc).__name__}: {exc}"}]}})
+                    self._advance(instance_id)     # 让它回到稳定态（多半是重新 blocked）
+                except Exception:
+                    # 已经在错误路径上了，尽力而为。残留窗口：退款那一笔也写不进去时，
+                    # 额度算花掉了（有界、可审：unblocks 里看得到那笔 grant 没有配对的 refund）。
+                    pass
+                self.provision_errors.setdefault(instance_id, []).append(
+                    {"node_id": node_id, "error": f"unblock advance {type(exc).__name__}: {exc}"})
+                return {"rejected": "unblock_failed", "instance_id": instance_id,
+                        "node_id": node_id, "refunded": True,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "detail": "解除后的重试当场失败，额度已退回，可重试"}
             return {"unblocked": node_id, "instance_id": instance_id,
                     "granted": granted, "requested": grant,
                     "grants_used": used + 1, "grants_left": MAX_UNBLOCK_GRANTS - used - 1,
@@ -531,28 +557,43 @@ class LarkFlowService:
                               "请直接联系审批人（上游改过一版之后可以再提）"}
 
         seq = len(log) + 1
-        # `approvers` 存**令牌**（角色名 / owner 的 open_id）：角色到 open_id 的映射会变，
-        # 权威 state 里冻结一个当时的 id 会让日后查审计对不上人。`notified` 另存「当时真发给了谁」，
-        # 那是投影侧的事实，两者都要，缺一不可。
-        record = {"by": actor, "at": _now(), "from_node": gate_id, "targets": list(targets),
-                  "escalated": escalated, "approvers": approvers, "notified": whom,
-                  "collateral": collateral, "comment": comment, "attempt": attempt,
-                  "seq": seq, "status": "pending"}
-        remapped = self._write_state(instance_id, {"escalations": {gate_id: [record]}})
-        self._advance(instance_id, skip=remapped)
-
         labels = {n["id"]: n.get("label", n["id"]) for n in values.get("dag") or []}
         text = (f"「{labels.get(gate_id, gate_id)}」的负责人申请把 "
                 f"{[labels.get(t, t) for t in escalated]} 打回重做"
                 f"（实例 {instance_id}）。这会连累 {[labels.get(c, c) for c in collateral]} 一起返工，"
                 f"故需要你或项目发起人同意。申请人：{actor or '未知'}。"
                 + (f"理由：{comment}" if comment else ""))
+
+        # **先发、后记**：`notified` 写的是「真发出去了给谁」，那是投影侧的事实，不是意图。
+        # 反过来（先记后发）时，飞书那一下失败就会在权威 state 里留一条「已通知」的假审计：
+        # 审批人隔天来查「谁该拍板」，系统说通知过了、人却从没收到，于是没人再去追。
+        # 代价是另一头的窗口：发完但写 state 之前进程死了 = 人收到了、系统里查无此事。
+        # 那一头**可恢复**（他一问就发现，申请人重点一次即可），假审计不可恢复，故取这一侧。
+        delivered, failed = [], []
         for who in whom:
-            self._tell(instance_id, who, text, f"{instance_id}:{gate_id}:escalation:{seq}:{who}",
-                       node_id=gate_id, what="escalation notify")
-        self._ack_escalation(instance_id, gate_id, record, whom, actor)
+            ok = self._tell(instance_id, who, text,
+                            f"{instance_id}:{gate_id}:escalation:{seq}:{who}",
+                            node_id=gate_id, what="escalation notify")
+            (delivered if ok else failed).append(who)
+
+        # `approvers` 存**令牌**（角色名 / owner 的 open_id）：角色到 open_id 的映射会变，
+        # 权威 state 里冻结一个当时的 id 会让日后查审计对不上人。`notified` 另存「当时真发给了谁」，
+        # 两者都要，缺一不可。
+        record = {"by": actor, "at": _now(), "from_node": gate_id, "targets": list(targets),
+                  "escalated": escalated, "approvers": approvers, "notified": delivered,
+                  "collateral": collateral, "comment": comment, "attempt": attempt,
+                  "seq": seq, "status": "pending"}
+        if failed:
+            # 一个审批人都没通知到 = 这笔申请事实上没人知道。记下来，好让运维 / 对账看得见
+            # 「有申请但没送达」，而不是以为在等人拍板。
+            record["notify_failed"] = failed
+        remapped = self._write_state(instance_id, {"escalations": {gate_id: [record]}})
+        self._advance(instance_id, skip=remapped)
+
+        self._ack_escalation(instance_id, gate_id, record, delivered, actor)
         return {"escalated": escalated, "node_id": gate_id, "instance_id": instance_id,
-                "approvers": whom, "collateral": collateral, "seq": seq}
+                "approvers": delivered, "notify_failed": failed,
+                "collateral": collateral, "seq": seq}
 
     def _ack_escalation(self, instance_id: str, gate_id: str, record: dict,
                         whom: list[str], actor: str | None) -> None:
@@ -742,6 +783,20 @@ class LarkFlowService:
         self.graph.invoke(None, self._run_cfg(instance_id), durability="sync")
         return self._remap_interrupts(instance_id, before)
 
+    @staticmethod
+    def _fingerprint(values: dict) -> tuple:
+        """「这一拍到底动了没有」的判据。
+
+        只比 `status` 会漏判：一道门重试**再次失败**时，status 从 `failed` 出发、经
+        pending、重跑、又回到 `failed`，前后快照**逐字相同**，于是被当成「推不动了」提前
+        返回，实例停在 `failed` 而不是 `blocked`。后果是双重的：`blocked` 通知不发（没人
+        知道它又死了），`unblock` 还会以 `not_blocked` 拒绝它，ADR-029 的出口当场失效。
+        累加型通道（`reopen_counts` / `attempts`）单调递增，正好补上 status 看不见的那一拍。
+        """
+        return (tuple(sorted((values.get("status") or {}).items())),
+                tuple(sorted((values.get("reopen_counts") or {}).items())),
+                tuple(sorted((values.get("attempts") or {}).items())))
+
     def _stalled(self, values: dict, live: set[str]) -> bool:
         """还有活该干却没被派出去吗？
 
@@ -767,10 +822,10 @@ class LarkFlowService:
             live = {(i.value or {}).get("node_id") for i in self._pending_interrupts(instance_id)}
             if not self._stalled(values, live):
                 return
-            before = dict(values.get("status", {}))
+            before = self._fingerprint(values)
             remapped = self._write_state(instance_id, {})
             self._handle(instance_id, skip=remapped)
-            if dict(self._values(instance_id).get("status", {})) == before:
+            if self._fingerprint(self._values(instance_id)) == before:
                 return   # 推不动了就停，别空转
         # 上界耗尽仍没推完：实例停在半截态，绝不能静默返回（那正是 ADR-029 要消灭的现象）
         self.provision_errors.setdefault(instance_id, []).append(
@@ -1009,9 +1064,13 @@ class LarkFlowService:
             return
         labels = {n["id"]: n.get("label", n["id"]) for n in values.get("dag") or []}
         grants = values.get("unblocks") or {}
+        attempts = values.get("attempts") or {}
         for nid in stuck:
-            # 幂等键含**已解除次数**：解除后再次卡死是一件新事，同一个键会被幂等吞掉，
+            # 幂等键含**已解除次数 + 轮次**：再次卡死是一件新事，同一个键会被幂等吞掉，
             # 于是第二次停摆没有任何人知道（项目静静躺死）。
+            # 只含解除次数不够：`blocked` 并不是真终态，别的门打回共同祖先就能把它重置回
+            # pending 再跑一次，那条路一次解除都没花，于是重新卡死时键没变、彻底静默（实测）。
+            # 轮次（attempts）才是「这是新的一次尝试」的判别式。
             used = grants_used(grants, nid)
             left = MAX_UNBLOCK_GRANTS - used
             how = (f"可改要素后由发起人解除（unblock）再试，剩余解除额度 {left} 次。"
@@ -1020,4 +1079,4 @@ class LarkFlowService:
                 instance_id,
                 f"「{labels.get(nid, nid)}」反复打回仍未通过，已停下等人介入"
                 f"（实例 {instance_id}）。{how}",
-                f"{instance_id}:{nid}:blocked:{used}")
+                f"{instance_id}:{nid}:blocked:{used}:{attempts.get(nid, 0)}")

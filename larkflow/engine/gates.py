@@ -141,13 +141,22 @@ def reopen_budget(node: dict) -> int:
 
 
 def grants_used(grants: dict | None, nid: str) -> int:
-    """这道门被人显式解除过几次（unblock 审计记录条数）。"""
-    return len((grants or {}).get(nid) or [])
+    """这道门被人显式解除过几次（不含已退款的那几笔）。
+
+    退款（`refund`）= 解除写进 state 之后、重试推进当场炸了（LLM 502、飞书抽风这类）。
+    额度是**留给人的**，不该被基础设施的抖动花掉；但审计只追加不改写，所以退的方式是
+    再补一条 refund 记录、由这里做减法，历史那笔 grant 原样躺着。
+    """
+    log = (grants or {}).get(nid) or []
+    return sum(1 for r in log if not r.get("refund")) - sum(1 for r in log if r.get("refund"))
 
 
 def granted_budget(grants: dict | None, nid: str) -> int:
-    """人给这道门追加过多少打回预算（历次 unblock 之和）。"""
-    return sum(int(r.get("grant", 0)) for r in (grants or {}).get(nid) or [])
+    """人给这道门追加过多少打回预算（历次 unblock 之和，退款的那几笔要扣回去）。"""
+    total = 0
+    for r in (grants or {}).get(nid) or []:
+        total += -int(r.get("grant", 0)) if r.get("refund") else int(r.get("grant", 0))
+    return max(0, total)
 
 
 def effective_reopen_budget(node: dict, grants: dict | None = None) -> int:
