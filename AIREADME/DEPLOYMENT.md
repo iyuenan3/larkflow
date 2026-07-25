@@ -24,6 +24,30 @@ larkflow serve ──┬── lark-cli event consume card.action.trigger   （�
 larkflow unblock / start / status / …  ← 另一个进程，写同一个 SQLite
 ```
 
+## 飞书 app 需要什么（权限台账）
+
+**为什么要有这张表**：dev 阶段图省事会把「我能开的都开了」，上线前没人说得清哪些是真用到的。这张表按**引擎实际 spawn 的 lark-cli 命令**倒推，一条命令一行；`确认` 一列区分「查过 `lark-cli schema` / 事件 schema」与「按命令语义推断、待第一条真链路验证」。**收敛权限时以这张表为准**，跑通后把没用上的关掉再回归一遍。
+
+| 引擎的动作 | lark-cli 命令 | 需要的权限 | 确认 |
+|---|---|---|---|
+| 派人工任务 | `task +create --summary --description --assignee --idempotency-key --as bot` | `task:task:write` | ✅ schema |
+| 关任务（目前只定义未调用） | `task +complete --task-id --as bot` | `task:task:write` | ✅ schema |
+| 收「任务完成」事件 | `event consume task.task.update_user_access_v2 --as bot` | `task:task:read` + **控制台事件** `task.task.update_user_access_v2` | ✅ 事件 schema |
+| 发门禁卡片 | `im +messages-send --user-id\|--chat-id --msg-type interactive` | 发消息权限（`im:message` 一族） | ⚠️ 推断 |
+| 发通知（打回回执 / 卡死告警） | `im +messages-send … --msg-type text` | 同上 | ⚠️ 推断 |
+| 收卡片按钮点击 | `event consume card.action.trigger --as bot` | `im:message:readonly` + **控制台回调** `card.action.trigger` | ✅ 事件 schema |
+| 建交付物 | `markdown +create --name --content -` | Drive 文件写入（`drive:drive` / `drive:file:upload` 一族） | ⚠️ 推断 |
+| 覆盖交付物 | `markdown +overwrite --file-token --content -` | 同上 | ⚠️ 推断 |
+| 读交付物正文 | `markdown +fetch --file-token` | Drive 文件读取 | ⚠️ 推断 |
+
+**「事件」与「回调」是两个东西，别在同一个页签里找**：开发者后台「事件与回调」下分两栏，`task.task.update_user_access_v2` 在**事件**里，`card.action.trigger`（卡片回传交互）在**回调**里。只订了事件、没订回调时，`lark-cli event consume card.action.trigger` 会以 `failed_precondition` 直接拒绝（文案用词是 callbacks 不是 events），并给出一键订阅链接，扫它最快。
+
+**事件订阅方式必须选长连接**，不要 webhook：`lark-cli event consume` 走长连接，这正是 ADR-007「引擎无需任何入站端口」的来源；选了 webhook 整条入站链路不通。
+
+**身份**：卡片回调只有 **bot** 收得到，故常驻服务 `LARKFLOW_IDENTITY=bot`。
+
+**代理**：本机 shell 有 Clash 全局代理，lark-cli 会警告凭证经由代理传输。飞书是境内服务，建议 `LARK_CLI_NO_PROXY=1` 绕开。注意这条警告与 `failed_precondition` 类报错**无关**，后者是发请求之前的本地前置校验，别把它误诊成网络问题。
+
 ## 启动 / 退出行为
 `larkflow serve` 的一生（顺序是硬的，理由见 ADR-031）：装 SIGINT/SIGTERM → **启动全实例对账** → 起泵 → block 到收到信号 → 停订阅 → 等在飞的那条事件跑完 → 关 DB。
 
