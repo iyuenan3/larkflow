@@ -1,10 +1,10 @@
 # CLAUDE.md · larkflow（飞流）· router
 
 > 飞书原生的交付物流转工作流引擎（LangGraph 驱动）。本文件是 router；详细真相源在 `AIREADME/`（先读 `AIREADME/INDEX.md`）。
-> 当前：立项 · 第一段引擎已跑通（2026-07-24）；第二轮设计定（交付物流转，ADR-012..018）。
+> 当前：引擎 v1.0 核心 headless 跑通（2026-07-24）；设计全定（ADR-012..025）。
 
 ## 状态
-第一段本地引擎已跑通（8 节点缺陷流）。定位升格为交付物流转引擎（受控活图 + 选择性重算 + 交付物 (容器,region)，见 `AIREADME/ARCHITECTURE`）。前端定为妙搭（本地开发，ADR-019 修订 cards-only）。下一步：妙搭前端原型验活图画布 + 建 dev 飞书 app + v1 独立 doc 真项目。
+引擎 v1.0 核心已落码跑通（v1 节点契约 + 交付物层 + 通用执行体 + 选择性重算 + auto 门 + merge 扇入 + 受控活图 + 合同图 + 真实栈代码，102 测绿，全程 Mock/Stub/`:memory:`）。**下一步 = 接真栈**：建 dev 飞书 app + 开事件回调 + 配 LLM 角色 env → 跑真 e2e（`build_real_service`）；并行轨是妙搭前端原型验三命门。已知留白见 CHANGELOG v0.3.0「未做」。
 
 ## 加载路由（任务 → 读）
 | 任务 | 读 |

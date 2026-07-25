@@ -29,7 +29,7 @@
 ```
 - 边由 `deps` 表达。**打回不在模板里预声明单目标**：gate 节点运行时产出 `{passed, reopen: [节点 id…], comment}`，`reopen` 是当场手选的一组；引擎把该组 + 其传递下游重置 `pending`（选择性重算，`larkflow/engine/gates.py` 的 `stale_downstream`）。`reopen` 合法域（每个目标须 ⊆ gate 的 deps 传递祖先）在**运行时**校验、非法则拒（seg-1 的模板期护栏②b 随 v1 搬到运行时）。
 - **投票门 / 决策表决产出（ADR-025）**：A 类审批投票门（role:gate + 阈值 approval_policy）票到阈值 → 引擎自动判 `{passed, reopen}`（reopen 默认 = 把关的上游，主负责人可加宽）；B 类决策表决（role:produce）产出决策值到 `outputs[node]`，不自动打回。
-- **打回权限契约（ADR-023）**：某人可见的打回候选 = 机制合法（⊆ 传递祖先）∩ 权限允许。权限 = 纯函数 `allowed_reopen(dag, actor_openid, project_owner, node_assignees, from_node) -> set[node_id]`：owner 全域；参与人限「重算集不牵连别的人工节点」的责任段；集体投票（A 类）另算。审核卡 / 画布据此过滤候选。
+- **打回权限契约（ADR-023）｜as-built：v1.0 只实现机制层**，权限层 `allowed_reopen` 尚未落码（v1.0 单 owner 场景够用；进多参与人前必须补，否则「防踢皮球」是空的）。引擎已把机制合法域 `reopen_candidates` 交给卡片 / 前端，权限过滤是叠在其上的下一层。某人可见的打回候选 = 机制合法（⊆ 传递祖先）∩ 权限允许。权限 = 纯函数 `allowed_reopen(dag, actor_openid, project_owner, node_assignees, from_node) -> set[node_id]`：owner 全域；参与人限「重算集不牵连别的人工节点」的责任段；集体投票（A 类）另算。审核卡 / 画布据此过滤候选。
 - **条件分支 skip / ready（ADR-025）**：节点 `skipped` ⟺ `when` 守卫失配 或 所有 deps 都 skipped；节点 ready ⟺ pending 且 deps 全 done/skipped 且 ≥1 dep done 且守卫通过。分支从 deps + 守卫涌现。打回决策节点 → 其 skipped 下游复活为 pending。
 - 生成新模板走 few-shot 护栏（三型齐全 / 每 gate 有可回退祖先 / 放行节点强制 human / human 声明 signal / human 节点 ≥1 负责人 / 多人节点须 1 主负责人 / 条件分支决策取值域被分支守卫全覆盖或留默认支），校验落 `larkflow/model/template.py`（ADR-010 / ADR-023 / ADR-025）。
 - **护栏③ as-built 判据（v1 已实现）**：`approval_policy=="auto"` 的 gate 只能是 `tool`（确定性机检 bypass）；其余 policy 的 gate 只能是 `human`（人拍板）。推论：**`llm` 在 v1 校验下不能当 gate**（红线「绝不让 LLM 自动放行」，CONVENTIONS 护栏③）；AI 评审须落成 `(llm, produce)` 出意见 + `human` gate 拍板，同构 ADR-021/022「AI 提议 + 人拍板」。v2 若要真 AI-gate 需改本护栏并记 ADR。
@@ -60,6 +60,7 @@
 - 卡片视觉 schema（派单卡 / 门禁卡通过·打回·多选 reopen / 定稿确认卡的排版），assignee_role → open_id 通讯录解析。
 - 共享协同拓扑的 docx block_id 跨 update 稳定性（v2）。
 - 引擎读 / 命令 API（供前端，ADR-019；形态待原型后定）：
+  - **读 as-built（驱动层已有，尚未暴露成网络接口）**：`status(instance_id)` 状态表 / `outputs(instance_id)` 产出 + 交付物 handle 登记表 / `pending(instance_id)` 卡在谁手上（节点 / 负责人 / 交付物链接 / 待审上游链接 / 打回候选）。
   - **读**：画布要整张 `dag`（节点 + 边 + pending 子图 + 状态），多维表格行式投影可能不够；定「整图读接口 + 返回字段 + 刷新 / 实时模型（轮询 / 推送）」。
   - **改图命令 as-built（引擎侧已实现，前端形态仍待定）**：`LarkFlowService.edit_graph(instance_id, ops)`，ops = `[{op: add_node, node:{…}} | {op: remove_node, id} | {op: update_node, id, set:{…}}]`；引擎权威侧串校验「只触 pending 子图（挂起 human 节点并入冻结线当 running）→ 仍过 validate_template → 不用 v1 未实现语义 → 新增 tool 节点有 handler」→ `update_state` 写 dag channel → 立刻 `invoke(None)` 推一步。**副作用（实测，见 MEMORY 2026-07-24）**：update_state 必让挂起中断换 id，故驱动层按 node 记 `interrupt_remap` 迁移链、旧卡继续有效且不重复派单。尚缺：乐观并发（读取时 checkpoint 版本）+ 鉴权。
   - **改图命令（前端侧待定）**：报文 schema（op + 目标节点 + deps）；**校验在引擎权威侧**（复用 ADR-013：只改 pending / 仍是 DAG / 不删在跑节点）；乐观并发（命令带读取时 checkpoint 版本，冻结线已推进则拒、令前端重取）；命令经 checkpointer `update_state` 改 dag channel 并触发下一 dispatch。

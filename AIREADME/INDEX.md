@@ -1,6 +1,6 @@
 # larkflow · 飞流 · AIREADME
-> 飞书原生的交付物流转工作流引擎（LangGraph 驱动，落到人）｜ 生命周期: 立项 · 第一段引擎已跑通 · 产品最终形态定型
-> last-synced: 8827338 · 2026-07-24
+> 飞书原生的交付物流转工作流引擎（LangGraph 驱动，落到人）｜ 生命周期: 引擎 v1.0 核心 headless 跑通 · 待接真栈
+> last-synced: 42adf46 · 2026-07-24
 <!-- 产品最终形态定稿后的同步锚点；check.sh --drift 据此算 AIREADME 落后 HEAD 多少 commit -->
 
 ## 状态
@@ -14,7 +14,7 @@
 | CONVENTIONS | ✅ | 节点契约 executor×role / 完成信号 / few-shot 护栏 / 禁用模式 |
 | ROADMAP | ✅ | Now 实现分层 v1.0(win)→v1.1 生成→v1.2 子项目→v1.3 投票分支 / Next v2 共享协同 + 前端可编辑 |
 | SPEC | ⚑ | 节点契约(含投票/分支/打回权限) + 引擎契约 + 产出协议已定；卡片视觉 + 引擎前端 API + 生成契约待定 |
-| CHANGELOG | ✅ | v0.0.0 立项 / v0.1.0 引擎 + 第二轮 / v0.1.1 前端 / v0.1.2 handle 权威 / v0.2.0 产品最终形态 |
+| CHANGELOG | ✅ | v0.0.0 立项 / v0.1.x 引擎 + 第二轮 + 前端 + handle 权威 / v0.2.0 产品最终形态 / v0.3.0 引擎 v1.0 headless |
 | DEPLOYMENT | ⚑ | 未部署；宿主 alicloud-sh + SQLite + lark-cli event 入口已定 |
 | MEMORY | ✅ | seg-1 对抗性审查 9 项（去重 6 根因）+ 2026-07-24 产出协议实测 |
 

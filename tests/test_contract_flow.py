@@ -127,6 +127,23 @@ def test_running_edit_inserts_a_review_node_into_the_future():
     assert all(svc.status(iid).get(n) == "done" for n in NODES + ["final_legal"])
 
 
+def test_gate_card_carries_a_link_to_what_is_being_reviewed():
+    """gate 自己不产交付物：不带上游链接的话，审核人手里只有一张「通过 / 打回」的空卡。"""
+    svc, io, llm, store = build()
+    iid = "ct-4"
+    svc.start(instance_id=iid, reporter="ou_owner", inputs=INPUTS)
+
+    waiting = {p["node_id"]: p for p in svc.pending(iid)}
+    biz_url = svc.outputs(iid)["biz_draft"]["deliverable"]["url"]
+    assert waiting["finance_gate"]["upstream"] == [
+        {"node_id": "biz_draft", "label": "商务条款起草", "url": biz_url}]
+
+    sent = next(c for c in io.cards.values()
+                if c["buttons"][0]["action_value"]["node_id"] == "finance_gate")
+    assert "财务复核(商务条款)" in sent["summary"]
+    assert biz_url in sent["summary"]        # 卡片正文里真带着要审的那份文档
+
+
 def test_auto_gate_reopen_target_is_its_gated_upstream():
     svc, io, llm, store = build()
     iid = "ct-3"

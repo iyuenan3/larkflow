@@ -223,7 +223,8 @@ class LarkFlowService:
         elif signal == "card_action":
             msg = self.io.send_card(
                 target=assignee,
-                summary=v.get("label", nid),
+                # 卡片正文也要带交付物链接：门禁走卡不走任务，只给个标题等于让人空手审
+                summary=self._criteria(v),
                 buttons=self._buttons(instance_id, iid, nid, v),
                 idem_key=idem,
             )
@@ -240,10 +241,14 @@ class LarkFlowService:
     def _criteria(self, v: dict) -> str:
         label, url = v.get("label", ""), v.get("deliverable_url")
         if v.get("role") == "gate":
-            body = f"审核「{label}」：通过或打回上游重做。"
+            lines = [f"审核「{label}」：通过或打回上游重做。"]
         else:
-            body = f"{label}：完成后在飞书任务上点「完成」。"
-        return f"{body}\n交付物：{url}" if url else body
+            lines = [f"{label}：完成后在飞书任务上点「完成」。"]
+        if url:
+            lines.append(f"你的交付物：{url}")
+        # 审核人得先能打开要审的那份东西（gate 自己不产出交付物）
+        lines += [f"待审：{u['label']} {u['url']}" for u in v.get("upstream") or []]
+        return "\n".join(lines)
 
     def _buttons(self, instance_id: str, iid: str, nid: str, v: dict) -> list[Button]:
         base = {"thread_id": instance_id, "interrupt_id": iid, "node_id": nid}

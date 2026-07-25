@@ -133,6 +133,22 @@ def test_edit_rejects_tool_node_without_handler():
             "deps": ["close"], "deliverable": {"region": "whole"}}}])
 
 
+def test_edit_after_the_instance_finished_still_runs_the_new_node():
+    """项目跑完了再补一个节点（复盘小结）：改图后要当场推一步，别静静躺着。"""
+    svc, io, iid = _pause_at_triage_review()
+    for node in ("triage_review", "reproduce"):
+        svc.resume_from_event({"key": CARD_ACTION, "action_value": io.button_value(node, "通过")})
+    guid = list(io.tasks.values())[-1]["guid"]
+    svc.resume_from_event({"key": "task.task.update_user_access_v2",
+                           "event": {"task_guid": guid, "event_types": ["task_completed_update"]}})
+    svc.resume_from_event({"key": CARD_ACTION, "action_value": io.button_value("qa_verify", "通过")})
+    assert svc.status(iid)["close"] == "done"          # 已收口
+
+    svc.edit_graph(iid, [{"op": "add_node", "node": AUDIT}])
+
+    assert svc.status(iid)["audit"] == "done"
+
+
 def test_edit_state_is_unchanged_when_rejected():
     svc, io, iid = _pause_at_triage_review()
     before = [n["id"] for n in svc.dag]

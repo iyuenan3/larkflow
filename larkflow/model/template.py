@@ -30,7 +30,6 @@ from .node import (
     ROLES,
     SIGNALS,
     deps_ancestors,
-    is_gate,
     is_produce,
 )
 

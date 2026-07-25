@@ -16,6 +16,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
 from ..model.node import is_gate, node_by_id
+from .deliverables import upstream_links
 from .executors import Executors
 from .gates import finish, ready_nodes, reopen_candidates, reopen_resets
 from .state import OrchestratorState
@@ -74,6 +75,8 @@ def build_graph(executors: Executors, checkpointer):
                 "signal": node.get("signal"),
                 "deliverable": handle or None,               # produce：人要写的那份交付物
                 "deliverable_url": handle.get("url"),        # 对人 = 一条文档链接
+                # gate 得先能打开「要审的那份东西」；produce 也常要参考上游
+                "upstream": upstream_links(state, node),
                 # 打回是运行时手选一组（ADR-014）：候选 = 机制合法域，默认 = 把关的直接上游
                 "reopen_candidates": reopen_candidates(dag, nid) if is_gate(node) else None,
                 "reopen_default": list(node.get("deps", [])) if is_gate(node) else None,

@@ -5,7 +5,7 @@
 ## Now（v1 · 分层交付，每层一个可演示里程碑）
 
 ### v1.0 · 第一个 win（引擎核心 + 一张策展合同图 + 卡片轨 + 只读驾驶舱）
-- 引擎 v1：node/template v1 schema（executor×role + deliverable / reopen / approval_policy）+ 通用 produce/gate 执行体 + 交付物 (容器,region) IO（markdown whole）+ merge 扇入 + 选择性重算运行时 reopen + auto 短路 + 受控活图 edit_graph。
+- ✅ 引擎 v1（2026-07-24 headless 跑通，102 测绿）：node/template v1 schema（executor×role + deliverable / reopen / approval_policy）+ 通用 produce/gate 执行体 + 交付物 (容器,region) IO（markdown whole）+ merge 扇入 + 选择性重算运行时 reopen + auto 短路 + 受控活图 edit_graph + 策展合同图 + 真实栈代码。**未做**：真飞书 / 真 LLM e2e（需 dev app）、ADR-023 权限层 `allowed_reopen`（v1.0 只做机制层，进多参与人前必补）。
 - 建 dev 飞书自建应用（ADR-008）+ 订阅事件（卡片 action / 任务完成 EventKey）+ 引擎起在 alicloud-sh（ADR-007）+ 接 LLM 多角色路由（ADR-017）。
 - **策展合同图**（商务 + 法律双起草 → 财务 / 法务分头 gate（single 复核）→ merge → 负责人定稿 → auto 格式检查 → 收口）端到端跑通。
 - **win（见 PRD）**：真项目跑通 + ≥1 次打回**可感知省算**（被打回支的负责人未被重新派单、旧 handle 直接复用，省下 ≥1 次 AI 长文起草）+ ≥1 次运行中改图（v1.0 经**轻量命令 / 卡片**触发 `edit_graph`，非画布拖拽；P3 画布只读，可视化画布编辑 = v2）+ auto-approve。

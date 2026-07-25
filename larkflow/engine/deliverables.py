@@ -67,8 +67,8 @@ def ensure_container(io: DeliverableIO, node: dict, state: dict, *, placeholder:
     return {HANDLE_KEY: handle.to_dict()}
 
 
-def read_upstream(io: DeliverableIO, state: dict, node: dict) -> dict[str, str]:
-    """下游消费：按 deps 从权威登记表取 handle 再 fetch 正文（ADR-016 consume）。
+def upstream_handles(state: dict, node: dict) -> dict[str, Deliverable]:
+    """本节点该消费 / 该审的上游交付物 handle。
 
     **透过不产交付物的节点看上游**：gate 只把关、不产出，若不透传，往图里插一道复核门
     就会悄悄切断下游的数据流（受控活图下这是常态）。每条路径在遇到第一个已登记 handle
@@ -76,7 +76,7 @@ def read_upstream(io: DeliverableIO, state: dict, node: dict) -> dict[str, str]:
     """
     outputs = state.get("outputs") or {}
     deps_of = {n["id"]: list(n.get("deps", [])) for n in (state.get("dag") or [])}
-    texts: dict[str, str] = {}
+    found: dict[str, Deliverable] = {}
     seen: set[str] = set()
     queue = list(node.get("deps", []))
     while queue:
@@ -86,7 +86,19 @@ def read_upstream(io: DeliverableIO, state: dict, node: dict) -> dict[str, str]:
         seen.add(dep)
         handle = prior_handle(outputs, dep)
         if handle is not None:
-            texts[dep] = io.fetch(handle)
+            found[dep] = handle
         else:
             queue.extend(deps_of.get(dep, []))
-    return texts
+    return found
+
+
+def read_upstream(io: DeliverableIO, state: dict, node: dict) -> dict[str, str]:
+    """下游消费：按 deps 从权威登记表取 handle 再 fetch 正文（ADR-016 consume）。"""
+    return {dep: io.fetch(handle) for dep, handle in upstream_handles(state, node).items()}
+
+
+def upstream_links(state: dict, node: dict) -> list[dict]:
+    """给人看的上游交付物链接（审核人得先能打开要审的那份东西）。"""
+    labels = {n["id"]: n.get("label", n["id"]) for n in (state.get("dag") or [])}
+    return [{"node_id": dep, "label": labels.get(dep, dep), "url": handle.url}
+            for dep, handle in upstream_handles(state, node).items()]

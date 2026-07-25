@@ -72,6 +72,7 @@
 ## 首个工作流与 seg-1
 - **seg-1 已建**：8 节点缺陷流本地引擎（`larkflow/templates/defect.yaml`，LangGraph + SQLite，15 测试绿）= 交付物流转的**退化特例**（交付物 = 修复，图固定单链），验证了 interrupt/resume + 打回 + checkpointer。（8 节点 = as-built，含 reproduce 门禁；ADR-009 原规划完整缺陷流 11 节点、seg-2 回填 ci_test/code_review/release_note，as-built 未落这三节点。）
 - **v1.0 目标（第一个 win）**：一个「各自产出再合并」形态的真实交付物流转项目（独立 doc 拓扑，合同类：商务 + 法律双起草 → 财务 / 法务分头 gate（single 复核）→ merge → 定稿 → auto 格式检查；ADR-018，实现分层见 ROADMAP）。
+- **v1.0 引擎 as-built（2026-07-24，headless 已跑通）**：`templates/contract.yaml` 落地上述拓扑（分头挂门 = 省算的结构前提），引擎侧 v1 契约 / 交付物层 / 通用执行体 / 选择性重算 / auto 门 / merge 扇入 / 受控活图 `edit_graph` 全部落码，102 测绿（Mock/Stub/`:memory:`）。**剩下的是真栈**：dev 飞书应用 + 事件回调 + 真 LLM 角色 env（代码已写，见 `build_real_service`）。
 
 ## 关键选型（理由见 DECISIONS）
 - 引擎 = LangGraph 有环（ADR-001）；两层 + 单一事实源（ADR-002）；固定编排器解释数据图（ADR-003，正好 enables 活图）。
