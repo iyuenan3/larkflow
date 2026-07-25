@@ -131,3 +131,15 @@ def test_all_shipped_templates_are_valid_and_runnable(name):
     svc, io = build_service(name)
     svc.start(instance_id=f"tpl-{name}", reporter="ou_r", inputs={"标题": "x"})
     assert svc.status(f"tpl-{name}")            # 起得来、有推进
+
+
+# ---------- 演示入口（别让它烂掉：它是唯一能用手摸到引擎的地方） ----------
+
+@pytest.mark.parametrize("name", ["contract", "defect", "hiring"])
+def test_demo_auto_runs_every_shipped_template(name, capsys):
+    from larkflow.demo import run_auto
+
+    run_auto(name)
+    out = capsys.readouterr().out
+    assert "收尾" in out and "交付物" in out
+    assert "❌" not in out and "⛔" not in out          # 剧本应当一路走通

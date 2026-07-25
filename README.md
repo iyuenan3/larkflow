@@ -52,24 +52,38 @@ flowchart LR
 ```
 AIREADME/            AI 真相源（先读 INDEX.md）
 larkflow/
-  engine/            固定编排器图 + 门禁 / 选择性重算（纯函数）
+  engine/            固定编排器图 + 门禁 / 选择性重算 + 受控活图 + tool 能力库（纯函数为主）
   model/             模板 / 节点契约 + 校验
-  io/                lark-cli 封装（事件 / 任务 / 卡 / 关联表）
-  llm/               LLM 客户端（Stub + OpenAI 兼容）
-  templates/         策展模板（seg-1 = 缺陷流）
-  service.py         驱动层：interrupt/resume 与飞书投影
-tests/               15 e2e / 单元测试（零外部依赖）
+  io/                lark-cli 封装（事件 / 任务 / 卡 / 交付物 / 关联表）
+  llm/               LLM 客户端（Stub + OpenAI 兼容多角色路由）
+  templates/         策展模板，**只有 yaml、没有 Python**（合同 / 缺陷 / 招聘）
+  service.py         驱动层：interrupt/resume、飞书投影、改图、对账
+  demo.py            本地演示入口（不联网）
+tests/               137 e2e / 单元测试（零外部依赖）
 ```
 
 ## 本地跑
 
-seg-1 引擎用内存 SQLite + Mock 飞书 IO + Stub LLM，零外部依赖：
+引擎用内存 SQLite + Mock 飞书 IO + Stub LLM，**不联网、不碰飞书、不调真 LLM**：
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-pytest -q          # 15 passed
+
+pytest -q                              # 137 passed
+
+python -m larkflow.demo --auto         # 自动跑一遍合同图，打印「打回省算」的证据
+python -m larkflow.demo                # 交互式：你扮演所有的人，h 看命令
+python -m larkflow.demo --template hiring   # 换一张完全不同的业务图（招聘接力）
 ```
+
+交互式演示里可以：`p` 看卡在谁手上（含交付物链接、可打回候选、上一轮打回意见）、
+`ok 1` 放行、`no 1 biz_draft 账期不对` 当场手选目标打回、`w 1 <正文>` 模拟人在飞书文档里写、
+`doc` 打印交付物正文、`add <id> <标签> after <上游>` 在运行中往图里加节点（受控活图）。
+
+**换一个业务场景 = 新增一个 `templates/<名字>.yaml`，零 Python**：tool 节点的确定性动作由
+`tool: {kind, args}` 从内置能力库选取（`record` / `summarize_links` / `notify` / `noop` /
+`format_check` / `expect_fields`）。`tests/test_generality.py` 把这条钉成硬约束。
 
 ## 文档
 
