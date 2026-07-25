@@ -72,9 +72,36 @@ class Correlations:
             seen.add(cur)
         return cur
 
+    def idem_store(self) -> "IdemStore":
+        """借同一个 SQLite 存幂等键（给没有 --idempotency-key 的 lark-cli 命令用）。"""
+        return IdemStore(self.conn)
+
     def get(self, external_id: str) -> Correlation | None:
         row = self.conn.execute(
             "SELECT external_id, thread_id, interrupt_id, node_id, kind FROM correlations WHERE external_id=?",
             (external_id,),
         ).fetchone()
         return Correlation(*row) if row else None
+
+
+class IdemStore:
+    """幂等键 → 外部对象 id 的小 KV。
+
+    `markdown +create` 没有 --idempotency-key（task / im 有），崩溃恢复重跑 super-step
+    会多建一份文档。写入前先查这里，重放直接返回旧 handle。
+    """
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS idem (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        self.conn.commit()
+
+    def get(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT value FROM idem WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def put(self, key: str, value: str) -> None:
+        self.conn.execute("INSERT OR REPLACE INTO idem VALUES (?,?)", (key, value))
+        self.conn.commit()

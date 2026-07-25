@@ -10,8 +10,9 @@
 from __future__ import annotations
 
 import json
-import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+
+from .cli import run_cli
 
 
 @dataclass
@@ -95,28 +96,31 @@ class MockLarkIO(LarkIO):
 class CliLarkIO(LarkIO):
     """真飞书：shell `lark-cli`（出站）。凭证走 lark-cli 自身 auth/profile，不落这里。
 
-    真飞书阶段接通；本地 e2e 不走此路径。命令形态见研究：
-      task +create --summary --description --assignee ou_ --idempotency-key --as bot --json
-      im   +messages-send --user-id ou_/--chat-id oc_ --msg-type interactive --content <card2.0>
+    命令与返回字段按内嵌 skill 核对（`lark-cli skills read lark-task/lark-im`），不猜 flag：
+      task +create --summary --description --assignee ou_ --idempotency-key --as bot → data.guid
+      task +complete --task-id <guid>
+      im +messages-send --user-id ou_/--chat-id oc_ --msg-type interactive --content <card2.0>
+         --idempotency-key（同 key 1 小时内只发一条）→ data.message_id
+    真飞书阶段接通；本地 e2e 不走此路径。
     """
 
-    def __init__(self, *, identity: str = "bot", profile: str | None = None):
+    def __init__(self, *, identity: str = "bot", profile: str | None = None, runner=run_cli):
         self.identity = identity
         self.profile = profile
+        self.runner = runner   # 可注入替身，便于对 argv 做单测
 
-    def _run(self, args: list[str]) -> dict:
+    def _run(self, args: list[str], *, stdin: str | None = None) -> dict:
         base = ["lark-cli"]
         if self.profile:
             base += ["--profile", self.profile]
-        out = subprocess.run(base + args + ["--json"], capture_output=True, text=True, check=True)
-        return json.loads(out.stdout or "{}")
+        return self.runner(base + args + ["--json"], stdin=stdin)
 
     def create_task(self, *, assignee, summary, description, idem_key) -> str:
-        res = self._run([
+        data = self._run([
             "task", "+create", "--summary", summary, "--description", description,
             "--assignee", assignee, "--idempotency-key", idem_key, "--as", self.identity,
         ])
-        return (res.get("task") or {}).get("guid", "")
+        return data.get("guid", "")
 
     def complete_task(self, task_guid, *, idem_key) -> None:
         self._run(["task", "+complete", "--task-id", task_guid, "--as", self.identity])
@@ -124,12 +128,12 @@ class CliLarkIO(LarkIO):
     def send_card(self, *, target, summary, buttons, idem_key) -> str:
         card = _card_2_0(summary, buttons)
         flag = "--chat-id" if target.startswith("oc_") else "--user-id"
-        res = self._run([
+        data = self._run([
             "im", "+messages-send", flag, target, "--msg-type", "interactive",
             "--content", json.dumps(card, ensure_ascii=False),
             "--idempotency-key", idem_key, "--as", self.identity,
         ])
-        return (res.get("data") or res).get("message_id", "")
+        return data.get("message_id", "")
 
     def notify(self, *, target, text, idem_key) -> None:
         flag = "--chat-id" if target.startswith("oc_") else "--user-id"

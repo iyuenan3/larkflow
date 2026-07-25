@@ -13,7 +13,10 @@ schema 层已放行、这里显式 NotImplementedError，绝不静默降级。
 """
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
+
+from .cli import run_cli
 
 WHOLE = "whole"
 
@@ -98,3 +101,75 @@ class FakeDeliverableStore(DeliverableIO):
         return Deliverable(type=self.doc_type, token=token,
                            url=f"https://example.feishu.cn/docx/{token}",
                            region=self.docs[token]["region"])
+
+
+class CliDeliverableIO(DeliverableIO):
+    """真飞书交付物：`lark-cli markdown +create/+overwrite/+fetch`（v1 = 独立 doc·whole）。
+
+    命令与返回字段按内嵌 skill 核对（`lark-cli skills read lark-markdown`），不猜 flag：
+      +create    --name <x.md> --content -（stdin）[--folder-token …] → data.file_token
+      +overwrite --file-token <t> --content -（stdin）               → data.version
+      +fetch     --file-token <t>                                    → data.content
+    正文一律走 stdin（`--content -`）：避免超长 argv 与 shell 转义（skill 明示推荐）。
+
+    **幂等**：`markdown +create` 没有 --idempotency-key（task/im 有），崩溃重跑会多建一份
+    文档。故本地记 idem_key → file_token（idem_store，随 checkpointer 同一个 SQLite 走），
+    重放直接返回旧 handle。overwrite 天然幂等（同内容覆盖同 handle）。
+    """
+
+    def __init__(self, *, identity: str = "bot", profile: str | None = None,
+                 folder_token: str | None = None, idem_store=None, runner=run_cli):
+        self.identity = identity
+        self.profile = profile
+        self.folder_token = folder_token   # 省略则建到云空间根目录
+        self.idem = idem_store             # 有 get/put 的小 KV（见 io/correlations.py）
+        self.runner = runner
+
+    def _run(self, args: list[str], *, stdin: str | None = None) -> dict:
+        base = ["lark-cli"]
+        if self.profile:
+            base += ["--profile", self.profile]
+        return self.runner(base + args + ["--as", self.identity, "--json"], stdin=stdin)
+
+    def create(self, *, title: str, content: str, region=WHOLE, idem_key: str) -> Deliverable:
+        assert_v1_region(region)
+        cached = self.idem.get(idem_key) if self.idem else None
+        if cached:
+            return Deliverable(type="markdown", token=cached, url=_md_url(cached), region=region)
+
+        args = ["markdown", "+create", "--name", md_name(title), "--content", "-"]
+        if self.folder_token:
+            args += ["--folder-token", self.folder_token]
+        data = self._run(args, stdin=content)
+        token = data.get("file_token") or ""
+        if not token:
+            raise LarkDeliverableError(f"markdown +create 未返回 file_token: {data}")
+        if self.idem:
+            self.idem.put(idem_key, token)
+        return Deliverable(type="markdown", token=token,
+                           url=data.get("url") or data.get("file_url") or _md_url(token),
+                           region=region)
+
+    def overwrite(self, handle: Deliverable, *, content: str) -> Deliverable:
+        self._run(["markdown", "+overwrite", "--file-token", handle.token, "--content", "-"],
+                  stdin=content)
+        return handle   # handle 不变，版本由飞书原生留痕
+
+    def fetch(self, handle: Deliverable) -> str:
+        data = self._run(["markdown", "+fetch", "--file-token", handle.token])
+        return data.get("content", "")
+
+
+class LarkDeliverableError(RuntimeError):
+    """交付物读写返回了不该有的形状。"""
+
+
+def md_name(title: str) -> str:
+    """文件名必须显式带 .md 后缀（skill 硬约束），且不能带路径分隔符。"""
+    safe = re.sub(r"[/\\\n\r\t]+", "_", (title or "deliverable").strip()) or "deliverable"
+    return safe if safe.endswith(".md") else f"{safe}.md"
+
+
+def _md_url(token: str) -> str:
+    # +create 通常回带可打开 URL；缺省时按 Drive 文件 URL 形态兜底（域名待 dev app 核实）
+    return f"https://feishu.cn/file/{token}"

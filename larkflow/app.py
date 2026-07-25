@@ -10,13 +10,13 @@ import sqlite3
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from .config import RoleResolver
+from .config import RoleResolver, env, load_llm_roles
 from .engine import Executors, build_graph
 from .engine.support import assert_v1_supported
 from .io import Correlations, FakeDeliverableStore, MockLarkIO
-from .io.deliverable import DeliverableIO
-from .io.lark_io import LarkIO
-from .llm import LLMClient, StubLLM
+from .io.deliverable import CliDeliverableIO, DeliverableIO
+from .io.lark_io import CliLarkIO, LarkIO
+from .llm import LLMClient, OpenAICompatLLM, StubLLM
 from .model import load_template
 from .service import LarkFlowService
 from .templates import (
@@ -81,3 +81,30 @@ def build_contract_service(**kw):
 def build_defect_service(**kw):
     """seg-1 缺陷流（已迁 v1 契约，作为回归载体保留）。"""
     return build_service("defect", **kw)
+
+
+def build_real_service(template: str = "contract", *, db_path: str | None = None,
+                       identity: str = "bot", profile: str | None = None,
+                       folder_token: str | None = None):
+    """真实栈：真飞书（lark-cli）+ 真 LLM（多角色路由）+ 文件 SQLite checkpointer。
+
+    engine-run 用；**跑之前需要 dev 飞书自建应用 + 事件回调配置 + LLM 角色 env**（见
+    DEPLOYMENT / .env.example）。本地测试绝不构造它（会真发消息、真建文档）。
+
+    交付物 IO 与 checkpointer 共用同一个 SQLite 连接，好让 markdown +create 的本地幂等表
+    与实例运行态一起持久（该命令没有 --idempotency-key）。
+    """
+    conn = sqlite3.connect(db_path or env("LARKFLOW_DB", "larkflow.sqlite"),
+                           check_same_thread=False)
+    corr = Correlations(conn)
+    io = CliLarkIO(identity=identity, profile=profile)
+    deliverables = CliDeliverableIO(
+        identity=identity, profile=profile,
+        folder_token=folder_token or env("LARKFLOW_DRIVE_FOLDER"),
+        idem_store=corr.idem_store(),
+    )
+    llm = OpenAICompatLLM(load_llm_roles())
+    return build_service(
+        template, conn=conn, io=io, llm=llm,
+        resolver=RoleResolver.from_env(), deliverables=deliverables,
+    )
