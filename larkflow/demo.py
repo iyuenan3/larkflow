@@ -13,7 +13,6 @@ import argparse
 import sys
 
 from .app import build_service
-from .engine.deliverables import PLACEHOLDER_MARK
 from .io.deliverable import Deliverable, FakeDeliverableStore
 from .io.events import CARD_ACTION, TASK_UPDATE
 from .llm import LLMClient
@@ -205,7 +204,7 @@ def run_interactive(template: str) -> None:
     svc.start(instance_id=iid, reporter="ou_owner",
               inputs={"甲方": "某某科技", "乙方": "某某咨询", "价款": "人民币 30 万元",
                       "期限": "12 个月", "岗位": "后端工程师", "标题": "演示"})
-    print(f"\n飞流 · 本地演示（Mock 飞书 + Stub LLM，不联网）")
+    print("\n飞流 · 本地演示（Mock 飞书 + Stub LLM，不联网）")
     print(f"模板 {template}｜实例 {iid}｜你来扮演所有的人。输入 h 看命令。\n")
     show_status(svc, iid)
     items = show_pending(svc, iid)
