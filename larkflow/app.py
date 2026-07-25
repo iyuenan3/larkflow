@@ -3,6 +3,9 @@
 `build_service` 默认全本地（MockLarkIO + StubLLM + FakeDeliverableStore + 内存 SQLite），
 零外部依赖，供 e2e 测试与本地演示。真飞书 / 真 LLM 阶段换成 CliLarkIO + OpenAICompatLLM
 + 文件 checkpointer 即可（见 build_real_service），引擎 / 驱动 / 模板一行不改。
+
+**新增一个业务场景 = 新增一个 templates/<name>.yaml**：这里没有按模板名注册的东西，
+tool 节点的行为由 `tool.kind` 从内置能力库选取（ADR-026）。
 """
 from __future__ import annotations
 
@@ -19,21 +22,10 @@ from .io.lark_io import CliLarkIO, LarkIO
 from .llm import LLMClient, OpenAICompatLLM, StubLLM
 from .model import load_template
 from .service import LarkFlowService
-from .templates import (
-    CONTRACT_LLM_HANDLERS,
-    CONTRACT_TOOL_HANDLERS,
-    DEFECT_LLM_HANDLERS,
-    DEFECT_TOOL_HANDLERS,
-)
-
-HANDLERS = {
-    "contract": (CONTRACT_TOOL_HANDLERS, CONTRACT_LLM_HANDLERS),
-    "defect": (DEFECT_TOOL_HANDLERS, DEFECT_LLM_HANDLERS),
-}
 
 
 def build_service(
-    template: str = "contract",
+    template: str | list[dict] = "contract",
     *,
     conn: sqlite3.Connection | None = None,
     io: LarkIO | None = None,
@@ -42,8 +34,9 @@ def build_service(
     deliverables: DeliverableIO | None = None,
     tool_handlers: dict | None = None,
     llm_handlers: dict | None = None,
+    strict_roles: bool = False,
 ):
-    """返回 (service, io)。默认本地栈；template = 模板名（templates/<name>.yaml）。"""
+    """返回 (service, io)。默认本地栈；template = 模板名或 dag。"""
     conn = conn or sqlite3.connect(":memory:", check_same_thread=False)
     saver = SqliteSaver(conn)
     saver.setup()
@@ -52,19 +45,16 @@ def build_service(
     llm = llm or StubLLM()
     resolver = resolver or RoleResolver()
     deliverables = deliverables or FakeDeliverableStore()
-    dag = load_template(template)
-    default_tools, default_llms = HANDLERS.get(template, ({}, {}))
+    dag = load_template(template) if isinstance(template, str) else template
 
     executors = Executors(
-        io=io,
-        resolver=resolver,
-        llm=llm,
-        deliverables=deliverables,
-        tool_handlers=default_tools if tool_handlers is None else tool_handlers,
-        llm_handlers=default_llms if llm_handlers is None else llm_handlers,
+        io=io, resolver=resolver, llm=llm, deliverables=deliverables,
+        tool_handlers=tool_handlers, llm_handlers=llm_handlers,
     )
     assert_v1_supported(dag)           # 模板别用引擎 v1 还没实现的语义（宁可不跑，不静默降级）
-    executors.validate_coverage(dag)   # 装配期自检，别跑到一半才炸
+    executors.validate_coverage(dag)   # 每个 tool 节点都要有可执行体（kind 或逃生舱）
+    if strict_roles:
+        resolver.validate_coverage(dag)  # 真栈：派单对象必须真配过，别把假 open_id 发到飞书
 
     graph = build_graph(executors, saver)
     corr = Correlations(conn)
@@ -106,5 +96,6 @@ def build_real_service(template: str = "contract", *, db_path: str | None = None
     llm = OpenAICompatLLM(load_llm_roles())
     return build_service(
         template, conn=conn, io=io, llm=llm,
-        resolver=RoleResolver.from_env(), deliverables=deliverables,
+        resolver=RoleResolver.from_env(strict=True), deliverables=deliverables,
+        strict_roles=True,
     )

@@ -81,6 +81,12 @@ nodes:
     role: gate
     deps: [finalize]
     approval_policy: auto
+    tool:
+      kind: format_check
+      args:
+        required: [价款, 期限, 违约, 争议]
+        forbid_placeholders: true
+        min_chars: 40
 
   - id: close
     label: 收口(汇总+通知发起人)
@@ -88,3 +94,9 @@ nodes:
     role: produce
     deps: [checks]
     deliverable: {region: whole}
+    tool:
+      kind: summarize_links
+      args:
+        title: 合同项目收口
+        notify: reporter
+        text: 合同已定稿并通过格式检查。

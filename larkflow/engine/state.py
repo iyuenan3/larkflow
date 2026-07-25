@@ -18,8 +18,17 @@ def merge(a: dict, b: dict) -> dict:
     return {**(a or {}), **(b or {})}
 
 
+def add_counts(a: dict, b: dict) -> dict:
+    """按键累加。只有 dispatch（单写者）写它，故不存在并发累加竞争。"""
+    out = dict(a or {})
+    for k, v in (b or {}).items():
+        out[k] = out.get(k, 0) + v
+    return out
+
+
 class OrchestratorState(TypedDict):
-    dag: list          # 模板节点数组（静态，seed 一次；随 checkpoint 持久）
-    status: Annotated[dict, merge]   # node_id -> pending | running | done | failed
-    outputs: Annotated[dict, merge]  # node_id -> 节点产出/交付物快照（scratch）
-    meta: dict         # instance_id / reporter / bug / template_id 等
+    dag: list          # 节点数组（受控活图会改它；随 checkpoint 持久）
+    status: Annotated[dict, merge]   # node_id -> pending | done | failed | blocked | skipped
+    outputs: Annotated[dict, merge]  # node_id -> 节点产出 + 交付物 handle 权威登记（ADR-020）
+    reopen_counts: Annotated[dict, add_counts]  # gate_id -> 已打回次数（预算，防无限重算）
+    meta: dict         # instance_id / reporter / inputs / template_id 等

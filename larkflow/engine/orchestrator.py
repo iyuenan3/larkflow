@@ -18,7 +18,14 @@ from langgraph.types import Send, interrupt
 from ..model.node import is_gate, node_by_id
 from .deliverables import upstream_links
 from .executors import Executors
-from .gates import finish, ready_nodes, reopen_candidates, reopen_resets
+from .gates import (
+    finish,
+    ready_nodes,
+    reopen_candidates,
+    reopen_feedback,
+    reopen_increments,
+    reopen_resets,
+)
 from .state import OrchestratorState
 
 _WORKER = {"tool": "tool_worker", "llm": "llm_worker", "human": "human_worker"}
@@ -30,8 +37,13 @@ def build_graph(executors: Executors, checkpointer):
     def dispatch(state: OrchestratorState) -> dict:
         # 打回单点执行：把 failed gate 的 reopen 组 + 下游重置 pending（修 A：单写者无竞争）。
         # 随后 route 在重置后的 status 上算 ready。dispatch 不扇出，故此写无并发。
-        resets = reopen_resets(state["dag"], state.get("status", {}), state.get("outputs", {}))
-        return {"status": resets} if resets else {}
+        status = state.get("status", {})
+        resets = reopen_resets(state["dag"], status, state.get("outputs", {}),
+                               state.get("reopen_counts", {}))
+        if not resets:
+            return {}
+        return {"status": resets,
+                "reopen_counts": reopen_increments(state["dag"], status, resets)}
 
     def route(state: OrchestratorState):
         ready = ready_nodes(state["dag"], state.get("status", {}))
@@ -80,6 +92,8 @@ def build_graph(executors: Executors, checkpointer):
                 # 打回是运行时手选一组（ADR-014）：候选 = 机制合法域，默认 = 把关的直接上游
                 "reopen_candidates": reopen_candidates(dag, nid) if is_gate(node) else None,
                 "reopen_default": list(node.get("deps", [])) if is_gate(node) else None,
+                # 被打回重做的人得知道「谁打回的、为什么」，否则重来一遍还是同一份东西
+                "feedback": reopen_feedback(dag, state.get("outputs") or {}, nid),
             }
         )
         return finish(dag, nid, {**prepared, **(answer or {})})

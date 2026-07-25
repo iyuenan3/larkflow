@@ -36,12 +36,12 @@ def test_diamond_reopen_reruns_sibling_against_fresh_upstream():
 
     def t_tool(node, state, ex):
         runs["T"] += 1
-        return {"ok": True, "gen": runs["T"]}
+        return {"ok": True, "gen": runs["T"], "content": f"上游正文 v{runs['T']}"}
 
     def a_llm(node, state, ex):
         gen = (state["outputs"].get("T") or {}).get("gen")
         runs["A_saw"].append(gen)
-        return {"ok": True, "saw_gen": gen}
+        return {"ok": True, "saw_gen": gen, "content": f"兄弟读到 gen={gen}"}
 
     def g_gate(node, state, ex):
         runs["G_attempts"] += 1

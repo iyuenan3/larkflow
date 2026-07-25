@@ -1,0 +1,114 @@
+# 招聘接力 · 与合同流形状完全不同的第二个业务场景
+#
+# 存在的意义是当一条**可执行的断言**：新增一个业务场景 = 新增一个 yaml，**零 Python**。
+# 它刻意和合同图处处不一样：
+#   · 人的分支与 AI 的分支并行且互不依赖（AI 那条链必须在面试官压着任务时照常推进）
+#   · 有纯动作节点（发通知，不产任何文档）
+#   · 交付物由人手写（面试记录）而不是 AI 起草
+#   · gate 出现在链条中段与末段，打回目标跨越 AI / 人两类节点
+#
+#   req ─→ jd ─→ jd_review ─┬─→ sourcing → screen → shortlist(auto) ─┐
+#                           │                                        ├─→ decision → offer → notify_candidate
+#                           └─→ interview ───────────────────────────┘
+id: hiring_relay
+name: 招聘接力
+nodes:
+  - id: req
+    label: 招聘需求登记
+    executor: tool
+    role: produce
+    deps: []
+    deliverable: {region: whole}
+    tool:
+      kind: record
+      args:
+        note: 需求确认后进入 JD 起草。
+
+  - id: jd
+    label: JD 起草
+    executor: llm
+    role: produce
+    deps: [req]
+    prompt: |
+      依据招聘需求起草职位描述（JD）：岗位职责、任职要求、团队与业务背景、薪酬区间说明。
+      用 Markdown 分条。要素缺失处写「【待确认：<缺什么>】」，不要编造。
+    model_role: writer
+    deliverable: {region: whole}
+
+  - id: jd_review
+    label: HRBP 审 JD
+    executor: human
+    role: gate
+    deps: [jd]
+    assignee_role: HRBP
+    signal: card_action
+    approval_policy: single
+
+  - id: sourcing
+    label: 寻访渠道清单
+    executor: llm
+    role: produce
+    deps: [jd_review]
+    prompt: 依据 JD 列出寻访渠道与关键词清单，标注每个渠道的预期产出量级。
+    model_role: writer
+    deliverable: {region: whole}
+
+  - id: screen
+    label: 简历初筛清单
+    executor: llm
+    role: produce
+    deps: [sourcing]
+    prompt: 依据渠道清单与 JD，产出初筛标准与待联系候选人清单模板。
+    model_role: writer
+    deliverable: {region: whole}
+
+  - id: shortlist
+    label: 初筛清单机检(auto)
+    executor: tool
+    role: gate
+    deps: [screen]
+    approval_policy: auto
+    tool:
+      kind: format_check
+      args:
+        required: [初筛标准]
+        min_chars: 20
+
+  - id: interview
+    label: 面试记录
+    executor: human
+    role: produce
+    deps: [jd_review]
+    assignee_role: 面试官
+    signal: task_complete
+    deliverable: {region: whole}
+
+  - id: decision
+    label: 录用决策
+    executor: human
+    role: gate
+    deps: [interview, shortlist]
+    assignee_role: 用人经理
+    signal: card_action
+    approval_policy: single
+
+  - id: offer
+    label: 发放 Offer
+    executor: human
+    role: produce
+    deps: [decision]
+    assignee_role: HRBP
+    signal: task_complete
+    deliverable: {region: whole}
+
+  # 纯动作节点：只通知，不产任何文档（故不声明 deliverable）
+  - id: notify_candidate
+    label: 通知候选人
+    executor: tool
+    role: produce
+    deps: [offer]
+    tool:
+      kind: notify
+      args:
+        to: reporter
+        text: Offer 已发出，请跟进候选人回复。

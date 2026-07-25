@@ -4,6 +4,10 @@ from __future__ import annotations
 from ..model.node import deps_ancestors, is_gate, node_by_id
 
 
+BLOCKED = "blocked"          # 终态：反复打回未见好转，等人介入（改图 / 改要素 / 手动放行）
+DEFAULT_REOPEN_BUDGET = 3
+
+
 class ReopenError(RuntimeError):
     """打回目标越出合法域（机制层：每个目标须 ⊆ gate 的 deps 传递祖先，ADR-014）。"""
 
@@ -66,6 +70,26 @@ def reopen_targets(node: dict, result: dict) -> list[str]:
     return list(node.get("deps", []))
 
 
+def reopen_feedback(dag: list[dict], outputs: dict, node_id: str) -> list[dict]:
+    """把「谁把我打回的、说了什么」查出来（纯函数）。
+
+    重算的输入必须带上它：否则 llm 节点用同一份 prompt 重跑，真 LLM（temperature=0）会
+    一字不差地再生成同一份稿；人节点也只会收到与上次逐字相同的派单卡。打回等于空转。
+    """
+    outputs = outputs or {}
+    out = []
+    for n in dag:
+        if not is_gate(n):
+            continue
+        result = outputs.get(n["id"]) or {}
+        if result.get("passed", True):
+            continue
+        if node_id in reopen_targets(n, result):
+            out.append({"from": n["id"], "label": n.get("label", n["id"]),
+                        "comment": result.get("comment"), "by": result.get("by")})
+    return out
+
+
 def reopen_candidates(dag: list[dict], gate_id: str) -> list[str]:
     """机制层合法的打回候选 = gate 的 deps 传递祖先（权限层过滤见 ADR-023）。"""
     return sorted(deps_ancestors(dag, gate_id))
@@ -98,24 +122,51 @@ def finish(dag: list[dict], nid: str, result: dict) -> dict:
     return {"outputs": {nid: result}, "status": {nid: "done"}}
 
 
-def reopen_resets(dag: list[dict], status: dict, outputs: dict | None = None) -> dict:
+def reopen_budget(node: dict) -> int:
+    """一道门最多能把同一段活打回几次（可按节点配 `reopen_budget`）。
+
+    没有预算的话，auto 机检门 + 产不出合格内容的上游 = 无限重算：单次 invoke 里
+    super-step 一路涨到 recursion_limit 才崩，实例停在半截、谁也不知道发生了什么。
+    这是通用产品的常态而非异常（AI 未必满足得了机检）。
+    """
+    raw = node.get("reopen_budget", DEFAULT_REOPEN_BUDGET)
+    return max(1, int(raw))
+
+
+def reopen_resets(dag: list[dict], status: dict, outputs: dict | None = None,
+                  counts: dict | None = None) -> dict:
     """打回落地（dispatch 单点执行）：把每个 failed gate 的 reopen 组 + 其传递下游
     + gate 自身重置 pending（选择性重算，ADR-014）。单写者，无并发竞争。
 
     gate 自身必被重置，且 reopen 目标是它的祖先，故重置集必然覆盖 gate → 结构性终止。
-    返回 status 增量 dict（node_id -> "pending"）；无 failed 节点则空。
+    超出打回预算的门标 `blocked`（终态，需人介入）而不是继续重算。
+    返回 status 增量 dict；无 failed 节点则空。
     """
-    outputs = outputs or {}
+    outputs, counts = outputs or {}, counts or {}
     resets: dict = {}
     for n in dag:
-        if status.get(n["id"]) != "failed":
+        nid = n["id"]
+        if status.get(nid) != "failed":
             continue
-        targets = reopen_targets(n, outputs.get(n["id"]))
-        bad = illegal_reopen(dag, n["id"], targets)
+        if counts.get(nid, 0) >= reopen_budget(n):
+            resets[nid] = BLOCKED      # 反复打回不见好转：停下来叫人，别空转到崩
+            continue
+        targets = reopen_targets(n, outputs.get(nid))
+        bad = illegal_reopen(dag, nid, targets)
         if bad:
             # 入口（service.resume）已挡一道；到这里说明 state 里已有非法值，属不变量破裂
-            raise ReopenError(f"{n['id']} 的打回目标越出合法域（须 ⊆ 传递祖先）: {bad}")
+            raise ReopenError(f"{nid} 的打回目标越出合法域（须 ⊆ 传递祖先）: {bad}")
         for target in targets:
-            for m in {target} | stale_downstream(dag, target) | {n["id"]}:
+            for m in {target} | stale_downstream(dag, target) | {nid}:
                 resets[m] = "pending"
     return resets
+
+
+def reopen_increments(dag: list[dict], status: dict, resets: dict) -> dict:
+    """本轮真正执行了打回的门 → 计数 +1（与 resets 同一次 dispatch 写回）。"""
+    return {n["id"]: 1 for n in dag
+            if status.get(n["id"]) == "failed" and resets.get(n["id"]) == "pending"}
+
+
+def blocked_nodes(dag: list[dict], status: dict) -> list[str]:
+    return [n["id"] for n in dag if status.get(n["id"]) == BLOCKED]

@@ -9,7 +9,7 @@ import pytest
 
 from larkflow.model import load_template, validate_template
 from larkflow.model.node import is_gate, is_produce, node_by_id
-from larkflow.model.template import TemplateError
+from larkflow.model.template import TemplateError, lint_template
 
 
 def base_dag() -> list[dict]:
@@ -97,9 +97,13 @@ def test_reject_duplicate_id_and_dangling_and_cycle():
 
 # ---------- 字段级护栏 ----------
 
-def test_produce_requires_deliverable():
-    with pytest.raises(TemplateError, match="deliverable"):
-        validate_template(mutate("draft", deliverable=None))
+def test_produce_may_omit_deliverable_for_pure_action_nodes():
+    """发通知 / 调外部系统 / 确认线下动作：这类节点不产文档。
+
+    强制每个 produce 都产一份飞书文档，会把纯审批、纯通知、纯决策类流程整类挡在门外。
+    「声明了落点却不产出」和「产出了却没落点」由执行体在运行时炸（见 test_generality）。
+    """
+    validate_template(mutate("draft", deliverable=None, prompt="x", model_role="w"))
 
 
 def test_deliverable_region_must_be_whole_or_section():
@@ -141,13 +145,46 @@ def test_human_requires_signal():
 
 # ---------- 护栏 ①..⑤（CONVENTIONS 编号） ----------
 
-def test_guardrail_1_all_three_executors_present():
+def test_guardrail_1_is_a_lint_hint_not_an_admission_gate():
+    """三型齐全是给生成器的风格建议（ADR-010「进生成 prompt」），不是运行准入条件。
+
+    硬校验会把整类真实业务挡在门外：招聘接力 / 采购审批全是 human，视频脚本是 llm+human。
+    """
+    pure_human = [
+        {"id": "jd", "label": "写 JD", "executor": "human", "role": "produce", "deps": [],
+         "assignee_role": "HR", "signal": "task_complete", "deliverable": {"region": "whole"}},
+        {"id": "ok", "label": "主管审", "executor": "human", "role": "gate", "deps": ["jd"],
+         "assignee_role": "主管", "signal": "card_action", "approval_policy": "single"},
+    ]
+    validate_template(pure_human)                      # 不抛
+    assert any("护栏①" in h for h in lint_template(pure_human))   # 但 lint 会提示
+
     dag = base_dag()
     node_by_id(dag, "seed")["executor"] = "llm"
     node_by_id(dag, "seed")["prompt"] = "x"
     node_by_id(dag, "seed")["model_role"] = "writer"
-    with pytest.raises(TemplateError, match="护栏①"):
-        validate_template(dag)
+    validate_template(dag)                             # llm + human，无 tool，合法
+
+
+def test_lint_flags_a_flow_with_no_gate():
+    assert any("把关" in h for h in lint_template([
+        {"id": "a", "label": "A", "executor": "tool", "role": "produce", "deps": [],
+         "deliverable": {"region": "whole"}, "tool": {"kind": "noop"}}]))
+
+
+def test_tool_declaration_shape():
+    ok = mutate("seed", tool={"kind": "record", "args": {"fields": ["甲方"]}})
+    validate_template(ok)
+    for bad in ({"args": {}}, {"kind": ""}, "record", {"kind": "record", "args": []}):
+        with pytest.raises(TemplateError, match="tool"):
+            validate_template(mutate("seed", tool=bad))
+
+
+def test_human_gate_must_use_card_action():
+    """「完成任务」是产出定稿信号，不是审批裁决：否则审批门静默退化成橡皮图章。"""
+    with pytest.raises(TemplateError, match="card_action"):
+        validate_template(mutate("review", signal="task_complete"))
+    validate_template(mutate("finalize", signal="task_complete"))   # produce 用它没问题
 
 
 def test_guardrail_2_gate_needs_reopenable_ancestor():

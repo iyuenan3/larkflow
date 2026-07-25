@@ -17,17 +17,22 @@ import threading
 
 from langgraph.types import Command
 
-from .engine.gates import illegal_reopen
+from .engine.gates import blocked_nodes, illegal_reopen, ready_nodes, reopen_resets
 from .engine.livegraph import GraphEditError, apply_ops
 from .engine.support import assert_v1_supported
 from .io.correlations import Correlation, Correlations
 from .io.events import CARD_ACTION, TASK_UPDATE
 from .io.lark_io import Button, LarkIO
+from .model.node import is_gate, node_by_id
 from .model.template import load_template, validate_template
 
 PASS_LABEL = "通过"
 REOPEN_LABEL = "打回"
 DONE_LABEL = "完成"
+
+# 借任一 worker 的位置写回 state：它的唯一出边就是 dispatch，于是 dispatch 会**真的执行**
+# （打回重置逻辑仍留在引擎里，驱动层不重算）。我们并不执行这个 worker，只是占它的位。
+_PUMP_AS_NODE = "tool_worker"
 
 
 class LarkFlowService:
@@ -39,11 +44,11 @@ class LarkFlowService:
         self.resolver = resolver
         self.dag = dag
         self.executors = executors   # 改图后复查 tool handler 覆盖（可选）
-        # 每 DAG 层约 2 super-step；给回边重跑留余量，防默认 recursion_limit=25 中途崩（修 C 之belt）
-        self._recursion_limit = 2 * len(dag) + 25
         # per-thread_id 串行化：EventPump 多线程（每 EventKey 一线程），防同实例并发 resume 丢更新（修 E）
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
+        # 派单失败不再吞掉：每实例记最近的失败，供 reconcile / 运维查
+        self.provision_errors: dict[str, list[dict]] = {}
 
     def _thread_lock(self, instance_id: str) -> threading.Lock:
         with self._locks_guard:
@@ -66,11 +71,12 @@ class LarkFlowService:
                 "dag": dag,
                 "status": {},
                 "outputs": {},
+                "reopen_counts": {},
                 "meta": {"instance_id": instance_id, "reporter": reporter,
                          "inputs": inputs or {}},
             }
-            self.graph.invoke(state0, self._run_cfg(instance_id), durability="sync")
-            self._handle(instance_id)
+            self.graph.invoke(state0, self._run_cfg(instance_id, dag), durability="sync")
+            self._advance(instance_id)
             return instance_id
 
     def _resolve_template(self, template) -> list[dict]:
@@ -109,8 +115,9 @@ class LarkFlowService:
             resolved = node_id is not None and status.get(node_id) == "done"
             if resolved or interrupt_id not in pending:
                 return {"skipped": "stale", "interrupt_id": interrupt_id}
-            self.graph.invoke(Command(resume={interrupt_id: value}), self._run_cfg(instance_id), durability="sync")
-            self._handle(instance_id)
+            self.graph.invoke(Command(resume={interrupt_id: value}),
+                              self._run_cfg(instance_id), durability="sync")
+            self._advance(instance_id)
             return {"resumed": interrupt_id}
 
     def edit_graph(self, instance_id: str, ops: list[dict]) -> dict:
@@ -137,16 +144,21 @@ class LarkFlowService:
             if self.executors is not None:
                 self.executors.validate_coverage(new_dag)
 
-            before = {i.id: (i.value or {}).get("node_id")
-                      for i in self._pending_interrupts(instance_id)}
-            self.graph.update_state(self._cfg(instance_id), {"dag": new_dag})
-            # 改完立刻推一步：新就绪的未来节点当场跑起来（唯一真环边照旧）
-            self.graph.invoke(None, self._run_cfg(instance_id), durability="sync")
-
-            remapped = self._remap_interrupts(instance_id, before)
-            self._handle(instance_id, skip=remapped)
+            remapped = self._write_state(instance_id, {"dag": new_dag})
+            self._advance(instance_id, skip=remapped)
             return {"edited": len(ops), "nodes": [n["id"] for n in new_dag],
                     "remapped": len(remapped)}
+
+    def reconcile(self, instance_id: str) -> dict:
+        """对账：按当前权威 state 重建飞书投影（幂等）+ 把被屏障挡住的分支推到位。
+
+        用于「进程崩在建任务与写关联表之间」「某个人派单失败」这类投影缺失，
+        以及运维手动催单。**不动 state 的业务值**，故可随时重跑。
+        """
+        with self._thread_lock(instance_id):
+            self.provision_errors.pop(instance_id, None)
+            self._advance(instance_id)
+            return {"reconciled": instance_id, "errors": self.provision_errors.get(instance_id, [])}
 
     def status(self, instance_id: str) -> dict:
         return self._values(instance_id).get("status", {})
@@ -160,16 +172,74 @@ class LarkFlowService:
 
         供驱动 / 前端读（前端读接口形态待定，见 SPEC 待填）；不含真相源以外的东西。
         """
+        status = self._values(instance_id).get("status", {})
         return [{"interrupt_id": it.id, **(it.value or {})}
-                for it in self._pending_interrupts(instance_id)]
+                for it in self._live_interrupts(instance_id, status)]
 
     # ---------- 内部 ----------
     def _cfg(self, instance_id: str) -> dict:
         return {"configurable": {"thread_id": instance_id}}
 
-    def _run_cfg(self, instance_id: str) -> dict:
-        # 运行（invoke）用；带 recursion_limit。读态（get_state）用 _cfg，不需要。
-        return {"configurable": {"thread_id": instance_id}, "recursion_limit": self._recursion_limit}
+    def _run_cfg(self, instance_id: str, dag: list[dict] | None = None) -> dict:
+        """运行（invoke）用；recursion_limit 按**运行时** dag 现算。
+
+        活图会让图长大、start(template=…) 也可能比装配期模板大得多，
+        按装配期算死会在中途炸 GraphRecursionError（实例停半截、投影孤悬）。
+        """
+        dag = dag or self._values(instance_id).get("dag") or self.dag
+        # 每 DAG 层约 2 super-step；给打回重跑留余量
+        return {"configurable": {"thread_id": instance_id}, "recursion_limit": 2 * len(dag) + 25}
+
+    # ---------- 推进：绕开 super-step 屏障 ----------
+    def _write_state(self, instance_id: str, updates: dict) -> set[str]:
+        """**保值**写回 state 并推一步；返回被重绑的新中断 id。
+
+        两条实测出来的硬约束（见 AIREADME/MEMORY）：
+        ① `update_state` 会落一个新 checkpoint，而在飞的 super-step 里**已完成任务的写入还没提交**，
+           不把当前观测到的 status/outputs 原样带上，就会被静默丢掉（有人刚点的裁决会凭空消失）。
+        ② `as_node` 指到某个 worker，其唯一出边是 dispatch，于是 dispatch **真的执行一次**：
+           打回重置逻辑仍留在引擎里，驱动层不重算。
+        """
+        values = self._values(instance_id)
+        before = {i.id: (i.value or {}).get("node_id")
+                  for i in self._pending_interrupts(instance_id)}
+        payload = {
+            "dag": updates.get("dag") or values.get("dag"),
+            "status": {**values.get("status", {}), **updates.get("status", {})},
+            "outputs": {**values.get("outputs", {}), **updates.get("outputs", {})},
+        }
+        # reopen_counts 用累加 reducer：保值写回会重复累加，故这里**不带它**（它只由 dispatch 写）
+        self.graph.update_state(self._cfg(instance_id), payload, as_node=_PUMP_AS_NODE)
+        self.graph.invoke(None, self._run_cfg(instance_id), durability="sync")
+        return self._remap_interrupts(instance_id, before)
+
+    def _stalled(self, values: dict, live: set[str]) -> bool:
+        """还有活该干却没被派出去吗？
+
+        LangGraph 的 super-step 是**屏障**：只要有人工节点挂着，dispatch 就不会再跑。于是
+        ① gate 判了打回却落不了地（上游不重算、没人被通知）；
+        ② 完全不相干的并行分支一起停（实测：B 跑完，C/D/E 全卡在另一条支的签字上）。
+        两者都表现为「按 dag 该就绪的节点没有在飞」。
+        """
+        dag, status = values.get("dag") or [], values.get("status", {})
+        if reopen_resets(dag, status, values.get("outputs", {}), values.get("reopen_counts", {})):
+            return True
+        return any(n["id"] not in live for n in ready_nodes(dag, status))
+
+    def _advance(self, instance_id: str, *, skip: set[str] | None = None) -> None:
+        """处理挂起（派单 / 投影），并把被屏障挡住的分支一拍一拍推到位。"""
+        self._handle(instance_id, skip=skip)
+        dag_len = len(self._values(instance_id).get("dag") or self.dag)
+        for _ in range(2 * dag_len + 5):
+            values = self._values(instance_id)
+            live = {(i.value or {}).get("node_id") for i in self._pending_interrupts(instance_id)}
+            if not self._stalled(values, live):
+                return
+            before = dict(values.get("status", {}))
+            remapped = self._write_state(instance_id, {})
+            self._handle(instance_id, skip=remapped)
+            if dict(self._values(instance_id).get("status", {})) == before:
+                return   # 推不动了就停，别空转
 
     def _values(self, instance_id: str) -> dict:
         return self.graph.get_state(self._cfg(instance_id)).values or {}
@@ -185,11 +255,27 @@ class LarkFlowService:
         return out
 
     def _handle(self, instance_id: str, skip: set[str] | None = None) -> None:
-        for it in self._pending_interrupts(instance_id):
+        status = self._values(instance_id).get("status", {})
+        for it in self._live_interrupts(instance_id, status):
             if skip and it.id in skip:
-                continue   # 只是改图导致的换 id：卡 / 任务还在人手里，别重复派
-            self._provision(instance_id, it)
+                continue   # 只是改图 / 推进导致的换 id：卡 / 任务还在人手里，别重复派
+            try:
+                self._provision(instance_id, it)
+            except Exception as exc:   # 一个人派失败，不能连累同批其他人
+                self.provision_errors.setdefault(instance_id, []).append(
+                    {"node_id": (it.value or {}).get("node_id"), "interrupt_id": it.id,
+                     "error": f"{type(exc).__name__}: {exc}"}
+                )
         self._project(instance_id)
+
+    def _live_interrupts(self, instance_id: str, status: dict) -> list:
+        """真正还在等人的中断。
+
+        并行下已 resume 的中断会滞留在 `get_state().interrupts`（直到同批兄弟也 resolve），
+        直接用会把已答复的节点当成「还卡在他手上」，既误导驾驶舱也会重复派单（修 F 同款判据）。
+        """
+        return [it for it in self._pending_interrupts(instance_id)
+                if status.get((it.value or {}).get("node_id")) != "done"]
 
     def _remap_interrupts(self, instance_id: str, before: dict[str, str]) -> set[str]:
         """改图后中断换了 id：按 node_id 对上号，记下迁移链，让旧卡 / 旧任务继续有效。
@@ -246,6 +332,8 @@ class LarkFlowService:
             lines = [f"{label}：完成后在飞书任务上点「完成」。"]
         if url:
             lines.append(f"你的交付物：{url}")
+        for f in v.get("feedback") or []:
+            lines.append(f"上一轮被「{f.get('label') or f.get('from')}」打回：{f.get('comment') or '（未留言）'}")
         # 审核人得先能打开要审的那份东西（gate 自己不产出交付物）
         lines += [f"待审：{u['label']} {u['url']}" for u in v.get("upstream") or []]
         return "\n".join(lines)
@@ -286,8 +374,13 @@ class LarkFlowService:
             ev = event.get("event", {})
             if "task_completed_update" not in (ev.get("event_types") or []):
                 return None
-            corr = self.corr.get(ev.get("task_guid", ""))
+            guid = ev.get("task_guid") or ""
+            corr = self.corr.get(guid) if guid else None
             if not corr:
+                return None
+            # 「完成任务」是产出定稿信号，**不是审批裁决**：绝不把它翻译成 gate 的放行
+            # （模板护栏已禁止 gate 配 task_complete，这里对既有实例 / 手改 dag 再兜一道）
+            if self._is_gate_node(corr.thread_id, corr.node_id):
                 return None
             return {
                 "instance_id": corr.thread_id,
@@ -297,6 +390,38 @@ class LarkFlowService:
             }
         return None
 
+    def _is_gate_node(self, instance_id: str, node_id: str) -> bool:
+        dag = self._values(instance_id).get("dag") or self.dag
+        try:
+            return is_gate(node_by_id(dag, node_id))
+        except KeyError:
+            return False
+
+    def blocked(self, instance_id: str) -> list[str]:
+        """反复打回仍不通过、已停下等人介入的门（终态，见 gates.BLOCKED）。"""
+        values = self._values(instance_id)
+        return blocked_nodes(values.get("dag") or [], values.get("status", {}))
+
     def _project(self, instance_id: str) -> None:
-        """投影钩子（seg-1 留空；进度卡 / 多维表格看板见 ROADMAP 第二段）。"""
-        return
+        """投影钩子（进度卡 / 多维表格看板见 ROADMAP）。
+
+        目前只做一件不能省的事：**卡死了得有人知道**。超预算的门是终态，不通知的话
+        项目就静静躺在那儿，谁都以为还在流转。
+        """
+        values = self._values(instance_id)
+        reporter = (values.get("meta") or {}).get("reporter")
+        stuck = blocked_nodes(values.get("dag") or [], values.get("status", {}))
+        if not reporter or not stuck:
+            return
+        labels = {n["id"]: n.get("label", n["id"]) for n in values.get("dag") or []}
+        for nid in stuck:
+            try:
+                self.io.notify(
+                    target=reporter,
+                    text=(f"「{labels.get(nid, nid)}」反复打回仍未通过，已停下等人介入"
+                          f"（实例 {instance_id}）。可改要素 / 改图后重试。"),
+                    idem_key=f"{instance_id}:{nid}:blocked",
+                )
+            except Exception as exc:
+                self.provision_errors.setdefault(instance_id, []).append(
+                    {"node_id": nid, "error": f"blocked-notify {type(exc).__name__}: {exc}"})

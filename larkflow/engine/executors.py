@@ -17,8 +17,16 @@ import json
 from typing import Callable
 
 from ..model.node import is_gate, is_produce
-from .deliverables import ensure_container, materialize, read_upstream
+from .deliverables import (
+    PLACEHOLDER_MARK,
+    ensure_container,
+    materialize,
+    prior_handle,
+    read_upstream,
+)
+from .gates import reopen_feedback
 from .support import V1_POLICIES, UnsupportedInV1
+from .tools import TOOL_KINDS
 
 Handler = Callable[[dict, dict, "Executors"], dict]
 
@@ -36,22 +44,29 @@ class Executors:
         deliverables=None,
         tool_handlers: dict[str, Handler] | None = None,
         llm_handlers: dict[str, Handler] | None = None,
+        tool_kinds: dict | None = None,
     ):
         self.io = io                      # LarkIO（Mock 或 Cli）：任务 / 卡 / 通知
         self.resolver = resolver          # assignee_role -> assignee(open_id)
         self.llm = llm                    # LLMClient（stub 或真实多角色路由）
         self.deliverables = deliverables  # DeliverableIO（Fake 或 Cli）：交付物读写
-        self.tool_handlers = tool_handlers or {}
+        self.tool_kinds = TOOL_KINDS if tool_kinds is None else tool_kinds  # 内置能力库（配置选取）
+        self.tool_handlers = tool_handlers or {}   # 逃生舱：按 node id 的一次性代码
         self.llm_handlers = llm_handlers or {}
 
     # ---------- 对外：三个 executor ----------
     def run_tool(self, node: dict, state: dict) -> dict:
         h = self.tool_handlers.get(node["id"])
-        if h is None:
+        if h is not None:                                    # 逃生舱优先
+            return self._collect(node, state, h(node, state, self))
+        kind = (node.get("tool") or {}).get("kind")
+        fn = self.tool_kinds.get(kind)
+        if fn is None:
             raise ExecutorError(
-                f"tool 节点 {node['id']} 未注册 handler（确定性程序无通用体，须注入）"
+                f"tool 节点 {node['id']} 无可执行体：tool.kind={kind!r} 不在能力库 "
+                f"{sorted(self.tool_kinds)}，也没注册 per-id handler"
             )
-        return self._collect(node, state, h(node, state, self))
+        return self._collect(node, state, fn(node, state, self, (node.get("tool") or {}).get("args") or {}))
 
     def run_llm(self, node: dict, state: dict) -> dict:
         if is_gate(node):
@@ -64,8 +79,11 @@ class Executors:
             return self._collect(node, state, h(node, state, self))
         if self.llm is None:
             raise ExecutorError(f"llm 节点 {node['id']} 无可用 LLMClient")
-        text = self.llm.complete(prompt=build_prompt(node, state, self._upstream(state, node)),
-                                 model_role=node["model_role"])
+        prompt = build_prompt(node, state, self._upstream(state, node),
+                              feedback=reopen_feedback(state.get("dag") or [],
+                                                       state.get("outputs") or {}, node["id"]),
+                              previous=self._previous_draft(state, node))
+        text = self.llm.complete(prompt=prompt, model_role=node["model_role"])
         return self._collect(node, state, {"ok": True, "content": text})
 
     def prepare_human(self, node: dict, state: dict) -> dict:
@@ -77,25 +95,39 @@ class Executors:
             # auto 门不该走到人（护栏③已保证 auto=tool）；会签 / 阈值 runtime 落 v1.3
             assert_gate_policy_supported(node)
             return {}
-        if not is_produce(node):
-            return {}
+        if not is_produce(node) or node.get("deliverable") is None:
+            return {}   # 纯动作的人工节点（线下动作确认等）不需要文档容器
         return ensure_container(
             self.deliverables, node, state,
             placeholder=self._placeholder(node),
         )
 
     def validate_coverage(self, dag: list[dict]) -> None:
-        """装配期自检：每个 tool 节点都得有 handler（否则跑到一半才炸）。"""
-        missing = [n["id"] for n in dag
-                   if n["executor"] == "tool" and n["id"] not in self.tool_handlers]
+        """装配期自检：每个 tool 节点都得有可执行体（内置 kind 或 per-id 逃生舱）。"""
+        missing = [
+            n["id"] for n in dag
+            if n["executor"] == "tool"
+            and n["id"] not in self.tool_handlers
+            and (n.get("tool") or {}).get("kind") not in self.tool_kinds
+        ]
         if missing:
-            raise ExecutorError(f"tool 节点缺 handler: {missing}")
+            raise ExecutorError(
+                f"tool 节点无可执行体: {missing}；声明 tool.kind ∈ {sorted(self.tool_kinds)} 即可，"
+                "无需写 Python"
+            )
 
     # ---------- 内部 ----------
     def _upstream(self, state: dict, node: dict) -> dict[str, str]:
         if self.deliverables is None:
             return {}
         return read_upstream(self.deliverables, state, node)
+
+    def _previous_draft(self, state: dict, node: dict) -> str | None:
+        """被打回重算时把自己的上一稿回喂：让 AI「照意见改」，而不是从零重写一遍。"""
+        if self.deliverables is None:
+            return None
+        handle = prior_handle(state.get("outputs") or {}, node["id"])
+        return self.deliverables.fetch(handle) if handle is not None else None
 
     def _collect(self, node: dict, state: dict, result: dict) -> dict:
         """统一收尾：produce 的 content 落成交付物；gate 的产出须自带 passed。"""
@@ -105,15 +137,29 @@ class Executors:
                 raise ExecutorError(f"gate 节点 {node['id']} 的产出必须含 passed")
             return result
         content = result.pop("content", None)
-        if content is None or not is_produce(node):
+        if not is_produce(node):
             return result
+        declared = node.get("deliverable") is not None
+        if content is None:
+            # 声明了落点却什么都没产出 = 静默的空洞：下游会经「透传」悄悄读到祖父节点的正文，
+            # 全程无声。gate 缺 passed 会炸，produce 缺产出没理由不炸。
+            if declared and prior_handle(state.get("outputs") or {}, node["id"]) is None:
+                raise ExecutorError(
+                    f"produce 节点 {node['id']} 声明了 deliverable 却没产出任何 content"
+                )
+            return result          # 纯动作节点（无 deliverable）：不产文档是正常的
+        if not declared:
+            raise ExecutorError(
+                f"{node['id']} 产出了正文却没声明 deliverable（交付物没有落点，会被丢掉）"
+            )
         return {**result, **materialize(self.deliverables, node, state, content=content)}
 
     def _placeholder(self, node: dict) -> str:
         who = node.get("assignee_role") or "负责人"
+        # PLACEHOLDER_MARK 是引擎与 auto 机检门共用的常量：机检据它判「人还没真写」
         return (f"# {node.get('label', node['id'])}\n\n"
-                f"> 待 {who} 填写。写完后按约定信号（{node.get('signal')}）发出定稿信号，"
-                f"引擎不会因为「文档不动了」判定稿。\n")
+                f"> {PLACEHOLDER_MARK} 由 {who} 填写。写完后发出约定的完成信号"
+                f"（{node.get('signal')}），引擎不会因为「文档不动了」判定稿。\n")
 
 
 def assert_gate_policy_supported(node: dict) -> None:
@@ -123,11 +169,15 @@ def assert_gate_policy_supported(node: dict) -> None:
         )
 
 
-def build_prompt(node: dict, state: dict, upstream: dict[str, str]) -> str:
-    """节点 prompt + 项目要素 + 上游交付物正文，拼成一次调用的输入。
+def build_prompt(node: dict, state: dict, upstream: dict[str, str],
+                 feedback: list[dict] | None = None, previous: str | None = None) -> str:
+    """节点 prompt + 项目要素 + 上游交付物正文 + **上一轮打回意见与自己的上一稿**。
 
     扇入（merge）就是多 deps 的这一条路径：每个上游按 label 标注来源，引擎无需
     「merge 节点类型」。
+
+    打回意见必须进这里，否则重算就是空转：同一份 prompt 重跑，真 LLM（temperature=0）
+    会一字不差地再生成同一份稿，人点的「打回」等于没点。
     """
     labels = {n["id"]: n.get("label", n["id"]) for n in (state.get("dag") or [])}
     parts = [node["prompt"]]
@@ -136,4 +186,13 @@ def build_prompt(node: dict, state: dict, upstream: dict[str, str]) -> str:
         parts.append("## 项目要素\n" + json.dumps(inputs, ensure_ascii=False, indent=2))
     for dep, text in upstream.items():
         parts.append(f"## 上游交付物 · {labels.get(dep, dep)}（{dep}）\n{text}")
+    if feedback:
+        parts.append("## 上一轮打回意见（必须逐条处理）\n" + render_feedback(feedback))
+        if previous:
+            parts.append(f"## 你的上一稿（在它基础上按意见修改，不要推倒重写）\n{previous}")
     return "\n\n".join(parts)
+
+
+def render_feedback(feedback: list[dict]) -> str:
+    return "\n".join(f"- {f.get('label') or f.get('from')}：{f.get('comment') or '（未留言）'}"
+                     for f in feedback)

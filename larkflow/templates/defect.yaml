@@ -2,10 +2,11 @@
 #   executor: tool | llm | human      谁执行
 #   role:     produce | gate          干啥（产出交付物 / 把关放行或打回）
 #   produce → deliverable{region}     交付物落点（ADR-016，v1 只做 whole）
+#   tool    → tool{kind, args}        内置能力库选取，**零 Python**（ADR-026）
 #   llm     → prompt + model_role     多角色 LLM 路由（ADR-017）
 #   gate    → approval_policy         auto=确定性机检 bypass / single=单人拍板
-#   human   → assignee_role + signal  派给谁 + 完成信号（结构化，绝不猜定稿）
-# 打回不在模板里预声明：gate 运行时产出 {passed, reopen:[…]}（ADR-014），故无 on_fail。
+#   human   → assignee_role + signal  派给谁 + 完成信号（gate 只能 card_action）
+# 打回不在模板里预声明：gate 运行时产出 {passed, reopen:[…], comment}（ADR-014）。
 # 这张图是交付物流转的**退化特例**（交付物 = 修复、图固定单链），v1.0 的 win 用合同图。
 id: defect_lifecycle
 name: 缺陷生命周期
@@ -17,13 +18,20 @@ nodes:
     role: produce
     deps: []
     deliverable: {region: whole}
+    tool:
+      kind: record
+      args:
+        note: 由飞流自动受理登记。
 
   - id: triage_ai
     label: AI分诊(定级/定类/建议负责人)
     executor: llm
     role: produce
     deps: [intake]
-    prompt: 依据缺陷描述定级(P0-P3)、定类、建议负责人，输出分诊结论。
+    prompt: |
+      你是缺陷分诊助手。依据受理登记里的缺陷描述，输出分诊结论：
+      严重级别(P0-P3)、类别(bug/regression/feature/question/infra)、建议负责人角色、判断依据。
+      用 Markdown 分条列出。
     model_role: triage
     deliverable: {region: whole}
 
@@ -51,6 +59,10 @@ nodes:
     role: produce
     deps: [reproduce]
     deliverable: {region: whole}
+    tool:
+      kind: record
+      args:
+        note: 已派给「开发」角色的负责人，验收标准见分诊结论。
 
   - id: fix
     label: 修复
@@ -76,3 +88,9 @@ nodes:
     role: produce
     deps: [qa_verify]
     deliverable: {region: whole}
+    tool:
+      kind: summarize_links
+      args:
+        title: 缺陷收口
+        notify: reporter
+        text: 缺陷已验证通过并收口。

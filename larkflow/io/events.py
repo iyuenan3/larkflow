@@ -22,22 +22,43 @@ READY_PREFIX = "[event] ready"
 
 
 class EventPump:
-    def __init__(self, on_event: Callable[[str, dict], None], *, identity: str = "bot", profile: str | None = None):
+    """飞书事件入口。**这是整个服务唯一的入站通道，它哑了产品就哑了**，故三条容错是必需的：
+
+    ① 处理某条事件抛异常，绝不能终结泵线程（否则进程还活着、systemd 看不出问题，
+       但从此所有实例的卡片点击与任务完成全部无人处理）。
+    ② ready 之后 stderr 仍要有人读：子进程写满管道（约 64KB）就会永久阻塞，事件流静默停摆。
+    ③ 子进程退了要带退避重启，并把故障喊出来。
+    """
+
+    def __init__(self, on_event: Callable[[str, dict], None], *, identity: str = "bot",
+                 profile: str | None = None, on_error: Callable[[str, Exception], None] | None = None,
+                 ready_timeout: float = 30.0, restart_backoff: float = 2.0, max_restarts: int = 5):
         self.on_event = on_event
         self.identity = identity
         self.profile = profile
+        self.on_error = on_error or (lambda where, exc: None)
+        self.ready_timeout = ready_timeout
+        self.restart_backoff = restart_backoff
+        self.max_restarts = max_restarts
         self._procs: list[subprocess.Popen] = []
         self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
 
     def start(self, event_keys: list[str]) -> None:
         for key in event_keys:
-            proc = self._spawn(key)
-            self._await_ready(proc, key)
-            t = threading.Thread(target=self._pump, args=(proc, key), daemon=True)
-            t.start()
-            self._procs.append(proc)
-            self._threads.append(t)
+            self._start_one(key)
+
+    def _start_one(self, key: str) -> None:
+        proc = self._spawn(key)
+        self._await_ready(proc, key)
+        self._procs.append(proc)
+        self._spawn_thread(self._drain_stderr, proc, key)   # ② 别让 stderr 写满管道
+        self._spawn_thread(self._pump, proc, key)
+
+    def _spawn_thread(self, fn, *args) -> None:
+        t = threading.Thread(target=fn, args=args, daemon=True)
+        t.start()
+        self._threads.append(t)
 
     def _spawn(self, key: str) -> subprocess.Popen:
         base = ["lark-cli"]
@@ -51,25 +72,69 @@ class EventPump:
         )
 
     def _await_ready(self, proc: subprocess.Popen, key: str) -> None:
-        for line in proc.stderr:  # 阻塞直到 ready 标记，绝不 sleep
-            if line.startswith(READY_PREFIX):
-                return
-        raise RuntimeError(f"event consume {key} 未就绪即退出")
+        """阻塞等 ready 标记，绝不 sleep；但也不能无限等（子进程可能挂着不吭声）。"""
+        result: dict = {}
+
+        def wait():
+            for line in proc.stderr:
+                if line.startswith(READY_PREFIX):
+                    result["ok"] = True
+                    return
+
+        t = threading.Thread(target=wait, daemon=True)
+        t.start()
+        t.join(self.ready_timeout)
+        if not result.get("ok"):
+            proc.terminate()
+            raise RuntimeError(f"event consume {key} 未在 {self.ready_timeout}s 内就绪")
+
+    def _drain_stderr(self, proc: subprocess.Popen, key: str) -> None:
+        try:
+            for _ in proc.stderr:      # 读掉就行，避免管道写满把子进程卡死
+                if self._stop.is_set():
+                    return
+        except Exception:
+            return
 
     def _pump(self, proc: subprocess.Popen, key: str) -> None:
-        for line in proc.stdout:
-            if self._stop.is_set():
-                break
-            line = line.strip()
-            if not line:
-                continue
+        restarts = 0
+        while not self._stop.is_set():
+            for line in proc.stdout:
+                if self._stop.is_set():
+                    return
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                try:
+                    self.on_event(key, obj)
+                except Exception as exc:      # ① 一条事件处理失败，绝不拖垮整条入站通道
+                    self.on_error(f"on_event:{key}", exc)
+            # stdout 到头 = 子进程没了：退避重启（③）
+            if self._stop.is_set() or restarts >= self.max_restarts:
+                self.on_error(f"consume:{key}", RuntimeError(
+                    f"event consume {key} 退出且重启已达上限 {self.max_restarts}，入站通道已停"))
+                return
+            restarts += 1
+            self.on_error(f"consume:{key}", RuntimeError(f"event consume {key} 退出，第 {restarts} 次重启"))
+            if self._stop.wait(self.restart_backoff * restarts):
+                return
             try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            self.on_event(key, obj)
+                proc = self._spawn(key)
+                self._await_ready(proc, key)
+                self._procs.append(proc)
+                self._spawn_thread(self._drain_stderr, proc, key)
+            except Exception as exc:
+                self.on_error(f"respawn:{key}", exc)
+                return
 
     def stop(self) -> None:
         self._stop.set()
         for proc in self._procs:
-            proc.terminate()
+            try:
+                proc.terminate()
+            except Exception:
+                pass

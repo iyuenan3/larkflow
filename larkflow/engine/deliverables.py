@@ -13,6 +13,9 @@ from __future__ import annotations
 from ..io.deliverable import WHOLE, Deliverable, DeliverableIO
 
 HANDLE_KEY = "deliverable"
+# 引擎给 human-produce 备好的空容器里放的占位标记。auto 机检门据此判「人还没真写」，
+# 所以它必须是**引擎与能力库共用的一个常量**，不能各写各的字样（改了措辞就静默失效）。
+PLACEHOLDER_MARK = "【待填写】"
 
 
 def prior_handle(outputs: dict, node_id: str) -> Deliverable | None:
@@ -75,7 +78,8 @@ def upstream_handles(state: dict, node: dict) -> dict[str, Deliverable]:
     的节点处停止，按 deps 顺序、去重。
     """
     outputs = state.get("outputs") or {}
-    deps_of = {n["id"]: list(n.get("deps", [])) for n in (state.get("dag") or [])}
+    dag_nodes = {n["id"]: n for n in (state.get("dag") or [])}
+    deps_of = {nid: list(n.get("deps", [])) for nid, n in dag_nodes.items()}
     found: dict[str, Deliverable] = {}
     seen: set[str] = set()
     queue = list(node.get("deps", []))
@@ -87,9 +91,15 @@ def upstream_handles(state: dict, node: dict) -> dict[str, Deliverable]:
         handle = prior_handle(outputs, dep)
         if handle is not None:
             found[dep] = handle
-        else:
+        elif _produces_nothing(dag_nodes.get(dep)):
+            # 只透过**本来就不产交付物**的节点（gate / 纯动作节点）。若是一个声明了落点却
+            # 没产出的 produce，那是缺陷不是透传，绝不能悄悄替换成它祖父的正文。
             queue.extend(deps_of.get(dep, []))
     return found
+
+
+def _produces_nothing(node: dict | None) -> bool:
+    return node is not None and node.get("deliverable") is None
 
 
 def read_upstream(io: DeliverableIO, state: dict, node: dict) -> dict[str, str]:
