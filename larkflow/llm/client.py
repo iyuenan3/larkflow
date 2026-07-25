@@ -71,14 +71,19 @@ class OpenAICompatLLM(LLMClient):
     """
 
     DEFAULT_ROLE = "default"
+    # 实测（2026-07-26，方舟 doubao-seed-2.1-turbo）：起草一份合同商务条款 **109.7s /
+    # 2570 字**。原来的 60s 会把 `biz_draft` 掐断，而那一刻飞书文档已建、任务已派：
+    # 人看到的是「AI 那步失败了」，日志里只有一个 ReadTimeout。默认值要明显大于实测值，
+    # 别卡在边界上；单个角色嫌慢就用 `LLM_<ROLE>_TIMEOUT` 单独收紧。
+    DEFAULT_TIMEOUT = 300
 
     def __init__(self, roles: dict[str, dict], *, ca_bundle: str | None = None,
-                 timeout: int = 60, client_factory=None, on_failover=None):
+                 timeout: float | None = None, client_factory=None, on_failover=None):
         if not roles:
             raise RuntimeError("LLM 角色路由表为空（见 .env.example 的 LLM_* 三元组）")
         self.roles = roles
         self.ca_bundle = ca_bundle
-        self.timeout = timeout
+        self.timeout = self.DEFAULT_TIMEOUT if timeout is None else timeout
         self.client_factory = client_factory or self._build_client
         self.on_failover = on_failover
         self.failovers: list[dict] = []
@@ -92,7 +97,9 @@ class OpenAICompatLLM(LLMClient):
             base_url=cfg["base_url"],
             api_key=cfg["api_key"],
             # 自签 TLS 时传 ca_bundle；绝不 verify=False
-            http_client=httpx.Client(verify=self.ca_bundle or True, timeout=self.timeout),
+            # 超时按**角色**取（起草要几分钟，机检 / 分诊几秒就够，一个数字盖不住）
+            http_client=httpx.Client(verify=self.ca_bundle or True,
+                                     timeout=cfg.get("timeout") or self.timeout),
         )
 
     def _chain(self, model_role: str) -> list[dict]:

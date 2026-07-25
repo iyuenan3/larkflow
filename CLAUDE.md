@@ -4,7 +4,7 @@
 > 当前：引擎 v1.0 核心 + 服务层已落码（2026-07-25）；设计全定（ADR-012..033）。
 
 ## 状态
-引擎核心 + 通用性收口 + **服务层**都已落码（v1 节点契约 + tool 数据化能力库 + 交付物层 + 选择性重算 + 打回预算与 `blocked` 出口 + 打回权限层 / 应答权 + 受控活图 + `larkflow serve` 常驻与 CLI + 三张模板 + 真实栈代码，**300 测绿**）。**新增业务场景 = 只加一个 yaml，零 Python**（见 `templates/hiring.yaml`）。
+引擎核心 + 通用性收口 + **服务层**都已落码（v1 节点契约 + tool 数据化能力库 + 交付物层 + 选择性重算 + 打回预算与 `blocked` 出口 + 打回权限层 / 应答权 + 受控活图 + `larkflow serve` 常驻与 CLI + 三张模板 + 真实栈代码，**307 测绿**）。**新增业务场景 = 只加一个 yaml，零 Python**（见 `templates/hiring.yaml`）。
 **但测绿全程 Mock/Stub/`:memory:`，真栈路径一次没跑过**（`build_real_service` 零覆盖）。**下一步 = 接真栈**：建 dev 飞书 app + 开事件回调 + 配 LLM 角色 env → 起 `larkflow serve` 跑真 e2e；并行轨是妙搭前端原型验三命门（0/3）。
 已知留白（详见 CHANGELOG v0.5.0 / ROADMAP v1.0）：escalation 的一键同意未做（申请落了 state，`status` 永远 pending）；`unblock` 无权限层（`by` 只进审计，`unblock(reopen=…)` 是绕过 ADR-023 的路）；改图换负责人不重新派单；`assignee_role` 配成飞书群时该节点无人可应答。
 
@@ -35,7 +35,7 @@
 ## 常用命令
 ```bash
 # 本地（全程不联网，Mock 飞书 + Stub LLM）
-pytest -q                              # 300 passed
+pytest -q                              # 307 passed
 python -m larkflow.demo --auto         # 自动跑一遍，打印「打回省算」的证据
 python -m larkflow.demo                # 交互式：你扮演所有的人（h 看命令；un 解除 ⛔ / esc 看审批申请）
 python -m larkflow.demo --template hiring   # 换业务图（contract / defect / hiring）

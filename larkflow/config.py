@@ -11,9 +11,11 @@ import re
 LLM_ROLE_RE = re.compile(r"^LLM_(?:(?P<role>(?!.*_BACKUP\d*_)[A-Z0-9_]+)_)?BASE_URL$")
 # 备用线路：BACKUP / BACKUP2 / BACKUP3…，按序号排队。
 LLM_BACKUP_RE = re.compile(
-    r"^LLM_(?:(?P<role>[A-Z0-9_]+)_)?BACKUP(?P<idx>\d*)_(?P<field>BASE_URL|API_KEY|MODEL)$")
+    r"^LLM_(?:(?P<role>[A-Z0-9_]+)_)?BACKUP(?P<idx>\d*)_"
+    r"(?P<field>BASE_URL|API_KEY|MODEL|TIMEOUT)$")
 DEFAULT_ROLE = "default"
-_FIELDS = {"BASE_URL": "base_url", "API_KEY": "api_key", "MODEL": "model"}
+_FIELDS = {"BASE_URL": "base_url", "API_KEY": "api_key", "MODEL": "model",
+           "TIMEOUT": "timeout"}
 
 
 class RoleResolver:
@@ -121,9 +123,24 @@ def load_llm_roles(environ: dict[str, str] | None = None) -> dict[str, dict]:
         # 主配置不全 → 整个角色跳过（既有语义），它的备用也一并丢掉：没有主线路的
         # 「备用」不该自己上位，那会让一份写漏的配置静默跑在人没打算用的供应商上。
         primary = {"base_url": base_url, "api_key": api_key, "model": model}
+        secs = _timeout(environ.get(f"{prefix}TIMEOUT"))
+        if secs:
+            primary["timeout"] = secs
         chain = [dict(primary, **b) for _, b in sorted((backups.get(raw or "") or {}).items())]
         roles[role] = {**primary, "fallbacks": chain} if chain else primary
     return roles
+
+
+def _timeout(raw):
+    """秒数，写坏了就当没配（退回默认值）。
+
+    env 里手滑一个字不该让整个服务起不来：这是运维旋钮，不是业务契约。
+    """
+    try:
+        secs = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return secs if secs > 0 else None
 
 
 def _load_backups(environ: dict[str, str]) -> dict[str, dict[int, dict]]:
@@ -140,7 +157,12 @@ def _load_backups(environ: dict[str, str]) -> dict[str, dict[int, dict]]:
             continue
         raw = m.group("role") or ""
         idx = int(m.group("idx") or 1)
-        out.setdefault(raw, {}).setdefault(idx, {})[_FIELDS[m.group("field")]] = val
+        field = _FIELDS[m.group("field")]
+        if field == "timeout":
+            val = _timeout(val)      # env 全是字符串，这一个要落成数字
+            if val is None:
+                continue
+        out.setdefault(raw, {}).setdefault(idx, {})[field] = val
     return out
 
 
