@@ -70,12 +70,23 @@ def ensure_container(io: DeliverableIO, node: dict, state: dict, *, placeholder:
 def read_upstream(io: DeliverableIO, state: dict, node: dict) -> dict[str, str]:
     """下游消费：按 deps 从权威登记表取 handle 再 fetch 正文（ADR-016 consume）。
 
-    未登记 handle 的上游（如纯 tool 记录节点）跳过，不报错。
+    **透过不产交付物的节点看上游**：gate 只把关、不产出，若不透传，往图里插一道复核门
+    就会悄悄切断下游的数据流（受控活图下这是常态）。每条路径在遇到第一个已登记 handle
+    的节点处停止，按 deps 顺序、去重。
     """
     outputs = state.get("outputs") or {}
+    deps_of = {n["id"]: list(n.get("deps", [])) for n in (state.get("dag") or [])}
     texts: dict[str, str] = {}
-    for dep in node.get("deps", []):
+    seen: set[str] = set()
+    queue = list(node.get("deps", []))
+    while queue:
+        dep = queue.pop(0)
+        if dep in seen:
+            continue
+        seen.add(dep)
         handle = prior_handle(outputs, dep)
         if handle is not None:
             texts[dep] = io.fetch(handle)
+        else:
+            queue.extend(deps_of.get(dep, []))
     return texts

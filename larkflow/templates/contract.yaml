@@ -1,0 +1,90 @@
+# 合同起草与复核 · v1.0 第一个 win 的策展模板（ADR-018 / ROADMAP v1.0）
+# 拓扑 = 商务 + 法律双起草（AI）→ 财务 / 法务分头 single gate → merge → 负责人定稿
+#        → auto 格式检查 → 收口
+#
+#   biz_draft ──→ finance_gate ─┐
+#                               ├─→ merge → finalize → checks(auto) → close
+#   legal_draft ─→ legal_gate ──┘
+#
+# 分头挂 gate 是关键：财务只审商务稿、法务只审法律稿，打回某一支时只重算那一支 + 其下游，
+# 旁支的 AI 长文起草不重跑、旧 handle 原样复用（v1.0 win 的「可感知省算」）。
+# merge 只依赖两道门：gate 不产交付物，正文由 read_upstream 透过门看到两份初稿。
+id: contract_v1
+name: 合同起草与复核
+nodes:
+  - id: biz_draft
+    label: 商务条款起草
+    executor: llm
+    role: produce
+    deps: []
+    prompt: |
+      你是商务合同起草助手。依据项目要素起草合同的**商务条款**部分（标的、价款与支付、
+      交付与验收、期限、变更）。用 Markdown，条款分条编号，金额 / 期限写具体值，
+      要素缺失处写「【待确认：<缺什么>】」而不是编造。
+    model_role: writer
+    deliverable: {region: whole}
+
+  - id: legal_draft
+    label: 法律条款起草
+    executor: llm
+    role: produce
+    deps: []
+    prompt: |
+      你是法务合同起草助手。依据项目要素起草合同的**法律条款**部分（保密、知识产权、
+      违约责任、不可抗力、争议解决、终止）。用 Markdown，条款分条编号，
+      要素缺失处写「【待确认：<缺什么>】」而不是编造。
+    model_role: legal
+    deliverable: {region: whole}
+
+  - id: finance_gate
+    label: 财务复核(商务条款)
+    executor: human
+    role: gate
+    deps: [biz_draft]
+    assignee_role: 财务
+    signal: card_action
+    approval_policy: single
+
+  - id: legal_gate
+    label: 法务复核(法律条款)
+    executor: human
+    role: gate
+    deps: [legal_draft]
+    assignee_role: 法务
+    signal: card_action
+    approval_policy: single
+
+  - id: merge
+    label: 合并成稿
+    executor: llm
+    role: produce
+    deps: [finance_gate, legal_gate]
+    prompt: |
+      把上游两份条款整合成一份完整合同：统一编号与称谓、消除重复与冲突、补齐首尾
+      （合同名称、双方、签署栏）。**不得删改任何一方已复核通过的实质条款**；
+      发现冲突就在文末列「【冲突待裁决】」清单。用 Markdown。
+    model_role: editor
+    deliverable: {region: whole}
+
+  - id: finalize
+    label: 负责人定稿
+    executor: human
+    role: produce
+    deps: [merge]
+    assignee_role: 负责人
+    signal: task_complete
+    deliverable: {region: whole}
+
+  - id: checks
+    label: 格式检查(auto)
+    executor: tool
+    role: gate
+    deps: [finalize]
+    approval_policy: auto
+
+  - id: close
+    label: 收口(汇总+通知发起人)
+    executor: tool
+    role: produce
+    deps: [checks]
+    deliverable: {region: whole}

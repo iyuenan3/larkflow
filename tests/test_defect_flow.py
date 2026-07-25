@@ -26,7 +26,7 @@ def test_win_g5_reopen_once_then_close():
     svc, io = build_defect_service()
     iid = "wf-1"
 
-    svc.start(instance_id=iid, reporter="ou_reporter", bug={"title": "登录崩溃", "detail": "点登录白屏"})
+    svc.start(instance_id=iid, reporter="ou_reporter", inputs={"title": "登录崩溃", "detail": "点登录白屏"})
     # intake(tool) + triage_ai(llm) 自动跑完，挂在 triage_review(human·卡)
     assert svc.status(iid)["intake"] == "done"
     assert svc.status(iid)["triage_ai"] == "done"
@@ -60,7 +60,7 @@ def test_deliverable_handles_stable_across_reopen():
     store = FakeDeliverableStore()
     svc, io = build_defect_service(deliverables=store)
     iid = "wf-3"
-    svc.start(instance_id=iid, reporter="ou_r", bug={"title": "登录崩溃"})
+    svc.start(instance_id=iid, reporter="ou_r", inputs={"title": "登录崩溃"})
 
     svc.resume_from_event(_card_event(io, "triage_review", "通过"))
     svc.resume_from_event(_card_event(io, "reproduce", "通过"))
@@ -89,7 +89,7 @@ def test_runtime_picked_reopen_target_reruns_deeper_branch():
     """打回目标是审核当场选的一组，不在模板里预声明（ADR-014）。"""
     svc, io = build_defect_service()
     iid = "wf-4"
-    svc.start(instance_id=iid, reporter="ou_r", bug={"title": "登录崩溃"})
+    svc.start(instance_id=iid, reporter="ou_r", inputs={"title": "登录崩溃"})
     svc.resume_from_event(_card_event(io, "triage_review", "通过"))
     svc.resume_from_event(_card_event(io, "reproduce", "通过"))
     svc.resume_from_event(_task_event(io))
@@ -114,7 +114,7 @@ def test_illegal_reopen_is_rejected_at_ingress():
     """打回合法域在引擎权威侧算、不信前端：非法目标不得进 state。"""
     svc, io = build_defect_service()
     iid = "wf-5"
-    svc.start(instance_id=iid, reporter="ou_r", bug={"title": "x"})
+    svc.start(instance_id=iid, reporter="ou_r", inputs={"title": "x"})
     svc.resume_from_event(_card_event(io, "triage_review", "通过"))
     svc.resume_from_event(_card_event(io, "reproduce", "通过"))
     svc.resume_from_event(_task_event(io))
@@ -132,7 +132,7 @@ def test_illegal_reopen_is_rejected_at_ingress():
 def test_default_reopen_target_comes_from_gated_upstream():
     svc, io = build_defect_service()
     iid = "wf-6"
-    svc.start(instance_id=iid, reporter="ou_r", bug={"title": "x"})
+    svc.start(instance_id=iid, reporter="ou_r", inputs={"title": "x"})
     svc.resume_from_event(_card_event(io, "triage_review", "通过"))
     assert io.button_value("reproduce", "打回")["reopen"] == ["triage_review"]
 
@@ -140,7 +140,7 @@ def test_default_reopen_target_comes_from_gated_upstream():
 def test_reopen_comment_is_recorded_in_outputs():
     svc, io = build_defect_service()
     iid = "wf-7"
-    svc.start(instance_id=iid, reporter="ou_r", bug={"title": "x"})
+    svc.start(instance_id=iid, reporter="ou_r", inputs={"title": "x"})
     svc.resume_from_event(_reopen_event(io, "triage_review", comment="定级偏低，重判"))
     assert svc.outputs(iid)["triage_review"]["comment"] == "定级偏低，重判"
 
@@ -149,7 +149,7 @@ def test_stale_resume_is_noop():
     """同一张卡重复点击（飞书 at-least-once）→ 第二次是陈旧中断，no-op。"""
     svc, io = build_defect_service()
     iid = "wf-2"
-    svc.start(instance_id=iid, reporter="ou_r", bug={"title": "x"})
+    svc.start(instance_id=iid, reporter="ou_r", inputs={"title": "x"})
 
     ev = _card_event(io, "triage_review", "通过")
     first = svc.resume_from_event(ev)

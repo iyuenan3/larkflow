@@ -121,6 +121,19 @@ def test_read_upstream_fetches_dep_contents_and_skips_unregistered():
     assert texts == {"a": "商务正文", "b": "法律正文"}   # note 无 handle → 跳过不报错
 
 
+def test_read_upstream_sees_through_nodes_without_deliverables():
+    """gate 不产交付物：不透传的话，往图里插一道复核门就切断了下游的数据流。"""
+    io = FakeDeliverableStore()
+    draft = materialize(io, dict(NODE, id="draft", label="初稿"), state_with(), content="初稿正文")
+    dag = [
+        {"id": "draft", "deps": []},
+        {"id": "review", "deps": ["draft"]},      # gate：无交付物
+        {"id": "publish", "deps": ["review"]},
+    ]
+    texts = read_upstream(io, {"dag": dag, "outputs": {"draft": draft}}, dag[2])
+    assert texts == {"draft": "初稿正文"}
+
+
 def test_prior_handle_none_when_unregistered():
     assert prior_handle({}, "draft") is None
     assert prior_handle({"draft": {"ok": True}}, "draft") is None

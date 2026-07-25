@@ -12,9 +12,9 @@ from ..engine.executors import Executors
 
 
 def intake(node: dict, state: dict, ex: Executors) -> dict:
-    """受理登记：把缺陷要素落成登记单（交付物）。"""
+    """受理登记：把缺陷要素落成登记单（交付物）。要素来自 start(inputs=…)。"""
     meta = state.get("meta", {})
-    bug = meta.get("bug", {})
+    bug = meta.get("inputs", {})
     lines = [f"# 缺陷登记 {meta.get('instance_id', '')}",
              f"- 标题：{bug.get('title', '')}",
              f"- 描述：{bug.get('detail', '')}",
@@ -25,7 +25,7 @@ def intake(node: dict, state: dict, ex: Executors) -> dict:
 
 def triage_ai(node: dict, state: dict, ex: Executors) -> dict:
     """AI 分诊：定级 / 定类 / 建议负责人（结构化产出 + 一份分诊结论交付物）。"""
-    bug = state.get("meta", {}).get("bug", {})
+    bug = state.get("meta", {}).get("inputs", {})
     triage = ex.llm.triage(bug) if ex.llm else {}
     lines = ["# 分诊结论"] + [f"- {k}：{v}" for k, v in triage.items()]
     return {"ok": True, "triage": triage, "content": "\n".join(lines)}

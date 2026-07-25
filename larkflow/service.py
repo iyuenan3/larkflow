@@ -23,7 +23,7 @@ from .engine.support import assert_v1_supported
 from .io.correlations import Correlation, Correlations
 from .io.events import CARD_ACTION, TASK_UPDATE
 from .io.lark_io import Button, LarkIO
-from .model.template import validate_template
+from .model.template import load_template, validate_template
 
 PASS_LABEL = "通过"
 REOPEN_LABEL = "打回"
@@ -53,17 +53,35 @@ class LarkFlowService:
             return lk
 
     # ---------- 对外 ----------
-    def start(self, *, instance_id: str, reporter: str, bug: dict) -> str:
+    def start(self, *, instance_id: str, inputs: dict | None = None, reporter: str | None = None,
+              template: str | list[dict] | None = None) -> str:
+        """起一个实例（ADR-021：两个入口都收敛到 start(template, inputs)）。
+
+        template 省略则用装配时的默认模板；传名字则按名加载，传 dag 则直接用（都过校验）。
+        inputs = 项目要素（llm 节点 prompt 里可见），随 meta 持久在 checkpointer。
+        """
+        dag = self._resolve_template(template)
         with self._thread_lock(instance_id):
             state0 = {
-                "dag": self.dag,
+                "dag": dag,
                 "status": {},
                 "outputs": {},
-                "meta": {"instance_id": instance_id, "reporter": reporter, "bug": bug},
+                "meta": {"instance_id": instance_id, "reporter": reporter,
+                         "inputs": inputs or {}},
             }
             self.graph.invoke(state0, self._run_cfg(instance_id), durability="sync")
             self._handle(instance_id)
             return instance_id
+
+    def _resolve_template(self, template) -> list[dict]:
+        if template is None:
+            return self.dag
+        dag = load_template(template) if isinstance(template, str) else template
+        validate_template(dag)
+        assert_v1_supported(dag)
+        if self.executors is not None:
+            self.executors.validate_coverage(dag)
+        return dag
 
     def resume_from_event(self, event: dict) -> dict:
         route = self._route(event)
@@ -137,6 +155,14 @@ class LarkFlowService:
         """节点产出 + 交付物 handle 权威登记表（ADR-020）。"""
         return self._values(instance_id).get("outputs", {})
 
+    def pending(self, instance_id: str) -> list[dict]:
+        """当前卡在谁手上：每个挂起的人工节点一条（含交付物链接、打回候选）。
+
+        供驱动 / 前端读（前端读接口形态待定，见 SPEC 待填）；不含真相源以外的东西。
+        """
+        return [{"interrupt_id": it.id, **(it.value or {})}
+                for it in self._pending_interrupts(instance_id)]
+
     # ---------- 内部 ----------
     def _cfg(self, instance_id: str) -> dict:
         return {"configurable": {"thread_id": instance_id}}
@@ -204,11 +230,11 @@ class LarkFlowService:
             self.corr.put(Correlation(msg, instance_id, iid, nid, "card"))
 
     def _assignee(self, instance_id: str, nid: str, assignee_role: str) -> str:
-        # fix 的执行人优先用 assign 节点定的 owner（seg-1 遗留硬编码，step 8 泛化）
-        if nid == "fix":
-            owner = (self._values(instance_id).get("outputs", {}).get("assign") or {}).get("owner")
-            if owner:
-                return owner
+        """派单对象只认模板里的 assignee_role（驱动层不认识任何具体模板）。
+
+        「按上游产出动态定人」（seg-1 的 fix 曾特判 assign 节点算出的 owner）留到 v1.1
+        与意图路由 / 生成一起做，届时是节点字段、不是驱动层硬编码。
+        """
         return self.resolver.resolve(assignee_role)
 
     def _criteria(self, v: dict) -> str:

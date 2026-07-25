@@ -64,7 +64,7 @@ def test_malformed_ops_are_rejected():
 def _pause_at_triage_review():
     svc, io = build_defect_service()
     iid = "live-1"
-    svc.start(instance_id=iid, reporter="ou_r", bug={"title": "x"})
+    svc.start(instance_id=iid, reporter="ou_r", inputs={"title": "x"})
     return svc, io, iid
 
 
