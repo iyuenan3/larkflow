@@ -153,6 +153,7 @@
 - Decision: 打回 = **机制层 ∩ 权限层**。权限层：① **项目 owner** 可打回本项目任一祖先节点。② **参与人（人工节点 H 的负责人）** 可打回 N 当且仅当 N ∈ 传递祖先(H) 且**重算集(N ∪ 传递下游)里除 H 自己与 H 的下游人工节点外，不牵连任何别的人工节点**（串行时退化为「最多到上一个人工节点」）。③ 跨界打回走 **escalation**：通知 {项目 owner + 目标节点负责人（多人节点取主负责人）}，任一方同意即执行（轻量版）。**节点负责人**：每个人工节点 ≥1 负责人；多人节点设 1 名**主负责人**为手动打回权主体。打回权威两源：个人主体（owner / 主负责人 / 责任段参与人）+ 集体投票（A 类阈值自动，ADR-025）。
 - Alternatives(否决): 只按「上一个人工节点」路径判（DAG 并行分支下漏踢皮球：打回共同上游会连累旁支他人的人工节点）；人人可全域打回（破责任边界）。
 - Tradeoff: 权限层 = 纯图函数 `allowed_reopen(dag, actor, owner, assignees, from_node)`，可穷举测；候选集 = 机制合法 ∩ 权限允许，审核卡 / 画布据此过滤。escalation v1 只做「申请 + 通知 + 一键同意」。
+- **→ 2026-07-25 实现状态（as-built，v0.5.0）**：权限层已落码 `larkflow/engine/permissions.py`（纯图函数 `allowed_reopen` / `reopen_verdict` / `collateral_humans` / `primary_owner` / `approvers_for`），接进 `service.resume`：actor 取自事件**顶层** `operator_id`（卡片封套里塞的身份字段一律无效，红线⑤），越权返回 `unauthorized_reopen`，跨界则落一笔申请到新的追加型 state channel `escalations` + 通知审批人且**不执行**打回（全或无：一组目标里只要有一个跨界，整笔都不执行）。身份的货币单位 = **令牌集合**（角色名 ∪ open_id），`open_id → 角色集合` 的反解在驱动层 `RoleResolver.roles_of` 做一次（一对多），纯函数层因此不必认识飞书、可穷举测。判据 ② 落成 `collateral_humans` 的四类豁免（target 自己 / H 自己 / H 的传递下游 / actor 自己担的人工节点）；**「豁免 target 自己」是从 ADR 括号里那句「串行退化为最多回到上一个人工节点」反推的，不是字面**（不豁免则 QA 连打回给开发都不行），若本意另有所指，整套判据的松紧要重定。**仍未做**：③ 的「一键同意」（没有 approve / reject 通道，记录 `status` 永远 pending，等真 dev app 的卡片回调）；`unblock(reopen=[…])` 没接这层（ADR-030 的已知绕行路）；A 类集体投票的打回权威（ADR-025，v1.3）。放行侧的身份判定不在本 ADR 范围，另见 ADR-032。
 
 ## ADR-024 · 2026-07-24 · 子项目 spawn：交付物流转递归自身 + 回填 + 边界隔离
 - **Status（暂定）**：设计草案，v1.2 首个真子项目校验前，模型级取值（回填协议 / 打回粒度 / 深度上限）视为暂定、可改。
@@ -199,4 +200,36 @@
 - Problem: auto 机检门 + 产不出合格内容的上游 = 无限重算，单次 invoke 里 super-step 一路涨到 `recursion_limit` 才崩，实例停在半截、投影孤悬、谁也不知道发生了什么（实测于招聘图的机检门）。这是通用产品的常态：AI 未必满足得了机检。
 - Decision: 每道门记打回次数（`reopen_counts`，dispatch 单写者、累加 reducer），超预算（节点可配 `reopen_budget`，默认 3）则把该门标 `blocked` 终态而非继续重算，并通知发起人「已停下等人介入」。`blocked` 不是 `done`，下游不会解锁。
 - Alternatives(否决): 只调大 recursion_limit（推迟而非解决）；无限重试（烧 LLM 额度且永不收敛）。
-- Tradeoff: 兑现 MEMORY finding C 的推迟条件（「seg-2 回填自动化门禁时」）。人介入方式 v1 = 改要素 / 改图后重试；「手动放行 blocked 门」的命令待补。
+- Tradeoff: 兑现 MEMORY finding C 的推迟条件（「seg-2 回填自动化门禁时」）。人介入方式 v1 = 改要素 / 改图后重试 + **显式解除**（`service.unblock` / `larkflow unblock`，2026-07-25 已落码，见 ADR-030；解除后节点回 pending，受控活图这才够得着它，于是「改图后重试」这条路才真的通）。
+
+## ADR-030 · 2026-07-25 · `blocked` 的解除通道：人显式介入 + 追加预算（不重置计数）
+- Problem: ADR-029 把反复打回仍不通过的门停成 `blocked` 终态，却没留出口。那道门自己过不了冻结线（受控活图只动 pending 节点）、它的上游是 done 也动不了、每次 `reopen_resets` 又把它重新算成 blocked。发起人收到「可改要素 / 改图后重试」的通知，实际无路可走：`blocked` 是死局。
+- Constraint: 只改未来不改历史（历史 `attempts` / `outputs` / `reopen_counts` 一条都不能改）；完成靠显式信号（引擎绝不自动解除，自动解除 = 把 ADR-029 消灭的无限重算原样放回来）；冻结线不许为解除而放宽（破 ADR-013）。
+- Decision: 加一条**人显式触发**的通道 `unblock(instance, node, by, reason, grant=1, reopen=None)`。语义 = 把这道门放回执行前沿（status 回 pending）并**追加**一份打回预算（`真实预算 = 节点配置 + Σgrant`），可选连带解冻一组祖先（过引擎侧 `illegal_reopen` 合法域校验，不信调用方给的目标）。四条落地口径：① 额度**两层有界**（单次 grant 收进 [1,3]，同一节点累计解除不超过 3 次，耗尽即拒并通知发起人）；② 必审计（谁 / 何时 / 为什么 / 追加多少）落新的**追加型** state channel `unblocks`（reducer 只追加不覆盖），`unblock_log()` 读；③ 解除只让门回 pending，**绝不顺带放行**（放行仍须来自门自己的执行体或人的裁决）；④ 冻结线一寸不放宽，「改图后重试」靠「解除后节点回 pending、受控活图这才够得着它」自然成立。被解除重置的节点 `attempts` +1（轮次是派单幂等键的一部分，不 +1 的话人手里还是上一轮那张卡，新一轮无人被叫）。
+- Alternatives(否决): 重置 `reopen_counts`（洗白审计，「这道门一共真打回过几次」从此不可考）；只封解除次数、不封单次 grant（一次 `grant=10**9` 就把预算机制原地废掉，变异测试实测退化成无限重算）；解除时顺带把门标 done（人替机检签字，破「完成靠显式信号」红线）；放宽冻结线让人直接编辑 blocked 节点（破 ADR-013）。
+- Tradeoff: **没有权限层**：`by` 只进审计不做鉴权，于是 `unblock(reopen=[…])` 是一条绕过 ADR-023 的路（谁调得到 service 谁就能借解除把任意合法祖先踢回去返工）。今天调用方只有运维 / demo，可接受；**接前端或卡片按钮之前必须先补**（做法：拿 `by` 当 actor 过一遍 `reopen_verdict`，与 `resume` 用同一把尺）。没有请求级幂等：auto 门解除后常常当场再 blocked，双击 / 重放会花掉两份额度（有界且每笔可审，不是幂等）。额度耗尽后没有第二条出路，产品答案是「改图 / 换要素重开一个实例」，引擎侧不提供「换实例接力」原语（那是 ADR-021 入口层的事）。`blocked` 也不是真终态：另一道门打回共同祖先时，`reopen_resets` 会把 blocked 节点当普通下游重置回 pending，不经审计、不花额度（信息没丢，报的是同一个仍然成立的条件，故未改）。
+
+## ADR-031 · 2026-07-25 · 常驻服务形态：一个 daemon + 一次性 CLI，多进程共用一个 SQLite
+- Problem: 引擎测全绿但**跑不起来**：`EventPump` 写好了却没有任何一行生产代码把它接到 `resume_from_event`；`reconcile()` 实现了却从不在启动时跑（崩溃自愈只做了一半）；`build_real_service()` 造出来的对象没人 start、没人 serve、没有信号处理。且 ADR-030 的救场动作（解除 blocked）必须能在 daemon 跑着的时候执行，而它写的是同一个 SQLite 文件。
+- Constraint: ADR-007「无入站端口」（事件靠出站长连接）；单一事实源 = checkpointer，绝不新建实例表；红线「测试全程 Mock / Stub / `:memory:`，绝不构造 `build_real_service`」（它会真发消息、真建文档）。
+- Decision: 进程拓扑 = **一个常驻 daemon（`larkflow serve`）+ 若干一次性 CLI 命令**（`start / status / pending / unblock / reconcile`）。
+  - daemon 的一生：装信号 → **启动全实例对账** → 起泵（每 EventKey 一条 `lark-cli event consume` 子进程 + 一条泵线程）→ block 到 SIGINT / SIGTERM → 停订阅 → 等在飞的那条事件跑完 → 关 DB。顺序是硬的：对账排在起泵之前（事件在半对账状态下进来会与推进拍打架），装信号排在最前（慢对账期间也停得下来）。
+  - 实例枚举的真相源就是 checkpointer（按 thread_id 去重），**不建实例表**。对账**逐实例容错**（一个坏实例不许让整个服务起不来）、跳过已跑完的实例（没有投影要重建、重推只会重发通知）。`larkflow reconcile`（不带实例）与 daemon 启动走**同一条代码路径**，容错 / 跳过 / 报告只有一份。
+  - 多进程写同一个 SQLite 选**真解决**而非「检测到 daemon 就拒绝」，三件事缺一不可：① `open_db` 开 WAL + busy_timeout（SQLite 层：读不被写堵、写与写排队而不是当场 `database is locked`）；② 跨进程 flock 按 instance_id 一把，作为 `lock_factory` 注进 `LarkFlowService`，把「同实例状态变更串行」这条既有不变量从进程内原样扩到跨进程（应用层的读改写丢更新才是真危险，丢的是人刚点下的裁决、事后无迹可查）；③ `<DB>.serve.lock` 单例锁，同一个 DB 只许一个 daemon。开不了 WAL（多半是 DB 放在网络盘上，而那里 flock 同样不可靠）**直接拒绝启动**，不降级。
+  - CLI 的一切外部依赖可注入（默认 factory 才是 `build_real_service`，且函数内延迟 import），于是每条子命令都能测穿而绝不构造真栈。退出码：0 成功 / 1 运行期失败或被拒 / 2 用法错。
+- Alternatives(否决): 一次性命令检测到 daemon 在跑就报错（daemon 一起来运维就再也 unblock 不了、起不了新项目，而 blocked 的出口恰恰是运维命令，产品当场做死）；新建一张实例表当枚举源（第二个真相源，一旦与 checkpointer 漂移，对账反而变成损坏源）；只在 CLI 外面套锁（daemon 侧不参与 = 等于没锁，根因位置在 service 的临界区）；起 HTTP 服务收事件（破 ADR-007）。
+- Tradeoff: flock 是**建议锁**（裸 sqlite3 进来写照样能覆盖），且只在本地盘可靠。service 的锁**不可重入**：今天那 5 处临界区确认无嵌套，但将来谁在临界区里调另一个带锁的公开方法，就从「进程内瞬时自锁」变成「跨进程真死锁到超时」，这条不变量只靠约定维持。单进程模型：每 EventKey 一条泵线程串行处理，没有 worker 池，一个慢 LLM 节点会挡住同一条通道上的后续事件（单租户团队 MVP 够用）。启动对账会对每个未完成实例真跑一次推进拍，实例多了启动会变慢且这段时间入站通道还没起（无并发 / 无分批）。健康检查与指标只在内存与 stderr 日志里（ADR-007 无入站端口下有意为之）。Windows 跑不了（flock 依赖 fcntl，构造时直接抛而不静默降级成「没有锁」）。`build_real_service` 这条路**仍然零测试覆盖**（红线：测试绝不构造真栈），只把它的调用方测穿了。
+
+## ADR-032 · 2026-07-25 · 身份判定覆盖同一张卡的两个按钮：新增应答权 `can_answer`
+- Problem: ADR-023 只说了打回。落码后暴露一个更重的洞：同一张审核卡上「通过」那颗按钮**零校验**，任何拿得到 `interrupt_id` 的人（卡被转发、`assignee_role` 解析成群、封套被伪造）都能替把关人放行，还在 `outputs` 里留下他本人从未做出的「同意」。实测复现：身份判定原按 `passed` 分两支，而非 gate 节点的 fail 落在两支之外（`gates.finish` 对非 gate 根本不看 `passed`、照样标 done），陌生人把封套里的 `verdict` 改一个字就替别人把定稿签了。
+- Constraint: 红线「一切权限 / 合法性在引擎权威侧算，绝不信前端回传」（卡片 `action_value` 是前端可自由构造的攻击面）。
+- Decision: 加第二把尺 `permissions.can_answer(dag, actor_roles, node_id)`：**应答人集合** = `assignee_role` ∪ `vote.voters` ∪ `vote.primary`，**不含项目 owner**（打回是调度，owner 全域；放行是代签，谁的活谁签。owner 要跳过一道门有留痕的正路：受控活图改 / 删该节点，ADR-013）。分支判据从「`passed` 是不是真」换成「**这一下是不是一次打回**」（gate + 判不通过 + 目标组非空），于是「不是打回的每一下都是应答」，一律过 `can_answer`。卡片通道缺 `operator_id` 一律 **fail closed**（独立 skip 值 `unidentified_actor`，好让 daemon 日志分得清「与我无关」和「入站通道认不出人」）；任务通道保留**结构性豁免**（飞书任务事件不带完成人，身份靠「这条 task_guid 是引擎发给谁的」+ 关联表，且 `_route` 已禁止 gate 走这条路、并核对关联行 kind 必须是 task）。
+- Alternatives(否决): 只判打回那半边（= 让人返工要过三条规则、让交付物生效零校验）；拿「这张卡发给了谁」当判据（卡可被转发）；把 owner 并进应答人（owner 就能伪造一条「他同意了」的审计记录，比打回越权更重）。
+- Tradeoff: 「owner 不能代签」是本 ADR 拍的产品口径，ADR-023 没写；要改只需把 owner 令牌并进 `can_answer`。`assignee_role` 映射成飞书群 `oc_` 时该节点**无人可应答**（反解不出角色 → 放行与打回都被拒），真栈若配了群会把那道门卡死；解法二选一：装配期拒绝解析成群的 assignee，或引入「群成员皆可应答」语义 + 群成员查询。非 gate 节点的 fail 现在被判成一次**应答**（应答人自己传 fail 仍会把节点标 done，`gates.finish` 的语义没动）；要让 produce 节点表达「我没做完」需要新语义。任务通道只收窄到 kind=task，没有真判人。
+
+## ADR-033 · 2026-07-25 · 外部写动作的幂等性收回本地，不外包给飞书的 1 小时窗口
+- Problem: 派单（建任务 / 发卡）与通知的幂等原本押在 lark-cli 的 `--idempotency-key` 上，而飞书那个去重窗口**只有 1 小时**；人工节点等的是人，超过 1 小时是常态。实测后果：每次 `serve` 重启 / 每次 `larkflow reconcile` 都真的给所有还在等的人再发一遍卡、再建一条待办（重复的待办没有任何代码去关掉它，永远躺在人的待办列表里），「实例卡住了」这类通知也会隔夜重播。
+- Constraint: ADR-031 把对账变成**每次启动都跑**的常规动作，这就把该缺陷从「偶发」变成「每次重启必现」。
+- Decision: 幂等键收回本地：`_once(key, make)` 走 `correlations.idem_store()`（与交付物 `markdown +create` 复用同一张表、同一个 SQLite）。全仓统一成一条规则：**idem_key 标识「一件事」，一辈子只做一次；要让同类事情再发一次，就把区分它的东西放进 key**（`:{attempt}` / `:{seq}` / `:{已解除次数}` / `:{总轮次}` 全是这么来的）。**先调外部、成功了才记键**：失败就当没做过，下次对账自然重试。派单拿不到外部对象 id 时抛错、**不写幂等表**（记成「已派」会永久挡住重试，那个人从此没人叫，而实例看上去一切正常）。本地命中时仍补写一次关联表：「崩在建任务与写关联表之间」那种投影缺失，正是靠这一笔补回来的。
+- Alternatives(否决): write-ahead（先落意图、再调 API、再落 external_id）：拿不回外部对象 id，重启后照样得再调一次，闭合不了那个崩溃窗口，只多出一个无法解释的中间态；给 `reconcile` 加「只补投影不重派」的模式（本地幂等表落地后 reconcile 天然如此，多一个模式就多一处口径）。
+- Tradeoff: 残留崩溃窗口：外部调用成功、进程死在写幂等表之前，重启后仍会重调一次（超过飞书那 1 小时窗口就是真重复 + 一条永远关不掉的孤儿待办）；闭合它需要外部系统支持「按幂等键查回对象」，lark-cli 没有这个能力。本地幂等表与飞书之间**没有对账**：有人在飞书侧手删了待办 / 撤回了卡，引擎认为「已派」就再也不会补发（改之前靠 1 小时窗口过期能意外补上），强制重发只能手工清那一行、没有命令。受控活图把 pending 节点的 `assignee_role` 换人时**不会重新派单**（幂等键只含 `{实例}:{节点}:{轮次}`），新负责人收不到卡：改之前是「超 1 小时靠窗口过期意外补发」，现在是确定性地不发；修法是改图时给受影响节点 `attempts` +1，或把派单对象放进幂等键。

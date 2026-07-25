@@ -3,7 +3,7 @@
 > 飞书原生的**交付物流转**工作流引擎（LangGraph 驱动）。
 > 在一张*项目进行中可编辑*的图上，AI、人、工具接力产出并审核一份交付物，任意打回、只重算受影响的部分，直到发起人认可后交付。全程落在飞书里。
 
-**状态**：立项 · 第一段本地引擎已跑通（8 节点缺陷流，15 测试绿）· 第二轮设计定。详细真相源见 [`AIREADME/`](AIREADME/INDEX.md)。
+**状态**：引擎核心 + 服务层已落码（267 测绿，全程 Mock / Stub / 内存库）· **真飞书环境一次没跑过**（差 dev 应用与事件回调）。详细真相源见 [`AIREADME/`](AIREADME/INDEX.md)。
 
 ---
 
@@ -57,9 +57,12 @@ larkflow/
   io/                lark-cli 封装（事件 / 任务 / 卡 / 交付物 / 关联表）
   llm/               LLM 客户端（Stub + OpenAI 兼容多角色路由）
   templates/         策展模板，**只有 yaml、没有 Python**（合同 / 缺陷 / 招聘）
-  service.py         驱动层：interrupt/resume、飞书投影、改图、对账
+  service.py         驱动层：interrupt/resume、飞书投影、改图、对账、打回权限、解除
+  serve.py           常驻服务：启动对账 + 事件泵 + 信号 / 优雅退出
+  store.py           多进程共用一个 SQLite（WAL + busy_timeout + 跨进程实例锁）
+  __main__.py        CLI（serve / start / status / pending / unblock / reconcile）
   demo.py            本地演示入口（不联网）
-tests/               137 e2e / 单元测试（零外部依赖）
+tests/               267 e2e / 单元测试（零外部依赖）
 ```
 
 ## 本地跑
@@ -70,7 +73,7 @@ tests/               137 e2e / 单元测试（零外部依赖）
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest -q                              # 137 passed
+pytest -q                              # 267 passed
 
 python -m larkflow.demo --auto         # 自动跑一遍合同图，打印「打回省算」的证据
 python -m larkflow.demo                # 交互式：你扮演所有的人，h 看命令
@@ -84,6 +87,52 @@ python -m larkflow.demo --template hiring   # 换一张完全不同的业务图�
 **换一个业务场景 = 新增一个 `templates/<名字>.yaml`，零 Python**：tool 节点的确定性动作由
 `tool: {kind, args}` 从内置能力库选取（`record` / `summarize_links` / `notify` / `noop` /
 `format_check` / `expect_fields`）。`tests/test_generality.py` 把这条钉成硬约束。
+
+## 怎么真跑起来（接真飞书）
+
+上面那一节全程在替身里跑。要让它真的在飞书里流转，需要四步：
+
+**1. 建 dev 飞书自建应用**（独立租户，ADR-008）
+在飞书开放平台建企业自建应用，开这几项：
+
+- 权限：`task:task`（建 / 完成任务）、`im:message`（发消息 / 卡片）、`docx:document` + `drive:drive`（交付物文档）
+- 事件与回调 → **回调配置**里开 `card.action.trigger`（卡片按钮回调）。**不开就一个按钮点击也收不到**，而消费端不会报错、只是永远静默。
+- 事件订阅方式选**长连接**（引擎靠 `lark-cli event consume` 出站订阅，宿主**不需要**开任何入站端口 / 域名 / 证书）。
+- 用 `lark-cli auth login` 把这个应用的凭证配进 lark-cli 的 profile（key / token 走 lark-cli 自己的存储，不进本仓库）。
+
+**2. 配 env**（照 `.env.example` 抄一份 `.env`，只填值不入库）
+
+```bash
+LARK_PROFILE=<lark-cli profile>     # 认哪一个飞书应用
+LARKFLOW_DB=/var/lib/larkflow/larkflow.sqlite   # 本地盘，不要放网络盘
+LARKFLOW_ROLES={"财务":"ou_xxx","法务":"ou_xxx","负责人":"ou_xxx"}   # 模板里每个 assignee_role 都要有
+LLM_BASE_URL= / LLM_API_KEY= / LLM_MODEL=       # OpenAI 兼容；按角色再配 LLM_<ROLE>_*
+```
+
+角色没配全会在装配期直接抛（真栈 strict，绝不伪造 `ou_<角色>` 发给飞书）。
+
+**3. 起常驻进程**
+
+```bash
+pip install -e .
+larkflow serve                      # = 启动对账 + 起事件泵 + block（唯一的守护进程）
+```
+
+`serve` 做三件事：① 把 checkpointer 里每个没跑完的实例对一遍账（补上崩溃时丢掉的卡 / 任务，把被 super-step 屏障挡住的分支推到位）；② 每个 EventKey 起一条 `lark-cli event consume` 子进程收 NDJSON；③ 收到 SIGINT / SIGTERM 后停订阅、等在飞的那条事件处理完、关 SQLite。挂 systemd 直接 `ExecStart=/usr/local/bin/larkflow serve`、`Restart=always` 即可。
+
+**4. 起项目、看状态、救场**（另一个进程，与 daemon 写同一个 DB）
+
+```bash
+larkflow start --template contract --reporter ou_xxx \
+        --input 甲方=某某科技 --input 乙方=某某咨询 --input 价款=30万
+larkflow status <实例>                     # 整张图 + 谁在等 + 有没有卡死
+larkflow pending <实例> --actor ou_xxx      # 以某个人的视角看他点得动什么
+larkflow unblock <实例> <节点> --by ou_xxx --reason "改了要素"   # 解除 ⛔
+larkflow reconcile [实例]                   # 手动对账（省略 = 全部）
+larkflow --json status <实例>               # 给脚本读
+```
+
+一次性命令与常驻 `serve` 是两个进程、写同一个 SQLite。这条是**正面处理过的**：DB 开 WAL + `busy_timeout`，同一实例的每一次状态变更再过一把跨进程 flock（`<DB>.locks/`），同一个 DB 只允许一个 `serve`（`<DB>.serve.lock`）。保证与不保证详见 `larkflow/store.py` 顶部。
 
 ## 文档
 
@@ -99,4 +148,4 @@ python -m larkflow.demo --template hiring   # 换一张完全不同的业务图�
 
 ---
 
-*立项 pre-code，第一段引擎已跑通；下一步见 [ROADMAP](AIREADME/ROADMAP.md)。欢迎 issue 讨论设计。*
+*引擎与服务层已落码、headless 全绿；下一步是接真飞书跑第一次端到端，见 [ROADMAP](AIREADME/ROADMAP.md)。欢迎 issue 讨论设计。*
