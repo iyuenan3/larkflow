@@ -40,9 +40,15 @@ larkflow unblock / start / status / …  ← 另一个进程，写同一个 SQLi
 | 覆盖交付物 | `markdown +overwrite --file-token --content -` | 同上 | ⚠️ 推断 |
 | 读交付物正文 | `markdown +fetch --file-token` | Drive 文件读取 | ⚠️ 推断 |
 
-**「事件」与「回调」是两个东西，别在同一个页签里找**：开发者后台「事件与回调」下分两栏，`task.task.update_user_access_v2` 在**事件**里，`card.action.trigger`（卡片回传交互）在**回调**里。只订了事件、没订回调时，`lark-cli event consume card.action.trigger` 会以 `failed_precondition` 直接拒绝（文案用词是 callbacks 不是 events），并给出一键订阅链接，扫它最快。
+**已在真栈实测通过（2026-07-26，测试组织）**：`im +messages-send --msg-type interactive`（卡片 2.0 + callback 按钮，正常投递并渲染）、`event consume card.action.trigger --as bot`（收到真实点击）。当时 app 开着全量权限，所以「命令能跑」已确认、「最小 scope 是哪一个」仍待收敛时逐个关掉验证。`task +*` 与 `markdown +*` 尚未在真栈跑过。
 
-**事件订阅方式必须选长连接**，不要 webhook：`lark-cli event consume` 走长连接，这正是 ADR-007「引擎无需任何入站端口」的来源；选了 webhook 整条入站链路不通。
+**「事件」与「回调」是两个东西，别在同一个页签里找**（2026-07-26 实测踩过）：开发者后台「事件与回调」下分**事件配置 / 回调配置**两栏，各自有**各自的订阅方式**。`task.task.update_user_access_v2` 在**事件**里，`card.action.trigger`（卡片回传交互）在**回调**里。只订了事件时，`lark-cli event consume card.action.trigger` 以 `failed_precondition` 直接拒绝（文案用词是 callbacks 不是 events）；在飞书里点按钮则弹「该应用尚未配置卡片回调」。
+
+**改完必须发布版本才生效**（同上，实测的真实根因）：回调加好了、订阅方式也对，但没发版本时行为与「没配」一模一样，包括 `event consume` 仍报 `failed_precondition`。**排查顺序：先确认版本发布了，再怀疑配置本身。**（当时我先怀疑的是「浏览器登录的租户不对」，错了。那条一键配置链接点进去显示「该应用不存在」，是未发布版本的连带表现，不是租户问题。）
+
+**两栏的订阅方式都要选长连接**，不要 webhook：`lark-cli event consume` 走长连接，这正是 ADR-007「引擎无需任何入站端口」的来源；选了 webhook 整条入站链路不通。
+
+**长连接没有队列**（ADR-007 的实测修正，可用性上很硬的一条）：daemon 不在线时人点按钮**当场失败**（飞书弹「目标回调服务当前未在线」），该回调**不补投**。webhook 模式下飞书会 POST 并重试，长连接没有这个兜底。所以 `Restart=always` 不是可选项；启动对账能补回投影，**补不回丢掉的点击**。好在它失败得响，用户会再点一次。
 
 **身份**：卡片回调只有 **bot** 收得到，故常驻服务 `LARKFLOW_IDENTITY=bot`。
 
