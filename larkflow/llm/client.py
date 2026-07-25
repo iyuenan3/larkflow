@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 
 
 class LLMClient:
@@ -86,7 +87,8 @@ class OpenAICompatLLM(LLMClient):
 
     def __init__(self, roles: dict[str, dict], *, ca_bundle: str | None = None,
                  timeout: float | None = None, client_factory=None, on_failover=None,
-                 trust_env: bool | None = None, http_factory=None):
+                 trust_env: bool | None = None, http_factory=None,
+                 openai_factory=None, on_call=None):
         if not roles:
             raise RuntimeError("LLM 角色路由表为空（见 .env.example 的 LLM_* 三元组）")
         self.roles = roles
@@ -97,6 +99,10 @@ class OpenAICompatLLM(LLMClient):
         # `no_proxy` 救不了。境内 LLM 端点本来也不该绕一趟代理（顺带少一处凭证经手方）。
         self.trust_env = (_env_off("LLM_NO_PROXY") if trust_env is None else trust_env)
         self.http_factory = http_factory
+        self.openai_factory = openai_factory
+        # 「正在等 LLM」的唯一可见信号。没有它，一次 110 秒的正常起草和一次 30 分钟的
+        # 静默停摆在日志里长得一模一样（都是什么都没有），运维无从判断该不该动手。
+        self.on_call = on_call
         self.timeout = self.DEFAULT_TIMEOUT if timeout is None else timeout
         self.client_factory = client_factory or self._build_client
         self.on_failover = on_failover
@@ -104,8 +110,11 @@ class OpenAICompatLLM(LLMClient):
         self._clients: dict[str, object] = {}
 
     def _build_client(self, cfg: dict):
-        from openai import OpenAI
+        make_openai = self.openai_factory
+        if make_openai is None:
+            from openai import OpenAI
 
+            make_openai = OpenAI
         make = self.http_factory
         if make is None:
             import httpx
@@ -117,7 +126,13 @@ class OpenAICompatLLM(LLMClient):
             timeout=cfg.get("timeout") or self.timeout,
             trust_env=self.trust_env,
         )
-        return OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], http_client=http)
+        return make_openai(
+            base_url=cfg["base_url"], api_key=cfg["api_key"], http_client=http,
+            # **重试策略只能有一处**：我们的故障切换链（ADR-036）。SDK 默认 max_retries=2
+            # 坐在它里面，效果是把每条线路的最坏耗时乘 3，**而且乘在超时上**：人配 300s，
+            # 实际最坏 900s，主备两条就是 30 分钟，全程零日志（真跑第一条 e2e 时实测踩到）。
+            max_retries=0,
+        )
 
     def _chain(self, model_role: str) -> list[dict]:
         cfg = self.roles.get(model_role) or self.roles.get(self.DEFAULT_ROLE)
@@ -139,6 +154,10 @@ class OpenAICompatLLM(LLMClient):
         chain = self._chain(model_role)
         tried: list[str] = []
         for i, cfg in enumerate(chain):
+            started = time.monotonic()
+            self._note_call({"event": "start", "model_role": model_role, "link": i,
+                             "model": cfg["model"], "base_url": cfg["base_url"],
+                             "timeout": cfg.get("timeout") or self.timeout})
             try:
                 resp = self._client(cfg).chat.completions.create(
                     model=cfg["model"],
@@ -146,6 +165,9 @@ class OpenAICompatLLM(LLMClient):
                     messages=[{"role": "user", "content": prompt}],
                 )
             except Exception as exc:
+                self._note_call({"event": "end", "model_role": model_role, "link": i,
+                                 "ok": False, "seconds": round(time.monotonic() - started, 1),
+                                 "error": f"{type(exc).__name__}: {exc}"})
                 tried.append(f"{cfg['base_url']}/{cfg['model']}: {type(exc).__name__}: {exc}")
                 if not _can_fail_over(exc):
                     raise            # 请求本身有问题，换线路无益
@@ -154,10 +176,20 @@ class OpenAICompatLLM(LLMClient):
                         f"角色 {model_role} 的 {len(chain)} 条线路全部打不通："
                         + "｜".join(tried)) from exc
                 continue
+            self._note_call({"event": "end", "model_role": model_role, "link": i,
+                             "ok": True, "seconds": round(time.monotonic() - started, 1)})
             if i:
                 self._note_failover(model_role, i, len(chain), tried)
             return resp.choices[0].message.content or ""
         raise LLMUnavailable(f"角色 {model_role} 没有任何可用线路")   # 链为空（装配期已挡）
+
+    def _note_call(self, record: dict) -> None:
+        if self.on_call is None:
+            return
+        try:
+            self.on_call(record)
+        except Exception:      # 观测钩子炸了，不许把一次已经成功的生成带走
+            pass
 
     def _note_failover(self, model_role: str, used: int, total: int, tried: list[str]) -> None:
         record = {"model_role": model_role, "used": used, "total": total, "errors": list(tried)}

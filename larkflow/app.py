@@ -119,7 +119,19 @@ def build_real_service(template: str = "contract", *, db_path: str | None = None
         print(f"[llm] 角色 {rec['model_role']} 切到第 {rec['used'] + 1}/{rec['total']} 条线路："
               f"{'｜'.join(rec['errors'])}", file=sys.stderr, flush=True)
 
-    llm = OpenAICompatLLM(load_llm_roles(), on_failover=_warn_failover)
+    def _trace_call(rec: dict) -> None:
+        """把「正在等 LLM」变成可见事件。真跑第一条 e2e 时，一个节点静默了 18 分钟，
+        而日志里与「正常起草要 110 秒」毫无区别：运维没有任何判据决定要不要动手。"""
+        if rec["event"] == "start":
+            print(f"[llm] → {rec['model_role']}#{rec['link']} {rec['model']} "
+                  f"（超时 {rec['timeout']:.0f}s）", file=sys.stderr, flush=True)
+        else:
+            tail = "" if rec["ok"] else f"｜{rec['error'][:160]}"
+            print(f"[llm] ← {rec['model_role']}#{rec['link']} "
+                  f"{'成功' if rec['ok'] else '失败'} {rec['seconds']}s{tail}",
+                  file=sys.stderr, flush=True)
+
+    llm = OpenAICompatLLM(load_llm_roles(), on_failover=_warn_failover, on_call=_trace_call)
     return build_service(
         template, conn=conn, io=io, llm=llm,
         resolver=RoleResolver.from_env(strict=True), deliverables=deliverables,
