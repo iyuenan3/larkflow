@@ -15,7 +15,7 @@ from larkflow.engine.gates import BLOCKED, reopen_resets
 from larkflow.io import FakeDeliverableStore
 from larkflow.io.events import EventPump
 from larkflow.io.events import CARD_ACTION, TASK_UPDATE
-from support import CountingLLM
+from support import CountingLLM, card_target
 
 INPUTS = {"甲方": "A", "乙方": "B", "价款": "30万", "期限": "12个月"}
 
@@ -27,9 +27,10 @@ def contract():
     return svc, io, llm, store
 
 
-def card(io, node, label, **ov):
+def card(io, node, label, *, operator=None, **ov):
+    """operator 默认 = 收到这张卡的人（打回权限层 ADR-023 据此判身份）。"""
     return {"key": CARD_ACTION, "action_value": dict(io.button_value(node, label), **ov),
-            "operator_id": "ou_op"}
+            "operator_id": operator or card_target(io, node)}
 
 
 # ---------- 并行门：打回必须当场落地 ----------
@@ -253,17 +254,20 @@ SHARED = [
 
 
 def test_a_bystander_gate_reopened_by_someone_else_gets_a_fresh_card():
-    """两道门共享上游：财务打回会把还在等的法务一起卷进新一轮。
+    """两道门共享上游：打回共同上游会把还在等的法务一起卷进新一轮。
 
     法务必须收到**新卡**，且他手里上一轮那张卡必须失效。否则会出现最坏的情况：
     法务从未见过 v2，引擎却在权威 state 里记下「法务放行 v2」（审计记录被伪造，实测复现过）。
+
+    这一枪由项目 owner 开：财务自己打回共享上游正是 ADR-023 要拦的踢皮球，得走 escalation
+    （见 test_permissions）。换成 owner 之后，「旁观者被卷进新一轮」这个现象一模一样。
     """
     llm = CountingLLM({"w": "正文"})
     svc, io = build_service(SHARED, llm=llm, deliverables=FakeDeliverableStore())
     svc.start(instance_id="sh-1", reporter="ou_o", inputs={})
     g2_old = io.button_value("g2", "通过")          # 法务手里第 1 轮那张
 
-    svc.resume_from_event({"key": CARD_ACTION, "operator_id": "ou_财务",
+    svc.resume_from_event({"key": CARD_ACTION, "operator_id": "ou_o",
                            "action_value": dict(io.button_value("g1", "打回"), comment="不行")})
 
     assert llm.counts["w"] == 2                     # 上游已重算成 v2
@@ -315,6 +319,83 @@ def test_no_duplicate_dispatch_after_the_engine_pumps_or_the_graph_is_edited():
 
     legal = [c for c in io.cards.values() if c["buttons"][0]["action_value"]["node_id"] == "legal_gate"]
     assert len(legal) == 1, "法务从头到尾没被叫过第二次，却拿到了多张卡"
+
+
+def counting_io(io):
+    """把 io 的两个写动作包一层计数器（只数**真的调出去了几次**，不改行为）。
+
+    MockLarkIO 自带一张进程内永久幂等表，所以「卡片对象数」看不出重复调用；
+    真栈那边只有飞书 --idempotency-key 的 1 小时窗口，过期就真的再建一个对象。
+    """
+    calls: list[tuple[str, str]] = []
+    real_card, real_task = io.send_card, io.create_task
+
+    def card_(**kw):
+        calls.append(("card", kw["idem_key"]))
+        return real_card(**kw)
+
+    def task_(**kw):
+        calls.append(("task", kw["idem_key"]))
+        return real_task(**kw)
+
+    io.send_card, io.create_task = card_, task_
+    return calls
+
+
+def test_reconciling_again_does_not_hand_the_same_card_out_a_second_time():
+    """对账 = 补缺失的投影，不是再派一遍单。
+
+    幂等绝不能只押在飞书的 --idempotency-key 上：那个窗口只有 1 小时，而人工节点等的
+    是人，超过 1 小时是常态。运维为修一个实例敲一次 `larkflow reconcile`，就等于给所有
+    还在等的人各发一遍。
+    """
+    svc, io, llm, store = contract()
+    calls = counting_io(io)
+    svc.start(instance_id="rc-1", reporter="ou_owner", inputs=INPUTS)
+    dispatched = list(calls)
+    assert len(dispatched) == 2                      # 财务 / 法务各一张
+
+    for _ in range(3):
+        svc.reconcile("rc-1")
+
+    assert calls == dispatched, "对账把同一件事又调了一遍外部 API"
+
+
+def test_a_dispatch_that_came_back_without_an_id_is_retried_not_remembered_as_done():
+    """拿不到外部 id = 这张卡回不来（关联表路由不了它）。
+
+    把它记进本地幂等表就等于**永久**挡住重试：这个人从此没人叫，而实例看上去一切正常。
+    """
+    svc, io, llm, store = contract()
+    real_send = io.send_card
+    io.send_card = lambda **kw: ""                    # 飞书回了个空壳
+    svc.start(instance_id="empty-1", reporter="ou_owner", inputs=INPUTS)
+    assert svc.provision_errors["empty-1"], "空 id 必须当派单失败记一笔，不能静默"
+    assert io.cards == {}
+
+    io.send_card = real_send
+    svc.reconcile("empty-1")
+
+    assert len(io.cards) == 2                          # 对账重试成功，两个人都被叫到了
+
+
+def test_reconcile_repairs_a_correlation_row_lost_to_a_crash_without_dispatching_again():
+    """崩在「发卡」与「写关联表」之间：卡真发出去了，引擎却收不到它的回调。
+
+    对账要补回这一行，但**不许**为此再派一次单（那会让人手里多一张一模一样的卡）。
+    """
+    svc, io, llm, store = contract()
+    svc.start(instance_id="corr-1", reporter="ou_owner", inputs=INPUTS)
+    msg_id = next(iter(io.cards))
+    svc.corr.conn.execute("DELETE FROM correlations")
+    svc.corr.conn.commit()
+    assert svc.corr.get(msg_id) is None
+    calls = counting_io(io)
+
+    svc.reconcile("corr-1")
+
+    assert calls == [], "为了补一行关联表又把卡发了一遍"
+    assert svc.corr.get(msg_id) is not None
 
 
 def test_reopen_budget_counts_exactly_once_per_reopen():

@@ -23,6 +23,7 @@ from .llm import LLMClient, OpenAICompatLLM, StubLLM
 from .model import load_template
 from .model.template import validate_template
 from .service import LarkFlowService
+from .store import DEFAULT_LOCK_TIMEOUT, InstanceLocks, open_db
 
 
 def build_service(
@@ -36,8 +37,13 @@ def build_service(
     tool_handlers: dict | None = None,
     llm_handlers: dict | None = None,
     strict_roles: bool = False,
+    lock_factory=None,
 ):
-    """返回 (service, io)。默认本地栈；template = 模板名或 dag。"""
+    """返回 (service, io)。默认本地栈；template = 模板名或 dag。
+
+    `lock_factory` 省略 = 进程内锁（测试 / demo 只有一个进程）。真栈注跨进程锁，
+    见 `build_real_service`。
+    """
     conn = conn or sqlite3.connect(":memory:", check_same_thread=False)
     saver = SqliteSaver(conn)
     saver.setup()
@@ -64,7 +70,7 @@ def build_service(
     graph = build_graph(executors, saver)
     corr = Correlations(conn)
     service = LarkFlowService(graph=graph, io=io, correlations=corr, resolver=resolver,
-                              dag=dag, executors=executors)
+                              dag=dag, executors=executors, lock_factory=lock_factory)
     return service, io
 
 
@@ -80,17 +86,24 @@ def build_defect_service(**kw):
 
 def build_real_service(template: str = "contract", *, db_path: str | None = None,
                        identity: str = "bot", profile: str | None = None,
-                       folder_token: str | None = None):
+                       folder_token: str | None = None,
+                       lock_timeout: float | None = None):
     """真实栈：真飞书（lark-cli）+ 真 LLM（多角色路由）+ 文件 SQLite checkpointer。
 
-    engine-run 用；**跑之前需要 dev 飞书自建应用 + 事件回调配置 + LLM 角色 env**（见
-    DEPLOYMENT / .env.example）。本地测试绝不构造它（会真发消息、真建文档）。
+    `larkflow serve` / CLI 用；**跑之前需要 dev 飞书自建应用 + 事件回调配置 + LLM 角色
+    env**（见 DEPLOYMENT / .env.example）。本地测试绝不构造它（会真发消息、真建文档）。
 
     交付物 IO 与 checkpointer 共用同一个 SQLite 连接，好让 markdown +create 的本地幂等表
     与实例运行态一起持久（该命令没有 --idempotency-key）。
+
+    这里比 `build_service` 多两件**只在多进程下才需要**的事（见 `store.py`）：
+      · `open_db` 开 WAL + busy_timeout（daemon 与一次性命令同时开着这个文件）。
+      · `InstanceLocks` 当 lock_factory，把「同一实例串行」从进程内扩到跨进程。
     """
-    conn = sqlite3.connect(db_path or env("LARKFLOW_DB", "larkflow.sqlite"),
-                           check_same_thread=False)
+    path = db_path or env("LARKFLOW_DB", "larkflow.sqlite")
+    conn = open_db(path)
+    locks = InstanceLocks.for_db(
+        path, timeout=DEFAULT_LOCK_TIMEOUT if lock_timeout is None else lock_timeout)
     corr = Correlations(conn)
     io = CliLarkIO(identity=identity, profile=profile)
     deliverables = CliDeliverableIO(
@@ -102,5 +115,5 @@ def build_real_service(template: str = "contract", *, db_path: str | None = None
     return build_service(
         template, conn=conn, io=io, llm=llm,
         resolver=RoleResolver.from_env(strict=True), deliverables=deliverables,
-        strict_roles=True,
+        strict_roles=True, lock_factory=locks,
     )

@@ -56,6 +56,7 @@ def show_status(svc, iid) -> None:
     stuck = svc.blocked(iid)
     if stuck:
         print(f"  ⛔ 已停下等人介入：{stuck}（反复打回仍不通过）")
+        print(f"     解除：un {stuck[0]} <理由>  [+目标…]（人显式介入，追加一份打回预算）")
 
 
 def show_pending(svc, iid) -> list[dict]:
@@ -63,6 +64,13 @@ def show_pending(svc, iid) -> list[dict]:
     if not items:
         print("  （没有人在等；全跑完或已停）")
         return items
+    # 打回候选按**这一项的负责人**过滤（ADR-023）：驾驶舱的全集口径会让人点了才知道越权
+    for p in items:
+        role = p.get("assignee_role")
+        if role and p.get("reopen_candidates") is not None:
+            mine = {x["node_id"]: x for x in svc.pending(iid, actor=svc.resolver.resolve(role))}
+            p.update({k: v for k, v in (mine.get(p["node_id"]) or {}).items()
+                      if k in ("reopen_candidates", "reopen_escalation")})
     for i, p in enumerate(items, 1):
         kind = "门禁" if p.get("role") == "gate" else "产出"
         print(f"  {i}) {p['node_id']}  {p.get('label')}  [{kind}] 派给 {p.get('assignee_role')}")
@@ -74,6 +82,8 @@ def show_pending(svc, iid) -> list[dict]:
             print(f"       ⚠ 上一轮被「{f['label']}」打回：{f.get('comment') or '（未留言）'}")
         if p.get("reopen_candidates"):
             print(f"       可打回：{p['reopen_candidates']}")
+        if p.get("reopen_escalation"):
+            print(f"       需审批才打得回（会连累别人返工）：{p['reopen_escalation']}")
     return items
 
 
@@ -115,7 +125,10 @@ def act(svc, io, iid, target: dict, *, passed: bool, reopen=None, comment=None) 
             av["reopen"] = list(reopen)
         if comment:
             av["comment"] = comment
-    return svc.resume_from_event({"key": CARD_ACTION, "action_value": av, "operator_id": "ou_demo"})
+    # 谁收到这张卡，谁才点得动它：打回权限层（ADR-023）按这个身份判。
+    # 写死一个占位 id 会让每一次打回都被判成陌生人越权。
+    who = svc.resolver.resolve(target.get("assignee_role"))
+    return svc.resume_from_event({"key": CARD_ACTION, "action_value": av, "operator_id": who})
 
 
 def write_doc(svc, store, iid, target: dict, text: str) -> None:
@@ -191,9 +204,12 @@ HELP = """
   g / graph           看拓扑（节点 + 依赖）
   ok <n>              该项通过 / 完成          例：ok 1
   no <n> [目标…] [意见…]  打回                 例：no 1 biz_draft 账期不对
+                      （越权会被拒；会连累别人返工的目标转成一笔审批申请，见 esc）
+  esc                 看待批的跨界打回申请（ADR-023）
   w <n> <正文>        模拟人在飞书文档里写内容  例：w 1 这是我写的定稿
   doc [节点]          打印交付物正文
   add <id> <标签> after <上游>   运行中往图里加一个 AI 节点（受控活图）
+  un <节点> <理由> [目标…]  解除 ⛔（人显式介入，追加一份打回预算，可连带解冻上游）
   h / help            帮助      q / quit      退出
 """
 
@@ -233,6 +249,15 @@ def run_interactive(template: str) -> None:
                       f"  [{n['executor']}/{n['role']}]  ← {n.get('deps') or '—'}")
         elif cmd == "doc":
             show_docs(svc, store, iid, rest[0] if rest else None)
+        elif cmd == "esc":
+            log = svc.escalations(iid)
+            if not log:
+                print("  （没有待批的打回申请）")
+            for nid, records in log.items():
+                for r in records:
+                    print(f"  {nid} #{r['seq']} [{r['status']}] {r['by']} 想打回 {r['escalated']}"
+                          f"，会连累 {r['collateral']}；已通知 {r.get('notified') or r['approvers']}"
+                          f"｜{r.get('comment') or '（未留言）'}")
         elif cmd in ("ok", "no", "w"):
             items = svc.pending(iid)
             if not rest or not (t := _find(items, rest[0])):
@@ -244,11 +269,21 @@ def run_interactive(template: str) -> None:
                 write_doc(svc, store, iid, t, " ".join(rest[1:]) or "（空）")
                 continue
             else:
-                cands = set(t.get("reopen_candidates") or [])
-                targets = [x for x in rest[1:] if x in cands]
-                comment = " ".join(x for x in rest[1:] if x not in cands)
+                # 候选 = 他直接打得回的 ∪ 要走审批的：后者照样让他点，点了会落一笔申请
+                ids = {n["id"] for n in svc.dag}
+                targets = [x for x in rest[1:] if x in ids]
+                comment = " ".join(x for x in rest[1:] if x not in ids)
                 print("  →", act(svc, io, iid, t, passed=False,
                                  reopen=targets or None, comment=comment or None))
+            show_status(svc, iid)
+            items = show_pending(svc, iid)
+        elif cmd == "un" and rest:
+            # 解除 blocked：目标（可选）取图里存在的节点 id，其余当理由
+            ids = {n["id"] for n in svc.dag}
+            targets = [x for x in rest[1:] if x in ids]
+            reason = " ".join(x for x in rest[1:] if x not in ids) or "（未留言）"
+            print("  →", svc.unblock(iid, rest[0], by="ou_owner", reason=reason,
+                                     reopen=targets or None))
             show_status(svc, iid)
             items = show_pending(svc, iid)
         elif cmd == "add" and len(rest) >= 4 and rest[2] == "after":

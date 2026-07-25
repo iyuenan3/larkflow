@@ -40,7 +40,7 @@ def build_graph(executors: Executors, checkpointer):
         # 随后 route 在重置后的 status 上算 ready。dispatch 不扇出，故此写无并发。
         status = state.get("status", {})
         resets = reopen_resets(state["dag"], status, state.get("outputs", {}),
-                               state.get("reopen_counts", {}))
+                               state.get("reopen_counts", {}), state.get("unblocks", {}))
         if not resets:
             return {}
         return {"status": resets,

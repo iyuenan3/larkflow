@@ -10,7 +10,7 @@ from larkflow.engine.tools import TOOL_KINDS
 from larkflow.io import FakeDeliverableStore
 from larkflow.io.events import CARD_ACTION, TASK_UPDATE
 from larkflow.model import load_template, validate_template
-from support import CountingLLM
+from support import CountingLLM, card_target
 
 REQ = {"岗位": "后端工程师", "团队": "基础架构", "薪酬区间": "40-60k", "招聘人数": "2"}
 
@@ -23,9 +23,10 @@ def build(template="hiring"):
     return svc, io, llm, store
 
 
-def card(io, node, label, **ov):
+def card(io, node, label, *, operator=None, **ov):
+    """operator 默认 = 收到这张卡的人（打回权限层 ADR-023 据此判身份）。"""
     return {"key": CARD_ACTION, "action_value": dict(io.button_value(node, label), **ov),
-            "operator_id": "ou_op"}
+            "operator_id": operator or card_target(io, node)}
 
 
 def task_done(io, summary):
@@ -85,9 +86,12 @@ def test_reopen_across_a_mixed_ai_and_human_frontier():
     svc.resume_from_event(task_done(io, "面试记录"))
     interview_handle = svc.outputs("h-4")["interview"]["deliverable"]
 
-    svc.resume_from_event(card(io, "decision", "打回", reopen=["sourcing"], comment="渠道太窄"))
+    before = llm.counts["writer"]
 
-    assert llm.counts["writer"] >= 3
+    res = svc.resume_from_event(card(io, "decision", "打回", reopen=["sourcing"], comment="渠道太窄"))
+
+    assert "resumed" in res, res            # 用人经理自己就打得动（重算集里没有别人的活）
+    assert llm.counts["writer"] > before    # 寻访 / 初筛真的重算了
     assert svc.outputs("h-4")["interview"]["deliverable"] == interview_handle  # 面试记录原样复用
     assert svc.status("h-4")["interview"] == "done"                            # 面试官没被重新叫回来
 

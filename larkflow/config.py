@@ -32,6 +32,26 @@ class RoleResolver:
             )
         return f"ou_{role}"
 
+    def roles_of(self, open_id: str) -> set[str]:
+        """**反向**解析：这个 open_id 担了哪些角色（ADR-023 的权限层要它）。
+
+        一对多：同一个人可以同时是「财务」和「法务」，故返回集合，绝不假设一对一。
+        非 strict 时与 `resolve` 的本地回退**严格对称**：`resolve(role)` 会回退成 `ou_<role>`，
+        所以 `ou_<role>` 也反解成 `role`，**但仅限该角色没有真映射**。少这个条件就有冒名
+        顶替：「财务」已配成 `ou_fin` 时，谁拿着 `ou_财务` 都能反解出「财务」。
+        strict（真栈）下只认真映射，认不出来就是认不出来。
+        """
+        if not open_id:
+            return set()
+        hit = {r for r, oid in self.mapping.items() if oid == open_id}
+        if hit or self.strict:
+            return hit
+        if isinstance(open_id, str) and open_id.startswith("ou_"):
+            role = open_id[3:]
+            if role and role not in self.mapping:
+                return {role}
+        return set()
+
     def validate_coverage(self, dag: list[dict]) -> None:
         """装配期自检：模板里出现的每个 assignee_role 都得能解析（与 tool 覆盖检查并列）。"""
         roles = {n.get("assignee_role") for n in dag if n.get("assignee_role")}

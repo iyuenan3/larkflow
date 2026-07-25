@@ -26,10 +26,24 @@ def add_counts(a: dict, b: dict) -> dict:
     return out
 
 
+def extend_lists(a: dict, b: dict) -> dict:
+    """按键追加列表。**只追加、绝不覆盖**（审计记录是历史，只改未来不改历史）。
+
+    只有 service.unblock（人显式触发，持实例锁）写它，无并发追加竞争；
+    与 add_counts 同理，保值写回绝不能带它，否则每推进一拍就重复追加一条假记录。
+    """
+    out = {k: list(v) for k, v in (a or {}).items()}
+    for k, v in (b or {}).items():
+        out.setdefault(k, []).extend(v)
+    return out
+
+
 class OrchestratorState(TypedDict):
     dag: list          # 节点数组（受控活图会改它；随 checkpoint 持久）
     status: Annotated[dict, merge]   # node_id -> pending | done | failed | blocked | skipped
     outputs: Annotated[dict, merge]  # node_id -> 节点产出 + 交付物 handle 权威登记（ADR-020）
     reopen_counts: Annotated[dict, add_counts]  # gate_id -> 已打回次数（预算，防无限重算）
     attempts: Annotated[dict, add_counts]       # node_id -> 第几轮（派单幂等键的一部分）
+    unblocks: Annotated[dict, extend_lists]     # node_id -> 人解除 blocked 的审计记录（追加）
+    escalations: Annotated[dict, extend_lists]  # gate_id -> 跨界打回的审批申请（ADR-023 ③，追加）
     meta: dict         # instance_id / reporter / inputs / template_id 等

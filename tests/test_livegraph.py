@@ -11,6 +11,7 @@ from larkflow.engine.executors import ExecutorError
 from larkflow.engine.livegraph import GraphEditError, apply_ops
 from larkflow.io.events import CARD_ACTION
 from larkflow.model.template import TemplateError
+from support import card_target
 
 DAG = [
     {"id": "a", "label": "A", "executor": "tool", "role": "produce", "deps": [],
@@ -73,18 +74,25 @@ AUDIT = {"id": "audit", "label": "复盘小结", "executor": "llm", "role": "pro
          "deliverable": {"region": "whole"}}
 
 
+def click(svc, io, node, label="通过", *, operator=None):
+    """operator 默认 = 收到这张卡的人。缺 operator 的卡片事件一律不路由（fail closed）。"""
+    return svc.resume_from_event({
+        "key": CARD_ACTION, "action_value": io.button_value(node, label),
+        "operator_id": operator or card_target(io, node)})
+
+
 def test_edit_adds_future_node_and_it_runs_at_the_end():
     svc, io, iid = _pause_at_triage_review()
 
     res = svc.edit_graph(iid, [{"op": "add_node", "node": AUDIT}])
     assert "audit" in res["nodes"]
 
-    for label, node in [("通过", "triage_review"), ("通过", "reproduce")]:
-        svc.resume_from_event({"key": CARD_ACTION, "action_value": io.button_value(node, label)})
+    for node in ("triage_review", "reproduce"):
+        click(svc, io, node)
     guid = list(io.tasks.values())[-1]["guid"]
     svc.resume_from_event({"key": "task.task.update_user_access_v2",
                            "event": {"task_guid": guid, "event_types": ["task_completed_update"]}})
-    svc.resume_from_event({"key": CARD_ACTION, "action_value": io.button_value("qa_verify", "通过")})
+    click(svc, io, "qa_verify")
 
     assert svc.status(iid)["audit"] == "done"          # 运行中加的节点真跑了
     assert svc.outputs(iid)["audit"]["deliverable"]["token"]
@@ -94,13 +102,15 @@ def test_edit_keeps_the_card_already_in_someones_hands_working():
     """改图让中断换 id：旧卡必须还能点（否则改一次图就废掉所有在等的人）。"""
     svc, io, iid = _pause_at_triage_review()
     old_card = io.button_value("triage_review", "通过")
+    who = card_target(io, "triage_review")
     cards_before = len(io.cards)
 
     res = svc.edit_graph(iid, [{"op": "add_node", "node": AUDIT}])
 
     assert res["remapped"] == 1
     assert len(io.cards) == cards_before               # 没重复派卡
-    assert "resumed" in svc.resume_from_event({"key": CARD_ACTION, "action_value": old_card})
+    assert "resumed" in svc.resume_from_event(
+        {"key": CARD_ACTION, "action_value": old_card, "operator_id": who})
     assert svc.status(iid)["triage_review"] == "done"
 
 
@@ -137,11 +147,11 @@ def test_edit_after_the_instance_finished_still_runs_the_new_node():
     """项目跑完了再补一个节点（复盘小结）：改图后要当场推一步，别静静躺着。"""
     svc, io, iid = _pause_at_triage_review()
     for node in ("triage_review", "reproduce"):
-        svc.resume_from_event({"key": CARD_ACTION, "action_value": io.button_value(node, "通过")})
+        click(svc, io, node)
     guid = list(io.tasks.values())[-1]["guid"]
     svc.resume_from_event({"key": "task.task.update_user_access_v2",
                            "event": {"task_guid": guid, "event_types": ["task_completed_update"]}})
-    svc.resume_from_event({"key": CARD_ACTION, "action_value": io.button_value("qa_verify", "通过")})
+    click(svc, io, "qa_verify")
     assert svc.status(iid)["close"] == "done"          # 已收口
 
     svc.edit_graph(iid, [{"op": "add_node", "node": AUDIT}])

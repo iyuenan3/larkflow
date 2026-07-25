@@ -6,14 +6,19 @@
 from larkflow.app import build_defect_service
 from larkflow.io import FakeDeliverableStore
 from larkflow.io.events import CARD_ACTION, TASK_UPDATE
+from support import card_target
 
 NODES = ["intake", "triage_ai", "triage_review", "reproduce",
          "assign", "fix", "qa_verify", "close"]
 
 
-def _card_event(io, node_id, label):
-    """模拟点某节点最新一张卡的某按钮（action_value 自描述路由键）。"""
-    return {"key": CARD_ACTION, "action_value": io.button_value(node_id, label), "operator_id": "ou_op"}
+def _card_event(io, node_id, label, operator=None):
+    """模拟点某节点最新一张卡的某按钮（action_value 自描述路由键）。
+
+    operator 默认 = 收到这张卡的人：打回权限层（ADR-023）据此判身份。
+    """
+    return {"key": CARD_ACTION, "action_value": io.button_value(node_id, label),
+            "operator_id": operator or card_target(io, node_id)}
 
 
 def _task_event(io):
@@ -79,14 +84,19 @@ def test_deliverable_handles_stable_across_reopen():
         assert outs[nid]["deliverable"]["token"], nid
 
 
-def _reopen_event(io, node_id, **override):
+def _reopen_event(io, node_id, operator=None, **override):
     """点「打回」并当场手选一组目标（前端 / app 用同一自描述封套回传）。"""
     av = dict(io.button_value(node_id, "打回"), **override)
-    return {"key": CARD_ACTION, "action_value": av, "operator_id": "ou_op"}
+    return {"key": CARD_ACTION, "action_value": av,
+            "operator_id": operator or card_target(io, node_id)}
 
 
 def test_runtime_picked_reopen_target_reruns_deeper_branch():
-    """打回目标是审核当场选的一组，不在模板里预声明（ADR-014）。"""
+    """打回目标是审核当场选的一组，不在模板里预声明（ADR-014）。
+
+    这一枪由**项目 owner** 开：手选的 triage_ai 会把分诊复核人与开发一起拖回返工，
+    QA 一个人拍不了这个板（ADR-023 ②，那条路走 escalation，见 test_permissions）。
+    """
     svc, io = build_defect_service()
     iid = "wf-4"
     svc.start(instance_id=iid, reporter="ou_r", inputs={"title": "登录崩溃"})
@@ -95,7 +105,7 @@ def test_runtime_picked_reopen_target_reruns_deeper_branch():
     svc.resume_from_event(_task_event(io))
 
     # 默认打回目标是 fix；这次手选更深的 triage_ai
-    svc.resume_from_event(_reopen_event(io, "qa_verify", reopen=["triage_ai"]))
+    svc.resume_from_event(_reopen_event(io, "qa_verify", operator="ou_r", reopen=["triage_ai"]))
 
     st = svc.status(iid)
     assert st["triage_ai"] == "done"          # 重跑完（llm 自动节点）

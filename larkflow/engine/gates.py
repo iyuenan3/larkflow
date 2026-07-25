@@ -4,8 +4,15 @@ from __future__ import annotations
 from ..model.node import deps_ancestors, is_gate, node_by_id
 
 
-BLOCKED = "blocked"          # 终态：反复打回未见好转，等人介入（改图 / 改要素 / 手动放行）
+BLOCKED = "blocked"          # 终态：反复打回未见好转，等人介入（改图 / 改要素 / 手动解除）
 DEFAULT_REOPEN_BUDGET = 3
+
+# 人显式解除 blocked（service.unblock）时**追加**预算。两层上界都不能少：
+#   MAX_UNBLOCK_GRANTS      同一节点最多被解除几次（人可以点几次）
+#   MAX_GRANT_PER_UNBLOCK   单次最多追加多少预算（防一次 grant=10**9 把预算机制原地废掉）
+# 少任何一层，「有限额度」都退化成「无限重算」，ADR-029 白做。
+MAX_UNBLOCK_GRANTS = 3
+MAX_GRANT_PER_UNBLOCK = DEFAULT_REOPEN_BUDGET
 
 
 class ReopenError(RuntimeError):
@@ -133,8 +140,50 @@ def reopen_budget(node: dict) -> int:
     return max(1, int(raw))
 
 
+def grants_used(grants: dict | None, nid: str) -> int:
+    """这道门被人显式解除过几次（unblock 审计记录条数）。"""
+    return len((grants or {}).get(nid) or [])
+
+
+def granted_budget(grants: dict | None, nid: str) -> int:
+    """人给这道门追加过多少打回预算（历次 unblock 之和）。"""
+    return sum(int(r.get("grant", 0)) for r in (grants or {}).get(nid) or [])
+
+
+def effective_reopen_budget(node: dict, grants: dict | None = None) -> int:
+    """真实预算 = 节点配置 + 人追加的额度。
+
+    追加是**加法**不是重置：`reopen_counts` 只增不减（历史不改），是预算被抬高了才让
+    这道门又跑得动，故「一共重算过多少次」在审计里始终是真的。
+    """
+    return reopen_budget(node) + granted_budget(grants, node["id"])
+
+
+def clamp_grant(grant) -> int:
+    """单次追加额度收进 [1, MAX_GRANT_PER_UNBLOCK]。"""
+    try:
+        n = int(grant)
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, min(n, MAX_GRANT_PER_UNBLOCK))
+
+
+def unblock_resets(dag: list[dict], node_id: str, targets=None) -> dict:
+    """人显式解除 blocked：把这道门放回执行前沿，可选连带解冻一组祖先（纯函数）。
+
+    形状与 reopen_resets 一致（门自身 + 每个目标及其传递下游 → pending），差别只在
+    触发者：这里是人显式点的，引擎绝不自动做（自动解除 = 把 ADR-029 消灭的无限重算放回来）。
+    目标合法域（⊆ 传递祖先）由调用方先过 illegal_reopen，不信调用方给的值。
+    """
+    resets = {node_id: "pending"}
+    for t in targets or []:
+        for m in {t} | stale_downstream(dag, t) | {node_id}:
+            resets[m] = "pending"
+    return resets
+
+
 def reopen_resets(dag: list[dict], status: dict, outputs: dict | None = None,
-                  counts: dict | None = None) -> dict:
+                  counts: dict | None = None, grants: dict | None = None) -> dict:
     """打回落地（dispatch 单点执行）：把每个 failed gate 的 reopen 组 + 其传递下游
     + gate 自身重置 pending（选择性重算，ADR-014）。单写者，无并发竞争。
 
@@ -148,7 +197,7 @@ def reopen_resets(dag: list[dict], status: dict, outputs: dict | None = None,
         nid = n["id"]
         if status.get(nid) != "failed":
             continue
-        if counts.get(nid, 0) >= reopen_budget(n):
+        if counts.get(nid, 0) >= effective_reopen_budget(n, grants):
             resets[nid] = BLOCKED      # 反复打回不见好转：停下来叫人，别空转到崩
             continue
         targets = reopen_targets(n, outputs.get(nid))
@@ -182,8 +231,9 @@ def attempt_increments(resets: dict) -> dict:
     return {k: 1 for k, v in resets.items() if v == "pending"}
 
 
-def total_reopen_budget(dag: list[dict]) -> int:
-    return sum(reopen_budget(n) for n in dag if is_gate(n))
+def total_reopen_budget(dag: list[dict], grants: dict | None = None) -> int:
+    """全图打回预算上界（含人追加的额度）。递归 / 推进预算据它现算，别把追加额度漏掉。"""
+    return sum(effective_reopen_budget(n, grants) for n in dag if is_gate(n))
 
 
 def blocked_nodes(dag: list[dict], status: dict) -> list[str]:

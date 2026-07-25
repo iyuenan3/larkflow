@@ -7,6 +7,10 @@
 *.sqlite-*
 *.db
 
+# 跨进程锁（跟着 DB 文件走：<DB>.locks/ 与 <DB>.serve.lock）
+*.locks/
+*.serve.lock
+
 # python
 .venv/
 __pycache__/

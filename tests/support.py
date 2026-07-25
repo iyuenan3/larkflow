@@ -20,3 +20,15 @@ class CountingLLM(LLMClient):
 
     def prompt_of(self, model_role: str, nth: int) -> str:
         return [c["prompt"] for c in self.calls if c["model_role"] == model_role][nth]
+
+
+def card_target(io, node_id: str) -> str | None:
+    """某节点最新一张卡发给了谁（= 真栈里唯一点得到它的那个人的 open_id）。
+
+    e2e 里的 `operator_id` 一律取它：飞书把卡投给谁，回调里的 operator 就是谁。
+    写死一个占位 id 会让打回权限层（ADR-023）永远判成「陌生人」，测的就不是真路径了。
+    """
+    for card in reversed(list(io.cards.values())):
+        if any(b["action_value"].get("node_id") == node_id for b in card["buttons"]):
+            return card["target"]
+    return None

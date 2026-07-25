@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+import time
 from typing import Callable
 
 CARD_ACTION = "card.action.trigger"
@@ -114,7 +115,9 @@ class EventPump:
                 except Exception as exc:      # ① 一条事件处理失败，绝不拖垮整条入站通道
                     self.on_error(f"on_event:{key}", exc)
             # stdout 到头 = 子进程没了：退避重启（③）
-            if self._stop.is_set() or restarts >= self.max_restarts:
+            if self._stop.is_set():
+                return          # 正常收工（stop 会 terminate 子进程），别当故障喊
+            if restarts >= self.max_restarts:
                 self.on_error(f"consume:{key}", RuntimeError(
                     f"event consume {key} 退出且重启已达上限 {self.max_restarts}，入站通道已停"))
                 return
@@ -132,9 +135,33 @@ class EventPump:
                 return
 
     def stop(self) -> None:
+        """停订阅：置位 + 终止 `event consume` 子进程。**不动正在处理的那条事件**
+        （它可能正握着实例锁写 checkpointer），要等它请用 `join`。"""
         self._stop.set()
         for proc in self._procs:
             try:
                 proc.terminate()
             except Exception:
                 pass
+            wait = getattr(proc, "wait", None)
+            if wait is None:
+                continue
+            try:
+                wait(timeout=5)
+            except Exception:            # 赖着不走才升级到 kill，别一上来就硬杀
+                kill = getattr(proc, "kill", None)
+                if kill is not None:
+                    try:
+                        kill()
+                    except Exception:
+                        pass
+
+    def join(self, timeout: float | None = None) -> None:
+        """等泵线程真正退出（优雅停的第二步：让在飞的那条事件跑完）。
+
+        线程都是 daemon，join 超时也不会挂住进程；超时后未完成的写由下次启动对账兜。
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        for t in list(self._threads):
+            left = None if deadline is None else max(0.0, deadline - time.monotonic())
+            t.join(left)

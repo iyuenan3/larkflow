@@ -10,7 +10,7 @@ from larkflow.app import build_contract_service
 from larkflow.io import FakeDeliverableStore
 from larkflow.io.deliverable import Deliverable
 from larkflow.io.events import CARD_ACTION, TASK_UPDATE
-from support import CountingLLM
+from support import CountingLLM, card_target
 
 NODES = ["biz_draft", "legal_draft", "finance_gate", "legal_gate",
          "merge", "finalize", "checks", "close"]
@@ -33,9 +33,13 @@ def build():
     return svc, io, llm, store
 
 
-def card(io, node_id, label, **override):
+def card(io, node_id, label, *, operator=None, **override):
+    """点某节点最新一张卡。operator 默认 = **收到这张卡的人**（真栈里只有他点得到它）。
+
+    打回权限层（ADR-023）按 operator 判身份，写死一个占位 id 会让每次打回都被判成越权。
+    """
     return {"key": CARD_ACTION, "action_value": dict(io.button_value(node_id, label), **override),
-            "operator_id": "ou_op"}
+            "operator_id": operator or card_target(io, node_id)}
 
 
 def task_done(io):
@@ -116,7 +120,8 @@ def test_running_edit_inserts_a_review_node_into_the_future():
     ])
 
     # 改图没废掉已经发出去的卡
-    assert "resumed" in svc.resume_from_event({"key": CARD_ACTION, "action_value": old_card})
+    assert "resumed" in svc.resume_from_event(
+        {"key": CARD_ACTION, "action_value": old_card, "operator_id": card_target(io, "legal_gate")})
     svc.resume_from_event(card(io, "finance_gate", "通过"))
     human_writes(svc, store, iid, GOOD_CONTRACT)
     svc.resume_from_event(task_done(io))
