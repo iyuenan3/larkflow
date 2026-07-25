@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import re
 
 # 角色主配置。**必须排除 BACKUP 段**：`LLM_WRITER_BACKUP_BASE_URL` 长得就像
@@ -164,6 +165,54 @@ def _load_backups(environ: dict[str, str]) -> dict[str, dict[int, dict]]:
                 continue
         out.setdefault(raw, {}).setdefault(idx, {})[field] = val
     return out
+
+
+def load_dotenv(path: str = ".env", *, environ: dict | None = None) -> list[str]:
+    """把 `.env` 读进环境变量，返回**本次真正设置**的键名（只键名，值全是凭证）。
+
+    **为什么不让人用 `source .env`**（实测踩过）：`.env` 长得像 shell 赋值，但它不是
+    shell 脚本。`source` 会做引号剥离、词分割、glob 展开、`$` 展开、反引号执行。
+    实际后果：`LARKFLOW_ROLES={"法务":"ou_…"}` 被吃成 `{法务:ou_…}`，JSON 当场炸；
+    含 `$` 的 api_key 会被悄悄改写成别的东西**而且不报错**。
+
+    这里的规则明确、与 shell 无关：
+      · `#` 开头整行 = 注释；空行跳过；允许 `export ` 前缀。
+      · 值**整体**被一对 `'` 或 `"` 包住时剥掉那对引号，否则原样保留（含内部引号）。
+      · 未被引号包裹时，「空白 + #」之后当行尾注释；紧贴的 `#` 是值的一部分。
+      · `$` / 反引号一律是字面量。
+      · **已存在的环境变量优先**：显式 export 是人当场的意图，文件不许盖回去。
+    """
+    environ = os.environ if environ is None else environ
+    try:
+        text = pathlib.Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    done: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
+        if not key:
+            continue
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]                       # 整体包裹的引号是语法
+        else:
+            cut = _INLINE_COMMENT.search(val)     # 只有「空白 + #」才是行尾注释
+            if cut:
+                val = val[:cut.start()].rstrip()
+        if key in environ:
+            continue                              # 显式 export 优先
+        environ[key] = val
+        done.append(key)
+    return done
+
+
+_INLINE_COMMENT = re.compile(r"\s+#")
 
 
 def env(key: str, default: str | None = None) -> str | None:

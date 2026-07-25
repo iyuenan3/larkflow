@@ -66,6 +66,8 @@ larkflow unblock / start / status / …  ← 另一个进程，写同一个 SQLi
 
 **退出**：停订阅 → 等在飞的那条事件跑完 → 关 DB。**没排空就不关 DB**（那条事件可能正握着实例锁写 checkpointer，关连接等于把桌子从它手底下抽走），改为记一笔 `drain` 故障、把半截写留给下次启动对账兜，并让进程**退出码 1**。所以 systemd 里 `Restart=always` 配合 `TimeoutStopSec` 要给足（一条事件里可能在跑 LLM）；日志里出现 `drain` 就说明上次没收干净，下次启动会补。
 
+**配置加载**：CLI 启动时自动读**当前目录的 `.env`**（`--env-file` 可改），已存在的环境变量优先。**绝不要用 `source .env`**：`.env` 长得像 shell 赋值但不是 shell 脚本，`source` 会做引号剥离与 `$` 展开：实测把 `LARKFLOW_ROLES={"法务":"ou_…"}` 吃成 `{法务:ou_…}` 当场炸，而含 `$` 的 api_key 会被悄悄改写**且不报错**。systemd 用 `EnvironmentFile=`（它按 KEY=VALUE 解析，不走 shell），或让工作目录指到项目根、靠自动加载。
+
 **DB 路径**：默认 `~/.larkflow/larkflow.sqlite`，`--db` / `LARKFLOW_DB` 给相对路径也会**落成绝对路径并回显**。默认值曾经是 cwd 相对的 `larkflow.sqlite`，于是 systemd 起的 daemon（`WorkingDirectory=/`）与你在 home 敲的救场命令各开各的库：两边都不报错、都「正常」，只是各看各的实例，而这个分叉没有任何症状。
 
 **幂等**：派单与通知的幂等键记在本地幂等表里（ADR-033），所以重启 / 反复对账**不会**再给还在等的人发第二遍卡、建第二条待办。
@@ -79,7 +81,7 @@ daemon 常驻握着 DB，而运维的一次性命令（尤其 `unblock`，那是
 - Windows 跑不了（flock 依赖 fcntl，构造时直接抛，不静默降级成「没有锁」）。
 
 ## 环境变量（只列 key 名，真值走 `.env` / keychain，绝不入库；完整注释见仓库 `.env.example`）
-- 飞书应用：`LARK_APP_ID`、`LARK_APP_SECRET`、`LARK_PROFILE`（lark-cli profile，认哪个应用）、`LARKFLOW_IDENTITY`（bot | user，卡片回调只有 bot 收得到）。
+- 飞书应用：`LARK_PROFILE`（lark-cli profile，认哪个应用）、`LARKFLOW_IDENTITY`（bot | user，卡片回调只有 bot 收得到）。**凭证不在这里**：app_id / secret / token 由 lark-cli 自己保管，引擎只透传 `--profile`。
 - 引擎：`LARKFLOW_DB`（SQLite 路径，**本地盘**）、`LARKFLOW_TEMPLATE`（默认模板名）、`LARKFLOW_DRIVE_FOLDER`（交付物落哪个云空间文件夹）。
 - 角色映射：`LARKFLOW_ROLES`（JSON，`assignee_role → open_id`；中文角色名当环境变量名 export 不进去，故以 JSON 为主）、`LARKFLOW_ROLE_<ASCII 别名>`（辅，会合并）。真栈 strict：模板里出现的角色没配全会在**装配期直接抛**，绝不伪造 `ou_<角色名>` 发给飞书。
 - LLM（ADR-017，按角色一组三元组）：`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`（默认角色兜底），以及 `LLM_<ROLE>_BASE_URL` / `_API_KEY` / `_MODEL`（如 writer / legal / editor / triage）。三元组缺项的角色会被跳过。

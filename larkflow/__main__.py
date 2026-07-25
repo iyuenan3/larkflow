@@ -21,7 +21,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from .config import env
+from .config import env, load_dotenv
 from .serve import DEFAULT_EVENT_KEYS, LarkFlowServer
 from .store import DEFAULT_LOCK_TIMEOUT, LockBusy, daemon_lock_for, resolve_db_path
 
@@ -57,6 +57,8 @@ def _add_global_flags(ap: argparse.ArgumentParser, *, suppress: bool = False) ->
                     help="等另一个 larkflow 进程放开这个实例的上限（秒）")
     ap.add_argument("--json", action="store_true", default=d(False),
                     help="输出 JSON（给脚本读）")
+    ap.add_argument("--env-file", default=d(".env"),
+                    help="从哪个文件读环境变量（默认 ./.env；**别用 source**，shell 会吃掉引号）")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -251,7 +253,29 @@ HANDLERS = {"serve": _cmd_serve, "start": _cmd_start, "status": _cmd_status,
             "pending": _cmd_pending, "unblock": _cmd_unblock, "reconcile": _cmd_reconcile}
 
 
+def _preload_env(argv) -> None:
+    """在 build_parser **之前**加载 `.env`：`--db` 之类的默认值是在建 parser 时从
+    环境变量取的，晚一步就读不到。`--env-file` 自己也是命令行参数，故这里先手工扫一遍
+    argv（鸡生蛋问题，不值得为它引入两段式解析）。
+
+    绝不让人用 `source .env`：那会走 shell 的引号剥离 / `$` 展开，把 JSON 和含 `$`
+    的 key 悄悄改坏（见 config.load_dotenv）。
+    """
+    path = ".env"
+    for i, a in enumerate(argv or []):
+        if a == "--env-file" and i + 1 < len(argv):
+            path = argv[i + 1]
+        elif a.startswith("--env-file="):
+            path = a.split("=", 1)[1]
+    keys = load_dotenv(path)
+    if keys:
+        # 只报键名：这里面全是凭证。人一眼看得出配置到底生效没有。
+        print(f"[env] 从 {path} 读入 {len(keys)} 个键：{' '.join(sorted(keys))}",
+              file=sys.stderr)
+
+
 def main(argv=None, *, factory=None, server_factory=LarkFlowServer) -> int:
+    _preload_env(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     ns = parser.parse_args(argv)
     if not getattr(ns, "cmd", None):
