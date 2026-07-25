@@ -31,4 +31,5 @@ class OrchestratorState(TypedDict):
     status: Annotated[dict, merge]   # node_id -> pending | done | failed | blocked | skipped
     outputs: Annotated[dict, merge]  # node_id -> 节点产出 + 交付物 handle 权威登记（ADR-020）
     reopen_counts: Annotated[dict, add_counts]  # gate_id -> 已打回次数（预算，防无限重算）
+    attempts: Annotated[dict, add_counts]       # node_id -> 第几轮（派单幂等键的一部分）
     meta: dict         # instance_id / reporter / inputs / template_id 等

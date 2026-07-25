@@ -3,7 +3,7 @@
 模板护栏与 v1 节点契约的单测在 tests/test_model_v1.py。
 """
 from larkflow.engine.gates import (
-    ReopenError,
+    BLOCKED,
     all_done,
     finish,
     illegal_reopen,
@@ -97,13 +97,21 @@ def test_illegal_reopen_detects_non_ancestors():
     assert illegal_reopen(DAG, "qa_verify", ["nope"]) == ["nope"]
 
 
-def test_reopen_resets_rejects_illegal_targets_in_state():
-    """入口已挡一道；state 里仍出现非法值 = 不变量破裂，宁可炸不静默。"""
-    import pytest
+def test_illegal_targets_in_state_are_dropped_not_raised():
+    """入口用引擎侧身份挡一道；state 里仍出现非法值时**绝不能抛**。
 
-    with pytest.raises(ReopenError, match="合法域"):
-        reopen_resets(DAG, {"qa_verify": "failed"},
-                      {"qa_verify": {"passed": False, "reopen": ["close"]}})
+    抛出去会让此后每一次推进都在同一处炸：实例永久砖化，pending() 还谎报「无人等待」。
+    降级为剔除非法目标；全非法就把这道门标 blocked 叫人。
+    """
+    # 一半合法一半非法：只按合法的那部分打回
+    mixed = reopen_resets(DAG, {"qa_verify": "failed"},
+                          {"qa_verify": {"passed": False, "reopen": ["fix", "close"]}})
+    assert mixed == {"fix": "pending", "qa_verify": "pending", "close": "pending"}
+
+    # 全非法：不抛、不乱重置，标 blocked
+    only_bad = reopen_resets(DAG, {"qa_verify": "failed"},
+                             {"qa_verify": {"passed": False, "reopen": ["close"]}})
+    assert only_bad == {"qa_verify": BLOCKED}
 
 
 def test_reopen_always_resets_the_gate_itself_so_the_loop_terminates():

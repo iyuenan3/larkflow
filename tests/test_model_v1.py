@@ -103,7 +103,12 @@ def test_produce_may_omit_deliverable_for_pure_action_nodes():
     强制每个 produce 都产一份飞书文档，会把纯审批、纯通知、纯决策类流程整类挡在门外。
     「声明了落点却不产出」和「产出了却没落点」由执行体在运行时炸（见 test_generality）。
     """
-    validate_template(mutate("draft", deliverable=None, prompt="x", model_role="w"))
+    # tool / human 的纯动作节点：合法
+    validate_template(mutate("seed", deliverable=None, tool={"kind": "notify"}))
+    validate_template(mutate("finalize", deliverable=None))
+    # 但 llm produce 一定会产正文，没落点就是产出被丢掉，装配期就得挡
+    with pytest.raises(TemplateError, match="deliverable"):
+        validate_template(mutate("draft", deliverable=None))
 
 
 def test_deliverable_region_must_be_whole_or_section():

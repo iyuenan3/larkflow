@@ -19,7 +19,9 @@ from __future__ import annotations
 import json
 from typing import Callable
 
-from .deliverables import PLACEHOLDER_MARK, prior_handle, read_upstream
+import re
+
+from .deliverables import PLACEHOLDER_MARKS, prior_handle, read_upstream
 
 ToolKind = Callable[[dict, dict, object, dict], dict]
 TOOL_KINDS: dict[str, ToolKind] = {}
@@ -36,13 +38,19 @@ def _meta(state: dict) -> dict:
     return state.get("meta") or {}
 
 
-def _target(state: dict, who: str | None) -> str | None:
-    """通知对象：reporter = 发起人；ou_/oc_ 开头当作 id 直用；其余按 assignee_role 解析。"""
+def _target(state: dict, who: str | None, ex=None) -> str | None:
+    """通知对象：reporter = 发起人；ou_/oc_ 开头当 id 直用；**其余一律过 RoleResolver**。
+
+    不过 resolver 的话，真栈会把「法务」这种中文角色名当 open_id 直接发给飞书。
+    """
     if not who:
         return None
     if who == "reporter":
         return _meta(state).get("reporter")
-    return who
+    if who.startswith(("ou_", "oc_", "cli_")):
+        return who
+    resolver = getattr(ex, "resolver", None)
+    return resolver.resolve(who) if resolver is not None else who
 
 
 # ---------- produce 类 ----------
@@ -81,7 +89,7 @@ def summarize_links(node: dict, state: dict, ex, args: dict) -> dict:
         if handle is not None:
             lines.append(f"- {n.get('label', n['id'])}：{handle.url}")
 
-    target = _target(state, args.get("notify"))
+    target = _target(state, args.get("notify"), ex)
     if target and ex.io is not None:
         ex.io.notify(
             target=target,
@@ -95,7 +103,7 @@ def summarize_links(node: dict, state: dict, ex, args: dict) -> dict:
 def notify(node: dict, state: dict, ex, args: dict) -> dict:
     """纯通知节点（不产交付物）。args: to=reporter|ou_xxx、text=正文"""
     meta = _meta(state)
-    target = _target(state, args.get("to") or "reporter")
+    target = _target(state, args.get("to") or "reporter", ex)
     text = args.get("text") or f"{node.get('label', node['id'])}（{meta.get('instance_id','')}）"
     if target and ex.io is not None:
         ex.io.notify(target=target, text=text,
@@ -120,10 +128,12 @@ def format_check(node: dict, state: dict, ex, args: dict) -> dict:
     """
     texts = read_upstream(ex.deliverables, state, node) if ex.deliverables else {}
     joined = "\n".join(texts.values())
-    missing = [s for s in (args.get("required") or []) if s not in joined]
-    marks = [PLACEHOLDER_MARK] if args.get("forbid_placeholders", True) else []
-    left = [m for m in marks if m in joined]
-    short = len(joined.strip()) < int(args.get("min_chars") or 1)
+    left = ([m for m in PLACEHOLDER_MARKS if m in joined]
+            if args.get("forbid_placeholders", True) else [])
+    # 判要素前先把占位段抠掉：否则「【待确认：价款】」这种空壳会把 required=[价款] 满足掉
+    body = re.sub(r"【[^】]*】", "", joined)
+    missing = [s for s in (args.get("required") or []) if s not in body]
+    short = len(body.strip()) < int(args.get("min_chars") or 1)
 
     passed = not missing and not left and not short
     reasons = []

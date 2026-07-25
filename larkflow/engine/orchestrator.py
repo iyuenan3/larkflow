@@ -19,6 +19,7 @@ from ..model.node import is_gate, node_by_id
 from .deliverables import upstream_links
 from .executors import Executors
 from .gates import (
+    attempt_increments,
     finish,
     ready_nodes,
     reopen_candidates,
@@ -43,7 +44,8 @@ def build_graph(executors: Executors, checkpointer):
         if not resets:
             return {}
         return {"status": resets,
-                "reopen_counts": reopen_increments(state["dag"], status, resets)}
+                "reopen_counts": reopen_increments(state["dag"], status, resets),
+                "attempts": attempt_increments(resets)}
 
     def route(state: OrchestratorState):
         ready = ready_nodes(state["dag"], state.get("status", {}))

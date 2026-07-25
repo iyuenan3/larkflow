@@ -145,6 +145,10 @@ def _validate_node(dag: list[dict], n: dict, ids: set[str]) -> None:
         for field in ("prompt", "model_role"):
             if not n.get(field):
                 raise TemplateError(f"{nid} 是 llm 节点，须声明 {field}")
+        # llm produce 一定会产正文，没有落点等于产出被丢掉；这条必须在装配期挡，
+        # 不能等到人点完卡片、resume 到一半才炸
+        if is_produce(n) and n.get("deliverable") is None:
+            raise TemplateError(f"{nid} 是 llm produce，须声明 deliverable（否则产出无处可落）")
 
     if executor == "tool":
         _validate_tool(nid, n.get("tool"))

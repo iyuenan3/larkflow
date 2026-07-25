@@ -16,6 +16,9 @@ HANDLE_KEY = "deliverable"
 # 引擎给 human-produce 备好的空容器里放的占位标记。auto 机检门据此判「人还没真写」，
 # 所以它必须是**引擎与能力库共用的一个常量**，不能各写各的字样（改了措辞就静默失效）。
 PLACEHOLDER_MARK = "【待填写】"
+# 出厂 prompt 教 AI 写的占位是「【待确认：…】」。机检必须认全套，否则一份满是占位的空壳稿
+# 会大摇大摆通过最后一道自动门（实测）。新增占位写法时**同时**改这里与模板 prompt。
+PLACEHOLDER_MARKS = (PLACEHOLDER_MARK, "【待确认")
 
 
 def prior_handle(outputs: dict, node_id: str) -> Deliverable | None:

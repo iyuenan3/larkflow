@@ -17,7 +17,13 @@ import threading
 
 from langgraph.types import Command
 
-from .engine.gates import blocked_nodes, illegal_reopen, ready_nodes, reopen_resets
+from .engine.gates import (
+    blocked_nodes,
+    illegal_reopen,
+    ready_nodes,
+    reopen_resets,
+    total_reopen_budget,
+)
 from .engine.livegraph import GraphEditError, apply_ops
 from .engine.support import assert_v1_supported
 from .io.correlations import Correlation, Correlations
@@ -25,6 +31,11 @@ from .io.events import CARD_ACTION, TASK_UPDATE
 from .io.lark_io import Button, LarkIO
 from .model.node import is_gate, node_by_id
 from .model.template import load_template, validate_template
+
+def _unanswered(status: dict, node_id) -> bool:
+    """这个人还在等吗。done / failed 都表示他本轮已经答过了（failed = 他点了打回）。"""
+    return (status or {}).get(node_id) not in ("done", "failed")
+
 
 PASS_LABEL = "通过"
 REOPEN_LABEL = "打回"
@@ -50,6 +61,22 @@ class LarkFlowService:
         # 派单失败不再吞掉：每实例记最近的失败，供 reconcile / 运维查
         self.provision_errors: dict[str, list[dict]] = {}
 
+    def _validate_roles(self, dag: list[dict]) -> None:
+        """派单对象必须解析得出（真栈 strict 下才生效）。别等人工节点挂起那一刻才炸。"""
+        check = getattr(self.resolver, "validate_coverage", None)
+        if check is not None:
+            check(dag)
+
+    def _notify_owner(self, instance_id: str, text: str, idem_key: str) -> None:
+        reporter = (self._values(instance_id).get("meta") or {}).get("reporter")
+        if not reporter:
+            return
+        try:
+            self.io.notify(target=reporter, text=text, idem_key=idem_key)
+        except Exception as exc:
+            self.provision_errors.setdefault(instance_id, []).append(
+                {"node_id": None, "error": f"notify {type(exc).__name__}: {exc}"})
+
     def _thread_lock(self, instance_id: str) -> threading.Lock:
         with self._locks_guard:
             lk = self._locks.get(instance_id)
@@ -72,6 +99,7 @@ class LarkFlowService:
                 "status": {},
                 "outputs": {},
                 "reopen_counts": {},
+                "attempts": {},
                 "meta": {"instance_id": instance_id, "reporter": reporter,
                          "inputs": inputs or {}},
             }
@@ -87,6 +115,7 @@ class LarkFlowService:
         assert_v1_supported(dag)
         if self.executors is not None:
             self.executors.validate_coverage(dag)
+        self._validate_roles(dag)
         return dag
 
     def resume_from_event(self, event: dict) -> dict:
@@ -98,18 +127,26 @@ class LarkFlowService:
     def resume(self, *, instance_id: str, interrupt_id: str, value: dict, node_id: str | None = None) -> dict:
         with self._thread_lock(instance_id):  # 同 thread_id 串行（修 E）
             values = self._values(instance_id)
-            # 打回合法域在**引擎权威侧**算，不信前端 / 卡片回传（ADR-014 / ADR-023）。
-            # 用运行时 dag（活图会改它），不用装配期模板。
-            reopen = (value or {}).get("reopen")
-            if reopen and node_id:
-                bad = illegal_reopen(values.get("dag") or self.dag, node_id, reopen)
-                if bad:
-                    return {"rejected": "illegal_reopen", "illegal": bad, "node_id": node_id}
             status = values.get("status", {})
-            pending = {i.id for i in self._pending_interrupts(instance_id)}
-            # 改图会让挂起中断换 id；顺迁移链把旧卡 / 旧任务上的 id 重绑到当前中断
+            live = {i.id: (i.value or {}).get("node_id")
+                    for i in self._pending_interrupts(instance_id)}
+            # 改图 / 推进会让挂起中断换 id；顺迁移链把旧卡 / 旧任务上的 id 重绑到当前中断
             interrupt_id = self.corr.resolve_interrupt(
-                instance_id, interrupt_id, is_live=lambda i: i in pending)
+                instance_id, interrupt_id, is_live=lambda i: i in live)
+            pending = set(live)
+
+            # 打回合法域在**引擎权威侧**算，不信前端 / 卡片回传（ADR-014 / ADR-023）。
+            # 关键：gate 身份取自**中断本身**，绝不用回传的 node_id —— 卡片 action_value 是前端
+            # 可自由构造的封套，少一个 node_id 就能绕开这道校验，而非法值一旦落进权威 state，
+            # 此后每一次推进都在同一处炸，实例永久砖化（实测）。
+            reopen = (value or {}).get("reopen")
+            if reopen:
+                gate_id = live.get(interrupt_id) or node_id
+                if not gate_id:
+                    return {"rejected": "unidentified_gate", "interrupt_id": interrupt_id}
+                bad = illegal_reopen(values.get("dag") or self.dag, gate_id, reopen)
+                if bad:
+                    return {"rejected": "illegal_reopen", "illegal": bad, "node_id": gate_id}
             # 修 F：并行下已 resume 的中断会滞留在 get_state().interrupts（直到同批兄弟也 resolve）。
             # 交叉核对节点自身状态：done 即已答复，配合 interrupt_id 仍 pending 才 resume，陈旧 no-op。
             resolved = node_id is not None and status.get(node_id) == "done"
@@ -143,6 +180,7 @@ class LarkFlowService:
             assert_v1_supported(new_dag)
             if self.executors is not None:
                 self.executors.validate_coverage(new_dag)
+            self._validate_roles(new_dag)
 
             remapped = self._write_state(instance_id, {"dag": new_dag})
             self._advance(instance_id, skip=remapped)
@@ -187,8 +225,10 @@ class LarkFlowService:
         按装配期算死会在中途炸 GraphRecursionError（实例停半截、投影孤悬）。
         """
         dag = dag or self._values(instance_id).get("dag") or self.dag
-        # 每 DAG 层约 2 super-step；给打回重跑留余量
-        return {"configurable": {"thread_id": instance_id}, "recursion_limit": 2 * len(dag) + 25}
+        # 每 DAG 层约 2 super-step，每轮打回约 4 个；预算配大了也不能退回 GraphRecursionError
+        # （那正是 ADR-029 要消灭的现象）
+        return {"configurable": {"thread_id": instance_id},
+                "recursion_limit": 2 * len(dag) + 4 * total_reopen_budget(dag) + 25}
 
     # ---------- 推进：绕开 super-step 屏障 ----------
     def _write_state(self, instance_id: str, updates: dict) -> set[str]:
@@ -201,8 +241,20 @@ class LarkFlowService:
            打回重置逻辑仍留在引擎里，驱动层不重算。
         """
         values = self._values(instance_id)
+        status = values.get("status", {})
+        # 只有「这一拍之后仍是同一轮、同一个人在等」的中断才允许重绑：
+        #  · 已答复的（done / failed）不算，他的旧卡该失效；
+        #  · 这一拍要被打回重置的不算，那是**新一轮**，人必须收到新卡。
+        # 漏掉第二条会出人命：被卷进新一轮的旁观者不补发新单，而他上一轮的旧卡被重绑到新一轮，
+        # 一点就把「对 v1 的裁决」记成「放行 v2」（实测复现过）。
+        reopened = {k for k, v in reopen_resets(values.get("dag") or [], status,
+                                                values.get("outputs", {}),
+                                                values.get("reopen_counts", {})).items()
+                    if v == "pending"}
         before = {i.id: (i.value or {}).get("node_id")
-                  for i in self._pending_interrupts(instance_id)}
+                  for i in self._pending_interrupts(instance_id)
+                  if _unanswered(status, (i.value or {}).get("node_id"))
+                  and (i.value or {}).get("node_id") not in reopened}
         payload = {
             "dag": updates.get("dag") or values.get("dag"),
             "status": {**values.get("status", {}), **updates.get("status", {})},
@@ -229,8 +281,9 @@ class LarkFlowService:
     def _advance(self, instance_id: str, *, skip: set[str] | None = None) -> None:
         """处理挂起（派单 / 投影），并把被屏障挡住的分支一拍一拍推到位。"""
         self._handle(instance_id, skip=skip)
-        dag_len = len(self._values(instance_id).get("dag") or self.dag)
-        for _ in range(2 * dag_len + 5):
+        dag = self._values(instance_id).get("dag") or self.dag
+        rounds = 2 * len(dag) + 2 * total_reopen_budget(dag) + 5
+        for _ in range(rounds):
             values = self._values(instance_id)
             live = {(i.value or {}).get("node_id") for i in self._pending_interrupts(instance_id)}
             if not self._stalled(values, live):
@@ -240,6 +293,11 @@ class LarkFlowService:
             self._handle(instance_id, skip=remapped)
             if dict(self._values(instance_id).get("status", {})) == before:
                 return   # 推不动了就停，别空转
+        # 上界耗尽仍没推完：实例停在半截态，绝不能静默返回（那正是 ADR-029 要消灭的现象）
+        self.provision_errors.setdefault(instance_id, []).append(
+            {"node_id": None, "error": f"advance 推进 {rounds} 拍仍未收敛，实例停在半截态"})
+        self._notify_owner(instance_id, f"实例 {instance_id} 推进未收敛，已停下等人介入。",
+                           f"{instance_id}:advance:stalled")
 
     def _values(self, instance_id: str) -> dict:
         return self.graph.get_state(self._cfg(instance_id)).values or {}
@@ -275,7 +333,7 @@ class LarkFlowService:
         直接用会把已答复的节点当成「还卡在他手上」，既误导驾驶舱也会重复派单（修 F 同款判据）。
         """
         return [it for it in self._pending_interrupts(instance_id)
-                if status.get((it.value or {}).get("node_id")) != "done"]
+                if _unanswered(status, (it.value or {}).get("node_id"))]
 
     def _remap_interrupts(self, instance_id: str, before: dict[str, str]) -> set[str]:
         """改图后中断换了 id：按 node_id 对上号，记下迁移链，让旧卡 / 旧任务继续有效。
@@ -296,7 +354,10 @@ class LarkFlowService:
         v = it.value or {}
         nid, signal = v["node_id"], v.get("signal")
         iid = it.id
-        idem = f"{instance_id}:{nid}:{iid}"  # 含中断 id：重放去重、reopen 出新单
+        # 幂等键用**轮次**不用中断 id：中断 id 每推进一拍就换，拿它当键会让同一个人、同一件事
+        # 反复收到新卡 / 新待办且无上限（实测）。轮次只在真被打回时 +1。
+        attempt = (self._values(instance_id).get("attempts") or {}).get(nid, 0)
+        idem = f"{instance_id}:{nid}:{attempt}"
         assignee = self._assignee(instance_id, nid, v.get("assignee_role"))
         if signal == "task_complete":
             guid = self.io.create_task(
@@ -415,13 +476,8 @@ class LarkFlowService:
             return
         labels = {n["id"]: n.get("label", n["id"]) for n in values.get("dag") or []}
         for nid in stuck:
-            try:
-                self.io.notify(
-                    target=reporter,
-                    text=(f"「{labels.get(nid, nid)}」反复打回仍未通过，已停下等人介入"
-                          f"（实例 {instance_id}）。可改要素 / 改图后重试。"),
-                    idem_key=f"{instance_id}:{nid}:blocked",
-                )
-            except Exception as exc:
-                self.provision_errors.setdefault(instance_id, []).append(
-                    {"node_id": nid, "error": f"blocked-notify {type(exc).__name__}: {exc}"})
+            self._notify_owner(
+                instance_id,
+                f"「{labels.get(nid, nid)}」反复打回仍未通过，已停下等人介入"
+                f"（实例 {instance_id}）。可改要素 / 改图后重试。",
+                f"{instance_id}:{nid}:blocked")

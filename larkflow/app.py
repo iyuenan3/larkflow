@@ -21,6 +21,7 @@ from .io.deliverable import CliDeliverableIO, DeliverableIO
 from .io.lark_io import CliLarkIO, LarkIO
 from .llm import LLMClient, OpenAICompatLLM, StubLLM
 from .model import load_template
+from .model.template import validate_template
 from .service import LarkFlowService
 
 
@@ -45,7 +46,11 @@ def build_service(
     llm = llm or StubLLM()
     resolver = resolver or RoleResolver()
     deliverables = deliverables or FakeDeliverableStore()
-    dag = load_template(template) if isinstance(template, str) else template
+    if isinstance(template, str):
+        dag = load_template(template)          # load_template 内部已校验
+    else:
+        dag = template
+        validate_template(dag)                 # 直接传 dag 也必须过同一把尺，别开后门
 
     executors = Executors(
         io=io, resolver=resolver, llm=llm, deliverables=deliverables,

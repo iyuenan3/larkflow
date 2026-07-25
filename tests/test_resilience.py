@@ -236,3 +236,169 @@ def test_a_failing_handler_does_not_kill_the_only_inbound_channel():
 
     assert seen == [0, 1, 2, 3, 4], seen        # 出错那条之后的事件照常处理
     assert any("on_event" in e for e in errors)  # 但故障被喊出来了
+
+
+# ---------- 第二轮对抗验证挖出的回归（都实测复现过） ----------
+
+SHARED = [
+    {"id": "draft", "label": "起草", "executor": "llm", "role": "produce", "deps": [],
+     "prompt": "写", "model_role": "w", "deliverable": {"region": "whole"}},
+    {"id": "g1", "label": "财务审", "executor": "human", "role": "gate", "deps": ["draft"],
+     "assignee_role": "财务", "signal": "card_action", "approval_policy": "single"},
+    {"id": "g2", "label": "法务审", "executor": "human", "role": "gate", "deps": ["draft"],
+     "assignee_role": "法务", "signal": "card_action", "approval_policy": "single"},
+    {"id": "tail", "label": "收口", "executor": "tool", "role": "produce", "deps": ["g1", "g2"],
+     "deliverable": {"region": "whole"}, "tool": {"kind": "noop"}},
+]
+
+
+def test_a_bystander_gate_reopened_by_someone_else_gets_a_fresh_card():
+    """两道门共享上游：财务打回会把还在等的法务一起卷进新一轮。
+
+    法务必须收到**新卡**，且他手里上一轮那张卡必须失效。否则会出现最坏的情况：
+    法务从未见过 v2，引擎却在权威 state 里记下「法务放行 v2」（审计记录被伪造，实测复现过）。
+    """
+    llm = CountingLLM({"w": "正文"})
+    svc, io = build_service(SHARED, llm=llm, deliverables=FakeDeliverableStore())
+    svc.start(instance_id="sh-1", reporter="ou_o", inputs={})
+    g2_old = io.button_value("g2", "通过")          # 法务手里第 1 轮那张
+
+    svc.resume_from_event({"key": CARD_ACTION, "operator_id": "ou_财务",
+                           "action_value": dict(io.button_value("g1", "打回"), comment="不行")})
+
+    assert llm.counts["w"] == 2                     # 上游已重算成 v2
+    g2_cards = [c for c in io.cards.values() if c["buttons"][0]["action_value"]["node_id"] == "g2"]
+    assert len(g2_cards) == 2, "法务没收到第 2 轮的新卡"
+
+    stale = svc.resume_from_event({"key": CARD_ACTION, "action_value": g2_old,
+                                   "operator_id": "ou_法务"})
+    assert stale.get("skipped") == "stale"
+    assert svc.status("sh-1").get("g2") != "done"   # 绝不能把对 v1 的裁决记成放行 v2
+
+
+def test_illegal_reopen_without_node_id_cannot_brick_the_instance():
+    """卡片封套是前端可自由构造的：少一个 node_id 不能绕开合法域校验。
+
+    绕开的后果是非法值落进权威 state，此后每一次推进都在同一处抛，实例永久砖化，
+    而 pending() 还谎报「无人等待」（实测复现过）。
+    """
+    svc, io, llm, store = contract()
+    svc.start(instance_id="brick-1", reporter="ou_owner", inputs=INPUTS)
+    av = dict(io.button_value("finance_gate", "打回"), reopen=["legal_draft"])
+    av.pop("node_id")
+
+    res = svc.resume_from_event({"key": CARD_ACTION, "action_value": av, "operator_id": "ou_财务"})
+
+    assert res["rejected"] == "illegal_reopen" and res["illegal"] == ["legal_draft"]
+    svc.reconcile("brick-1")                                   # 不抛
+    assert {p["node_id"] for p in svc.pending("brick-1")} == {"finance_gate", "legal_gate"}
+    assert "resumed" in svc.resume_from_event(card(io, "legal_gate", "通过"))   # 实例还活着
+
+
+def test_illegal_targets_that_somehow_reached_state_block_instead_of_bricking():
+    from larkflow.engine.gates import reopen_resets as rr
+    dag = [{"id": "a", "deps": []}, {"id": "g", "deps": ["a"], "role": "gate"},
+           {"id": "z", "deps": ["g"]}]
+    assert rr(dag, {"g": "failed"}, {"g": {"passed": False, "reopen": ["z"]}}) == {"g": BLOCKED}
+
+
+def test_no_duplicate_dispatch_after_the_engine_pumps_or_the_graph_is_edited():
+    """中断 id 每推进一拍就换。拿它当幂等键会让同一个人反复收到新卡且无上限（实测）。"""
+    svc, io, llm, store = contract()
+    svc.start(instance_id="dup-1", reporter="ou_owner", inputs=INPUTS)
+    svc.edit_graph("dup-1", [{"op": "add_node", "node": {
+        "id": "audit", "label": "复盘", "executor": "llm", "role": "produce", "deps": ["close"],
+        "prompt": "p", "model_role": "editor", "deliverable": {"region": "whole"}}}])
+    svc.resume_from_event(card(io, "finance_gate", "通过"))
+    svc.reconcile("dup-1")
+    svc.reconcile("dup-1")
+
+    legal = [c for c in io.cards.values() if c["buttons"][0]["action_value"]["node_id"] == "legal_gate"]
+    assert len(legal) == 1, "法务从头到尾没被叫过第二次，却拿到了多张卡"
+
+
+def test_reopen_budget_counts_exactly_once_per_reopen():
+    """保值写回若把累加型的 reopen_counts 一起带上，预算 3 会变成 1。"""
+    dag = [
+        {"id": "draft", "label": "起草", "executor": "llm", "role": "produce", "deps": [],
+         "prompt": "p", "model_role": "w", "deliverable": {"region": "whole"}},
+        {"id": "chk", "label": "机检", "executor": "tool", "role": "gate", "deps": ["draft"],
+         "approval_policy": "auto", "reopen_budget": 3,
+         "tool": {"kind": "format_check", "args": {"required": ["永不出现"]}}},
+    ]
+    llm = CountingLLM({"w": "过不了"})
+    svc, io = build_service(dag, llm=llm)
+    svc.start(instance_id="cnt-1", reporter="ou_o", inputs={})
+    assert svc._values("cnt-1")["reopen_counts"] == {"chk": 3}
+    assert llm.counts["w"] == 4                     # 首跑 + 预算内 3 次重算
+
+
+def test_a_generous_reopen_budget_does_not_fall_back_to_recursion_limit():
+    """预算调大就撞 GraphRecursionError 的话，ADR-029 的预算机制原地失效。"""
+    dag = [
+        {"id": "draft", "label": "起草", "executor": "llm", "role": "produce", "deps": [],
+         "prompt": "p", "model_role": "w", "deliverable": {"region": "whole"}},
+        {"id": "chk", "label": "机检", "executor": "tool", "role": "gate", "deps": ["draft"],
+         "approval_policy": "auto", "reopen_budget": 12,
+         "tool": {"kind": "format_check", "args": {"required": ["永不出现"]}}},
+    ]
+    svc, io = build_service(dag, llm=CountingLLM({"w": "过不了"}))
+    svc.start(instance_id="big-1", reporter="ou_o", inputs={})
+    assert svc.blocked("big-1") == ["chk"]
+
+
+def test_machine_check_recognises_the_placeholder_the_shipped_prompts_actually_produce():
+    """出厂 prompt 教 AI 写「【待确认：X】」，机检常量却是「【待填写】」→ 空壳稿通过最后一道门。"""
+    from larkflow.engine.tools import format_check
+
+    class Ex:
+        deliverables = object()
+
+    node = {"id": "chk", "deps": ["d"], "tool": {}}
+    state = {"dag": [{"id": "d", "deps": []}], "outputs": {}}
+    import larkflow.engine.tools as T
+    orig = T.read_upstream
+    T.read_upstream = lambda io, st, n: {"d": "一、【待确认：价款】\n二、【待确认：期限】\n三、其余条款从略。"}
+    try:
+        out = format_check(node, state, Ex(), {"required": ["价款", "期限"], "min_chars": 5})
+    finally:
+        T.read_upstream = orig
+    assert out["passed"] is False
+    assert out["placeholders"] and out["missing"] == ["价款", "期限"]   # 占位段不算数
+
+
+def test_notify_targets_go_through_the_role_resolver():
+    from larkflow.engine.tools import _target
+
+    class Ex:
+        resolver = RoleResolver({"法务": "ou_leg"})
+
+    st = {"meta": {"reporter": "ou_rep"}}
+    assert _target(st, "reporter", Ex()) == "ou_rep"
+    assert _target(st, "法务", Ex()) == "ou_leg"       # 不解析的话真栈会把中文名当 open_id 发出去
+    assert _target(st, "ou_direct", Ex()) == "ou_direct"
+
+
+def test_passing_a_dag_straight_to_build_service_still_goes_through_the_guardrails():
+    dag = [
+        {"id": "d", "label": "起草", "executor": "llm", "role": "produce", "deps": [],
+         "prompt": "p", "model_role": "w", "deliverable": {"region": "whole"}},
+        {"id": "g", "label": "审批", "executor": "human", "role": "gate", "deps": ["d"],
+         "assignee_role": "老板", "signal": "task_complete", "approval_policy": "single"},
+    ]
+    with pytest.raises(Exception, match="card_action"):
+        build_service(dag)
+
+
+def test_passthrough_only_sees_through_nodes_that_produce_nothing():
+    """透传是为 gate 设计的；若连「声明了落点却没产出」的节点也透传，下游会静默读到祖父的正文。"""
+    from larkflow.engine.deliverables import upstream_handles
+
+    dag = [{"id": "gp", "deps": []},
+           {"id": "mid", "deps": ["gp"], "deliverable": {"region": "whole"}},
+           {"id": "me", "deps": ["mid"]}]
+    outputs = {"gp": {"deliverable": {"type": "markdown", "token": "t1", "url": "u", "region": "whole"}}}
+    assert upstream_handles({"dag": dag, "outputs": outputs}, dag[2]) == {}
+
+    dag[1].pop("deliverable")          # 改成纯动作节点 → 才透传
+    assert list(upstream_handles({"dag": dag, "outputs": outputs}, dag[2])) == ["gp"]

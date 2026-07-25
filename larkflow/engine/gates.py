@@ -152,10 +152,15 @@ def reopen_resets(dag: list[dict], status: dict, outputs: dict | None = None,
             resets[nid] = BLOCKED      # 反复打回不见好转：停下来叫人，别空转到崩
             continue
         targets = reopen_targets(n, outputs.get(nid))
-        bad = illegal_reopen(dag, nid, targets)
+        bad = set(illegal_reopen(dag, nid, targets))
         if bad:
-            # 入口（service.resume）已挡一道；到这里说明 state 里已有非法值，属不变量破裂
-            raise ReopenError(f"{nid} 的打回目标越出合法域（须 ⊆ 传递祖先）: {bad}")
+            # 入口（service.resume）用引擎侧身份挡一道；到这里说明 state 里已有非法值。
+            # **不能抛**：抛出去会让此后每一次推进都在同一处炸，实例永久砖化、pending() 还谎报
+            # 无人等待（实测）。降级为「剔除非法目标」，全非法就把这道门标 blocked 叫人。
+            targets = [t for t in targets if t not in bad]
+            if not targets:
+                resets[nid] = BLOCKED
+                continue
         for target in targets:
             for m in {target} | stale_downstream(dag, target) | {nid}:
                 resets[m] = "pending"
@@ -166,6 +171,19 @@ def reopen_increments(dag: list[dict], status: dict, resets: dict) -> dict:
     """本轮真正执行了打回的门 → 计数 +1（与 resets 同一次 dispatch 写回）。"""
     return {n["id"]: 1 for n in dag
             if status.get(n["id"]) == "failed" and resets.get(n["id"]) == "pending"}
+
+
+def attempt_increments(resets: dict) -> dict:
+    """被重置为 pending 的节点 = 进入新一轮 → 轮次 +1。
+
+    轮次是**派单幂等键的一部分**：同一轮无论推进多少拍、中断 id 换多少次，人手里都只有一张卡；
+    真被打回了才发新卡。用中断 id 当幂等键会随每一拍 churn，导致无上限重复派单（实测）。
+    """
+    return {k: 1 for k, v in resets.items() if v == "pending"}
+
+
+def total_reopen_budget(dag: list[dict]) -> int:
+    return sum(reopen_budget(n) for n in dag if is_gate(n))
 
 
 def blocked_nodes(dag: list[dict], status: dict) -> list[str]:
