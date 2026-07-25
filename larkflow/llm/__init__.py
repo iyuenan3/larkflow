@@ -1,3 +1,3 @@
-from .client import LLMClient, StubLLM, OpenAICompatLLM
+from .client import LLMClient, LLMUnavailable, OpenAICompatLLM, StubLLM
 
-__all__ = ["LLMClient", "StubLLM", "OpenAICompatLLM"]
+__all__ = ["LLMClient", "LLMUnavailable", "OpenAICompatLLM", "StubLLM"]

@@ -10,6 +10,7 @@ tool 节点的行为由 `tool.kind` 从内置能力库选取（ADR-026）。
 from __future__ import annotations
 
 import sqlite3
+import sys
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
@@ -112,7 +113,13 @@ def build_real_service(template: str = "contract", *, db_path: str | None = None
         folder_token=folder_token or env("LARKFLOW_DRIVE_FOLDER"),
         idem_store=corr.idem_store(),
     )
-    llm = OpenAICompatLLM(load_llm_roles())
+    # 切到备用线路必须看得见：静默切走的话，主线路可以死一个月都没人知道，
+    # 而账单和延迟都已经变了。写 stderr，`larkflow serve` 下就是 daemon 日志。
+    def _warn_failover(rec: dict) -> None:
+        print(f"[llm] 角色 {rec['model_role']} 切到第 {rec['used'] + 1}/{rec['total']} 条线路："
+              f"{'｜'.join(rec['errors'])}", file=sys.stderr, flush=True)
+
+    llm = OpenAICompatLLM(load_llm_roles(), on_failover=_warn_failover)
     return build_service(
         template, conn=conn, io=io, llm=llm,
         resolver=RoleResolver.from_env(strict=True), deliverables=deliverables,

@@ -5,8 +5,15 @@ import json
 import os
 import re
 
-LLM_ROLE_RE = re.compile(r"^LLM_(?:(?P<role>[A-Z0-9_]+)_)?BASE_URL$")
+# 角色主配置。**必须排除 BACKUP 段**：`LLM_WRITER_BACKUP_BASE_URL` 长得就像
+# 「角色 writer_backup 的主配置」，不排除就会凭空多出一个没人用的角色，而备用线路
+# 静默失效、配置看起来还完全正常。
+LLM_ROLE_RE = re.compile(r"^LLM_(?:(?P<role>(?!.*_BACKUP\d*_)[A-Z0-9_]+)_)?BASE_URL$")
+# 备用线路：BACKUP / BACKUP2 / BACKUP3…，按序号排队。
+LLM_BACKUP_RE = re.compile(
+    r"^LLM_(?:(?P<role>[A-Z0-9_]+)_)?BACKUP(?P<idx>\d*)_(?P<field>BASE_URL|API_KEY|MODEL)$")
 DEFAULT_ROLE = "default"
+_FIELDS = {"BASE_URL": "base_url", "API_KEY": "api_key", "MODEL": "model"}
 
 
 class RoleResolver:
@@ -99,6 +106,7 @@ def load_llm_roles(environ: dict[str, str] | None = None) -> dict[str, dict]:
     未命中回退 default。三元组缺项的角色直接跳过（宁可少一个角色，不带半截配置上路）。
     """
     environ = os.environ if environ is None else environ
+    backups = _load_backups(environ)
     roles: dict[str, dict] = {}
     for key, base_url in environ.items():
         m = LLM_ROLE_RE.match(key)
@@ -110,8 +118,30 @@ def load_llm_roles(environ: dict[str, str] | None = None) -> dict[str, dict]:
         api_key, model = environ.get(f"{prefix}API_KEY"), environ.get(f"{prefix}MODEL")
         if not api_key or not model:
             continue
-        roles[role] = {"base_url": base_url, "api_key": api_key, "model": model}
+        # 主配置不全 → 整个角色跳过（既有语义），它的备用也一并丢掉：没有主线路的
+        # 「备用」不该自己上位，那会让一份写漏的配置静默跑在人没打算用的供应商上。
+        primary = {"base_url": base_url, "api_key": api_key, "model": model}
+        chain = [dict(primary, **b) for _, b in sorted((backups.get(raw or "") or {}).items())]
+        roles[role] = {**primary, "fallbacks": chain} if chain else primary
     return roles
+
+
+def _load_backups(environ: dict[str, str]) -> dict[str, dict[int, dict]]:
+    """扫出 {角色原文: {序号: 局部覆盖}}。
+
+    **局部覆盖**是这里的关键：只写 `LLM_WRITER_BACKUP_API_KEY` 就等于「同一个供应商、
+    同一个模型、换一把 key」（限流时最常见的用法）。要求人把三项重复填一遍，等于逼他
+    复制粘贴，而且改主配置时一定会漏改备用的那一份。
+    """
+    out: dict[str, dict[int, dict]] = {}
+    for key, val in environ.items():
+        m = LLM_BACKUP_RE.match(key)
+        if not m or not val:
+            continue
+        raw = m.group("role") or ""
+        idx = int(m.group("idx") or 1)
+        out.setdefault(raw, {}).setdefault(idx, {})[_FIELDS[m.group("field")]] = val
+    return out
 
 
 def env(key: str, default: str | None = None) -> str | None:
