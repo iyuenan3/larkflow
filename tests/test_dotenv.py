@@ -63,16 +63,21 @@ def test_dollar_signs_and_backticks_are_literal(tmp_path):
 
 def test_a_missing_file_is_a_no_op(tmp_path):
     env = {"A": "1"}
-    assert load_dotenv(str(tmp_path / "没有这个文件"), environ=env) == []
+    assert load_dotenv(str(tmp_path / "没有这个文件"), environ=env) == ([], [])
     assert env == {"A": "1"}
 
 
-def test_it_reports_which_keys_it_set(tmp_path):
-    """启动时打一行「从 .env 读了哪几个键」，人一眼看得出配置到底生效没有。
-    **只报键名不报值**：这里面全是凭证。"""
+def test_it_reports_both_what_it_set_and_what_was_already_taken(tmp_path):
+    """**只报 set 是不够的**：11 个键全被环境变量占用时会一行都不打，看起来就像
+    dotenv 根本没工作。而那正是「shell 里留着一份被 source 弄坏的值」的样子（实测踩过），
+    没有任何线索指向 shell。所以被占用的键必须也报出来。
+
+    只报键名不报值：这里面全是凭证。
+    """
     env = {"B": "已存在"}
     got = load_dotenv(write(tmp_path, "A=1\nB=2\nC=3\n"), environ=env)
-    assert got == ["A", "C"], "已被 shell 占用的键不算「本次设置」"
+    assert got.set == ["A", "C"]
+    assert got.skipped == ["B"], "被占用 = 文件里的值没生效，这条必须能被看见"
 
 
 def test_lines_without_an_equals_sign_are_ignored_not_fatal(tmp_path):

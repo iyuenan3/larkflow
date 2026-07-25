@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import re
+from typing import NamedTuple
 
 # 角色主配置。**必须排除 BACKUP 段**：`LLM_WRITER_BACKUP_BASE_URL` 长得就像
 # 「角色 writer_backup 的主配置」，不排除就会凭空多出一个没人用的角色，而备用线路
@@ -167,8 +168,19 @@ def _load_backups(environ: dict[str, str]) -> dict[str, dict[int, dict]]:
     return out
 
 
-def load_dotenv(path: str = ".env", *, environ: dict | None = None) -> list[str]:
-    """把 `.env` 读进环境变量，返回**本次真正设置**的键名（只键名，值全是凭证）。
+class Loaded(NamedTuple):
+    """`.env` 加载结果。`skipped` 是**关键的一半**：被环境变量占用的键，文件里的值没生效。
+
+    只报 `set` 的话，「shell 里已有一份坏值」这个场景是**完全静默**的：11 个键全被占用时
+    一行都不打，看起来就像 dotenv 没工作（实测踩过，坏值来自早先的 `source .env`）。
+    """
+
+    set: list[str]
+    skipped: list[str]
+
+
+def load_dotenv(path: str = ".env", *, environ: dict | None = None) -> "Loaded":
+    """把 `.env` 读进环境变量，返回 (本次设置的键, 被占用而未生效的键)。只键名，值全是凭证。
 
     **为什么不让人用 `source .env`**（实测踩过）：`.env` 长得像 shell 赋值，但它不是
     shell 脚本。`source` 会做引号剥离、词分割、glob 展开、`$` 展开、反引号执行。
@@ -186,8 +198,9 @@ def load_dotenv(path: str = ".env", *, environ: dict | None = None) -> list[str]
     try:
         text = pathlib.Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return []
+        return Loaded([], [])
     done: list[str] = []
+    skipped: list[str] = []
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -206,10 +219,11 @@ def load_dotenv(path: str = ".env", *, environ: dict | None = None) -> list[str]
             if cut:
                 val = val[:cut.start()].rstrip()
         if key in environ:
-            continue                              # 显式 export 优先
+            skipped.append(key)                   # 显式 export 优先，但要说出来
+            continue
         environ[key] = val
         done.append(key)
-    return done
+    return Loaded(done, skipped)
 
 
 _INLINE_COMMENT = re.compile(r"\s+#")

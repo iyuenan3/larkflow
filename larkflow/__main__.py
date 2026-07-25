@@ -267,11 +267,18 @@ def _preload_env(argv) -> None:
             path = argv[i + 1]
         elif a.startswith("--env-file="):
             path = a.split("=", 1)[1]
-    keys = load_dotenv(path)
-    if keys:
+    loaded = load_dotenv(path)
+    if loaded.set:
         # 只报键名：这里面全是凭证。人一眼看得出配置到底生效没有。
-        print(f"[env] 从 {path} 读入 {len(keys)} 个键：{' '.join(sorted(keys))}",
+        print(f"[env] 从 {path} 读入 {len(loaded.set)} 个键：{' '.join(sorted(loaded.set))}",
               file=sys.stderr)
+    if loaded.skipped:
+        # 这一条比上一条重要：静默的话，「shell 里留着一份被 source 弄坏的值」会表现成
+        # 「文件明明配对了却一直报错」，而且完全没有线索指向 shell（实测踩过）。
+        print(f"[env] {len(loaded.skipped)} 个键已被环境变量占用、文件里的值**未生效**："
+              f"{' '.join(sorted(loaded.skipped))}\n"
+              f"      如果是早先 `source .env` 留下的，那些值已被 shell 的引号剥离弄坏，"
+              f"请开一个干净终端，或 unset 掉它们。", file=sys.stderr)
 
 
 def main(argv=None, *, factory=None, server_factory=LarkFlowServer) -> int:

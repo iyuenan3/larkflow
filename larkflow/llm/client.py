@@ -57,6 +57,13 @@ def _can_fail_over(exc: Exception) -> bool:
     return _status_of(exc) not in NO_FAILOVER_STATUS
 
 
+def _env_off(key: str) -> bool:
+    """`<KEY>=1/true/yes/on` 表示「关掉」，返回 False（即不 trust_env）。"""
+    import os
+
+    return str(os.environ.get(key, "")).strip().lower() not in ("1", "true", "yes", "on")
+
+
 class OpenAICompatLLM(LLMClient):
     """真 LLM 阶段接通。本地测试不构造它（避免引入网络 / 证书依赖）。
 
@@ -78,11 +85,18 @@ class OpenAICompatLLM(LLMClient):
     DEFAULT_TIMEOUT = 300
 
     def __init__(self, roles: dict[str, dict], *, ca_bundle: str | None = None,
-                 timeout: float | None = None, client_factory=None, on_failover=None):
+                 timeout: float | None = None, client_factory=None, on_failover=None,
+                 trust_env: bool | None = None, http_factory=None):
         if not roles:
             raise RuntimeError("LLM 角色路由表为空（见 .env.example 的 LLM_* 三元组）")
         self.roles = roles
         self.ca_bundle = ca_bundle
+        # 是否吃环境里的 http(s)_proxy / all_proxy。默认吃（有人的 LLM 在墙外，确实要走代理）。
+        # `LLM_NO_PROXY=1` 关掉：本机 Clash 会把 all_proxy 设成 socks5://…，而 httpx 在
+        # **建客户端那一刻**就急切构造 socks 传输，缺 socksio 直接 ImportError；实测
+        # `no_proxy` 救不了。境内 LLM 端点本来也不该绕一趟代理（顺带少一处凭证经手方）。
+        self.trust_env = (_env_off("LLM_NO_PROXY") if trust_env is None else trust_env)
+        self.http_factory = http_factory
         self.timeout = self.DEFAULT_TIMEOUT if timeout is None else timeout
         self.client_factory = client_factory or self._build_client
         self.on_failover = on_failover
@@ -90,17 +104,20 @@ class OpenAICompatLLM(LLMClient):
         self._clients: dict[str, object] = {}
 
     def _build_client(self, cfg: dict):
-        import httpx
         from openai import OpenAI
 
-        return OpenAI(
-            base_url=cfg["base_url"],
-            api_key=cfg["api_key"],
+        make = self.http_factory
+        if make is None:
+            import httpx
+            make = httpx.Client
+        http = make(
             # 自签 TLS 时传 ca_bundle；绝不 verify=False
+            verify=self.ca_bundle or True,
             # 超时按**角色**取（起草要几分钟，机检 / 分诊几秒就够，一个数字盖不住）
-            http_client=httpx.Client(verify=self.ca_bundle or True,
-                                     timeout=cfg.get("timeout") or self.timeout),
+            timeout=cfg.get("timeout") or self.timeout,
+            trust_env=self.trust_env,
         )
+        return OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], http_client=http)
 
     def _chain(self, model_role: str) -> list[dict]:
         cfg = self.roles.get(model_role) or self.roles.get(self.DEFAULT_ROLE)
