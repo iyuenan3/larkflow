@@ -318,19 +318,29 @@ def test_no_duplicate_dispatch_after_the_engine_pumps_or_the_graph_is_edited():
 
 
 def test_reopen_budget_counts_exactly_once_per_reopen():
-    """保值写回若把累加型的 reopen_counts 一起带上，预算 3 会变成 1。"""
+    """预算计数必须精确，且要在**有人工节点挡着**（推进要一拍一拍走）时依然精确。
+
+    reopen_counts 是累加型 channel：保值写回若把它一起带上就会重复累加，预算 3 秒变 1。
+    图里没有人工节点就不会触发推进拍，也就测不到这个交互，故这里刻意挂一个永不应答的人。
+    """
     dag = [
         {"id": "draft", "label": "起草", "executor": "llm", "role": "produce", "deps": [],
          "prompt": "p", "model_role": "w", "deliverable": {"region": "whole"}},
         {"id": "chk", "label": "机检", "executor": "tool", "role": "gate", "deps": ["draft"],
          "approval_policy": "auto", "reopen_budget": 3,
          "tool": {"kind": "format_check", "args": {"required": ["永不出现"]}}},
+        # 旁支挂一个永远不应答的人 → super-step 屏障常在 → 每一步都得靠推进拍
+        {"id": "idle", "label": "别人的活", "executor": "human", "role": "produce", "deps": [],
+         "assignee_role": "路人", "signal": "task_complete", "deliverable": {"region": "whole"}},
     ]
     llm = CountingLLM({"w": "过不了"})
     svc, io = build_service(dag, llm=llm)
     svc.start(instance_id="cnt-1", reporter="ou_o", inputs={})
+
+    assert [p["node_id"] for p in svc.pending("cnt-1")] == ["idle"]   # 屏障确实在
     assert svc._values("cnt-1")["reopen_counts"] == {"chk": 3}
     assert llm.counts["w"] == 4                     # 首跑 + 预算内 3 次重算
+    assert svc.blocked("cnt-1") == ["chk"]
 
 
 def test_a_generous_reopen_budget_does_not_fall_back_to_recursion_limit():
