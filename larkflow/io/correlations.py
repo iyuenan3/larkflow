@@ -72,6 +72,13 @@ class Correlations:
             seen.add(cur)
         return cur
 
+    def tasks_of(self, thread_id: str) -> list[Correlation]:
+        """这个实例派出去的全部飞书任务（对账轮询用）。"""
+        rows = self.conn.execute(
+            "SELECT external_id, thread_id, interrupt_id, node_id, kind FROM correlations "
+            "WHERE thread_id=? AND kind='task'", (thread_id,)).fetchall()
+        return [Correlation(*r) for r in rows]
+
     def idem_store(self) -> "IdemStore":
         """借同一个 SQLite 存幂等键（给没有 --idempotency-key 的 lark-cli 命令用）。"""
         return IdemStore(self.conn)

@@ -44,6 +44,15 @@ class LarkIO:
         """
         raise NotImplementedError
 
+    def get_task(self, task_guid: str) -> dict:
+        """查一条飞书任务的当下状态，至少给出 `{"completed": bool}`。
+
+        对账要它把**丢掉的完成事件**捞回来：长连接会静默死亡（进程活着、TCP 显示
+        ESTABLISHED、日志无异常，但一条事件都收不到），而任务完成这条**失败得无声无息**
+        （人看到任务已完成、引擎还在等），不轮询就永远发现不了。
+        """
+        raise NotImplementedError
+
 
 class MockLarkIO(LarkIO):
     """本地内存实现。测试据此断言 + 造事件。"""
@@ -58,6 +67,9 @@ class MockLarkIO(LarkIO):
 
     def update_card(self, *, token: str, card: dict) -> None:
         self.card_updates.append({"token": token, "card": card})
+
+    def get_task(self, task_guid: str) -> dict:
+        return {"completed": bool((self.tasks.get(task_guid) or {}).get("completed"))}
 
     def _next(self, prefix: str) -> str:
         self._seq += 1
@@ -145,6 +157,13 @@ class CliLarkIO(LarkIO):
             "--idempotency-key", idem_key, "--as", self.identity,
         ])
         return data.get("message_id", "")
+
+    def get_task(self, task_guid: str) -> dict:
+        data = self._run(["task", "tasks", "get", "--task-guid", task_guid,
+                          "--as", self.identity])
+        task = (data or {}).get("task") or {}
+        # 飞书用 completed_at 毫秒时间戳表达完成，0 / 缺失 = 没完成
+        return {"completed": bool(int(task.get("completed_at") or 0)), "raw": task}
 
     def update_card(self, *, token: str, card: dict) -> None:
         self._run([

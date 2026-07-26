@@ -113,6 +113,16 @@ class LarkFlowService:
         if check is not None:
             check(dag)
 
+    @staticmethod
+    def _dispatch_key(instance_id: str, node_id: str, attempt: int) -> str:
+        """派单幂等键 = 「这个实例的这个节点在这一轮」。
+
+        **只此一处拼**：派单用它记「派过了」，对账轮询用它反查「本轮那条待办是哪条」。
+        两处各拼一次的话，改一个忘一个，后果是轮询永远查不到 → 丢事件永远捞不回来，
+        而且没有任何症状（我第一版就漏了 kind 段）。
+        """
+        return f"{instance_id}:{node_id}:{attempt}"
+
     def _once(self, key: str, make):
         """外部写动作的本地幂等闸：同一个 idem_key **一辈子**只真的做一次。
 
@@ -247,7 +257,7 @@ class LarkFlowService:
             pending = set(live)
 
             # 打回合法域在**引擎权威侧**算，不信前端 / 卡片回传（ADR-014 / ADR-023）。
-            # 关键：gate 身份取自**中断本身**，绝不用回传的 node_id —— 卡片 action_value 是前端
+            # 关键：gate 身份取自**中断本身**，绝不用回传的 node_id：卡片 action_value 是前端
             # 可自由构造的封套，少一个 node_id 就能绕开这道校验，而非法值一旦落进权威 state，
             # 此后每一次推进都在同一处炸，实例永久砖化（实测）。
             reopen = (value or {}).get("reopen")
@@ -700,10 +710,59 @@ class LarkFlowService:
         用于「进程崩在建任务与写关联表之间」「某个人派单失败」这类投影缺失，
         以及运维手动催单。**不动 state 的业务值**，故可随时重跑。
         """
+        # 扫描在**锁外**做：它内部走 `resume`，而 resume 自己要取同一把锁，
+        # 那把锁不可重入（跨进程 flock 更是），在锁内调会直接死锁。
+        self.provision_errors.pop(instance_id, None)
+        self._sweep_tasks(instance_id)
         with self._thread_lock(instance_id):
-            self.provision_errors.pop(instance_id, None)
             self._advance(instance_id)
-            return {"reconciled": instance_id, "errors": self.provision_errors.get(instance_id, [])}
+        return {"reconciled": instance_id, "errors": self.provision_errors.get(instance_id, [])}
+
+    def _sweep_tasks(self, instance_id: str) -> None:
+        """把**丢掉的任务完成事件**捞回来。
+
+        长连接会**静默死亡**：进程活着、TCP 显示 ESTABLISHED、日志无异常，而一条事件都
+        收不到（实测一次睡眠后连着 10 小时 48 分 RECEIVED=0）。这时两条入站通道的表现
+        完全不对称：
+          · **卡片**失败得响：用户当场看到「目标回调服务当前未在线」，会再点一次；
+            而且卡片没有「状态」可查，本来也轮询不了。
+          · **任务**失败得无声无息：用户看到任务已完成、引擎还在等，双方都觉得自己对，
+            谁也不会去查。这条不轮询就永远发现不了，实例就此停死。
+        故只扫 `task_complete` 的在等节点，逐个反查飞书。查不到 / 报错都只记一笔，
+        绝不因此推进（红线：完成必须来自显式信号，轮询读的仍是人的真实动作）。
+        """
+        get = getattr(self.io, "get_task", None)
+        if get is None:
+            return
+        values = self._values(instance_id)
+        status, attempts = values.get("status", {}), values.get("attempts") or {}
+        for it in self._live_interrupts(instance_id, status):
+            v = it.value or {}
+            nid = v.get("node_id")
+            if v.get("signal") != "task_complete" or not nid:
+                continue        # 卡片没有「状态」可查，而且它失败得响，不需要补
+            # **只看本轮那条待办**。一个节点被打回 N 次就有 N+1 条飞书待办，旧的那几条
+            # 永远停在「已完成」；按 node_id 去翻关联表会拿第 1 轮的完成去推第 3 轮，
+            # 于是每对账一次就白烧一轮打回预算（真栈实测：两次重启把预算烧到上限、
+            # 实例直奔 blocked）。派单幂等键 `{实例}:{节点}:{轮次}` 天然只指向本轮。
+            guid = self._idem.get(
+                self._dispatch_key(instance_id, nid, attempts.get(nid, 0)) + ":task")
+            if not guid:
+                continue
+            try:
+                if not (get(guid) or {}).get("completed"):
+                    continue
+            except Exception as exc:
+                self.provision_errors.setdefault(instance_id, []).append(
+                    {"node_id": nid, "error": f"get_task {type(exc).__name__}: {exc}"})
+                continue
+            # 捞回来这件事必须**看得见**：它意味着入站通道漏过事件，是要人管的故障信号，
+            # 不是「系统很聪明地自愈了」。静默自愈会让一条死掉的通道永远不被发现。
+            self.provision_errors.setdefault(instance_id, []).append(
+                {"node_id": nid,
+                 "error": "recovered: 任务已完成但没收到事件（入站通道漏了，请查 event status）"})
+            self.resume(instance_id=instance_id, interrupt_id=it.id,
+                        value={"passed": True, "completed": True}, node_id=nid)
 
     def status(self, instance_id: str) -> dict:
         return self._values(instance_id).get("status", {})
@@ -944,7 +1003,7 @@ class LarkFlowService:
         if kind is None:
             return
         attempt = (self._values(instance_id).get("attempts") or {}).get(nid, 0)
-        idem = f"{instance_id}:{nid}:{attempt}"
+        idem = self._dispatch_key(instance_id, nid, attempt)
 
         def make():
             # 派单对象在这里才解析：重放时连 resolver 都不必碰（真栈 strict 下它会抛）
