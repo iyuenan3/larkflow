@@ -37,6 +37,13 @@ class LarkIO:
     def notify(self, *, target: str, text: str, idem_key: str) -> None:
         raise NotImplementedError
 
+    def update_card(self, *, token: str, card: dict) -> None:
+        """用回调 token 把卡片换成「已处理」的样子（投影侧动作）。
+
+        飞书的延迟更新：token 30 分钟内有效、最多用 2 次，且**只支持整张替换**。
+        """
+        raise NotImplementedError
+
 
 class MockLarkIO(LarkIO):
     """本地内存实现。测试据此断言 + 造事件。"""
@@ -45,8 +52,12 @@ class MockLarkIO(LarkIO):
         self.tasks: dict[str, dict] = {}
         self.cards: dict[str, dict] = {}
         self.notifications: list[dict] = []
+        self.card_updates: list[dict] = []
         self._idem: dict[str, str] = {}   # idem_key -> external_id
         self._seq = 0
+
+    def update_card(self, *, token: str, card: dict) -> None:
+        self.card_updates.append({"token": token, "card": card})
 
     def _next(self, prefix: str) -> str:
         self._seq += 1
@@ -135,6 +146,12 @@ class CliLarkIO(LarkIO):
         ])
         return data.get("message_id", "")
 
+    def update_card(self, *, token: str, card: dict) -> None:
+        self._run([
+            "api", "POST", "/open-apis/interactive/v1/card/update", "--as", self.identity,
+            "--data", json.dumps({"token": token, "card": card}, ensure_ascii=False),
+        ])
+
     def notify(self, *, target, text, idem_key) -> None:
         flag = "--chat-id" if target.startswith("oc_") else "--user-id"
         self._run([
@@ -142,6 +159,23 @@ class CliLarkIO(LarkIO):
             "--content", json.dumps({"text": text}, ensure_ascii=False),
             "--idempotency-key", idem_key, "--as", self.identity,
         ])
+
+
+def settled_card(summary: str, verdict: str) -> dict:
+    """已处理的卡：正文照旧 + 一行结论，**按钮全部撤掉**。
+
+    撤按钮不是为了好看：留着就还能点，而点了只会静默 no-op（那一轮的中断早没了），
+    人会以为「系统坏了」。撤掉之后，「不能点」本身就是反馈。
+    """
+    return {
+        "schema": "2.0",
+        "header": {"title": {"tag": "plain_text", "content": "larkflow"}, "template": "grey"},
+        "body": {"elements": [
+            {"tag": "markdown", "content": summary},
+            {"tag": "hr"},
+            {"tag": "markdown", "content": verdict},
+        ]},
+    }
 
 
 def _card_2_0(summary: str, buttons: list[Button]) -> dict:

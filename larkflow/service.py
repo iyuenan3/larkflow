@@ -36,7 +36,7 @@ from .engine.permissions import MAX_PENDING_ESCALATIONS, can_answer, reopen_verd
 from .engine.support import assert_v1_supported
 from .io.correlations import Correlation, Correlations
 from .io.events import CARD_ACTION, TASK_UPDATE
-from .io.lark_io import Button, LarkIO
+from .io.lark_io import Button, LarkIO, settled_card
 from .model.node import is_gate, node_by_id
 from .model.template import load_template, validate_template
 
@@ -215,7 +215,8 @@ class LarkFlowService:
         return self.resume(**route)
 
     def resume(self, *, instance_id: str, interrupt_id: str, value: dict,
-               node_id: str | None = None, actor: str | None = None) -> dict:
+               node_id: str | None = None, actor: str | None = None,
+               token: str | None = None) -> dict:
         """把一个人的答复喂回引擎。
 
         `actor` = **事件里的** `operator_id`（谁真的点了这一下）。绝不从 `value` /
@@ -264,6 +265,10 @@ class LarkFlowService:
             # 在一道早就答完的门上凭空生出审批申请。
             resolved = node_id is not None and status.get(node_id) == "done"
             if resolved or interrupt_id not in pending:
+                # 旧卡与新卡长得一模一样，人翻聊天记录往上点只会得到静默 no-op。
+                # 当场把它标失效，「不能点」本身就是反馈。
+                self._settle_card(instance_id, values, gate_id or node_id, token,
+                                  "⌛ **这张卡已失效**（这一环已经进入新一轮，请找最新那张）")
                 return {"skipped": "stale", "interrupt_id": interrupt_id}
             if value is not None:
                 if self._is_reopen(values, gate_id, value):
@@ -282,6 +287,8 @@ class LarkFlowService:
             self.graph.invoke(Command(resume={interrupt_id: value}),
                               self._run_cfg(instance_id), durability="sync")
             self._advance(instance_id)
+            self._settle_card(instance_id, values, gate_id or node_id, token,
+                              self._verdict_line(values, gate_id or node_id, value, actor))
             return {"resumed": interrupt_id}
 
     def edit_graph(self, instance_id: str, ops: list[dict]) -> dict:
@@ -417,6 +424,37 @@ class LarkFlowService:
                     "grants_used": used + 1, "grants_left": MAX_UNBLOCK_GRANTS - used - 1,
                     "reopen": targets, "reset": sorted(resets),
                     "status": self.status(instance_id).get(node_id)}
+
+    def _verdict_line(self, values: dict, node_id, value: dict, actor: str | None) -> str:
+        """卡上那一行结论。**说人话**：退回到哪一环用标签不用 node id，意见原样带上。"""
+        who = actor or "（引擎）"
+        if value.get("passed", False):
+            return f"✅ **已通过** · {who} · {_now()}"
+        targets = list(value.get("reopen") or [])
+        if not targets:
+            node = self._node(values.get("dag") or self.dag, node_id)
+            targets = list((node or {}).get("deps") or [])
+        back = "、".join(self._label(values, t) for t in targets) or "上游"
+        line = f"↩ **已打回** → {back} · {who} · {_now()}"
+        if value.get("comment"):
+            line += f"\n> 意见：{value['comment']}"
+        return line
+
+    def _settle_card(self, instance_id: str, values: dict, node_id, token, verdict: str) -> None:
+        """把卡片换成「已处理」的样子。**失败绝不影响已经落地的裁决**：卡片是投影，
+        权威结论在 checkpointer 里（红线）。没有 token 就跳过（任务通道 / 进程内直调）。
+        """
+        if not token:
+            return
+        update = getattr(self.io, "update_card", None)
+        if update is None:
+            return
+        try:
+            update(token=token, card=settled_card(
+                f"审核「{self._label(values, node_id)}」", verdict))
+        except Exception as exc:
+            self.provision_errors.setdefault(instance_id, []).append(
+                {"node_id": node_id, "error": f"update_card {type(exc).__name__}: {exc}"})
 
     # ---------- 打回权限层（ADR-023）----------
     def _actor_roles(self, actor: str | None) -> set[str]:
@@ -1014,6 +1052,8 @@ class LarkFlowService:
                 # 自由构造的，往里塞 by / actor / operator_id 一律无效（ADR-023 / 红线⑤）。
                 "actor": event.get("operator_id"),
                 "value": value,
+                # 延迟更新 token：点完之后要把这张卡改成「已处理」的样子（投影侧）
+                "token": event.get("token"),
             }
         if key == TASK_UPDATE:
             ev = event.get("event", {})
