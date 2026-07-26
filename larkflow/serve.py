@@ -28,6 +28,7 @@ import threading
 from collections import deque
 from datetime import datetime, timedelta, timezone
 
+from .config import env
 from .io.events import CARD_ACTION, TASK_UPDATE, EventPump
 
 DEFAULT_EVENT_KEYS = (CARD_ACTION, TASK_UPDATE)
@@ -106,7 +107,8 @@ class LarkFlowServer:
 
     def __init__(self, service, *, event_keys=DEFAULT_EVENT_KEYS, pump_factory=EventPump,
                  on_error=None, identity: str = "bot", profile: str | None = None,
-                 signals=_signal, log=None, max_errors: int = 200):
+                 signals=_signal, log=None, max_errors: int = 200,
+                 sweep_seconds: float | None = None):
         self.service = service
         self.event_keys = list(event_keys)
         self.pump_factory = pump_factory
@@ -123,6 +125,13 @@ class LarkFlowServer:
         self._stopping = False
         self._clean_exit = True
         self._lock = threading.Lock()
+        # 定期对账。**任务事件那条推送在真栈上根本不到**（实测：bot 身份 + pre-consume 正常
+        # + websocket 已连 + app 建的任务 + app 完成 + app 加成 follower，一条都收不到），
+        # 于是 ADR-038 的轮询是 `task_complete` 节点唯一可靠的通道，只在启动时跑一次
+        # 远远不够：人交了卷，引擎要等到下次重启才知道。配 0 = 关掉。
+        self.sweep_seconds = (float(env("LARKFLOW_SWEEP_SECONDS", "120"))
+                              if sweep_seconds is None else float(sweep_seconds))
+        self._sweeper: threading.Thread | None = None
 
     # ---------- 启动对账 ----------
     def instances(self) -> list[str]:
@@ -170,6 +179,35 @@ class LarkFlowServer:
             return self.service.finished(instance_id)
         except Exception:
             return False        # 读不出来就当没跑完，交给 reconcile 去炸（有人接住）
+
+    def start_sweeper(self) -> None:
+        """起定期对账线程。与启动对账同款纪律：**一轮出错不许让后续所有轮停摆**。"""
+        if self.sweep_seconds <= 0 or self._sweeper is not None:
+            return
+        self._sweeper = threading.Thread(target=self._sweep_loop, daemon=True,
+                                         name="larkflow-sweeper")
+        self._sweeper.start()
+        self.log(f"定期对账已起：每 {self.sweep_seconds:g}s 一轮")
+
+    def _sweep_loop(self) -> None:
+        while not self._stopped.wait(self.sweep_seconds):
+            try:
+                ids, _ = list_instances(self.service.graph)
+            except Exception as exc:
+                self._error("sweep:list", exc)
+                continue
+            for iid in ids:
+                if self._stopped.is_set():
+                    return
+                try:
+                    if self._finished(iid):
+                        continue
+                    result = self.service.reconcile(iid)
+                    for e in result.get("errors") or ():
+                        # 「捞回来了」是故障信号不是好消息：它意味着推送漏了
+                        self.log(f"对账 {iid}：{e}")
+                except Exception as exc:
+                    self._error(f"sweep:{iid}", exc)
 
     # ---------- 事件 ----------
     def start(self) -> None:
@@ -272,6 +310,7 @@ class LarkFlowServer:
             # 对账期间就被喊停了（几百个实例要对很久）：别再起泵，那只会起一下又立刻停。
             if not self._stopped.is_set():
                 self.start()
+                self.start_sweeper()
         except Exception as exc:
             self._error("startup", exc)
             self.stop(drain_timeout)
