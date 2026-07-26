@@ -1,7 +1,7 @@
 """受控活图：运行中改图的合法变更（ADR-013）。
 
 冻结线 = 执行前沿：done / running / failed 的节点冻结，**只有 pending 节点可增删改**。
-「只改未来、不改历史」——已完成节点的产出冻在 checkpointer 里就是权威。
+「只改未来、不改历史」：已完成节点的产出冻在 checkpointer 里就是权威。
 
 这里只做**纯粹的 ops 应用 + 冻结线校验**；图级不变量（仍是 DAG / deps 不悬挂 / 护栏）
 交给 validate_template，运行时能力边界交给 assert_v1_supported，二者由驱动层在写回前串起来。

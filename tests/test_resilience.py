@@ -61,7 +61,7 @@ def test_editing_the_graph_does_not_swallow_a_verdict_made_moments_ago():
 
     svc.edit_graph("r-2", [{"op": "add_node", "node": {
         "id": "audit", "label": "复盘", "executor": "llm", "role": "produce", "deps": ["close"],
-        "prompt": "p", "model_role": "editor", "deliverable": {"region": "whole"}}}])
+        "prompt": "p", "model_role": "editor", "deliverable": {"region": "whole"}}}], by="ou_owner", reason="测试改图")
 
     assert svc.outputs("r-2")["finance_gate"] == verdict   # 裁决与意见都还在
     assert llm.counts["writer"] == 2                        # 重算也没被回滚
@@ -312,7 +312,7 @@ def test_no_duplicate_dispatch_after_the_engine_pumps_or_the_graph_is_edited():
     svc.start(instance_id="dup-1", reporter="ou_owner", inputs=INPUTS)
     svc.edit_graph("dup-1", [{"op": "add_node", "node": {
         "id": "audit", "label": "复盘", "executor": "llm", "role": "produce", "deps": ["close"],
-        "prompt": "p", "model_role": "editor", "deliverable": {"region": "whole"}}}])
+        "prompt": "p", "model_role": "editor", "deliverable": {"region": "whole"}}}], by="ou_owner", reason="测试改图")
     svc.resume_from_event(card(io, "finance_gate", "通过"))
     svc.reconcile("dup-1")
     svc.reconcile("dup-1")

@@ -39,8 +39,15 @@
   - **actor 只取事件顶层 `operator_id`**，绝不从 `action_value` / `value` 里取（封套是前端可自由构造的攻击面；红线：权限判定只在引擎权威侧算）。卡片事件缺 `operator_id` → `{"skipped": "unidentified_actor"}`（fail closed）。
   - **不带 `reopen` 的「打回」也过权限层**（用引擎默认目标组 = gate 的直接上游），否则前端什么都不带就能绕过。
   - **全或无**：一组目标里只要有一个跨界，整笔都不执行，落一笔 escalation 申请。卡片上的默认目标只剔 `denied`、**保留** `needs_escalation`（剔掉就成了一次静默的部分打回）；`pending(actor=)` 的 `reopen_default` 与卡上那颗按钮同一把尺。
-  - escalation 记录（state channel `escalations[gate_id]`，追加型）：`{by, at, from_node, targets, escalated, approvers（令牌）, notified（当时真发给了谁）, collateral, comment, attempt, seq, status}`。同一轮 + 同一人 + 同一组目标（按**集合**比）去重；每道门**每一轮**待批 ≤5 笔。**v1 没有 approve / reject 通道**，`status` 永远 `pending`，作废靠轮次推进自然推导（读「现在还等谁拍板」用 `pending_escalations`，读全量历史用 `escalations`）。
-  - 仍未做：③ 的一键同意；`unblock(reopen=…)` 没接这层（绕行路，ADR-030）；A 类集体投票的打回权威（ADR-025，v1.3）。
+  - escalation 记录（state channel `escalations[gate_id]`，追加型）里混两类，靠 `kind` 分（缺省 = `request`，向后兼容早于 ADR-040 的记录）：
+    - `request`：`{kind, by, at, from_node, targets, escalated, approvers（令牌）, notified（当时真发给了谁）, collateral, comment, attempt, seq, status}`。同一轮 + 同一人 + 同一组目标（按**集合**比）去重；每道门**每一轮**待批 ≤5 笔。`seq` = 这道门第几笔**申请**（`len(_requests(log))+1`；log 里混着裁决记录，用 `len(log)` 会跳号）。
+    - `verdict`（ADR-040）：`{kind, ref（指向申请的 seq）, node_id, verdict: approved|rejected, by, at, attempt, comment, reopened?}`。
+  - **同意 / 拒绝契约 as-built（ADR-040）**：`approve_escalation(instance_id, gate_id, *, by, seq=None, comment=None)` / `reject_escalation(…)` 同签名。`seq` 省略 = 本轮唯一那笔；多笔待批而不给 seq → `ambiguous_escalation` 并列候选。
+    - 五道闸按序：`missing_audit`（`by` 空）→ `already_settled`（幂等）→ `stale`（轮次已过**或门已被答复**）→ `self_approve` → `unauthorized_approve`；另有 `no_such_escalation` / `illegal_reopen`。
+    - **状态是派生的**：`effective_status` ∈ `pending|approved|rejected|expired`，由「有没有配对的 verdict」+「轮次是否仍是当前轮」+「门是否已被答复」算出。记录里那个 `status` 字面量冻的是落库那一刻、永远 `pending`。配额 / `pending_escalations` / `escalations` 的标注三处共用同一把尺。
+    - 审批人身份**两把尺**：`_actor_roles(by) ∩ record.approvers`（令牌），或 `by ∈ record.notified`（当初真通知到的 open_id，防 `roles_of` 反解静默失效导致这笔申请无人可批）。**禁自批**（`by == record.by` 即拒）。
+    - 同意 = **执行整组 `targets`**（全或无），执行前按当前活图重跑 `illegal_reopen`；**先执行、后记裁决**（崩在中间可自愈，见 ADR-040）。
+  - 仍未做：`unblock(reopen=…)` 没接这层（绕行路，ADR-030）；A 类集体投票的打回权威（ADR-025，v1.3）；（审批卡已于 ADR-043 补齐，封套见下）。
 - **条件分支 skip / ready（ADR-025）**：节点 `skipped` ⟺ `when` 守卫失配 或 所有 deps 都 skipped；节点 ready ⟺ pending 且 deps 全 done/skipped 且 ≥1 dep done 且守卫通过。分支从 deps + 守卫涌现。打回决策节点 → 其 skipped 下游复活为 pending。
 - 生成新模板走 few-shot 护栏（三型齐全 / 每 gate 有可回退祖先 / 放行节点强制 human / human 声明 signal / human 节点 ≥1 负责人 / 多人节点须 1 主负责人 / 条件分支决策取值域被分支守卫全覆盖或留默认支），校验落 `larkflow/model/template.py`（ADR-010 / ADR-023 / ADR-025）。
 - **护栏① as-built：不是硬校验**（ADR-027）。「三型齐全」回到 ADR-010 原意（进生成 prompt），落 `lint_template()` 当风格提示。纯人协作流（招聘接力 / 采购审批）与纯 AI+人流（视频脚本）都是合法流程，硬校验会把它们整类挡在门外，还会让「运行中删掉最后一个 llm 节点」被拒。
@@ -100,11 +107,11 @@
 - 条件分支决策节点的**取值域声明字段**（护栏⑤全覆盖判据的前提，v1.3 定；v1 只校验守卫引用祖先）。
 - 卡片视觉 schema（派单卡 / 门禁卡通过·打回·多选 reopen / 定稿确认卡的排版），assignee_role → open_id 通讯录解析。
 - 共享协同拓扑的 docx block_id 跨 update 稳定性（v2）。
-- **escalation 的 approve / reject 契约**（ADR-023 ③ 的一键同意）：审批卡的封套、同意后「按当时的目标组执行」的语义、幂等、申请过期规则。v1 只有「申请 + 通知」，`status` 永远 pending。
+- ~~**escalation 的 approve / reject 契约**~~ → 已定并落码（ADR-040 引擎侧 + ADR-043 审批卡）。审批卡封套 = `{"kind": "escalation", "thread_id", "node_id": <门>, "seq", "decision": "approve"|"reject"}`，**不带 `interrupt_id`**；`_route` 按 `kind` 分流；裁决后 settle 卡片（ADR-037）。身份仍只取事件顶层 `operator_id`。
 - 引擎读 / 命令 API（供前端，ADR-019；形态待原型后定）：
   - **读 / 命令 as-built 已列在〈引擎对外接口 as-built〉**（驱动层方法 + CLI，**没有网络接口**）。前端要的是把它包成网络 API，或退「命令走飞书原生轨」（ADR-019 命门）。
   - **读**：画布要整张 `dag`（节点 + 边 + pending 子图 + 状态），多维表格行式投影可能不够；定「整图读接口 + 返回字段 + 刷新 / 实时模型（轮询 / 推送）」。`dag_of(instance_id)` 已给出整图，缺的是传输与实时模型。
-  - **改图命令 as-built（引擎侧已实现，前端形态仍待定）**：`LarkFlowService.edit_graph(instance_id, ops)`，ops = `[{op: add_node, node:{…}} | {op: remove_node, id} | {op: update_node, id, set:{…}}]`；引擎权威侧串校验「只触 pending 子图（挂起 human 节点并入冻结线当 running）→ 仍过 validate_template → 不用 v1 未实现语义 → 新增 tool 节点有 handler」→ `update_state` 写 dag channel → 立刻 `invoke(None)` 推一步。**副作用（实测，见 MEMORY 2026-07-24）**：update_state 必让挂起中断换 id，故驱动层按 node 记 `interrupt_remap` 迁移链、旧卡继续有效且不重复派单。尚缺：乐观并发（读取时 checkpoint 版本）+ 鉴权。
+  - **改图命令 as-built（引擎侧已实现，前端形态仍待定）**：`LarkFlowService.edit_graph(instance_id, ops, *, by, reason)`，ops = `[{op: add_node, node:{…}} | {op: remove_node, id} | {op: update_node, id, set:{…}}]`；**鉴权 = owner-only + 必署名**（ADR-042：`by` 空或 `reason` 空 → `missing_audit`；`by != meta.reporter` → `unauthorized_edit`，两者都是结构化 return 不是抛异常）；引擎权威侧串校验「只触 pending 子图（挂起 human 节点并入冻结线当 running）→ 仍过 validate_template → 不用 v1 未实现语义 → 新增 tool 节点有 handler」（这四条抛 `GraphEditError` / `TemplateError`）→ `update_state` 写 dag channel + 往追加型 channel `edits["log"]` 记一条 `{by, at, reason, ops, nodes_after}`（`edit_log()` 读，被拒 / 被校验拦下的**不留痕**）→ 立刻 `invoke(None)` 推一步。**副作用（实测，见 MEMORY 2026-07-24）**：update_state 必让挂起中断换 id，故驱动层按 node 记 `interrupt_remap` 迁移链、旧卡继续有效且不重复派单。CLI 出口 `larkflow edit <实例> --ops <字面 JSON|@文件|-> --by --reason`。尚缺：乐观并发（读取时 checkpoint 版本）。
   - **改图命令（前端侧待定）**：报文 schema（op + 目标节点 + deps）；**校验在引擎权威侧**（复用 ADR-013：只改 pending / 仍是 DAG / 不删在跑节点）；乐观并发（命令带读取时 checkpoint 版本，冻结线已推进则拒、令前端重取）；命令经 checkpointer `update_state` 改 dag channel 并触发下一 dispatch。
   - **鉴权**：调用方认证（服务间 token / mTLS / 飞书身份透传择一）；命令带已验证操作人 open_id，供 gate `approval_policy=any/all` 按人归因去重；最小权限（前端只能对 pending 子图与本人有权的 gate 发命令）。**as-built 已有的那一半**：卡片 / 任务通道的裁决已按 ADR-023 / ADR-032 在引擎权威侧判身份（actor 取自事件顶层，不信封套）。**仍缺**：调用方认证本身（CLI 与进程内直调零鉴权）、`edit_graph` 的鉴权与乐观并发、`unblock` 的鉴权。
   - **cards 与 app 双输入面**：同一次决策跨两面去重（幂等键口径见上文「派单幂等键 = 实例:节点:轮次」，**不要再用 interrupt id**）；app 命令复用卡片自描述封套，引擎单处理器消费，身份仍只认引擎侧已验证的操作人。

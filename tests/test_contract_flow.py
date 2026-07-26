@@ -117,7 +117,7 @@ def test_running_edit_inserts_a_review_node_into_the_future():
             "deps": ["finalize"], "assignee_role": "法务", "signal": "card_action",
             "approval_policy": "single"}},
         {"op": "update_node", "id": "checks", "set": {"deps": ["final_legal"]}},
-    ])
+    ], by="ou_owner", reason="测试改图")
 
     # 改图没废掉已经发出去的卡
     assert "resumed" in svc.resume_from_event(

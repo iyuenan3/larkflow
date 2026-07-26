@@ -55,7 +55,7 @@ def test_an_inline_comment_is_stripped_only_when_the_value_is_unquoted(tmp_path)
 
 
 def test_dollar_signs_and_backticks_are_literal(tmp_path):
-    """`source` 会展开 `$X` 并执行反引号 —— 一把含 `$` 的 key 会被悄悄改写。"""
+    """`source` 会展开 `$X` 并执行反引号，一把含 `$` 的 key 会被悄悄改写。"""
     env = {"X": "已存在"}
     load_dotenv(write(tmp_path, "A=sk-$X-`whoami`\n"), environ=env)
     assert env["A"] == "sk-$X-`whoami`"

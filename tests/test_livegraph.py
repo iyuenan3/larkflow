@@ -84,7 +84,7 @@ def click(svc, io, node, label="通过", *, operator=None):
 def test_edit_adds_future_node_and_it_runs_at_the_end():
     svc, io, iid = _pause_at_triage_review()
 
-    res = svc.edit_graph(iid, [{"op": "add_node", "node": AUDIT}])
+    res = svc.edit_graph(iid, [{"op": "add_node", "node": AUDIT}], by="ou_r", reason="测试改图")
     assert "audit" in res["nodes"]
 
     for node in ("triage_review", "reproduce"):
@@ -105,7 +105,7 @@ def test_edit_keeps_the_card_already_in_someones_hands_working():
     who = card_target(io, "triage_review")
     cards_before = len(io.cards)
 
-    res = svc.edit_graph(iid, [{"op": "add_node", "node": AUDIT}])
+    res = svc.edit_graph(iid, [{"op": "add_node", "node": AUDIT}], by="ou_r", reason="测试改图")
 
     assert res["remapped"] == 1
     assert len(io.cards) == cards_before               # 没重复派卡
@@ -117,22 +117,22 @@ def test_edit_keeps_the_card_already_in_someones_hands_working():
 def test_edit_cannot_touch_history_or_running_frontier():
     svc, io, iid = _pause_at_triage_review()
     with pytest.raises(GraphEditError, match="冻结线"):
-        svc.edit_graph(iid, [{"op": "remove_node", "id": "intake"}])      # 已 done
+        svc.edit_graph(iid, [{"op": "remove_node", "id": "intake"}], by="ou_r", reason="测试改图")      # 已 done
     with pytest.raises(GraphEditError, match="冻结线"):
-        svc.edit_graph(iid, [{"op": "remove_node", "id": "triage_review"}])  # 正挂着人
+        svc.edit_graph(iid, [{"op": "remove_node", "id": "triage_review"}], by="ou_r", reason="测试改图")  # 正挂着人
 
 
 def test_edit_must_still_pass_template_guardrails():
     svc, io, iid = _pause_at_triage_review()
     with pytest.raises(TemplateError, match="环"):
-        svc.edit_graph(iid, [{"op": "update_node", "id": "close", "set": {"deps": ["close"]}}])
+        svc.edit_graph(iid, [{"op": "update_node", "id": "close", "set": {"deps": ["close"]}}], by="ou_r", reason="测试改图")
     with pytest.raises(TemplateError, match="依赖不存在"):
-        svc.edit_graph(iid, [{"op": "add_node", "node": {**AUDIT, "deps": ["nope"]}}])
+        svc.edit_graph(iid, [{"op": "add_node", "node": {**AUDIT, "deps": ["nope"]}}], by="ou_r", reason="测试改图")
     with pytest.raises(TemplateError, match="护栏②"):
         # 新门禁没有可回退祖先
         svc.edit_graph(iid, [{"op": "add_node", "node": {
             "id": "g2", "label": "野门", "executor": "human", "role": "gate", "deps": [],
-            "assignee_role": "QA", "signal": "card_action", "approval_policy": "single"}}])
+            "assignee_role": "QA", "signal": "card_action", "approval_policy": "single"}}], by="ou_r", reason="测试改图")
 
 
 def test_edit_rejects_tool_node_without_handler():
@@ -140,7 +140,7 @@ def test_edit_rejects_tool_node_without_handler():
     with pytest.raises(ExecutorError, match="ship"):
         svc.edit_graph(iid, [{"op": "add_node", "node": {
             "id": "ship", "label": "发布", "executor": "tool", "role": "produce",
-            "deps": ["close"], "deliverable": {"region": "whole"}}}])
+            "deps": ["close"], "deliverable": {"region": "whole"}}}], by="ou_r", reason="测试改图")
 
 
 def test_edit_after_the_instance_finished_still_runs_the_new_node():
@@ -154,7 +154,7 @@ def test_edit_after_the_instance_finished_still_runs_the_new_node():
     click(svc, io, "qa_verify")
     assert svc.status(iid)["close"] == "done"          # 已收口
 
-    svc.edit_graph(iid, [{"op": "add_node", "node": AUDIT}])
+    svc.edit_graph(iid, [{"op": "add_node", "node": AUDIT}], by="ou_r", reason="测试改图")
 
     assert svc.status(iid)["audit"] == "done"
 
@@ -163,5 +163,5 @@ def test_edit_state_is_unchanged_when_rejected():
     svc, io, iid = _pause_at_triage_review()
     before = [n["id"] for n in svc.dag]
     with pytest.raises(GraphEditError):
-        svc.edit_graph(iid, [{"op": "remove_node", "id": "intake"}])
+        svc.edit_graph(iid, [{"op": "remove_node", "id": "intake"}], by="ou_r", reason="测试改图")
     assert [n["id"] for n in svc._values(iid)["dag"]] == before

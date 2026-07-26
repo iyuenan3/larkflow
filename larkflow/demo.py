@@ -291,7 +291,9 @@ def run_interactive(template: str) -> None:
                     "deps": [rest[3]], "prompt": "补一段说明", "model_role": "writer",
                     "deliverable": {"region": "whole"}}
             try:
-                print("  →", svc.edit_graph(iid, [{"op": "add_node", "node": node}]))
+                # demo 里你扮所有的人，改图这一下按「项目发起人」记账（引擎侧 owner-only）
+                print("  →", svc.edit_graph(iid, [{"op": "add_node", "node": node}],
+                                            by="ou_owner", reason="演示：运行中加一步"))
                 show_status(svc, iid)
             except Exception as exc:
                 print(f"  改图被拒：{type(exc).__name__}: {exc}")

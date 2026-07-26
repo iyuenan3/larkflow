@@ -1,5 +1,46 @@
 # CHANGELOG · larkflow
 
+## v0.7.0 · 2026-07-26 · 把「不修不敢拉真人进来」的那几条留白收口（ADR-040..043）
+- 背景：真栈 e2e 跑通之后按「敢不敢让第一个非 Maxwell 的人碰它」重排留白，排出来最重的三条恰好都是**机制把人送进一个状态、却没给出口**这同一个病，只是换了地方。ADR-029 的 `blocked` 死局是第一次，这是第二、三、四次。
+- Added: **escalation 的同意 / 拒绝通道**（ADR-040）：`approve_escalation` / `reject_escalation` + `larkflow approve/reject/escalations` 三个子命令。此前 `_escalate` 把申请写进权威 state，而全仓**没有任何 approve / reject 通道**（`status` 硬编码一处写入、reducer 只追加不覆盖，申请落库后物理上不可能再变），且它在**默认路径**上：v0.5.0 把卡上默认打回目标改成「保留要走审批的」之后，默认那颗「打回」按钮天然带跨界目标，一点就落进 escalation，人收到「等人拍板」而那个按钮不存在。
+- Added: **打回那一刻关掉旧轮次的飞书待办**（ADR-041）。`complete_task` 三处定义、**零调用点**，真栈第一条 e2e 留下 2 条僵尸（本次手工清掉，并顺带验掉了这条真栈从没跑过的路径：bot 身份关得掉指派给别人的待办，返回带 `already_completed` 自带幂等语义）。最难受的孤儿不是「旧轮次里已点完的」，是**被卷进新一轮、但要等上游返工才轮到派单**的旁支节点，人手里那条死单和能干的活长得一模一样。
+- Added: **`edit_graph` 的鉴权与审计**（ADR-042）：owner-only + 必署名 + 新的 `edits` 追加型 channel + `edit_log()`。此前它连 actor 都不收，比无鉴权的 `unblock` 更狠（`unblock` 最多让人返工，`edit_graph` 能**直接删掉一道还在等的门**让流程静默放行），而 `larkflow edit` 正要把这个入口开到命令行上。
+- Added: **`larkflow edit`**（win 判据③「运行中改图」此前在真栈上**无从触发**，引擎侧早已落码却没有入口）。`--ops` 收字面 JSON / `@文件` / `-`（stdin）三种来源：报文里全是中文 label、prompt 常含 `$`，逼人在命令行裸写 JSON 是重踩「别 `source .env`」那个坑。CLI 只校验报文形状，合法性一律引擎权威侧算。
+- Changed: **escalation 的状态改为派生**（`effective_status` ∈ pending/approved/rejected/expired）。追加型 channel 没有 UPDATE，所以「同意」不是改 `status` 而是**追加一条裁决记录**。这顺带修掉 v0.5.1 留下的「`escalations()` 旧记录 status 恒为 pending」那条 finding：它不是漏写，是存储模型决定的，只能改读法。
+- Changed（**修订 ADR-023 ③**）：① **禁自批**。`approvers_for` = owner 令牌 ∪ 目标节点主负责人，而申请人完全可能正好是后者，不禁的话他自己提、自己批，那三条规则被整个绕开（owner 恒在审批人里且走不到 escalation 这条路，故禁自批不会造成无人可批）。② 审批人身份**两把尺**：令牌求交之外再认「当初真通知到的 open_id」，否则 `roles_of` 反解一旦静默失效（自定义 resolver 无该方法 / 角色映射改了 / assignee 配成飞书群），这笔申请就没人同意得了，死局原样复发。
+- Fixed: **门已被答复的 escalation 申请不再显示为「待批」**。申请不是裁决（`_ack_escalation` 明说「你手里这张卡仍然有效」），所以提申请的人完全可能没等批下来就自己点了通过，这是常态。轮次那把尺在这里不管用（点通过不会让 `attempts` 变），必须另看门的状态，否则驾驶舱一直显示「等人拍板」而门早就过去了，真有人去点同意还会试着掀开一道已经放行的门。
+- Fixed: `larkflow edit` 的两条拒绝出口口径不一致（CLI 侧发现）：`edit_graph` 对 `missing_audit` / `unauthorized_edit` 是 `return` 结构化拒绝而不是抛异常，只 catch 异常的写法会把**越权当成功**打印并退出 0。
+- Reviewed: 5 维度对抗 review（escalation 语义 / 关旧待办 / edit 鉴权 / CLI / 测试有效性），逐条证伪后**坐实 18 条、证伪 5 条**，全部带实跑复现。引擎侧最重的三条已修并各配回归测试（见 ADR-040 / ADR-042 末尾）；教训是同一个：**「活性」这件事只许有一把尺**，自己再写一遍判据必错（我把三处口径统一了，唯独漏了 `_escalate` 里的去重，于是驳回之后申请人永远提不了同一笔且零反馈）。
+- Reviewed: 变异测试补覆盖。review 用变异法证明了两处**零覆盖**：删掉 `_can_approve` 的令牌那把尺、去掉裁决通知幂等键里的 `:{seq}`，测试都全绿。更难堪的是 `test_the_audit_channel_is_append_only` **完全是空跑**：它拿 `reconcile` 当「后续推进」，而在那个现场 `reconcile` 一次 `_write_state` 都不调（我自己复现确认），于是它声称保护的不变量从未被执行到。已重写成打在不变量所在的那一层并**断言它真的被调到**，免得再退化。补完后 8 个变异体逐个验证**全部被杀**（基线 rc=0，先验尺再跑，不重蹈上次「基线 rc=4 导致 11/11 假阳性」）。
+- Docs: 清掉全仓 23 处中文破折号（项目写作硬规范，此前是我自己破的）。CHANGELOG 补上 v0.6.0（真栈第一条 e2e 那个里程碑此前一条没记），ROADMAP 按真实完成度重标（原文还写着「真栈三件套一件没做」）。
+- Fixed（CLI 侧，同一轮 review 坐实的 8 条）：`candidates` 是 `list[int]` 而 CLI 当 dict 遍历，多笔待批时 `approve` 直接 `AttributeError`、`--json` 的 stdout 变空串（**两份测试对同一契约打架，CLI 实现的是 stub 那份错的**，stub 形状已同步改成真 service 的）；`_ops` 不查 `node` / `id` / `set` 的类型，`apply_ops` 抛的 `AttributeError` / `TypeError` 不在认领清单里，同样让 `--json` 的 stdout 变空；漏认第 5 种异常 `UnsupportedInV1`（运行中给节点加 `when` 守卫这种最自然的改图就会撞上）；`LockBusy` 既没走 stderr 也不认 `--json`；非字符串 `node.id` 能混进权威 dag（`--json` 投影里 `nodes[].id` 是数字 `7`、`status` 的键是字符串 `"7"`，同一份报文里两种身份）；`escalations --all` 把裁决记录当申请渲染（拍板人被标成申请人、`seq` 显示 `?`）；`edit` 打错实例回 `illegal_edit` 而其余命令回 `no_such_instance`。另加一层兜底 except，认领清单过时也不会让 `--json` 的 stdout 空着。
+- Added: **审批卡**（ADR-043），ADR-023 ③ 的「一键同意」这才名副其实：审批人收到带「同意 / 驳回」两颗按钮的卡，封套 `{kind: escalation, thread_id, node_id, seq, decision}` **刻意不带 `interrupt_id`**（拍板不是答复中断），`_route` 据 `kind` 走第三条分支。按钮文案与门禁卡的「通过 / 打回」用不同的字：两者挂在同一个 `node_id` 上并存。拍完把卡改成「已处理」，另一位审批人后来点他那张会得到「已由 X 处理过」而不是静默 no-op。
+- Fixed: **停订阅没带走整棵进程树**（ADR-044），于是真机上**每一次**停机都报「10s 内没排空」而事件数是 0：`lark-cli event consume` 是两级进程，`terminate()` 只杀第一级，孙进程握着 stdout / stderr 让管道永不 EOF、泵线程卡死。代价不是多一行日志，而是**退出码恒定非 0**，把「这次停机干不干净」这个信号（v0.5.1 专门加的）淹在恒噪声里。改成 `start_new_session` + 按进程组发信号，真机复验「已停止（干净）／故障 0」。
+- Verified: **v1.0 win 判据补齐 4/4**，③运行中改图在真栈上取得（实例跑到两道人工门时 `larkflow edit` 插节点 + 改依赖：`edited=2` / `remapped=2`（人手里的卡被重绑、仍有效）/ `attempts` 全空（改图不是打回）/ 审计落 `edits`；越权改图被 `unauthorized_edit` 挡住）。
+- **469 tests pass（339 → 469，+130）**。仍然全程 Mock / Stub / `:memory:`，红线不破；新增 7 条 CLI 端到端走的是真 service（Mock 飞书 + Stub LLM），不再是「照抄实现自己声明的异常元组」那种结构上抓不到漏网的测试。
+- 未做：`unblock` 仍无权限层（ADR-030 自己写的处方是「拿 `by` 当 actor 过一遍 `reopen_verdict`」）；human produce 配 `card_action` 时打回**无法主动作废旧卡**（`update_card` 只吃回调 token，没有按 message_id 改卡的能力），与任务通道不对称；`build_real_service` 的 `profile` 不从 env 取默认；`task.task.update_user_access_v2` 不推送的根因仍未查明；daemon 自己没有存活信号。
+
+## v0.6.0 · 2026-07-26 · 真栈第一条 e2e 跑通（引擎不再只是「在 Mock 里跑通过」）
+- 背景：此前所有「测绿」都是 Mock / Stub / `:memory:`，证的是逻辑自洽，**不证任何一条真栈路径**。这一版把 dev 飞书应用建起来、LLM 多角色 env 配起来，让策展合同图**八个节点在真飞书 + 真 LLM 上从头走到尾**。ADR-036..039 四条决策全部是接真栈才暴露出来的问题逼出来的，不是设计推演出来的。
+- Verified: **v1.0 win 判据 3/4**（PRD 口径，真人 / 真项目版，此前为 0）。
+  ① **真项目端到端 ✅**：`biz_draft` / `legal_draft` 双起草 → `finance_gate` / `legal_gate` 两个真人门（含一次真打回）→ `merge` 合并 → `finalize` 人定稿 → `checks` auto 机检 → `close` 收口，**八个节点全 done**，`outputs` 权威登记 8 条（其中 5 条是真实飞书文档，2 个人工门与 1 个机检产的是裁决不产文档）。
+  ② **打回可感知省算 ✅**，三条独立证据：权威 state 的 `attempts`（= 各节点被打回重置进新一轮的次数）里**根本没有 `legal_draft` / `legal_gate`**，即法律那一支的 AI 长文起草与人工复核**一次都没重跑**；`legal_gate` 全程只发过 1 张卡，而被牵连的 `finance_gate` 发了 2 张；交付物 handle 不变、只做 overwrite（正文 1871 → 2545 字，文档 token 没变）。数字自洽：`finance_gate` 打回 1 次波及 `{biz_draft, finance_gate, merge, finalize, checks, close}` 各 +1，`checks` 再打回 3 次波及 `{finalize, checks, close}` 各 +3，正好凑出 `close/finalize/checks = 4`、`merge = 1`。
+  ③ **运行中改图 ⬜**：`edit_graph` 引擎侧早已落码且有测试，但 **CLI 没有入口，真栈上无法触发**。
+  ④ **auto 门 ✅ 双向**：同一道 `checks` 自动打回 3 次后自动放行，两个方向都验到。
+- Added: **LLM 备用线路**（ADR-036）：每角色一条有序链 `LLM_<ROLE>_BACKUP[N]_*`，缺项继承主配置（只写 `BACKUP_API_KEY` = 同端点换把 key，三项都填 = 换一家）；400 / 422 **不切换**（是我们自己的请求错了，换线路只会原样再错一次还多烧一次钱）；切换必须留痕。实测把主 key 换成假的，真实的方舟 401 被正确判成可切换并自动落到备用（3.7s）。
+- Added: **超时按角色可配**（ADR-036 同条）：实测一次真实起草 **109.7s / 2570 字**，而当时默认 60s，`biz_draft` 必被掐断。默认提到 300s，加 `LLM_TIMEOUT` / `LLM_<ROLE>_TIMEOUT`。
+- Added: **引擎自己读 `.env`**（`config.load_dotenv`）：`source .env` 走的是 shell 语义，会剥掉 `LARKFLOW_ROLES` 的 JSON 引号、把含 `$` 的 api_key 悄悄改写，而且不报错。加载器同时报出「因已被占用而未生效」的键，否则全被占用时一行日志都没有、看起来像加载器没工作。
+- Added: **卡片「已处理」回写**（ADR-037）：裁决落地后把卡换成结论版（谁 / 何时 / 什么结论 / 打回到哪一环 / 意见），**按钮全部撤掉**；陈旧旧卡当场标「已失效」。用户原话：「点了通过或者打回，卡片没有任何变化，会让用户不知道点过了没、点了什么」。越权点击**不改卡**（卡可能已被转发，改卡会改掉所有人看到的内容），只走私信。
+- Added: **对账轮询在等的飞书任务**（ADR-038）与**定期对账线程**（ADR-039，`LARKFLOW_SWEEP_SECONDS` 默认 120s，配 0 关掉）。
+- Added: `LLM_NO_PROXY`：httpx 见到 `all_proxy=socks5://…` 会**急切构造** SOCKS 传输并直接报 `socksio` 未安装，`no_proxy` 救不了，只有 `trust_env=False` 能。
+- Added: 真飞书报文钉成测试（`tests/test_real_payloads.py`，脱敏）。好消息：`normalize_event` / `_route` 照 lark-cli 字段表写的解包逻辑与真报文完全对上，**一行没改**。
+- Fixed: **openai SDK 默认 `max_retries=2`**，且坐在我们自建的故障切换**里面**，把配置的超时乘 3（实测 `timeout=2` 实际耗 7.5s）。按当时配置换算 = 一条线路 15 分钟、主备两条最坏 30 分钟；现场表现是 `merge` 点完通过后 18 分钟毫无动静。改 `max_retries=0`（重试策略只许有一处），并加 `on_call` 让「正在等 LLM」可见：在此之前，一次 110s 的正常起草与一次 30 分钟的静默停摆，在日志里长得一模一样。
+- Fixed: **长连接会静默死亡**：进程全活、TCP 显示 ESTABLISHED、`event status` 说 running、日志无异常，而它自己的账本写着 `RECEIVED 0`，**10 小时 48 分一条事件没收到**。`EventPump` 的退避重启只在子进程退出时触发，子进程不退就永远不重启。应对见 ADR-038 / ADR-039（轮询兜底），主动探测仍未做。
+- Fixed: `_sweep_tasks` 第一版按 node_id 翻关联表，会拿第 1 轮的完成去 resume 第 3 轮，**每对账一次白烧一轮打回预算**（真栈实测把 `checks` 的预算从 1 烧到 3、实例直奔 blocked）。改按派单幂等键 `{实例}:{节点}:{轮次}` 定位，该键只在 `_dispatch_key` 一处拼，派单与轮询共用（两处各拼一次必然漂移：第一版漏了 `:kind` 段，后果是永远查不到、丢事件永远捞不回来，且没有任何症状）。
+- Docs: DEPLOYMENT 补**飞书权限台账**（真正用到的 scope 逐条记；测试组织为方便开了全量，故必须单独记账）、「事件」与「回调」是控制台两栏各自订阅、**改完必须发布版本才生效**（一次误判成租户不对，实为版本没发）、长连接没有队列且不补投。`.env.example` 重写：只留代码真读的 key，每条标出读它的代码路径。
+- 339 tests pass（280 → 339，新增 59）。**新增的仍然全程 Mock / Stub / `:memory:`**，红线不破（测试绝不构造 `build_real_service`）；真栈那一遍是手工跑的，证据在上面 Verified 一条。
+- 未做：`larkflow edit` 子命令（win ③ 在真栈上无法触发）；`task.task.update_user_access_v2` **为什么根本不推送**未查明（ADR-039 标未验：隔离实验里 websocket 已连、以 bot 身份亲手建并完成任务、按提示加 app 为 follower 都试过，`RECEIVED` 始终 0，而卡片事件同一条 bus 正常）；打回时不关旧轮次的飞书待办，每打回一次给人留一条僵尸（真栈上留下 2 条，手工清掉）；`build_real_service` 的 `profile` 不从 env 取默认，调用方忘传会**静默**连到另一个 app；ADR-037 的卡片回写只有 Mock 测试，真栈没验过（那个实例后面没有卡片节点了）。
+
 ## v0.5.1 · 2026-07-26 · 收口上一轮没验完的 finding（假审计 / 静默失败 / 一个推进死角）
 - 背景：v0.5.0 的对抗 review 出了 20 条 finding，为控成本只验了最重的 5 条，**15 条不是低价值、只是没看**。事后抽查全中，遂逐条复现后修掉；修的过程中又撞出一个 review 没人报的引擎 bug。
 - Added: ADR-034（审计记录写在事情发生**之后**：投影侧事实与权威意图分离）、ADR-035（推进的收敛判据要看累加通道）。`tests/test_hardening.py` 13 条。
@@ -45,7 +86,7 @@
 - Added: ADR-021 入口与意图路由（结构化 + @bot NL 双入口，确认步）；ADR-022 模板生成升为主路径（受控活图 + 确认降低 ADR-003 生成风险）；ADR-023 打回权限模型（机制 × 权限两层，防踢皮球精确判据，节点负责人 / 主负责人，escalation）；ADR-024 子项目 spawn（交付物流转递归 + 回填 + 边界隔离）；ADR-025 多人节点投票门(A) / 决策表决(B) + 条件分支（when 守卫 / skipped）。
 - Changed: 前端呈现 → 两视角两表面（参与人 chat-first 可只读看全貌 / 发起人 app 驾驶舱可编辑，可见 ≠ 可操作）+ 页面 P1-P4；节点契约补 assignee_role / vote / when，状态机加 skipped；生成从 ADR-003 路线 1 优先升为主路径。理由见 DECISIONS ADR-021..025。
 - Changed: ROADMAP 从「Now v1」细化为**实现分层** v1.0(第一个 win) → v1.1 生成 → v1.2 子项目 → v1.3 投票分支，v2 共享协同 + 前端可编辑；子项目 / 会签从 v2 提前到 v1.2 / v1.3。
-- Reviewed: 两轮对抗性 workflow review —— 内部一致性（修 12 项）+ PM 产品视角（6 把 pm-skill 尺子）。据 PM review 补：v1.0/v1.1 间加**采用 gate**、win 判据改「可感知省算」、修 win↔画布（v1.0 改图走命令 / 卡片）矛盾、PRD 补频次假设 + vs 飞书原生一节、ADR-024/025 加暂定头。
+- Reviewed: 两轮对抗性 workflow review：内部一致性（修 12 项）+ PM 产品视角（6 把 pm-skill 尺子）。据 PM review 补：v1.0/v1.1 间加**采用 gate**、win 判据改「可感知省算」、修 win↔画布（v1.0 改图走命令 / 卡片）矛盾、PRD 补频次假设 + vs 飞书原生一节、ADR-024/025 加暂定头。
 - 注：本版为纯设计 / 文档定稿（未动代码），代码仍 seg-1 契约、待 v1.0 step 1 迁移。
 
 ## v0.1.2 · 2026-07-24 · 开写就绪度复盘 + 交付物 handle 权威定家

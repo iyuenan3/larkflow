@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import copy
 import threading
 from datetime import datetime, timedelta, timezone
 
@@ -50,16 +51,56 @@ def _target_key(targets) -> tuple:
     return tuple(sorted(set(targets or ())))
 
 
-def _live_escalations(log, attempt) -> list[dict]:
-    """这道门**这一轮**还等着人拍板的跨界打回申请。
+def _requests(log) -> list[dict]:
+    """log 里的**申请**（对照 `kind == "verdict"` 的裁决）。
 
-    申请是对「这道门这一轮的那一版」提的：门一进新一轮（被打回 / 被解除重置），它要打回
-    的那一版已经被重做过了，旧申请随之作废。配额与对外读接口必须用这同一把尺：两套
-    口径正是「审批通道被永久锁死」那条缺陷的根因（v1 没有 approve / reject 通道，
-    `status` 永远停在 pending，按整条历史算就再也降不下来）。
+    早于一键同意通道的记录没有 `kind` 字段，缺省即申请：追加型 channel 里躺着的历史
+    不能改（红线：只改未来不改历史），所以新字段只能靠缺省值向后兼容。
     """
-    return [r for r in log or ()
-            if r.get("status") == "pending" and r.get("attempt") == attempt]
+    return [r for r in log or () if r.get("kind", "request") == "request"]
+
+
+def _verdicts_by_ref(log) -> dict:
+    """已被拍板的申请：`seq` → 那条裁决记录。"""
+    return {r["ref"]: r for r in log or ()
+            if r.get("kind") == "verdict" and r.get("ref") is not None}
+
+
+def _effective_status(record: dict, verdicts: dict, attempt, answered: bool) -> str:
+    """一笔申请**当下**的真实状态（派生，不是存出来的）。
+
+    `escalations` 是追加型 channel，物理上没有 UPDATE，所以记录里那个 `status` 字面量
+    冻的是「落库那一刻」，永远是 pending。把当下状态算出来，顺带修掉「旧记录 status
+    恒为 pending」那条挂了很久的 finding：它不是漏写，是存储模型决定的，只能改读法。
+    """
+    v = verdicts.get(record.get("seq"))
+    if v is not None:
+        return v.get("verdict") or "settled"
+    return "pending" if (record.get("attempt") == attempt and not answered) else "expired"
+
+
+def _live_escalations(log, attempt, *, answered: bool = False) -> list[dict]:
+    """这道门**现在**还等着人拍板的跨界打回申请。
+
+    三条出局判据：
+      · **已被拍板**（log 里有一条 `ref` 指向它的裁决记录）。
+      · **轮次已过**：申请是对「这道门这一轮的那一版」提的，门一进新一轮（被打回 /
+        被解除重置），它要打回的那一版已经被重做过了，旧申请随之作废。
+      · **门已答复**：申请不是裁决，提了申请的人手里那张卡**仍然有效**（`_ack_escalation`
+        就是这么告诉他的），所以他完全可能没等批下来就自己点了通过。轮次那把尺在这里不
+        管用（点通过不会让 `attempts` 变），必须另看门的状态：否则驾驶舱一直显示「等人
+        拍板」而门早就过去了，真有人去点同意还会试着掀开一道已经放行的门。
+
+    配额与对外读接口必须用这同一把尺：两套口径正是「审批通道被永久锁死」那条缺陷的
+    根因（当时没有 approve / reject 通道，`status` 永远停在 pending，按整条历史算就
+    再也降不下来）。
+    """
+    if answered:
+        return []
+    settled = _verdicts_by_ref(log)
+    return [r for r in _requests(log)
+            if r.get("status") == "pending" and r.get("attempt") == attempt
+            and r.get("seq") not in settled]
 
 
 def _unanswered(status: dict, node_id) -> bool:
@@ -70,6 +111,11 @@ def _unanswered(status: dict, node_id) -> bool:
 PASS_LABEL = "通过"
 REOPEN_LABEL = "打回"
 DONE_LABEL = "完成"
+# 审批卡（ADR-023 ③ 的「一键同意」）。刻意与门禁卡的「通过 / 打回」用不同的字：
+# 审批人批的是**一笔申请**，不是那道门本身，两者在同一个 node_id 上并存。
+ESC_APPROVE_LABEL = "同意"
+ESC_REJECT_LABEL = "驳回"
+ESC_KIND = "escalation"          # 封套的自描述标记，`_route` 据它分流
 
 # 借任一 worker 的位置写回 state：它的唯一出边就是 dispatch，于是 dispatch 会**真的执行**
 # （打回重置逻辑仍留在引擎里，驱动层不重算）。我们并不执行这个 worker，只是占它的位。
@@ -193,6 +239,7 @@ class LarkFlowService:
                 "attempts": {},
                 "unblocks": {},
                 "escalations": {},
+                "edits": {},
                 "meta": {"instance_id": instance_id, "reporter": reporter,
                          "inputs": inputs or {}},
             }
@@ -215,6 +262,11 @@ class LarkFlowService:
         route = self._route(event)
         if not route:
             return {"skipped": "unrouted"}
+        if "escalation" in route:
+            esc = route["escalation"]
+            if not esc.get("actor"):
+                return {"skipped": "unidentified_actor"}   # 同下：fail closed
+            return self._settle_from_card(**esc)
         if event.get("key") == CARD_ACTION and not route.get("actor"):
             # 身份缺失 = fail closed。飞书的卡片回调一定带 operator_id；没有它的封套是畸形
             # 输入，绝不能当「匿名点击」放进来：那会让 `resume` 的 actor 变 None，而 None
@@ -301,18 +353,35 @@ class LarkFlowService:
                               self._verdict_line(values, gate_id or node_id, value, actor))
             return {"resumed": interrupt_id}
 
-    def edit_graph(self, instance_id: str, ops: list[dict]) -> dict:
-        """受控活图：运行中改未来（ADR-013）。校验 → 写回 dag channel → 触发下一次 dispatch。
+    def edit_graph(self, instance_id: str, ops: list[dict], *,
+                   by: str | None = None, reason: str | None = None) -> dict:
+        """受控活图：运行中改未来（ADR-013）。鉴权 → 校验 → 写回 dag channel → 触发下一次 dispatch。
 
         校验一律在**引擎权威侧**做，不信前端（ADR-019 / ADR-023）：
           ① ops 只触 pending 子图（apply_ops 的冻结线）
           ② 新图仍过 validate_template（仍是 DAG / 不悬挂 / 全部护栏）
           ③ 新图不用引擎 v1 未实现的语义；新增 tool 节点得有 handler
+
+        **鉴权 = owner-only + 必署名**（照 ADR-024：改 / 删一道门是 owner 跳过审核的正路，
+        故不套 ADR-023 那三条，那是「让别人返工」的尺）。此前这个方法连 actor 都不收，
+        而它比无鉴权的 `unblock` 更狠：`unblock` 最多让人返工，`edit_graph` 能**直接删掉
+        一道还在等的门**，那道审核从此不存在、流程静默放行、没有任何人收到信号。接 CLI
+        （`larkflow edit`）就是把这个天窗开到真实攻击面上，故必须先补。
+
+        审计落 `edits`（追加型 channel，与 `unblocks` / `escalations` 同类），只记**真发生
+        过的**改动（ADR-034）：被拒的、被引擎校验拦下的都不留痕，否则就是假审计。
         """
+        if not (by or "").strip() or not (reason or "").strip():
+            return {"rejected": "missing_audit", "instance_id": instance_id,
+                    "detail": "改图必须署名并说明原因（谁改的 / 为什么改是审计不变量）"}
         with self._thread_lock(instance_id):
             values = self._values(instance_id)
             if not values:
                 raise GraphEditError(f"实例不存在: {instance_id}")
+            if by not in self._owner_roles(values):
+                return {"rejected": "unauthorized_edit", "instance_id": instance_id,
+                        "actor": by,
+                        "detail": "只有项目发起人能改图（ADR-024：改 / 删一道门是 owner 的正路）"}
             # 「在跑」= 已派出去还没回来的节点。tool/llm 在一个 super-step 内跑完（本方法
             # 又与 invoke 同锁），故唯一会长时间在飞的是挂起的 human 节点：把它们当 running
             # 并入冻结线，落地 ADR-013「不删在跑节点」。
@@ -326,10 +395,39 @@ class LarkFlowService:
                 self.executors.validate_coverage(new_dag)
             self._validate_roles(new_dag)
 
-            remapped = self._write_state(instance_id, {"dag": new_dag})
-            self._advance(instance_id, skip=remapped)
+            # 校验全过了才记账：上面任何一条抛出去，这次改图就是**没发生过**（ADR-034）。
+            audit = {"by": by, "at": _now(), "reason": reason, "ops": copy.deepcopy(ops),
+                     "nodes_after": [n["id"] for n in new_dag]}
+            try:
+                remapped = self._write_state(instance_id, {"dag": new_dag,
+                                                           "edits": {"log": [audit]}})
+                self._advance(instance_id, skip=remapped)
+            except Exception as exc:
+                # **抛异常 ≠ 图没变**。`_write_state` 是先 `update_state` 落 checkpoint、
+                # 再 `invoke` 跑一拍，而新节点就在这一拍上执行，执行体那条路上没有任何
+                # try/except。真栈里这条最普通的改图就能走到：加一个知会某角色的 notify
+                # 节点，四道前置校验全过（`validate_coverage` 只扫 assignee_role / voters，
+                # 不看 tool.args），到 `resolver.resolve` 才抛 RoleError；LLMUnavailable 同理。
+                # 让它裸抛出去的话，调用方与 CLI 会报「改图被拒」并退 1，而人照提示重试就
+                # 撞「id 已存在」。所以要分清「没落库」（照抛）与「已落库但推进失败」（如实报）。
+                if (self._values(instance_id).get("dag") or []) != new_dag:
+                    raise                       # 还没落库，这次改图真的没发生
+                self.provision_errors.setdefault(instance_id, []).append(
+                    {"node_id": None,
+                     "error": f"改图已生效，但随后的推进失败: {type(exc).__name__}: {exc}"})
+                return {"edited": len(ops), "nodes": [n["id"] for n in new_dag], "remapped": 0,
+                        "advance_error": f"{type(exc).__name__}: {exc}",
+                        "detail": "改图已经落库生效，不要重试（重试会撞 id 已存在）；"
+                                  "推进失败的原因见 error，修好后 `larkflow reconcile` 继续"}
             return {"edited": len(ops), "nodes": [n["id"] for n in new_dag],
                     "remapped": len(remapped)}
+
+    def edit_log(self, instance_id: str) -> list[dict]:
+        """这个实例被改过几次图、谁改的、为什么、改完长什么样（追加型，只增不改）。
+
+        没有它的话，一张跑到一半的图为什么长成现在这样，事后只能靠猜。
+        """
+        return list((self._values(instance_id).get("edits") or {}).get("log") or [])
 
     def unblock(self, instance_id: str, node_id: str, *, by: str, reason: str,
                 grant: int = 1, reopen: list[str] | None = None) -> dict:
@@ -572,15 +670,22 @@ class LarkFlowService:
         attempt = (values.get("attempts") or {}).get(gate_id, 0)
         whom = self._resolve_approvers(instance_id, approvers, self._owner_roles(values))
 
+        # 去重与配额都只看**还等着拍板的那些**（`_live_escalations` 那把尺，已排掉裁决过的
+        # 与轮次过期的）。这里曾经自己写了一遍判据、拿 `r["status"] == "pending"` 当活性，
+        # 而那个字面量是**落库那一刻冻住的、永远是 pending**（追加型 channel 没有 UPDATE）。
+        # 后果：一笔申请被驳回之后，申请人再点同一个打回会命中 duplicate 分支，卡不变、
+        # `_ack_escalation` 的幂等键与上一次逐字相同又被 `_once` 吞掉，于是**他一个字都收不到，
+        # 也永远提不了这笔申请**，而审批人那边查无此事（对抗 review 实测复现）。
+        waiting = _live_escalations(log, attempt, answered=self._answered(values, gate_id))
+
         # 双击 / 事件重放不该把申请堆成一摞：同一轮、同一人、同一组目标只留一笔。
         # 目标组按**集合**比，绝不拿前端给的原始列表逐字比：`reopen_verdict` 内部本来就把
         # targets 去过重了，两处口径不一致的话，`["a"]` / `["a","a"]` / 多选框顺序不同的
         # `["b","a"]` 会被当成三笔不同申请，各占一格配额（实测：5 次语义相同的点击把这道门
         # 的审批通道点死，发起人还收到 5 条逐字相同的通知）。
         key = _target_key(targets)
-        same = next((r for r in log if r.get("attempt") == attempt and r.get("by") == actor
-                     and _target_key(r.get("targets")) == key
-                     and r.get("status") == "pending"), None)
+        same = next((r for r in waiting if r.get("by") == actor
+                     and _target_key(r.get("targets")) == key), None)
         if same is not None:
             self._ack_escalation(instance_id, gate_id, same, whom, actor)
             return {"escalated": list(same.get("escalated") or escalated), "node_id": gate_id,
@@ -591,7 +696,6 @@ class LarkFlowService:
         # 上限只管**本轮**（口径见 `_live_escalations`）：按整条历史算的话，5 格一满这道门
         # 此后**永久**提不了申请，连新一轮的合法申请也提不了（实测）。轮次本身有上界，
         # 由打回预算兜（ADR-029），所以总量仍然是有界的。
-        waiting = _live_escalations(log, attempt)
         if len(waiting) >= MAX_PENDING_ESCALATIONS:
             self._tell(instance_id, actor,
                        f"「{self._label(values, gate_id)}」本轮待批的打回申请已达上限"
@@ -604,7 +708,8 @@ class LarkFlowService:
                     "detail": "这道门本轮待批的打回申请已达上限；v1 还没有一键同意，"
                               "请直接联系审批人（上游改过一版之后可以再提）"}
 
-        seq = len(log) + 1
+        # 「这道门第几笔**申请**」：log 里现在还混着裁决记录，拿 len(log) 会跳号。
+        seq = len(_requests(log)) + 1
         labels = {n["id"]: n.get("label", n["id"]) for n in values.get("dag") or []}
         text = (f"「{labels.get(gate_id, gate_id)}」的负责人申请把 "
                 f"{[labels.get(t, t) for t in escalated]} 打回重做"
@@ -619,9 +724,7 @@ class LarkFlowService:
         # 那一头**可恢复**（他一问就发现，申请人重点一次即可），假审计不可恢复，故取这一侧。
         delivered, failed = [], []
         for who in whom:
-            ok = self._tell(instance_id, who, text,
-                            f"{instance_id}:{gate_id}:escalation:{seq}:{who}",
-                            node_id=gate_id, what="escalation notify")
+            ok = self._ask_approval(instance_id, gate_id, who, text, seq)
             (delivered if ok else failed).append(who)
 
         # `approvers` 存**令牌**（角色名 / owner 的 open_id）：角色到 open_id 的映射会变，
@@ -642,6 +745,75 @@ class LarkFlowService:
         return {"escalated": escalated, "node_id": gate_id, "instance_id": instance_id,
                 "approvers": delivered, "notify_failed": failed,
                 "collateral": collateral, "seq": seq}
+
+    def _ask_approval(self, instance_id: str, gate_id: str, who: str, summary: str,
+                      seq: int) -> bool:
+        """给审批人发一张**可点的**审批卡。ADR-023 ③ 说的「一键」就在这里。
+
+        在此之前这里发的是纯文本，拍板要有人去敲 `larkflow approve`：对一个飞书原生的
+        产品来说，等于把出口修在大多数审批人根本走不到的地方。
+
+        封套**没有 `interrupt_id`**：拍板不是在答复某个中断，而是对一笔申请表态。它靠
+        `{kind, thread_id, node_id, seq, decision}` 自描述，`_route` 据 `kind` 分流。
+        封套只用来路由，**身份一律取事件顶层的 `operator_id`**（红线⑤）。
+
+        返回是否真发出去了：`notified` 记的是投影侧事实，把没送到的人记成「已通知」就是
+        假审计（ADR-034）。幂等键与旧的纯文本通知同款（`{实例}:{门}:escalation:{seq}:{人}`），
+        同一笔申请对同一个人一辈子只发一次。
+        """
+        base = {"kind": ESC_KIND, "thread_id": instance_id, "node_id": gate_id, "seq": seq}
+        buttons = [
+            Button(ESC_APPROVE_LABEL, {**base, "decision": "approve"}, "primary_filled"),
+            Button(ESC_REJECT_LABEL, {**base, "decision": "reject"}, "danger_filled"),
+        ]
+        key = f"{instance_id}:{gate_id}:escalation:{seq}:{who}"
+        try:
+            self._once(f"esc-card:{key}",
+                       lambda: self.io.send_card(target=who, summary=summary,
+                                                 buttons=buttons, idem_key=key))
+            return True
+        except Exception as exc:
+            self.provision_errors.setdefault(instance_id, []).append(
+                {"node_id": gate_id,
+                 "error": f"escalation card {type(exc).__name__}: {exc}"})
+            return False
+
+    def _settle_from_card(self, *, instance_id: str, gate_id: str, seq, decision,
+                          actor: str | None, token: str | None) -> dict:
+        """审批卡被点了：判 decision → 走引擎那条通道 → 把卡改成「已处理」。
+
+        `decision` 只认 approve / reject。封套可伪造，认不出来的一律当没发生，**绝不猜**：
+        猜错的方向是「把一个说不清的点击当成同意」，那会真的让别人返工。
+        """
+        if decision not in ("approve", "reject"):
+            return {"skipped": "unknown_decision", "instance_id": instance_id,
+                    "node_id": gate_id}
+        settle = self.approve_escalation if decision == "approve" else self.reject_escalation
+        out = settle(instance_id, gate_id, by=actor,
+                     seq=seq if isinstance(seq, int) else None)
+        self._settle_approval_card(instance_id, gate_id, out, actor=actor, token=token,
+                                   decision=decision)
+        return out
+
+    def _settle_approval_card(self, instance_id: str, gate_id: str, out: dict, *,
+                              actor: str | None, token: str | None, decision: str) -> None:
+        """审批卡点完之后要变样（ADR-037 的纪律搬到这条通道上）。
+
+        **越权不改卡**：卡可能已被转发，越权的是看到卡的某个人，不是这张卡本身；把「你没有
+        权限」写上去会改掉所有人看到的内容，包括真正的审批人。
+        """
+        if not token or out.get("rejected") in ("unauthorized_approve", "self_approve"):
+            return
+        if out.get("approved"):
+            line = (f"✅ **已同意**（{actor}）"
+                    + ("；打回已执行" if out.get("landed", True) else "；但预算已耗尽，什么都没能退回"))
+        elif out.get("rejected_request"):
+            line = f"🚫 **已驳回**（{actor}）；没有任何东西被退回"
+        elif out.get("rejected") == "already_settled":
+            line = f"⌛ **这张卡已失效**：这笔申请已由 {out.get('settled_by') or '他人'} 处理过了"
+        else:
+            line = f"⌛ **这张卡已失效**（{out.get('rejected') or out.get('skipped')}）"
+        self._settle_card(instance_id, self._values(instance_id), gate_id, token, line)
 
     def _ack_escalation(self, instance_id: str, gate_id: str, record: dict,
                         whom: list[str], actor: str | None) -> None:
@@ -672,13 +844,256 @@ class LarkFlowService:
         return sorted(out)
 
     def escalations(self, instance_id: str, node_id: str | None = None):
-        """跨界打回的审批申请**全量历史**（谁 / 何时 / 想打回谁 / 会连累谁 / 该谁批）。
+        """跨界打回的审批申请**全量历史**（谁 / 何时 / 想打回谁 / 会连累谁 / 该谁批 / 后来谁拍的板）。
 
-        审计口径：只追加、一条不删（`escalations` 是追加型 channel）。「现在还等着谁拍板」
-        问 `pending_escalations`，别拿这个当待办列表：里面有已经随轮次作废的旧申请。
+        审计口径：只追加、一条不删（`escalations` 是追加型 channel）。里面混着两类记录，
+        靠 `kind` 分：`request`（缺省，向后兼容旧记录）与 `verdict`。申请这一类额外带一个
+        **派生**字段 `effective_status`（pending / approved / rejected / expired），因为
+        记录里那个 `status` 冻的是落库那一刻、永远是 pending。
+
+        「现在还等着谁拍板」问 `pending_escalations`，别拿这个当待办列表。
         """
-        log = self._values(instance_id).get("escalations") or {}
-        return list(log.get(node_id) or []) if node_id else {k: list(v) for k, v in log.items()}
+        values = self._values(instance_id)
+        log = values.get("escalations") or {}
+        attempts = values.get("attempts") or {}
+
+        def annotate(gid, rows):
+            verdicts, attempt = _verdicts_by_ref(rows), attempts.get(gid, 0)
+            answered = self._answered(values, gid)
+            return [dict(r) if r.get("kind") == "verdict"
+                    else dict(r, effective_status=_effective_status(r, verdicts, attempt,
+                                                                    answered))
+                    for r in rows]
+
+        if node_id:
+            return annotate(node_id, list(log.get(node_id) or []))
+        return {k: annotate(k, list(v)) for k, v in log.items()}
+
+    # ---------- 一键同意 / 拒绝（ADR-023 ③ 那半边） ----------
+
+    def approve_escalation(self, instance_id: str, gate_id: str, *, by: str | None,
+                           seq: int | None = None, comment: str | None = None) -> dict:
+        """同意一笔跨界打回申请，**并当场把打回执行掉**。
+
+        没有这条通道，`_escalate` 就是个死局：申请落进权威 state，而全仓没有任何代码能
+        让它前进一步。默认那颗「打回」按钮又天然带着跨界目标（`_permitted_default` 只剔
+        denied），于是这是**默认路径**上的死局，不是边角。
+        """
+        return self._settle_escalation(instance_id, gate_id, by=by, seq=seq,
+                                       comment=comment, approve=True)
+
+    def reject_escalation(self, instance_id: str, gate_id: str, *, by: str | None,
+                          seq: int | None = None, comment: str | None = None) -> dict:
+        """驳回一笔申请：什么都不执行，但要**明确关掉它**并告诉申请人。
+
+        没有这一半的话，不同意就只能干晾着：申请永远挂在待批里占配额，申请人永远在等回音。
+        """
+        return self._settle_escalation(instance_id, gate_id, by=by, seq=seq,
+                                       comment=comment, approve=False)
+
+    def _settle_escalation(self, instance_id: str, gate_id: str, *, by: str | None,
+                           seq: int | None, comment: str | None, approve: bool) -> dict:
+        """同意 / 拒绝共用的那条路：定位 → 五道闸 → 执行 → 记账 → 通知。
+
+        闸的**顺序**是正确性的一部分，与 `resume` 同一条纪律：
+          ① 审计（`by` 空即拒，照 ADR-030 的 `missing_audit`）
+          ② 已拍过板（幂等：双击 / 重放 / CLI 手抖不许烧掉两轮返工）
+          ③ 陈旧（门已进新一轮 = 这笔申请针对的那一版早被重做过，再批就是拿过期判定改真相源）
+          ④ 自批（申请人可能正好在审批人集合里，见下）
+          ⑤ 权限
+        ②③ 必须排在 ④⑤ 之前：一条重放的旧同意不该在早就结束的申请上跑出新的判定。
+        """
+        if not (by or "").strip():
+            return {"rejected": "missing_audit", "instance_id": instance_id, "node_id": gate_id,
+                    "detail": "同意 / 拒绝必须署名（谁拍的板是审计不变量，照 ADR-030）"}
+        with self._thread_lock(instance_id):
+            values = self._values(instance_id)
+            log = list((values.get("escalations") or {}).get(gate_id) or [])
+            attempt = (values.get("attempts") or {}).get(gate_id, 0)
+            settled = _verdicts_by_ref(log)
+            base = {"instance_id": instance_id, "node_id": gate_id}
+
+            record = self._pick_escalation(log, attempt, seq,
+                                           answered=self._answered(values, gate_id))
+            if isinstance(record, dict) and record.get("rejected"):
+                return {**base, **record}
+
+            if record["seq"] in settled:
+                done = settled[record["seq"]]
+                return {**base, "rejected": "already_settled", "seq": record["seq"],
+                        "verdict": done.get("verdict"), "settled_by": done.get("by"),
+                        "detail": "这笔申请已经有人拍过板了"}
+            if record.get("attempt") != attempt or self._answered(values, gate_id):
+                # 两种作废：门进了新一轮（那一版早被重做过），或门已经被答复掉了
+                # （申请不是裁决，提申请的人手里那张卡仍然有效，他完全可能自己点了通过）。
+                return {**base, "skipped": "stale", "seq": record["seq"],
+                        "detail": "这笔申请已随轮次推进 / 这道门被答复而作废"}
+            if by == record.get("by"):
+                # `approvers_for` = owner 令牌 ∪ 目标节点主负责人，而申请人完全可能正好是
+                # 后者（他打回自己的活，但重算集牵连了第三个人）。不禁的话他自己提、自己批，
+                # ADR-023 那三条规则被整个绕开。owner 恒在审批人里、且 owner 走不到 escalation
+                # 这条路（他有全域权、直接执行），所以禁自批不会造成一笔申请无人可批。
+                return {**base, "rejected": "self_approve", "seq": record["seq"],
+                        "detail": "不能同意自己提的申请，请找 owner 或目标节点负责人"}
+            if not self._can_approve(by, record):
+                return {**base, "rejected": "unauthorized_approve", "seq": record["seq"],
+                        "approvers": list(record.get("approvers") or []),
+                        "detail": "只有项目发起人或被打回节点的负责人能拍这个板"}
+
+            reopened: list[str] = []
+            if approve:
+                blocked = self._execute_approved_reopen(instance_id, values, gate_id, record)
+                if isinstance(blocked, dict):
+                    return {**base, **blocked, "seq": record["seq"]}
+                reopened = blocked
+
+            # **先执行、后记账**（ADR-034）。中间崩掉的话：打回已落地 → 门进了新一轮 →
+            # 这笔申请按轮次自然作废，不会被二次同意。反过来（先记后执行）崩掉，就是
+            # 「显示已批准、其实什么都没发生」，没有任何机制能发现，不可恢复。
+            verdict = {"kind": "verdict", "ref": record["seq"], "node_id": gate_id,
+                       "verdict": "approved" if approve else "rejected",
+                       "by": by, "at": _now(), "attempt": attempt, "comment": comment}
+            if approve:
+                verdict["reopened"] = reopened
+            remapped = self._write_state(instance_id, {"escalations": {gate_id: [verdict]}})
+            self._advance(instance_id, skip=remapped)
+
+            self._announce_verdict(instance_id, values, gate_id, record,
+                                   by=by, comment=comment, approve=approve, reopened=reopened)
+            out = {**base, "seq": record["seq"], "by": by}
+            if not approve:
+                return {**out, "rejected_request": True}
+            if not reopened:
+                # 同意了，但引擎**什么都没退回**：打回预算已耗尽，`reopen_resets` 直接把这道门
+                # 标成 blocked、一个节点都不重置（gates.py）。此前这里照样回 approved 并且
+                # 宣告「X 已退回重做 / 你被卷进返工」，而两人的节点其实一动没动，谁也不会收到
+                # 新单；整条流程停在 blocked 等 unblock，只有发起人从 ADR-029 那条独立通知里
+                # 知道。**批准是真的，落地不是**，这两件事必须分开报（对抗 review 实测）。
+                return {**out, "approved": True, "reopened": [], "landed": False,
+                        "gate_status": (self._values(instance_id).get("status") or {}).get(gate_id),
+                        "detail": "已同意，但这道门的打回预算已耗尽，什么都没能退回；"
+                                  "实例已停下等人 unblock（ADR-029 / ADR-030）"}
+            return {**out, "approved": True, "reopened": reopened, "landed": True}
+
+    def _pick_escalation(self, log: list[dict], attempt: int, seq: int | None, *,
+                         answered: bool):
+        """定位要拍板的那一笔。省略 seq 时**绝不瞎猜**：一道门本轮可以挂多笔申请。"""
+        requests = _requests(log)
+        if seq is not None:
+            found = next((r for r in requests if r.get("seq") == seq), None)
+            return found if found is not None else {
+                "rejected": "no_such_escalation", "seq": seq,
+                "detail": "这道门没有第 %s 笔申请" % seq}
+        live = _live_escalations(log, attempt, answered=answered)
+        if not live:
+            return {"rejected": "no_such_escalation",
+                    "detail": "这道门本轮没有待拍板的申请"}
+        if len(live) > 1:
+            return {"rejected": "ambiguous_escalation",
+                    "candidates": [r.get("seq") for r in live],
+                    "detail": "本轮有多笔待批，请用 seq 指明是哪一笔"}
+        return live[0]
+
+    def _can_approve(self, actor: str, record: dict) -> bool:
+        """这个人拍得动这个板吗。**两把尺，缺一不可。**
+
+        ① 令牌求交：`approvers` 存的是令牌（角色名 / owner 的 open_id），拿 `roles_of`
+           把 operator 反解成他的令牌集合再求交，与打回权限层同一口径。
+        ② **当时真通知到的那些 open_id**：①会静默失效（自定义 resolver 没有 `roles_of`、
+           角色映射后来改了、assignee 配成飞书群），一旦失效这笔申请就**没人同意得了**,
+           死局原样复发。我们当初亲口告诉了他「该你拍板」，他就该点得动。这不是放宽，
+           是把当时那次通知本身当成授权凭据（它已经在权威 state 里，不可伪造）。
+        """
+        tokens = self._actor_roles(actor)
+        if tokens & set(record.get("approvers") or ()):
+            return True
+        return actor in set(record.get("notified") or ())
+
+    def _execute_approved_reopen(self, instance_id: str, values: dict, gate_id: str,
+                                 record: dict):
+        """把这笔申请当初想做的打回真做掉。成功返回被退回的节点，失败返回结构化拒绝。
+
+        批准替代的是**权限层**，不是机制层：申请挂着的这段时间图可能被改（受控活图），
+        当时的合法祖先今天可能已经不是祖先了。拿一份过期的目标组直接写真相源，正是
+        「一切合法性在引擎权威侧现算」要防的事。
+        """
+        targets = list(record.get("targets") or [])
+        dag = values.get("dag") or self.dag
+        bad = illegal_reopen(dag, gate_id, targets)
+        if bad:
+            return {"rejected": "illegal_reopen", "illegal": bad,
+                    "detail": "图改过之后这些目标已经不是这道门的祖先了，不能照当时的申请执行"}
+        live = {i.id: (i.value or {}).get("node_id")
+                for i in self._pending_interrupts(instance_id)}
+        interrupt_id = next((k for k, v in live.items() if v == gate_id), None)
+        if interrupt_id is None:
+            # 门已经不在等了（被别的路答掉 / 图改没了）。批准一个没有落点的打回会静默丢失。
+            return {"skipped": "stale", "detail": "这道门已经不在等人了"}
+
+        before = dict(values.get("attempts") or {})
+        self.graph.invoke(
+            Command(resume={interrupt_id: {"verdict": "fail", "reopen": targets,
+                                           "comment": record.get("comment")}}),
+            self._run_cfg(instance_id), durability="sync")
+        self._advance(instance_id)
+        # 「退回了什么」按**轮次增量**算，不按 status 前后差：llm / tool 节点会在同一次
+        # `_advance` 里重跑完又回到 done，看 status 的话它们会凭空消失。
+        after = self._values(instance_id).get("attempts") or {}
+        return sorted(k for k, v in after.items() if v > before.get(k, 0))
+
+    def _announce_verdict(self, instance_id: str, values: dict, gate_id: str, record: dict,
+                          *, by: str, comment: str | None, approve: bool,
+                          reopened: list[str]) -> None:
+        """申请人在等回音，被连累的人即将平白返工。两边都不该靠猜。
+
+        投影侧动作，失败只记不抛（`_tell` 自带这条纪律）：权威结论已经在 checkpointer 里。
+        """
+        seq, gate = record.get("seq"), self._label(values, gate_id)
+        tail = f"，附言：{comment}" if comment else ""
+        if approve:
+            # **只说真发生了的事**：报 `reopened`（引擎实际退回的）与 targets 的交集，
+            # 不报申请里写的那一组。打回预算耗尽时 `reopened` 是空的，一个节点都没动，
+            # 而此前这里照读 `record["targets"]`，于是申请人被告知「已退回重做」、旁支
+            # 负责人被告知「你也被卷进返工」，两句都是假的（形参 `reopened` 收了却没用）。
+            landed = [t for t in record.get("targets") or () if t in set(reopened or ())]
+            what = [self._label(values, t) for t in landed]
+            if not landed:
+                self._tell(instance_id, record.get("by"),
+                           f"你对「{gate}」提的打回申请（第 {seq} 笔）已由 {by} 同意，"
+                           f"但这道门的打回预算已耗尽，**什么都没能退回**，实例已停下等人"
+                           f"解除（实例 {instance_id}）{tail}。",
+                           f"{instance_id}:{gate_id}:esc-approved-void:{seq}")
+                return          # 没人被卷进返工，就别去惊动旁支负责人
+            self._tell(instance_id, record.get("by"),
+                       f"你对「{gate}」提的打回申请（第 {seq} 笔）已由 {by} 同意，"
+                       f"{what} 已退回重做（实例 {instance_id}）{tail}。",
+                       f"{instance_id}:{gate_id}:esc-approved:{seq}")
+            for cid in record.get("collateral") or ():
+                if cid not in set(reopened or ()):
+                    continue    # 没被真卷进来就不发，假通知比不发更糟
+                self._tell(instance_id, self._owner_of(values, cid),
+                           f"「{gate}」申请把 {what} 打回重做，已获同意，"
+                           f"你负责的「{self._label(values, cid)}」也被卷进这一轮返工"
+                           f"（实例 {instance_id}）。",
+                           f"{instance_id}:{gate_id}:esc-collateral:{seq}:{cid}")
+        else:
+            what = [self._label(values, t) for t in record.get("targets") or ()]
+            self._tell(instance_id, record.get("by"),
+                       f"你对「{gate}」提的打回申请（第 {seq} 笔）被 {by} 驳回，"
+                       f"{what} 没有退回，这道门还在等你的裁决（实例 {instance_id}）{tail}。",
+                       f"{instance_id}:{gate_id}:esc-rejected:{seq}")
+
+    def _owner_of(self, values: dict, node_id: str) -> str | None:
+        """节点主负责人令牌 → open_id（解析不出来就不发，别把中文角色名当 open_id 发出去）。"""
+        from .engine.permissions import primary_owner
+
+        token = primary_owner(self._node(values.get("dag") or [], node_id) or {})
+        if not token:
+            return None
+        try:
+            return self.resolver.resolve(token)
+        except Exception:
+            return None
 
     def pending_escalations(self, instance_id: str, node_id: str | None = None):
         """**现在还等着人拍板**的申请（每道门只留它当前那一轮的，口径见 `_live_escalations`）。
@@ -688,10 +1103,24 @@ class LarkFlowService:
         values = self._values(instance_id)
         log = values.get("escalations") or {}
         attempts = values.get("attempts") or {}
-        live = {k: _live_escalations(v, attempts.get(k, 0)) for k, v in log.items()}
+        live = {k: _live_escalations(v, attempts.get(k, 0),
+                                     answered=self._answered(values, k))
+                for k, v in log.items()}
         if node_id:
             return live.get(node_id) or []
         return {k: v for k, v in live.items() if v}
+
+    def _answered(self, values: dict, gate_id: str) -> bool:
+        """这道门**已经不在等人拍板**了吗。
+
+        判据是 `done / failed / blocked` 三种，不是 `_unanswered` 的两种：**`blocked` 必须
+        算进来**。一道门被打回预算掐成 `blocked` 时 `attempt_increments` 为空、`attempts`
+        一动不动，于是「轮次已过」那把尺不触发；而它也没被答复，「门已答复」那把尺按
+        `_unanswered` 的口径同样不触发。三条出局判据一条都不命中的后果：同轮那些没拍板的
+        申请**永远显示待批**，而 `_execute_approved_reopen` 那边按「还有没有挂起中断」判，
+        blocked 之后没有中断 → 每次同意都回 `stale`，只有 reject 出得去（对抗 review 实测）。
+        """
+        return (values.get("status") or {}).get(gate_id) in ("done", "failed", BLOCKED)
 
     def _node(self, dag: list[dict], nid) -> dict | None:
         try:
@@ -909,7 +1338,21 @@ class LarkFlowService:
         return any(n["id"] not in live for n in ready_nodes(dag, status))
 
     def _advance(self, instance_id: str, *, skip: set[str] | None = None) -> None:
-        """处理挂起（派单 / 投影），并把被屏障挡住的分支一拍一拍推到位。"""
+        """处理挂起（派单 / 投影），把被屏障挡住的分支推到位，最后收拾旧轮次的待办。"""
+        try:
+            self._pump(instance_id, skip=skip)
+        finally:
+            # 关旧单挂在**一次推进一次**，而不是挂在 `_handle`（泵循环里每拍都调）。
+            # 成功时两者没差别（`_once` 之后全是本地幂等表查询，很便宜），但**失败时**
+            # 挂在 `_handle` 上会每一拍都真去 spawn 一次 lark-cli，一次推进能放大到几十次。
+            # 放在 finally 里：推进本身炸了，旧单照样该收拾（它与推进成不成功无关）。
+            try:
+                self._close_stale_tasks(instance_id, self._values(instance_id))
+            except Exception as exc:
+                self.provision_errors.setdefault(instance_id, []).append(
+                    {"node_id": None, "error": f"关旧单扫描失败: {type(exc).__name__}: {exc}"})
+
+    def _pump(self, instance_id: str, *, skip: set[str] | None = None) -> None:
         self._handle(instance_id, skip=skip)
         snapshot = self._values(instance_id)
         dag = snapshot.get("dag") or self.dag
@@ -947,7 +1390,8 @@ class LarkFlowService:
         return out
 
     def _handle(self, instance_id: str, skip: set[str] | None = None) -> None:
-        status = self._values(instance_id).get("status", {})
+        values = self._values(instance_id)
+        status = values.get("status", {})
         for it in self._live_interrupts(instance_id, status):
             if skip and it.id in skip:
                 continue   # 只是改图 / 推进导致的换 id：卡 / 任务还在人手里，别重复派
@@ -959,6 +1403,52 @@ class LarkFlowService:
                      "error": f"{type(exc).__name__}: {exc}"}
                 )
         self._project(instance_id)
+
+    def _close_stale_tasks(self, instance_id: str, values: dict) -> None:
+        """把**旧轮次**那些还开着的飞书待办关掉（ADR-040）。
+
+        `_provision` 每一轮建一条新待办，而在此之前**没有任何代码去关旧的**：一个节点被
+        打回 N 次，人的待办列表里就留 N 条永远不会有人点的僵尸（真栈第一条 e2e 之后
+        实测留下 2 条，手工清的）。
+
+        最难受的不是「旧轮次里人已经点完的那些」，是**被卷进新一轮、但新一轮还没轮到派单**
+        的旁支节点：它得等上游返工完成，这中间人手里那条旧单一直开着，长得和能干的活一模
+        一样，点下去只有静默 no-op（任务通道没有卡片那套「陈旧当场作废」，`_settle_card`
+        要回调 token，任务事件没有）。所以关的时机挂在这里（每次推进都跑）而不是挂在
+        `_provision`（那要等到给他派新单的时候，旁支节点可能要等一整轮）。
+
+        为什么按 `range(当前轮次)` 现算而不是前后 diff：轮次是在调用方的 `graph.invoke`
+        里就 +1 的，`_advance` 拿不到那一刻的前值。现算是幂等的，重启 / 对账重跑都对，
+        而且天然把「上次关单失败的」补上。
+
+        **绝不关本轮那条**（`range` 天然排除）：`_sweep_tasks` 会把 `completed == True`
+        当成人的真实完成信号并 resume，关错一条就是引擎替人交了卷，破「完成必须来自
+        显式信号」这条红线。
+        """
+        attempts = values.get("attempts") or {}
+        for n in values.get("dag") or ():
+            nid = n.get("id")
+            if not nid or n.get("signal") != "task_complete":
+                continue          # 卡片另有 ADR-037 的「当场标失效」，且它没有「完成」这个动作
+            for old in range(attempts.get(nid, 0)):
+                guid = self._idem.get(self._dispatch_key(instance_id, nid, old) + ":task")
+                if not guid:
+                    continue
+                try:
+                    # 键里必须带**旧轮次号**：不带的话同一个节点第二次被打回会被幂等表
+                    # 整个吞掉，第二条僵尸永远关不掉。失败不记键（`_once` 先做后记），
+                    # 于是下一次推进 / 对账会自己补上。
+                    self._once(f"{instance_id}:{nid}:{old}:task-closed",
+                               lambda g=guid, o=old: self._do_close(instance_id, nid, g, o))
+                except Exception as exc:
+                    self.provision_errors.setdefault(instance_id, []).append(
+                        {"node_id": nid,
+                         "error": f"complete_task 关第 {old} 轮旧单失败: "
+                                  f"{type(exc).__name__}: {exc}"})
+
+    def _do_close(self, instance_id: str, node_id: str, guid: str, attempt: int) -> str:
+        self.io.complete_task(guid, idem_key=f"{instance_id}:{node_id}:{attempt}:close")
+        return ""
 
     def _live_interrupts(self, instance_id: str, status: dict) -> list:
         """真正还在等人的中断。
@@ -1093,6 +1583,16 @@ class LarkFlowService:
         key = event.get("key")
         if key == CARD_ACTION:
             av = event.get("action_value") or {}
+            if av.get("kind") == ESC_KIND:
+                # 审批卡（ADR-023 ③）：拍板不是答复中断，所以**没有 interrupt_id**，
+                # 不能沿用下面那把「thread_id + interrupt_id」的钥匙。
+                if "thread_id" not in av or "node_id" not in av:
+                    return None
+                return {"escalation": {
+                    "instance_id": av["thread_id"], "gate_id": av["node_id"],
+                    "seq": av.get("seq"), "decision": av.get("decision"),
+                    # 身份**只**取事件顶层：封套里的 by / actor / operator_id 一律无效
+                    "actor": event.get("operator_id"), "token": event.get("token")}}
             if "thread_id" not in av or "interrupt_id" not in av:
                 return None
             passed = av.get("verdict") == "pass"

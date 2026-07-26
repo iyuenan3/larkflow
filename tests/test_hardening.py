@@ -85,10 +85,12 @@ def test_escalation_records_only_the_approvers_it_really_reached():
         svc.resume_from_event({"key": TASK_UPDATE, "event": {
             "task_guid": guid, "event_types": ["task_completed_update"]}})
 
-    real_notify = io.notify
-    io.notify = lambda *, target, text, idem_key: (
+    # 审批人收到的是**审批卡**（ADR-043），所以失败要注在发卡这一路上；
+    # 申请人的回执仍走 notify，别把那条也弄挂了。
+    real_card = io.send_card
+    io.send_card = lambda *, target, summary, buttons, idem_key: (
         (_ for _ in ()).throw(RuntimeError("飞书挂了")) if target == "ou_owner"
-        else real_notify(target=target, text=text, idem_key=idem_key))
+        else real_card(target=target, summary=summary, buttons=buttons, idem_key=idem_key))
 
     out = click(svc, io, "g", "打回", "ou_yi", reopen=["a"], comment="重来")
     assert out.get("escalated") == ["a"], out

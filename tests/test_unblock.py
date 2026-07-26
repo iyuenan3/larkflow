@@ -131,7 +131,7 @@ def test_unblock_puts_the_gate_back_on_the_frontier_and_the_project_can_finish()
 
     # 门回了 pending，于是它自己也能被受控活图改（改前 blocked 是改不动的）
     svc.edit_graph("ub-1", [{"op": "update_node", "id": "check", "set": {
-        "tool": {"kind": "format_check", "args": {"required": ["期限"]}}}}])
+        "tool": {"kind": "format_check", "args": {"required": ["期限"]}}}}], by="ou_owner", reason="测试改图")
 
     write_and_finish(svc, io, store, "ub-1", "draft", "一、期限：12 个月。")
 
@@ -151,7 +151,7 @@ def test_a_blocked_gate_cannot_be_edited_before_it_is_unblocked():
 
     with pytest.raises(GraphEditError, match="冻结线"):
         svc.edit_graph("ub-frozen", [{"op": "update_node", "id": "check",
-                                      "set": {"label": "改个名"}}])
+                                      "set": {"label": "改个名"}}], by="ou_owner", reason="测试改图")
 
 
 # ---------- 合法域：不信调用方给的目标 ----------

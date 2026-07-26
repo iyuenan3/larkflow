@@ -3,7 +3,7 @@
 > 飞书原生的**交付物流转**工作流引擎（LangGraph 驱动）。
 > 在一张*项目进行中可编辑*的图上，AI、人、工具接力产出并审核一份交付物，任意打回、只重算受影响的部分，直到发起人认可后交付。全程落在飞书里。
 
-**状态**：引擎核心 + 服务层已落码（339 测绿，全程 Mock / Stub / 内存库）· **真飞书环境一次没跑过**（差 dev 应用与事件回调）。详细真相源见 [`AIREADME/`](AIREADME/INDEX.md)。
+**状态**：引擎 + 服务层已落码（469 测绿，全程 Mock / Stub / 内存库）· **真飞书 + 真 LLM 上已端到端跑通第一条链路**（2026-07-26，八个节点、5 份真实交付物）。详细真相源见 [`AIREADME/`](AIREADME/INDEX.md)。
 
 ---
 
@@ -73,7 +73,7 @@ tests/               316 e2e / 单元测试（零外部依赖）
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest -q                              # 339 passed
+pytest -q                              # 469 passed
 
 python -m larkflow.demo --auto         # 自动跑一遍合同图，打印「打回省算」的证据
 python -m larkflow.demo                # 交互式：你扮演所有的人，h 看命令
@@ -127,10 +127,15 @@ larkflow start --template contract --reporter ou_xxx \
         --input 甲方=某某科技 --input 乙方=某某咨询 --input 价款=30万
 larkflow status <实例>                     # 整张图 + 谁在等 + 有没有卡死
 larkflow pending <实例> --actor ou_xxx      # 以某个人的视角看他点得动什么
+larkflow edit <实例> --ops @ops.json --by ou_xxx --reason "加一道审"   # 运行中改图（只动 pending）
+larkflow escalations <实例> [--node <节点>] [--all]   # 谁在等谁拍板（默认只列待批）
+larkflow approve <实例> <节点> --by ou_xxx [--seq N] [--comment "…"]   # 否决换 reject
 larkflow unblock <实例> <节点> --by ou_xxx --reason "改了要素"   # 解除 ⛔
 larkflow reconcile [实例]                   # 手动对账（省略 = 全部）
 larkflow --json status <实例>               # 给脚本读
 ```
+
+`edit` 的 `--ops` 收三种来源：字面 JSON、`@文件`、`-`（读 stdin）。报文里全是中文 label、prompt 还常含 `$`，**别在命令行裸写**（shell 的引号剥离 / `$` 展开会把它悄悄改坏，与「别 `source .env`」同一个坑）。CLI 只校验报文形状，合不合法一律由引擎权威侧算。
 
 一次性命令与常驻 `serve` 是两个进程、写同一个 SQLite。这条是**正面处理过的**：DB 开 WAL + `busy_timeout`，同一实例的每一次状态变更再过一把跨进程 flock（`<DB>.locks/`），同一个 DB 只允许一个 `serve`（`<DB>.serve.lock`）。保证与不保证详见 `larkflow/store.py` 顶部。
 

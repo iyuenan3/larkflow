@@ -20,7 +20,11 @@ from pathlib import Path
 import pytest
 
 from larkflow.app import build_service
+from larkflow.config import RoleError
+from larkflow.engine.executors import ExecutorError
+from larkflow.engine.livegraph import GraphEditError
 from larkflow.io import FakeDeliverableStore
+from larkflow.model.template import TemplateError
 from larkflow.io.events import CARD_ACTION, TASK_UPDATE, EventPump
 from larkflow import store as store_module
 from larkflow.serve import LarkFlowServer, instance_ids, normalize_event
@@ -326,7 +330,7 @@ def test_a_task_completion_event_from_the_pump_finishes_a_human_produce_node():
         "task_guid": guid, "event_types": ["task_completed_update"]}})
 
     # 「完成任务」是产出定稿信号：它必须落进权威 state。（这份稿是空的，随后的机检门当场
-    # 把定稿打回，于是 status 又回 pending 并发出第二轮任务 —— 那正是引擎该有的反应。）
+    # 把定稿打回，于是 status 又回 pending 并发出第二轮任务，那正是引擎该有的反应。）
     assert svc.outputs("t-1")["finalize"]["completed"] is True
     assert srv.stats["handled"] == 3
     assert len([t for t in io.tasks.values() if t["summary"] == "负责人定稿"]) == 2
@@ -894,5 +898,585 @@ def test_the_package_is_runnable_as_a_module():
                           capture_output=True, text=True, timeout=120, cwd=root,
                           env={**os.environ, "PYTHONPATH": root})
     assert proc.returncode == 0
-    for sub in ("serve", "start", "status", "pending", "unblock", "reconcile"):
+    for sub in ("serve", "start", "status", "pending", "edit", "escalations",
+                "approve", "reject", "unblock", "reconcile"):
         assert sub in proc.stdout
+
+
+# ---------- CLI：改图 / 审批（注入假 service） ----------
+
+class CliService:
+    """CLI 段专用的假 service：只记调用、按脚本回话，一行引擎逻辑都不跑。
+
+    这几条命令测的是 CLI 自己的活（参数解析成什么、退出码给几、拒绝怎么回显），
+    与引擎实现无关。绑真 service 会把 service 的签名变更算到 CLI 头上（红的不是
+    CLI 的锅），而真栈那条路本来就绝不许在测试里构造（会真发飞书消息 / 真建文档）。
+    """
+
+    DAG = [{"id": "biz_draft", "label": "商务起草", "executor": "llm", "role": "produce",
+            "deps": []},
+           {"id": "legal_gate", "label": "法务审", "executor": "human", "role": "gate",
+            "deps": ["biz_draft"]}]
+
+    def __init__(self, dag=None, **scripted):
+        self.calls: list[tuple] = []
+        self.scripted = scripted
+        self.dag = list(self.DAG if dag is None else dag)
+
+    def _reply(self, name, default):
+        r = self.scripted.get(name, default)
+        if isinstance(r, BaseException):
+            raise r
+        return r
+
+    def dag_of(self, instance_id):
+        return self.dag
+
+    def edit_graph(self, instance_id, ops, **kw):
+        self.calls.append(("edit_graph", instance_id, ops, kw))
+        return self._reply("edit_graph", {"edited": len(ops), "remapped": 0,
+                                          "nodes": [n["id"] for n in self.dag]})
+
+    def escalations(self, instance_id, node_id=None):
+        self.calls.append(("escalations", instance_id, node_id))
+        return self._reply("escalations", {})
+
+    def pending_escalations(self, instance_id, node_id=None):
+        self.calls.append(("pending_escalations", instance_id, node_id))
+        return self._reply("pending_escalations", {})
+
+    def approve_escalation(self, instance_id, gate_id, **kw):
+        self.calls.append(("approve_escalation", instance_id, gate_id, kw))
+        return self._reply("approve_escalation",
+                           {"approved": True, "instance_id": instance_id, "node_id": gate_id,
+                            "seq": kw.get("seq") or 1, "reopened": ["biz_draft"],
+                            "by": kw.get("by")})
+
+    def reject_escalation(self, instance_id, gate_id, **kw):
+        self.calls.append(("reject_escalation", instance_id, gate_id, kw))
+        return self._reply("reject_escalation",
+                           {"rejected_request": True, "instance_id": instance_id,
+                            "node_id": gate_id, "seq": kw.get("seq") or 1, "by": kw.get("by")})
+
+
+# ---------- 端到端的真现场（Mock 飞书 + Stub LLM，绝不碰 build_real_service）----------
+#
+# 假 service 测得了「CLI 自己的活」，测不了「CLI 与引擎之间的契约」：stub 的形状是我写的，
+# 我照着自己的实现写 stub，就只能验出我已经想到的事（candidates 那条实测崩，就是因为
+# stub 喂的形状引擎从不产生）。所以每条跨层的路，至少留一条走真 service 的。
+
+CROSS_GATES = [
+    {"id": "a", "label": "甲写材料", "executor": "human", "role": "produce", "deps": [],
+     "assignee_role": "甲", "signal": "task_complete", "deliverable": {"region": "whole"}},
+    {"id": "b", "label": "AI 整合", "executor": "llm", "role": "produce", "deps": ["a"],
+     "prompt": "整合", "model_role": "w", "deliverable": {"region": "whole"}},
+    {"id": "g", "label": "乙审", "executor": "human", "role": "gate", "deps": ["b"],
+     "assignee_role": "乙", "signal": "card_action", "approval_policy": "single"},
+    {"id": "side", "label": "丙审", "executor": "human", "role": "gate", "deps": ["b"],
+     "assignee_role": "丙", "signal": "card_action", "approval_policy": "single"},
+    {"id": "tail", "label": "收口", "executor": "tool", "role": "produce", "deps": ["g", "side"],
+     "tool": {"kind": "noop"}},
+]
+
+
+def cross(iid):
+    """跑到「乙审 / 丙审」两道门同时挂着的现场：乙打回甲的活会把还在等的丙一起卷进返工，
+    于是乙那一下天然是**跨界打回**，落进 escalation。"""
+    from larkflow.io.deliverable import Deliverable
+
+    store = FakeDeliverableStore()
+    svc, io = build_service(CROSS_GATES, llm=CountingLLM({"w": "正文"}), deliverables=store)
+    svc.start(instance_id=iid, reporter="ou_owner", inputs={})
+    p = next(x for x in svc.pending(iid) if x["node_id"] == "a")
+    store.overwrite(Deliverable.from_dict(p["deliverable"]), content="材料")
+    guid = next(t["guid"] for t in io.tasks.values() if t["summary"] == "甲写材料")
+    svc.resume_from_event({"key": TASK_UPDATE, "event": {
+        "task_guid": guid, "event_types": ["task_completed_update"]}})
+    assert {x["node_id"] for x in svc.pending(iid)} == {"g", "side"}
+    return svc, io
+
+
+def push_back(svc, io, targets, comment="材料不全"):
+    res = svc.resume_from_event({"key": CARD_ACTION, "operator_id": "ou_乙",
+                                 "action_value": dict(io.button_value("g", "打回"),
+                                                      reopen=list(targets), comment=comment)})
+    assert res.get("seq"), res          # 真的落成了一笔申请，不是被别的规则挡掉
+    return res
+
+
+ESC = {"by": "ou_法务", "at": "2026-07-26T10:00:00+08:00", "from_node": "legal_gate",
+       "targets": ["biz_draft"], "escalated": ["biz_draft"], "approvers": ["ou_owner", "财务"],
+       "notified": ["ou_owner"], "collateral": ["legal_draft"], "comment": "价款条款改了",
+       "attempt": 0, "seq": 2, "status": "pending", "effective_status": "pending"}
+
+ADD_OP = [{"op": "add_node", "node": {"id": "extra", "label": "补充审阅", "executor": "human",
+                                      "role": "gate", "deps": ["biz_draft"],
+                                      "assignee_role": "法务"}}]
+
+
+def test_cli_edit_hands_the_ops_and_the_audit_pair_to_the_engine(capsys, tmp_path):
+    svc = CliService()
+    rc = cli(["--db", str(tmp_path / "db.sqlite"), "edit", "ed-1",
+              "--ops", json.dumps(ADD_OP, ensure_ascii=False),
+              "--by", "ou_owner", "--reason", "加一道审"], svc)
+    assert rc == 0
+    name, iid, ops, kw = svc.calls[0]
+    assert (name, iid) == ("edit_graph", "ed-1") and ops == ADD_OP
+    assert kw == {"by": "ou_owner", "reason": "加一道审"}
+    assert "ed-1" in capsys.readouterr().out
+
+
+def test_cli_edit_reads_ops_from_a_file_so_the_shell_cannot_eat_them(tmp_path):
+    """ops 里全是中文 label，prompt 还可能含 `$`。逼人在命令行裸写 JSON = 重踩
+    `source .env` 那个坑（shell 的引号剥离 / `$` 展开会把报文悄悄改坏）。"""
+    ops = [{"op": "update_node", "id": "biz_draft",
+            "set": {"prompt": "按 $价款 与 ${期限} 重写「商务条款」", "label": "商务起草 v2"}}]
+    f = tmp_path / "ops.json"
+    f.write_text(json.dumps(ops, ensure_ascii=False), encoding="utf-8")
+    svc = CliService()
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "edit", "ed-2", "--ops", f"@{f}",
+                "--by", "ou_owner", "--reason", "改提示词"], svc) == 0
+    assert svc.calls[0][2] == ops, "文件里那份报文得一个字节不差地进引擎"
+
+
+def test_cli_edit_reads_ops_from_stdin(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "stdin", _io.StringIO(json.dumps(ADD_OP, ensure_ascii=False)))
+    svc = CliService()
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "edit", "ed-3", "--ops", "-",
+                "--by", "ou_owner", "--reason", "管道进来的"], svc) == 0
+    assert svc.calls[0][2] == ADD_OP
+
+
+@pytest.mark.parametrize("bad", [
+    "{不是 JSON",                                  # 连 JSON 都不是
+    '{"op": "add_node"}',                          # 是对象不是数组
+    '["add_node"]',                                # 元素不是对象
+    '[{"op": "rename_node", "id": "x"}]',          # op 不在受控活图的三条里
+])
+def test_cli_edit_refuses_a_malformed_ops_report_at_parse_time(bad, tmp_path):
+    """形状错 = 参数错，退出码 2，且**一次都不碰 service**。"""
+    svc = CliService()
+    with pytest.raises(SystemExit) as e:
+        cli(["--db", str(tmp_path / "db.sqlite"), "edit", "ed-4", "--ops", bad,
+             "--by", "ou_owner", "--reason", "r"], svc)
+    assert e.value.code == 2 and svc.calls == []
+
+
+def test_cli_edit_does_not_second_guess_the_engine(tmp_path):
+    """CLI 只校验形状。「这个节点是不是 pending」「会不会成环」一律留给引擎权威侧算，
+    照红线「绝不信前端」的同一条理由：两处各判一次，早晚判出两套口径。"""
+    frozen = [{"op": "remove_node", "id": "biz_draft"}]          # 假设它已经 done
+    svc = CliService()
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "edit", "ed-5",
+                "--ops", json.dumps(frozen), "--by", "ou_owner", "--reason", "r"], svc) == 0
+    assert svc.calls[0][2] == frozen, "CLI 不许自己拦下来，得原样递到引擎"
+
+
+@pytest.mark.parametrize("exc, code", [
+    (GraphEditError("越过冻结线：biz_draft 已 done"), "illegal_edit"),
+    (TemplateError("deps 悬挂: nope"), "invalid_graph"),
+    (ExecutorError("tool 节点无可执行体: ['x']"), "unknown_executor"),
+    (RoleError("角色解析不出来: 法务"), "unknown_role"),
+])
+def test_cli_edit_turns_an_engine_rejection_into_one_json_object(exc, code, capsys, tmp_path):
+    """落到 main 的通吃 except 的话只打 stderr，`--json` 下 stdout 是空的，
+    「stdout 必须是一个可 json.loads 的对象」这条契约当场破。"""
+    svc = CliService(edit_graph=exc)
+    rc = cli(["--db", str(tmp_path / "db.sqlite"), "--json", "edit", "ed-6",
+              "--ops", json.dumps(ADD_OP), "--by", "ou_owner", "--reason", "r"], svc)
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["rejected"] == code and str(exc) in payload["error"]
+
+
+@pytest.mark.parametrize("bad", [
+    '[{"op": "add_node", "node": "x"}]',                      # node 不是对象 → apply_ops AttributeError
+    '[{"op": "add_node", "node": ["x"]}]',
+    '[{"op": "add_node", "node": {"label": "无 id"}}]',
+    '[{"op": "add_node", "node": {"id": 7, "label": "整数 id"}}]',   # 脏 id 会进权威 dag
+    '[{"op": "add_node", "node": {"id": "", "label": "空 id"}}]',
+    '[{"op": "remove_node", "id": ["a"]}]',                   # apply_ops TypeError: unhashable
+    '[{"op": "remove_node", "id": 7}]',
+    '[{"op": "update_node", "id": "x", "set": "不是对象"}]',
+    '[{"op": "update_node", "id": "x", "set": ["a"]}]',
+])
+def test_cli_edit_stops_a_structurally_broken_node_before_the_engine(bad, tmp_path):
+    """报文形状错一律 rc=2、且碰都不碰 service。
+
+    不挡的话，这些全在 `apply_ops` 里炸成 AttributeError / TypeError，两者都不在 edit 认领的
+    异常里，于是落进通吃 except：`--json` 下 stdout 是空串，脚本读到空串只会崩在解析那行。
+    整数 id 更狠，它一路畅通到权威 dag（实测），而 dag 是追加型，脏数据只能再发一次 edit 删。
+    """
+    svc = CliService()
+    with pytest.raises(SystemExit) as e:
+        cli(["--db", str(tmp_path / "db.sqlite"), "edit", "ed-8", "--ops", bad,
+             "--by", "ou_owner", "--reason", "r"], svc)
+    assert e.value.code == 2 and svc.calls == []
+
+
+def test_cli_edit_keeps_a_dirty_id_out_of_the_authoritative_graph(tmp_path):
+    """真 service 端到端：整数 id 此前真的进了权威 dag，`status` 的键成了 int 7，
+    而 `--json` 投影里 nodes[].id 是数字 7、status 的键经 json.dumps 变成字符串 "7"，
+    同一份报文里一个节点两种身份。"""
+    svc, io, llm = contract()
+    svc.start(instance_id="dirty-1", reporter="ou_owner", inputs=INPUTS)
+    before = [n["id"] for n in svc.dag_of("dirty-1")]
+    dirty = [{"op": "add_node", "node": {"id": 7, "label": "脏", "executor": "tool",
+                                         "role": "produce", "deps": ["biz_draft"],
+                                         "tool": {"kind": "noop"}}}]
+    with pytest.raises(SystemExit) as e:
+        cli(["--db", str(tmp_path / "db.sqlite"), "edit", "dirty-1",
+             "--ops", json.dumps(dirty, ensure_ascii=False), "--by", "ou_owner",
+             "--reason", "试"], svc)
+    assert e.value.code == 2
+    assert [n["id"] for n in svc.dag_of("dirty-1")] == before, "权威 dag 一个字节都不许动"
+
+
+def test_cli_edit_reports_a_capability_boundary_as_json_too(capsys, tmp_path):
+    """真 service 端到端：加一道会签门（v1.3 才实现）走的是 `UnsupportedInV1`，
+    它继承 NotImplementedError，与 edit 认领的那四个类 issubclass 全 False。
+
+    这条测试故意**不**照抄实现里的异常元组：照抄的话，结构上就不可能发现「漏了第 5 种」。
+    """
+    svc, io, llm = contract()
+    svc.start(instance_id="cap-1", reporter="ou_owner", inputs=INPUTS)
+    ops = [{"op": "add_node", "node": {"id": "multi", "label": "会签", "executor": "human",
+                                       "role": "gate", "deps": ["merge"],
+                                       "assignee_role": "法务", "signal": "card_action",
+                                       "approval_policy": "all"}}]
+    rc = cli(["--db", str(tmp_path / "db.sqlite"), "--json", "edit", "cap-1",
+              "--ops", json.dumps(ops, ensure_ascii=False), "--by", "ou_owner",
+              "--reason", "加会签"], svc)
+    payload = json.loads(capsys.readouterr().out)          # 此前这里是空串
+    assert rc == 1 and payload["rejected"] == "unsupported_in_v1"
+    assert "v1.3" in payload["error"]
+
+
+def test_cli_edit_never_leaves_stdout_empty_under_json(capsys, tmp_path):
+    """漏网异常也得出一个对象。引擎会长出新的异常类型，CLI 不该因此破契约。
+
+    这条路**不许**说「改图被拒」：写回图与推进执行不是一步，漏网异常可能是图已经落库之后
+    才抛的，那时候报「被拒」是骗人。落没落只能让人自己去 status 看，故 landed=unknown。
+    """
+    svc = CliService(edit_graph=ZeroDivisionError("引擎里冒出来的新玩意"))
+    rc = cli(["--db", str(tmp_path / "db.sqlite"), "--json", "edit", "ed-9",
+              "--ops", json.dumps(ADD_OP), "--by", "ou_owner", "--reason", "r"], svc)
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1 and payload["rejected"] == "engine_error"
+    assert "ZeroDivisionError" in payload["error"] and payload["landed"] == "unknown"
+
+    svc2 = CliService(edit_graph=ZeroDivisionError("同上"))
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "edit", "ed-10",
+                "--ops", json.dumps(ADD_OP), "--by", "ou_owner", "--reason", "r"], svc2) == 1
+    human = capsys.readouterr().out
+    assert "被拒" not in human and "status ed-10" in human
+
+
+@pytest.mark.parametrize("cmd, extra", [
+    ("edit", ["--ops", json.dumps(ADD_OP), "--by", "ou_o", "--reason", "r"]),
+    ("approve", ["g", "--by", "ou_o"]),
+    ("reject", ["g", "--by", "ou_o"]),
+])
+def test_cli_lock_contention_stays_json_and_says_it_is_retryable(cmd, extra, capsys, tmp_path):
+    """拿不到实例锁不是「引擎说不行」，是**可重试**。此前它只往 stdout 打一行裸文本，
+    `--json` 下同样破契约；而 edit / approve / reject 是继 unblock 之后第一批写命令，
+    这条路第一次被推到真实使用面上。"""
+    svc = CliService(**{{"edit": "edit_graph", "approve": "approve_escalation",
+                         "reject": "reject_escalation"}[cmd]: LockBusy("被另一个进程占着")})
+    rc = cli(["--db", str(tmp_path / "db.sqlite"), "--json", cmd, "lk-9", *extra], svc)
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1 and payload["rejected"] == "lock_busy" and payload["retryable"] is True
+
+
+def test_cli_edit_of_an_unknown_instance_says_so_like_every_other_command(capsys, tmp_path):
+    """打错实例 id 是最常见的手误，别报成 illegal_edit（同一批改动里 escalations 报的是
+    no_such_instance，两套口径会让人以为是自己的 ops 写错了）。"""
+    svc = CliService(dag=[])
+    rc = cli(["--db", str(tmp_path / "db.sqlite"), "--json", "edit", "typo-1",
+              "--ops", json.dumps(ADD_OP), "--by", "ou_owner", "--reason", "r"], svc)
+    assert rc == 1 and json.loads(capsys.readouterr().out)["rejected"] == "no_such_instance"
+    assert svc.calls == []
+
+
+def test_cli_edit_reads_an_ops_file_that_starts_with_a_bom(tmp_path):
+    """带 BOM 的 ops 文件（Windows / 某些编辑器另存）也得读得进来。
+    用 utf-8 读的话 json 会报「Unexpected UTF-8 BOM」，虽然点了名，但让人改文件编码
+    才能用一个 CLI，属于没必要的摩擦。"""
+    f = tmp_path / "ops.json"
+    f.write_text(json.dumps(ADD_OP, ensure_ascii=False), encoding="utf-8-sig")
+    assert f.read_bytes()[:3] == b"\xef\xbb\xbf", "先确认这个文件真的带 BOM"
+    svc = CliService()
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "edit", "bom-1", "--ops", f"@{f}",
+                "--by", "ou_owner", "--reason", "带 BOM 的文件"], svc) == 0
+    assert svc.calls[0][2] == ADD_OP
+
+
+@pytest.mark.parametrize("code", ["unauthorized_edit", "missing_audit"])
+def test_cli_edit_also_catches_the_rejections_that_come_back_as_a_dict(code, capsys, tmp_path):
+    """service 有两条拒绝出口：校验失败抛异常，鉴权 / 缺审计回结构化拒绝。
+    只认异常那条的话，`unauthorized_edit` 会被当成功打印并退出 0。"""
+    svc = CliService(edit_graph={"rejected": code, "instance_id": "ed-7",
+                                 "detail": "只有项目发起人能改图"})
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "edit", "ed-7",
+                "--ops", json.dumps(ADD_OP), "--by", "ou_路人", "--reason", "r"], svc) == 1
+    out = capsys.readouterr().out
+    assert code in out and "只有项目发起人能改图" in out
+
+
+def test_cli_edit_demands_who_and_why():
+    with pytest.raises(SystemExit) as e:
+        from larkflow.__main__ import build_parser
+        build_parser().parse_args(["edit", "i", "--ops", json.dumps(ADD_OP)])
+    assert e.value.code == 2
+
+
+@pytest.mark.parametrize("argv", [
+    ["edit", "i", "--ops", json.dumps(ADD_OP), "--by", "ou_o", "--reason", "r"],
+    ["escalations", "i"],
+    ["approve", "i", "n", "--by", "ou_o"],
+    ["reject", "i", "n", "--by", "ou_o"],
+])
+def test_cli_new_subcommands_still_honour_the_global_flags(argv):
+    """每个新子命令都必须走 sub.add_parser（parents=[common]）：裸 subs.add_parser 的话
+    `--json` 当场 exit 2，且 `--db X` 会被子解析器的默认值覆盖回默认库（argparse 经典坑）。"""
+    from larkflow.__main__ import build_parser
+    ns = build_parser().parse_args(["--db", "/tmp/x.sqlite", *argv, "--json"])
+    assert ns.db == "/tmp/x.sqlite" and ns.json is True
+
+
+def test_cli_escalations_shows_who_should_decide(capsys, tmp_path):
+    svc = CliService(pending_escalations={"legal_gate": [ESC]})
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "escalations", "es-1"], svc) == 0
+    out = capsys.readouterr().out
+    for must in ("legal_gate", "ou_owner", "财务", "ou_法务", "biz_draft", "价款条款改了", "2"):
+        assert must in out, f"一眼看不出 {must!r}，审批人就不知道该拍什么板"
+    assert svc.calls == [("pending_escalations", "es-1", None)]
+
+
+def test_cli_escalations_says_so_when_nobody_is_waiting(capsys, tmp_path):
+    svc = CliService()
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "escalations", "es-2"], svc) == 0
+    assert "没有待拍板的申请" in capsys.readouterr().out
+
+
+def test_cli_escalations_all_reads_the_whole_history(capsys, tmp_path):
+    """默认只列待批；`--all` 才走全量历史（里面有随轮次作废的旧申请，别当待办用）。"""
+    settled = {**ESC, "seq": 1, "status": "pending", "effective_status": "expired"}
+    svc = CliService(escalations={"legal_gate": [settled, ESC]})
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "escalations", "es-3", "--all"], svc) == 0
+    out = capsys.readouterr().out
+    assert svc.calls == [("escalations", "es-3", None)], "--all 得读全量那口，不是待批那口"
+    assert "expired" in out and "pending" in out
+
+
+def test_cli_escalations_all_does_not_dress_a_verdict_up_as_a_request(capsys, tmp_path):
+    """真 service 端到端：全量 log 里混着两类记录，靠 `kind` 分（request 缺省 / verdict）。
+
+    不分 kind 地渲染的话，裁决行的 `by`（拍板人）会被标成「申请人」、`seq` 是 None 显示成
+    `?`、`comment`（拍板附言）印成「理由」，count 还把裁决计成申请。审批人照着这份输出
+    只会去拍一块已经拍过的板。
+    """
+    svc, io = cross("hist-1")
+    push_back(svc, io, ["a"])
+    push_back(svc, io, ["a", "b"], comment="连整合也重来")
+    svc.approve_escalation("hist-1", "g", by="ou_甲", seq=1, comment="确实不全")
+    raw = svc.escalations("hist-1")["g"]
+    assert [r.get("kind", "request") for r in raw] == ["request", "request", "verdict"]
+
+    rc = cli(["--db", str(tmp_path / "db.sqlite"), "--json", "escalations", "hist-1",
+              "--all"], svc)
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["count"] == 2, "count 只数申请，裁决不是待办也不是申请"
+    assert payload["verdicts"] == 1
+
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "escalations", "hist-1", "--all"], svc) == 0
+    out = capsys.readouterr().out
+    assert "ou_甲 同意" in out, "裁决要挂在它 ref 指向的那笔申请下面，写清谁拍的板"
+    assert "申请人：ou_甲" not in out, "拍板人不是申请人"
+    assert "第 None 笔" not in out and "第 ? 笔" not in out
+    assert "确实不全" in out
+
+
+def test_cli_escalations_all_shows_the_derived_status_not_the_frozen_literal(capsys, tmp_path):
+    """记录里的 `status` 字面量冻的是落库那一刻，**永远**是 pending（追加型 channel 没有
+    UPDATE）。批过的那笔要显示 approved，随轮次作废的要显示 expired。"""
+    svc, io = cross("hist-2")
+    push_back(svc, io, ["a"])
+    push_back(svc, io, ["a", "b"], comment="连整合也重来")
+    svc.approve_escalation("hist-2", "g", by="ou_甲", seq=1)
+    states = {r["seq"]: r["effective_status"]
+              for r in svc.escalations("hist-2")["g"] if r.get("kind", "request") == "request"}
+    assert states == {1: "approved", 2: "expired"}, states
+
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "escalations", "hist-2", "--all"], svc) == 0
+    out = capsys.readouterr().out
+    assert "[approved]" in out and "[expired]" in out
+    assert "[pending]" not in out, "别再把那个恒为 pending 的字面量印出来"
+
+
+def test_cli_escalations_default_view_is_unaffected_by_verdict_records(capsys, tmp_path):
+    """默认视图走 pending_escalations，拍过板的那笔不该再出现。"""
+    svc, io = cross("hist-3")
+    push_back(svc, io, ["a"])
+    push_back(svc, io, ["a", "b"], comment="连整合也重来")
+    svc.approve_escalation("hist-3", "g", by="ou_甲", seq=1)
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "escalations", "hist-3"], svc) == 0
+    assert "没有待拍板的申请" in capsys.readouterr().out, "同意会把这道门推进新一轮，旧申请全作废"
+
+
+def test_cli_escalations_renders_an_orphan_verdict_instead_of_swallowing_it(capsys, tmp_path):
+    """裁决的 ref 指不到申请（历史 / 数据异常）时也要露出来，别静默吞掉一条审计。"""
+    svc = CliService(escalations={"g": [{"kind": "verdict", "ref": 9, "node_id": "g",
+                                         "verdict": "rejected", "by": "ou_owner",
+                                         "at": "2026-07-26T10:00:00+08:00"}]})
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "escalations", "orp-1", "--all"], svc) == 0
+    out = capsys.readouterr().out
+    assert "第 9 笔" in out and "ou_owner" in out
+
+
+def test_cli_escalations_can_focus_one_node_and_takes_a_bare_list(capsys, tmp_path):
+    """带 node_id 时 service 回的是 list 而不是 dict（现状如此）。CLI 两种都得吃得下，
+    否则 `--node` 一加就 TypeError。"""
+    svc = CliService(pending_escalations=[ESC])
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "escalations", "es-4",
+                "--node", "legal_gate"], svc) == 0
+    assert svc.calls == [("pending_escalations", "es-4", "legal_gate")]
+    assert "legal_gate" in capsys.readouterr().out
+
+
+def test_cli_escalations_json_is_one_object_keyed_by_node(capsys, tmp_path):
+    svc = CliService(pending_escalations=[ESC])
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "--json", "escalations", "es-5",
+                "--node", "legal_gate"], svc) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["escalations"]["legal_gate"][0]["seq"] == 2 and payload["count"] == 1
+
+
+def test_cli_read_commands_also_keep_stdout_parseable_when_something_blows_up(capsys, tmp_path):
+    """兜底那条（main 的通吃 except）自己也得守约。此前它只往 stderr 打一行，
+    `--json` 的 stdout 是空串，而 escalations / approve / reject 都可能走到它。"""
+    svc = CliService(pending_escalations=RuntimeError("state 读坏了"))
+    rc = cli(["--db", str(tmp_path / "db.sqlite"), "--json", "escalations", "boom-1"], svc)
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1 and payload["rejected"] == "internal_error"
+    assert "RuntimeError" in payload["error"] and payload["cmd"] == "escalations"
+
+
+def test_cli_human_mode_still_keeps_crashes_on_stderr(capsys, tmp_path):
+    """人类模式保持旧行为：错误走 stderr，不污染 stdout 管道。"""
+    svc = CliService(pending_escalations=RuntimeError("state 读坏了"))
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "escalations", "boom-2"], svc) == 1
+    cap = capsys.readouterr()
+    assert cap.out == "" and "RuntimeError" in cap.err
+
+
+def test_cli_escalations_of_an_unknown_instance_exits_nonzero(capsys, tmp_path):
+    svc = CliService(dag=[])
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "escalations", "nope"], svc) == 1
+    assert "nope" in capsys.readouterr().out
+
+
+def test_cli_approve_settles_a_request_and_says_what_got_reopened(capsys, tmp_path):
+    svc = CliService()
+    rc = cli(["--db", str(tmp_path / "db.sqlite"), "approve", "ap-1", "legal_gate",
+              "--by", "ou_owner", "--seq", "2", "--comment", "同意返工"], svc)
+    assert rc == 0
+    name, iid, gate, kw = svc.calls[0]
+    assert (name, iid, gate) == ("approve_escalation", "ap-1", "legal_gate")
+    assert kw == {"by": "ou_owner", "seq": 2, "comment": "同意返工"}
+    out = capsys.readouterr().out
+    assert "biz_draft" in out and "ou_owner" in out
+
+
+def test_cli_approve_without_a_seq_leaves_the_choice_to_the_engine(tmp_path):
+    svc = CliService()
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "approve", "ap-2", "legal_gate",
+                "--by", "ou_owner"], svc) == 0
+    assert svc.calls[0][3] == {"by": "ou_owner", "seq": None, "comment": None}
+
+
+def test_cli_reject_turns_a_request_down_and_still_exits_zero(capsys, tmp_path):
+    """否决一笔申请是**成功执行**（rejected_request），别和 `rejected`（命令被拒）混了。"""
+    svc = CliService()
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "reject", "rj-1", "legal_gate",
+                "--by", "ou_owner", "--comment", "先别返工"], svc) == 0
+    assert svc.calls[0][0] == "reject_escalation"
+    assert "legal_gate" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("result, hint", [
+    ({"rejected": "unauthorized_approve", "instance_id": "x"}, "审批人"),
+    ({"rejected": "self_approve", "instance_id": "x"}, "自己"),
+    ({"rejected": "no_such_escalation", "instance_id": "x"}, "没有"),
+    ({"rejected": "already_settled", "instance_id": "x"}, "拍过板"),
+    ({"rejected": "illegal_reopen", "instance_id": "x"}, "打回"),
+    ({"rejected": "missing_audit", "instance_id": "x"}, "审计"),
+    ({"skipped": "stale", "instance_id": "x"}, "作废"),
+])
+def test_cli_approve_reports_every_structured_refusal_with_a_nonzero_exit(
+        result, hint, capsys, tmp_path):
+    svc = CliService(approve_escalation=result)
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "approve", "ap-3", "legal_gate",
+                "--by", "ou_x"], svc) == 1
+    assert hint in capsys.readouterr().out
+
+
+def test_cli_approve_of_an_ambiguous_gate_tells_you_to_pick_a_seq(capsys, tmp_path):
+    # candidates 是**纯 seq 列表**（引擎侧 `_pick_escalation` 的真形状）。此前这个 stub
+    # 喂的是 [{"seq": …}]，引擎从不产生，于是测试全绿而真栈 100% AttributeError。
+    svc = CliService(approve_escalation={"rejected": "ambiguous_escalation",
+                                         "candidates": [2, 3]})
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "approve", "ap-4", "legal_gate",
+                "--by", "ou_owner"], svc) == 1
+    out = capsys.readouterr().out
+    assert "--seq 2" in out and "--seq 3" in out
+
+
+def test_cli_approve_survives_a_real_ambiguous_escalation(capsys, tmp_path):
+    """真 service 端到端：同一道门挂两笔待批，approve 不给 seq。
+
+    这条是 candidates 那个崩的唯一真守卫：形状由引擎产生，不是我写的 stub。
+    """
+    svc, io = cross("amb-1")
+    push_back(svc, io, ["a"])
+    push_back(svc, io, ["a", "b"], comment="连整合也重来")
+    assert [r["seq"] for r in svc.pending_escalations("amb-1", "g")] == [1, 2]
+
+    rc = cli(["--db", str(tmp_path / "db.sqlite"), "--json", "approve", "amb-1", "g",
+              "--by", "ou_甲"], svc)
+    payload = json.loads(capsys.readouterr().out)     # stdout 必须仍是一个对象
+    assert rc == 1 and payload["rejected"] == "ambiguous_escalation"
+    assert payload["candidates"] == [1, 2]
+
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "approve", "amb-1", "g",
+                "--by", "ou_甲"], svc) == 1
+    out = capsys.readouterr().out
+    assert "--seq 1" in out and "--seq 2" in out, "人得看得出下一步该敲什么"
+
+
+def test_cli_approve_then_picks_one_of_them_and_it_lands(capsys, tmp_path):
+    """挑一笔批下去，打回真的落地（不只是打印一句好话）。"""
+    svc, io = cross("amb-2")
+    push_back(svc, io, ["a"])
+    push_back(svc, io, ["a", "b"], comment="连整合也重来")
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "approve", "amb-2", "g",
+                "--by", "ou_甲", "--seq", "1", "--comment", "同意"], svc) == 0
+    assert svc.status("amb-2")["a"] == "pending", "甲的活得真的退回重做"
+    assert "a" in capsys.readouterr().out
+
+
+def test_cli_approve_json_stays_one_object_even_when_refused(capsys, tmp_path):
+    svc = CliService(approve_escalation={"rejected": "self_approve", "instance_id": "ap-5"})
+    assert cli(["--db", str(tmp_path / "db.sqlite"), "--json", "approve", "ap-5",
+                "legal_gate", "--by", "ou_法务"], svc) == 1
+    assert json.loads(capsys.readouterr().out)["rejected"] == "self_approve"
+
+
+@pytest.mark.parametrize("cmd", ["approve", "reject"])
+def test_cli_approve_and_reject_demand_who(cmd):
+    """审计是不变量（照 unblock 的 missing_audit 先例）：没有 `--by` 连解析都不给过。"""
+    from larkflow.__main__ import build_parser
+    with pytest.raises(SystemExit) as e:
+        build_parser().parse_args([cmd, "i", "n"])
+    assert e.value.code == 2

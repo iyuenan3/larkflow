@@ -45,5 +45,6 @@ class OrchestratorState(TypedDict):
     reopen_counts: Annotated[dict, add_counts]  # gate_id -> 已打回次数（预算，防无限重算）
     attempts: Annotated[dict, add_counts]       # node_id -> 第几轮（派单幂等键的一部分）
     unblocks: Annotated[dict, extend_lists]     # node_id -> 人解除 blocked 的审计记录（追加）
-    escalations: Annotated[dict, extend_lists]  # gate_id -> 跨界打回的审批申请（ADR-023 ③，追加）
+    escalations: Annotated[dict, extend_lists]  # gate_id -> 跨界打回的审批申请 + 裁决（ADR-023 ③，追加）
+    edits: Annotated[dict, extend_lists]        # "log" -> 受控活图的改图审计（ADR-013，追加）
     meta: dict         # instance_id / reporter / inputs / template_id 等

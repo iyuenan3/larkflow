@@ -3,7 +3,7 @@
 现场证据链：卡片事件通；任务事件在 **bot 身份 + pre-consume 正常 + websocket 已连 +
 app 建的任务 + app 完成 + 甚至把 app 加成 follower** 的情况下，一条都收不到。
 于是 ADR-038 的轮询不再是「安全网」，而是 `task_complete` 节点**唯一**能依靠的通道，
-只在启动时跑一次远远不够 —— 人交了卷，引擎要等到下次重启才知道。
+只在启动时跑一次远远不够：人交了卷，引擎要等到下次重启才知道。
 """
 from __future__ import annotations
 

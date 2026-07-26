@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
 import threading
 import time
@@ -61,15 +63,24 @@ class EventPump:
         t.start()
         self._threads.append(t)
 
-    def _spawn(self, key: str) -> subprocess.Popen:
+    def _argv(self, key: str) -> list[str]:
         base = ["lark-cli"]
         if self.profile:
             base += ["--profile", self.profile]
+        return base + ["event", "consume", key, "--as", self.identity]
+
+    def _spawn(self, key: str) -> subprocess.Popen:
         # 保留 stdin=PIPE 不关 → 无界订阅不因 EOF 退出（研究坑）
+        # **`start_new_session=True`**：子进程自成进程组，停机时才能按组把整棵树带走。
+        # `lark-cli event consume` 是两级进程（`node …/bin/lark-cli` 再派生真正的 CLI），
+        # 只 terminate 第一级的话，孙进程继续握着 stdout / stderr，管道**永远不 EOF**，
+        # 泵线程一直阻塞在 `for line in proc.stdout`，于是 `join(timeout)` 必然超时：
+        # 每次停机都判「没排空」、不关连接、退出码非 0，把「这次停机干不干净」这个信号
+        # 淹在恒定噪声里（真机上两次重启逐字复现，事件数都是 0）。
         return subprocess.Popen(
-            base + ["event", "consume", key, "--as", self.identity],
+            self._argv(key),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, bufsize=1,
+            text=True, bufsize=1, start_new_session=True,
         )
 
     def _await_ready(self, proc: subprocess.Popen, key: str) -> None:
@@ -135,20 +146,47 @@ class EventPump:
                 return
 
     def stop(self) -> None:
-        """停订阅：置位 + 终止 `event consume` 子进程。**不动正在处理的那条事件**
+        """停订阅：置位 + 终止 `event consume` **整棵进程树**。**不动正在处理的那条事件**
         （它可能正握着实例锁写 checkpointer），要等它请用 `join`。"""
         self._stop.set()
         for proc in self._procs:
+            self._terminate_tree(proc)
+
+    def _terminate_tree(self, proc) -> None:
+        """按**进程组**结束，而不是只杀 Popen 拿到的那一个。
+
+        `lark-cli event consume` 是两级进程（`node …/bin/lark-cli` 再派生真正的 CLI）。
+        只 `terminate()` 第一级的话，孙进程继续握着 stdout / stderr，管道**永远不 EOF**，
+        泵线程一直阻塞在 `for line in proc.stdout`，于是 `join(timeout)` 必然超时：每次
+        停机都判「没排空」、不关连接、退出码非 0，把「这次停机干不干净」这个信号淹在恒定
+        噪声里（真机上两次重启逐字复现，事件数都是 0；本地用一个自己派生孙进程的替身
+        也稳定复现）。
+
+        进程组是 `_spawn` 里 `start_new_session=True` 建的。拿不到 pid / 不是真进程
+        （测试替身）时退回逐个 terminate，别让替身把停机路径搞崩。
+        """
+        def signal_group(sig) -> bool:
+            pid = getattr(proc, "pid", None)
+            if pid is None:
+                return False
+            try:
+                os.killpg(os.getpgid(pid), sig)
+                return True
+            except (OSError, TypeError, AttributeError, ValueError):
+                return False
+
+        if not signal_group(signal.SIGTERM):
             try:
                 proc.terminate()
             except Exception:
                 pass
-            wait = getattr(proc, "wait", None)
-            if wait is None:
-                continue
-            try:
-                wait(timeout=5)
-            except Exception:            # 赖着不走才升级到 kill，别一上来就硬杀
+        wait = getattr(proc, "wait", None)
+        if wait is None:
+            return
+        try:
+            wait(timeout=5)
+        except Exception:            # 赖着不走才升级到 kill，别一上来就硬杀
+            if not signal_group(signal.SIGKILL):
                 kill = getattr(proc, "kill", None)
                 if kill is not None:
                     try:

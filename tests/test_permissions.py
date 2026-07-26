@@ -282,17 +282,22 @@ def test_a_cross_boundary_reopen_is_escalated_and_not_executed():
     assert log[0]["collateral"] == ["side"] and log[0]["status"] == "pending"
     assert log[0]["at"]
 
-    # 审批人 = 项目 owner + 目标节点主负责人（角色须过 resolver，别把中文名当 open_id 发出去）
-    told = {n["target"] for n in io.notifications}
-    assert {"ou_owner", "ou_甲"} <= told
+    # 审批人 = 项目 owner + 目标节点主负责人（角色须过 resolver，别把中文名当 open_id 发出去）。
+    # 他们收到的是**可点的审批卡**（ADR-043），不是纯文本；申请人那条回执才是 notify。
+    told = {c["target"] for c in io.cards.values()
+            if (c["buttons"][0]["action_value"] or {}).get("kind") == "escalation"}
+    assert {"ou_owner", "ou_甲"} == told
+    assert any(n["target"] == "ou_乙" for n in io.notifications), "申请人拿回执"
     assert res["approvers"] == ["ou_owner", "ou_甲"]
     # 记录里存的是**令牌**（角色名不会随映射变动而失真）+ 当时真发给了谁，两者都要
     assert log[0]["approvers"] == ["ou_owner", "甲"]
     assert log[0]["notified"] == ["ou_owner", "ou_甲"]
 
-    # 申请那一拍写了权威 state（会换中断 id），但不许因此重复派单
+    # 申请那一拍写了权威 state（会换中断 id），但不许因此重复派单。
+    # 只数**派单卡**：审批卡挂在同一个 node_id 上（ADR-043），不分开数会把它们算进来。
     assert len([c for c in io.cards.values()
-                if c["buttons"][0]["action_value"]["node_id"] == "g"]) == 1
+                if c["buttons"][0]["action_value"]["node_id"] == "g"
+                and c["buttons"][0]["action_value"].get("kind") != "escalation"]) == 1
 
     # 乙 手里那张卡还有效：申请不是裁决，他仍然可以放行
     assert "resumed" in click(svc, io, "g", "通过", operator="ou_乙")
@@ -339,7 +344,7 @@ def test_a_reopen_inside_the_participants_own_lane_just_works():
 def test_the_default_reopen_target_on_the_card_is_already_permission_filtered():
     """卡上的默认目标只剔「点了必被拒」的（denied），**保留**要走审批的那些。
 
-    g 的 deps = [c, b]：c 在乙自己这一支，b 会连累丙。两个都得留在卡上 —— 把 b 删掉的话，
+    g 的 deps = [c, b]：c 在乙自己这一支，b 会连累丙。两个都得留在卡上：把 b 删掉的话，
     乙 点一下就只把 c 退回去重做，b 与那笔本该产生的审批申请一起无声消失，
     `_check_reopen` 的「全或无」被发卡那一刻的过滤架空
     （见 test_the_card_button_never_silently_reopens_only_half_of_the_default）。
@@ -364,7 +369,7 @@ def test_clicking_the_default_reopen_button_executes_without_asking_anyone():
     """默认目标全都在他自己这一支时，点一下就当场执行，不惊动任何人。
 
     这条原来跑在 g 上（deps = [c, b]，b 会连累丙）。它当时之所以「不用问人」，是因为
-    发卡时把 b 悄悄删掉了 —— 测到的其实是那次静默的部分打回，不是这条性质。
+    发卡时把 b 悄悄删掉了，测到的其实是那次静默的部分打回，不是这条性质。
     """
     llm = CountingLLM({"w": "正文"})
     svc, io = build_service(LANE, llm=llm, deliverables=FakeDeliverableStore())
@@ -572,7 +577,7 @@ def test_permission_follows_the_live_graph_not_the_template():
 
     svc.edit_graph("lg-1", [{"op": "add_node", "node": {
         "id": "side", "label": "丙审", "executor": "human", "role": "gate", "deps": ["d"],
-        "assignee_role": "丙", "signal": "card_action", "approval_policy": "single"}}])
+        "assignee_role": "丙", "signal": "card_action", "approval_policy": "single"}}], by="ou_owner", reason="测试改图")
 
     mine = {p["node_id"]: p for p in svc.pending("lg-1", actor="ou_乙")}["g"]
     assert mine["reopen_candidates"] == []               # 新来的丙成了会被连累的旁观者
@@ -713,7 +718,7 @@ def test_the_card_button_never_silently_reopens_only_half_of_the_default():
 
     g 的默认目标 = deps = [c, b]，其中 b 会连累丙。`_permitted_default` 把 b 删掉之后，
     乙 点「打回」拿到的是一次**静默的部分打回**：c 重算了、b 原样不动、申请没落、
-    谁都没被告知 —— 正是 `_escalate` 那段注释说的「比什么都不做更难排查」。
+    谁都没被告知，正是 `_escalate` 那段注释说的「比什么都不做更难排查」。
     """
     svc, io, llm = perm_service("pm-20")
     before = llm.counts["w"]
@@ -745,7 +750,7 @@ def test_the_read_api_and_the_card_agree_on_the_default_reopen_target():
     """驾驶舱 / 前端读到的默认目标，必须与卡上那颗按钮里的**逐字一致**。
 
     两处各自过一遍权限层、口径却不同（一处只留 allowed，一处留 allowed ∪ 待审批），
-    就是同一个「打回」有两种语义 —— 照读接口预勾选再回传，等于绕出一次静默的部分打回。
+    就是同一个「打回」有两种语义：照读接口预勾选再回传，等于绕出一次静默的部分打回。
     """
     svc, io, llm = perm_service("pm-23")
     for nid in ("g", "side"):
