@@ -1,13 +1,14 @@
 # CLAUDE.md · larkflow（飞流）· router
 
 > 飞书原生的**通用**交付物流转工作流引擎（LangGraph 驱动）。本文件是 router；详细真相源在 `AIREADME/`（先读 `AIREADME/INDEX.md`）。
-> 当前：引擎 + 服务层落码，**真栈第一条 e2e 已跑通**（2026-07-26）；设计全定（ADR-012..042）。
+> 当前：引擎 + 服务层落码，**真栈第一条 e2e 已跑通**（2026-07-26），**已真部署到 alicloud-sh**（2026-07-27，systemd 常驻 + 长连接活着）；设计全定（ADR-012..042）。
 
 ## 状态
 引擎核心 + 通用性收口 + 服务层全部落码，并已在**真飞书 + 真 LLM** 上把策展合同图八个节点端到端跑通（2026-07-26，5 份真实交付物，证据见 CHANGELOG v0.6.0）。**新增业务场景 = 只加一个 yaml，零 Python**（见 `templates/hiring.yaml`）。
 **v1.0 win 判据 4/4**（2026-07-26 全部在真栈取得）：真项目跑通 ✅ / 打回可感知省算 ✅ / 运行中改图 ✅（`larkflow edit` 在跑到一半的真实例上插节点 + 改依赖，卡片重绑不失效）/ auto 门双向 ✅。**但这一版是 Maxwell 一人扮全部角色跑的**，非 Maxwell 的真人 = 0：win 证的是引擎能做到，不是有人要（采用 gate 见 ROADMAP）。
 **469 测绿**，全程 Mock/Stub/`:memory:`（红线：绝不构造 `build_real_service`），证的是逻辑自洽；真栈那一遍是手工跑的。
-已知留白（详见 ROADMAP v1.0）：`unblock` 无权限层（`by` 只进审计，`unblock(reopen=…)` 是绕过 ADR-023 的路）；改图换负责人不重新派单；`assignee_role` 配成飞书群时该节点无人可应答；`task.task.update_user_access_v2` 为什么根本不推送未查明（ADR-039）；daemon 自己没有存活信号。
+已知留白（详见 ROADMAP v1.0）：`unblock` 无权限层（`by` 只进审计，`unblock(reopen=…)` 是绕过 ADR-023 的路）；改图换负责人不重新派单；`assignee_role` 配成飞书群时该节点无人可应答；daemon 自己没有存活信号。
+（**已消除**：`task.task.update_user_access_v2` 不推送 → 2026-07-27 在 alicloud-sh 上验到推送且路由正常，2 秒跑完整条链；病根是本机那个跨重启复用的陈旧 `lark-cli event _bus`，不是平台。轮询降级回安全网，见 ADR-039。）
 
 ## 加载路由（任务 → 读）
 | 任务 | 读 |
@@ -15,7 +16,7 @@
 | 了解定位 / 红线 | `AIREADME/CORE` |
 | 改架构 / 选型 | `AIREADME/ARCHITECTURE` + `DECISIONS` |
 | 加功能 / 产品 | `AIREADME/PRD` + `ROADMAP` + `CONVENTIONS` |
-| 部署 / 运维 | `AIREADME/DEPLOYMENT`（形态已落码，仍未真部署）|
+| 部署 / 运维 | `AIREADME/DEPLOYMENT`（**已真部署**：alicloud-sh，systemd 常驻，一租户一进程；含 runbook 与 `larkflow doctor`）|
 | 依赖关系 | `AIREADME/RELATIONS` |
 
 ## 红线（前三条详见 `AIREADME/CORE`「绝不」；后两条是落码后追加的工程红线）

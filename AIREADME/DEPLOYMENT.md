@@ -1,9 +1,23 @@
 # DEPLOYMENT · larkflow
 
-⚑ **仍未部署**（一次真部署都没做过，宿主上没起过进程）。变化的是：**部署形态已经落码**（`larkflow serve` + CLI，ADR-031），不再是「立项 pre-code」的纸面设想。差的是 dev 飞书应用与真栈验证，见文末〈还缺什么才能真跑〉。
+✅ **已真部署**（alicloud-sh，2026-07-27）。ADR-007 从立项欠到现在的那笔债还上了：租户 `dev` 以 systemd 常驻，真飞书凭证，**入站长连接已建立**：
+
+```
+[21:19:44] 启动对账：实例 0｜已对账 0｜已完成 0｜失败 0
+[21:19:47] 入站通道已就绪：['card.action.trigger', 'task.task.update_user_access_v2']
+[21:19:47] 定期对账已起：每 120s 一轮
+```
+
+实测资源：**6 进程 / 282 MB RSS**（1 个 python + 每个 EventKey 一条两级 node consume + 1 个 per-(HOME,appId) 的事件总线守护进程）。宿主 1.6G 内存，起完还剩约 1.0G 可用。
+
+产物在 `deploy/`（systemd 模板单元 + 租户 env 模板 + bootstrap 脚本）+ `larkflow doctor`（只读体检）+ 文末〈runbook〉。
+
+**仍未做**：在这台机器上跑一条真实例走完八个节点（引擎能力本身已在 Mac 上验过，见 CHANGELOG v0.6.0）；长连接跨小时级的存活（那正是 ADR-039 记的「静默死亡」，只能靠时间验）。
+
+这一趟换来 6 条真机才看得见的东西，全部已修回代码，逐条记在下面各节：模板 yaml 根本没被打进包（装出来的引擎一条流程都跑不起来）、`requires-python` 过严、`Path.exists()` 不吞 EACCES、`ensurepip` 单独成包、`StartLimit*` 写错段被静默忽略、以及凭证隔离只认 `HOME`。
 
 ## 目标形态
-- **宿主**：alicloud-sh（Ubuntu 22.04 / 2 核 / 1.6G 内存 / 40G 盘；内网地址走 keychain 不入库，当前只开 22 端口、闲置）。
+- **宿主**：alicloud-sh（Ubuntu 22.04.5 / x86_64 / 2 核 / **1.6G 内存**（可用约 1.15G）/ 40G 盘（34G 空闲）；只开 22 端口）。Python 自带 3.10.12，**`ensurepip` 在单独的 `python3.10-venv` 包里**（`python3 -m venv --help` 会过、真建 venv 才报错）。内存这条是硬约束：实测每租户约 6 进程 / 300MB，而定期对账的全量枚举会再吃几百 MB 峰值，**这台机器一个租户就接近满**。
 - **持久化**：LangGraph checkpointer 用 **SQLite**（省内存，单租户 MVP 够）。同一个文件里还有关联表与幂等表。**必须放本地盘**（网络盘上 WAL 与 flock 都不可靠，见〈多进程〉）。
 - **事件入口**：引擎 spawn `lark-cli event consume <EventKey>` 子进程收 NDJSON，出站长连接。**无需任何入站端口**（ADR-007）。
 - **前端↔引擎传输（命门，ADR-019）**：前端要引擎的读 / 命令 API = 入站。但妙搭云托管（`aiforce.cloud`）能否 egress 到本机、且本机能否公网可达（公网 IP / 域名 / 证书 / 反代 / 隧道）**未确认**。若不能，**退「命令走飞书原生轨」**：app 写多维表格 / 发消息 / 触发自动化 → 引擎经 `event consume` 消费（保 ADR-007「无入站」）。**列为妙搭原型第一必验项，排在画布之前。**
@@ -54,6 +68,32 @@ larkflow unblock / start / status / …  ← 另一个进程，写同一个 SQLi
 
 **代理**：本机 shell 有 Clash 全局代理，lark-cli 会警告凭证经由代理传输。飞书是境内服务，建议 `LARK_CLI_NO_PROXY=1` 绕开。注意这条警告与 `failed_precondition` 类报错**无关**，后者是发请求之前的本地前置校验，别把它误诊成网络问题。
 
+## 飞书凭证在宿主上到底落在哪（2026-07-27 查实）
+
+开发机上 `~/.lark-cli/config.json` 里是 `"appSecret": {"source": "keychain", "id": "appsecret:<appId>"}`，真值在 macOS Keychain 里。**这个结论不能带到 Linux 宿主上**，而红线「key / 凭证不入库」在真宿主上成不成立就取决于这一条。查法与结论：
+
+- lark-cli 是 Go 写的单体二进制，npm 包按平台分发。取官方 `lark-cli-1.0.77-linux-amd64.tar.gz`（校验和对过），扫符号与字符串：
+  - darwin 构建链的是 `github.com/zalando/go-keyring`，只编进 `macOSXKeychain` 那条实现。
+  - **linux 构建里 `keyring` / `freedesktop` 零命中**（同一份二进制里 `open-apis` 有 365 处，证明字符串提取是有效的），即**没有走 D-Bus Secret Service**，没有 gnome-keyring / KWallet 这条路。
+  - linux 构建里有 `internal/keychain/keychain_other.go`、`keychain.getMasterKey`、常量 `master.key`，以及一句面向用户的原话：**「command is only supported on macOS; on this platform the keychain layer already uses local files.」**
+**在真宿主上实测坐实**（alicloud-sh，Ubuntu 22.04.5，无桌面、无 gnome-keyring、无 user D-Bus、`org.freedesktop.secrets` 不存在）。用一个**假** app secret 建 profile，落盘的是：
+
+```
+-rw------- 240 <CONFIG_DIR>/config.json                       {"appSecret":{"source":"keychain","id":"appsecret:<appId>"}}
+-rw-------  32 <DATA_DIR>/lark-cli/master.key                 32 字节 = AES-256 主密钥
+-rw-------  56 <DATA_DIR>/lark-cli/appsecret_<appId>.enc      密文
+```
+
+- **结论**：Linux 上 app secret = **密文文件 + 同目录的 `master.key`**。注意 `config.json` 里仍写着 `"source": "keychain"`，那只是内部抽象的名字，这台机器上根本没有任何 keychain。它是**静态混淆，不是 OS 级保护**：谁读得到这个目录谁就解得开。
+
+三条直接后果：
+
+1. 红线仍然成立（凭证不在 larkflow 的 SQLite 里），但**安全边界从「OS 钥匙串」降级成「文件权限 + 谁能登这台机」**。所以每租户独立 Unix 用户 + `0700` 目录不是洁癖，那是这一层唯一的防线。
+2. **隔离只认 `HOME` 一个变量。** 实测三组对照：只设 `HOME` 时 config 与密文**都**跟着 HOME 走（`$HOME/.lark-cli/` 与 `$HOME/.local/share/lark-cli/`）；`HOME` + `LARKSUITE_CLI_CONFIG_DIR` 时 config.json 分开了、**密文仍留在 HOME 下**；再加 `LARKSUITE_CLI_DATA_DIR` 密文才跟着走。结论是**只设 HOME 就已经把两样都隔离干净了**，多设那两个不增加任何隔离，只增加一处「建 profile 时的 env 与服务运行时的 env 不一致」的失败模式，而那个失败极其隐蔽：profile 建出来看着正常、`profile list` 里也在，服务却在 `auth status` 报 `bot: not_configured`，然后照常启动、静默地没有凭证（当天踩了两次）。所以 `deploy/` 里只留 `HOME`，并给每个租户放一个 `<租户目录>/lark` 包装器，人手工敲 lark-cli 时一律走它、不碰 env。
+3. 建 profile 不需要浏览器：`lark-cli profile add --app-secret-stdin` 完全非交互（真机实测通过），secret 走 stdin 不进命令行、不进 shell 历史。
+
+**未验的一条**：二进制里还有 `LARKSUITE_CLI_APP_ID` / `LARKSUITE_CLI_APP_SECRET` 这对**未文档化**的环境变量。设上之后 lark-cli 进入 external credential provider 模式（`auth` 子命令被拒，原话 "credentials are provided externally and do not support interactive management"），而且**配置目录里一个文件都不落**。若它能真正完成 token 交换，凭证就可以完全不落盘、只存在于 0600 的 env 文件里，比上面那套文件加密强一个档次。但 README 里没有它、也就没有兼容承诺，**验通之前不要依赖**。
+
 ## 启动 / 退出行为
 `larkflow serve` 的一生（顺序是硬的，理由见 ADR-031）：装 SIGINT/SIGTERM → **启动全实例对账** → 起泵 → block 到收到信号 → 停订阅 → 等在飞的那条事件跑完 → 关 DB。
 
@@ -86,13 +126,52 @@ daemon 常驻握着 DB，而运维的一次性命令（尤其 `unblock`，那是
 - 角色映射：`LARKFLOW_ROLES`（JSON，`assignee_role → open_id`；中文角色名当环境变量名 export 不进去，故以 JSON 为主）、`LARKFLOW_ROLE_<ASCII 别名>`（辅，会合并）。真栈 strict：模板里出现的角色没配全会在**装配期直接抛**，绝不伪造 `ou_<角色名>` 发给飞书。
 - LLM（ADR-017，按角色一组三元组）：`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`（默认角色兜底），以及 `LLM_<ROLE>_BASE_URL` / `_API_KEY` / `_MODEL`（如 writer / legal / editor / triage）。三元组缺项的角色会被跳过。
 
-## 进程守护建议（尚未在真机上验证）
-- systemd 单元：`ExecStart=/usr/local/bin/larkflow serve`、`Restart=always`、`RestartSec=5`，`EnvironmentFile=` 指到 `.env`，`WorkingDirectory` 与 `LARKFLOW_DB` 的目录读写权限对齐（锁文件与 WAL 会写在 DB 同目录）。停止用默认 SIGTERM 即可（daemon 会优雅收尾）；`TimeoutStopSec` 给到大于事件处理时间（一条事件里可能在跑 LLM）。
+## runbook：一台机器上开一个租户（目标 30 分钟，尚未在真机上验证）
+
+产物在 `deploy/`：`larkflow@.service`（systemd 模板单元，`%i` = 租户名）、`tenant.env.example`、`bootstrap.sh`。一台机器可以跑多个租户，**每租户 = 一个进程 + 一个 SQLite + 一个 lark-cli 配置目录 + 一个 Unix 用户**，引擎代码零改动（全仓 `grep -rni tenant larkflow/` = 0，隔离全靠这四样物理分区）。实测每租户约 6 个进程 / 300MB（1 个 python + 每个 EventKey 一条两级 node consume + 1 个事件总线守护进程）。
+
+**为什么不用 systemd 的 `EnvironmentFile=`**：它有自己的引号规则，而要塞进去的恰好是最容易被引号规则改坏的两类值（`LARKFLOW_ROLES` 是内含双引号的 JSON、LLM 的 api_key 常含 `$`）。这个项目已经被「`source .env` 把 JSON 引号吃掉」坑过一次，不该换个解析器再坑一次。改用 `larkflow --env-file`，走本项目自己那套有测试钉着的解析器；systemd 侧只放纯 ASCII 的 `HOME` 与 `LARKSUITE_CLI_*`。
+
+**国内宿主先解决源**（阿里云上海实测：github / npm registry / npmmirror / open.feishu.cn 都直连通，**唯独 `pypi.org` 超时**）。所以：
+
+```bash
+# node：apt 里的太老（lark-cli 要 >=16），NodeSource 域内不稳，直接取 npmmirror 的二进制
+curl -sSL -o node.tar.xz https://registry.npmmirror.com/-/binary/node/v24.18.0/node-v24.18.0-linux-x64.tar.xz
+sudo tar -xJf node.tar.xz -C /usr/local --strip-components=1     # curl 必须带 -L，不然拿到的是重定向页
+sudo npm i -g @larksuite/cli --registry=https://registry.npmmirror.com
+# pip：bootstrap.sh 默认已经指到阿里云镜像，可用 PIP_INDEX_URL 覆盖
+```
+
+| # | 做 | 验收（做完立刻确认，别攒到最后） |
+|---|---|---|
+| 0 | 客户侧建飞书**自建应用**、开权限（见上面的权限台账）、**事件与回调两栏分别订阅且都选长连接**、**发布版本** | 控制台能看到已发布版本；漏发版本时行为与「没配」一模一样，排查顺序永远是先确认版本 |
+| 1 | 装 node + lark-cli（见上）；`sudo ./deploy/bootstrap.sh <租户名>` | 脚本自己会报每一步是新建还是跳过（幂等，重复跑不覆盖 env 与凭证） |
+| 2 | 配 profile（secret 走 stdin）：`lark-cli profile add --name <租户> --app-id cli_xxx --app-secret-stdin` | `lark-cli --profile <租户> auth status --json` 的 `appId` 对得上、`identities.bot.status == ready` |
+| 3 | 填 `/srv/larkflow/<租户>/larkflow.env` | 至少 `LARK_PROFILE` / `LARKFLOW_APP_ID` / `LARKFLOW_ROLES` / 一组 `LLM_*` |
+| 4 | `larkflow --env-file <那个文件> doctor` | 全绿或只剩 ⚠️。**这一步是整套 runbook 的意义所在**：它把「起不来 / 起来了但静默不干活」的已知成因一次查完，而不是到现场逐个撞 |
+| 5 | `sudo systemctl enable --now larkflow@<租户>` | `journalctl -u larkflow@<租户> -f` 看到启动对账跑完 + 入站通道就绪 |
+| 6 | 起一条真实例走一遍 | `larkflow start …` → 人在飞书里收到卡 → 点一下 → `larkflow status` 变了 |
+
+**演练时验到的正常失败长什么样**（假凭证下，第 5 步）：ExecStartPre 的 doctor 输出整段进 journald，接着 `启动对账：实例 0`，然后 `故障 startup: RuntimeError: event consume card.action.trigger 未在 30.0s 内就绪`，`已停止（干净）`，退出码 1，systemd 5 秒后重启。**这是好的失败**：响、有指向、退出码非 0。真凭证下这一条应该变成入站通道就绪且不再退出。顺带这次也在真 Linux 上验到了 `已停止（干净）`，即 ADR-044 的进程组修复成立（Mac 上那条路一直报「10s 内没排空」）。
+
+**踩过的两个 systemd / 打包坑**（已修，写在这里免得下次重踩）：
+- `StartLimitIntervalSec` / `StartLimitBurst` **必须写在 `[Unit]` 段**。写进 `[Service]` 时 systemd 249 只对前者报 `Unknown key name ... ignoring`、却把后者收下，于是配上默认的 10 秒窗口，而每轮失败要 9 秒，永远凑不满次数：实测连重启 16 次仍在 `activating`。改到 `[Unit]` 后 10 次即停进 `failed`，日志写 `Start request repeated too quickly`。
+- **模板 yaml 要在 `pyproject.toml` 里显式声明 package-data**，否则 `pip install` 装出来的包里 `templates/` 只有 `__init__.py`，`load_template` 抛「模板文件不存在」，引擎一条流程都跑不起来。从源码树跑永远发现不了。`tests/test_packaging.py` 现在钉着它。
+
+**`auth status` 是纯本地判断**（拿伪造 secret 建的 profile 它照样说 `ready`）：它证明「配成了哪个 app」，不证明「凭证还能用」。真正的凭证验证只能靠第 6 步跑一条真链路。
+
+**`ExecStartPre` 用 `-` 前缀跑 doctor**：失败也不挡启动。这是有意的，长连接会静默死亡、`Restart=always` 不能被一次体检失败卡住；但每次启动都把体检结果留进 journald，出事时第一屏就是「当时配置长什么样」。doctor 全程本地只读，不会因为网络抖动假红。
+
+**多租户时最容易犯的错**：复制 systemd 单元忘了改 `LARK_PROFILE`。写错 profile 名 lark-cli 会 fail loud；写成**另一家的合法 profile 名**不会，那就是无声的跨租户串号。`LARKFLOW_APP_ID` 这颗钉子专治这个，doctor 每次启动都对一遍。
+
+## 进程守护要点（细节已落在 `deploy/larkflow@.service`）
+- `Restart=always` + `RestartSec=5`。**不是可选项**：长连接没有队列，daemon 不在线时人点按钮当场失败且不补投。同时给 `StartLimitBurst=10` / `StartLimitIntervalSec=300`，配置写错时停进 failed 状态说人话，而不是每 5 秒假装重启。
+- `TimeoutStopSec=330`：停机是「停订阅 → 等在飞的那条事件跑完 → 关 DB」，一条事件里可能正在跑 LLM（默认超时 300s）。没排空 daemon 会拒绝关 DB 并以非 0 退出，那是设计如此。
 - `lark-cli event consume` 子进程的拉起与断线重启由 daemon 自己管（退避重启 + 上限，达上限会喊出来），systemd 只管 daemon 本身。
 - 观测：目前只有 stderr 日志 + 进程内计数（`server.stats` / `server.errors`），**没有 HTTP 探针、不落盘指标**（ADR-007 无入站端口下有意为之）。运维靠 `journalctl` 与 `larkflow status <实例>`。
 - 备份：直接备份 SQLite 文件（WAL 模式下连 `-wal` / `-shm` 一起，或先 `sqlite3 .backup`）。锁文件（`<DB>.locks/`、`<DB>.serve.lock`）不必备份，已进 `.gitignore`。
 
-## 还缺什么才能真跑（按顺序，每条都没做）
+## 还缺什么才能真跑（宿主侧已就位；缺的全在飞书那一侧 + 真凭证）
 1. **建 dev 飞书自建应用**（ADR-008 独立租户）：权限（`task:task` / `im:message` / `docx:document` + `drive:drive`）、**事件与回调 → 回调配置里开 `card.action.trigger`**（不开就一个按钮点击也收不到，且消费端不报错、只是永远静默）、事件订阅方式选长连接、`lark-cli auth login` 把凭证配进 profile。
 2. **配 env**（上一节清单）+ 角色 open_id 映射齐全。
 3. **在宿主上真起一次 `larkflow serve`**：systemd 单元没写过、没跑过；`build_real_service` 这条路**零测试覆盖**（红线：测试绝不构造真栈，只把它的调用方测穿了）。
