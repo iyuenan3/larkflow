@@ -129,6 +129,19 @@ def _now() -> str:
     return datetime.now(_CST).isoformat(timespec="seconds")
 
 
+class InstanceExists(ValueError):
+    """`start` 打到一个已经存在的实例上。
+
+    不是「重复起实例」这种手滑级问题，是 ADR-042 那条鉴权的**旁路**：`meta` / `dag` 是
+    无 reducer 的通道，`invoke(state0)` 对它们是整个替换，于是一条 `start --id <既有>`
+    就能换掉 owner、换掉项目要素、把整张图（含一道还在等的门）替成自己给的那张，而且
+    `edits` 审计里一个字都不留。`status` 走 merge reducer，`{}` 合并等于不动，所以实例
+    看起来**没被重置**，它带着原来的进度按新图跑到底，比整个清空更难被发现。
+
+    照 store.py 顶部那句口径：宁可失败得响，不要静默覆盖。
+    """
+
+
 class LarkFlowService:
     def __init__(self, *, graph, io: LarkIO, correlations: Correlations, resolver,
                  dag: list[dict], executors=None, lock_factory=None):
@@ -231,6 +244,14 @@ class LarkFlowService:
         """
         dag = self._resolve_template(template)
         with self._thread_lock(instance_id):
+            # 判在锁**内**：`larkflow start` 是一次性命令，两个人同时敲同一个 --id 时
+            # 锁外判会让两边都看到「不存在」。判据借 `dag_of` 那把尺，不另写一个：CLI 的
+            # status / pending / edit 判 no_such_instance 用的就是它，两把尺迟早分叉成
+            # 「查无此实例」与「已存在，不许起」并存（v0.7.0 活性判据那条教训）。
+            if self.dag_of(instance_id):
+                raise InstanceExists(
+                    f"实例已存在：{instance_id}。起新实例请换一个 id；要改这个实例的图走 "
+                    f"`larkflow edit`（它有 owner-only 鉴权与审计，ADR-042）。")
             state0 = {
                 "dag": dag,
                 "status": {},
@@ -346,11 +367,25 @@ class LarkFlowService:
                     denied = self._check_answer(instance_id, values, gate_id, actor)
                     if denied is not None:
                         return denied
+            # 先回一张「已收到」（真部署第一条 e2e 撞出来的）。**下游是在下面这个 invoke
+            # 里面就跑掉的**，不是在 `_advance` 里：一道门放行后紧跟着的 llm 节点实测要两分
+            # 多钟（配额耗尽切备用线路时更久）。只在 invoke 之后改卡，人点完就得盯着一张毫无
+            # 变化的卡等几分钟，而这正是 ADR-037 要消灭的那句原话「点了通过或者打回，卡片
+            # 没有任何变化，会让用户不知道点过了没」。ADR-037 补的是「有没有」，这里补「多久」。
+            # 为什么不干脆把**结论**提前写：那等于在裁决落库之前替引擎许一个还没兑现的诺，
+            # invoke 万一抛了，卡上就留着一条假事实。所以这一段只说「收到了」，这在此刻是
+            # 无条件为真的（权限已经验完、马上就提交）。飞书的 token 恰好可以用 2 次，正好够。
+            self._settle_card(instance_id, values, gate_id or node_id, token,
+                              "⏳ **已收到，正在处理**…（处理完这张卡会更新成结论）")
             self.graph.invoke(Command(resume={interrupt_id: value}),
                               self._run_cfg(instance_id), durability="sync")
-            self._advance(instance_id)
+            # 结论这一次仍排在 `_advance` **之前**：`_advance` 抛异常时改卡就轮不到执行，
+            # 而裁决其实早就以 durability="sync" 落库了，「引擎已经收下」这个事实不该因为
+            # 下游推不动就完全不可见。`_verdict_line` 只读点击前的 `values` 与点击报文，
+            # 不依赖任何下游结果；`_settle_card` 自己吞异常，绝不会反过来挡住推进。
             self._settle_card(instance_id, values, gate_id or node_id, token,
                               self._verdict_line(values, gate_id or node_id, value, actor))
+            self._advance(instance_id)
             return {"resumed": interrupt_id}
 
     def edit_graph(self, instance_id: str, ops: list[dict], *,

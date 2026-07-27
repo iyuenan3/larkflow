@@ -192,3 +192,41 @@ def test_an_unconfigured_role_borrows_the_default_chain_backups_included():
                                         "model": "m2"}]}}
     llm, _made, _seen = build(roles, {"k1": [_Boom(503)]})
     assert llm.complete(prompt="p", model_role="没配过的角色") == "k2@https://relay/m2"
+
+
+# ---------- 默认角色的备用线路不许被当成「角色」（真栈加第三条线路时撞出来的） ----------
+
+def test_the_default_roles_backups_do_not_become_phantom_roles():
+    """`LLM_BACKUP2_*` 是**默认角色的第 2 条备用**，不是一个叫 backup2 的角色。
+
+    `LLM_ROLE_RE` 的前瞻是 `(?!.*_BACKUP\\d*_)`，要求 BACKUP 前面有下划线，所以它挡得住
+    带角色名的 `LLM_WRITER_BACKUP_BASE_URL`，却挡不住不带角色名的 `LLM_BACKUP_BASE_URL`
+    与 `LLM_BACKUP2_BASE_URL`：那两个的 role 组分别匹配成 "BACKUP" / "BACKUP2"。
+
+    后果与 `config.py` 顶部那条注释担心的一模一样，只是漏了另一半：配置看起来完全正常，
+    `larkflow doctor` 会把 backup / backup2 当成两个真角色列出来，让人以为配了三个角色
+    （实际是一个 + 两条备用）。模板里万一有节点的 model_role 恰好叫 backup，还会静默选中它。
+    """
+    env = {
+        "LLM_BASE_URL": "https://main.example.com", "LLM_API_KEY": "k0", "LLM_MODEL": "m0",
+        "LLM_BACKUP_API_KEY": "k1",
+        "LLM_BACKUP2_BASE_URL": "https://third.example.com",
+        "LLM_BACKUP2_API_KEY": "k2", "LLM_BACKUP2_MODEL": "m2",
+    }
+    roles = load_llm_roles(env)
+    assert set(roles) == {"default"}, f"只该有 default，实际 {sorted(roles)}"
+    chain = [roles["default"]] + list(roles["default"]["fallbacks"])
+    assert [c["base_url"] for c in chain] == [
+        "https://main.example.com", "https://main.example.com", "https://third.example.com"]
+    assert [c["api_key"] for c in chain] == ["k0", "k1", "k2"]
+
+
+def test_a_named_roles_backups_still_do_not_become_phantom_roles():
+    """带角色名那一半原本就挡住了，一起钉上防回归。"""
+    env = {
+        "LLM_WRITER_BASE_URL": "https://w.example.com",
+        "LLM_WRITER_API_KEY": "k", "LLM_WRITER_MODEL": "m",
+        "LLM_WRITER_BACKUP_API_KEY": "k1", "LLM_WRITER_BACKUP2_API_KEY": "k2",
+    }
+    assert set(load_llm_roles(env)) == {"writer"}
+    assert len(load_llm_roles(env)["writer"]["fallbacks"]) == 2

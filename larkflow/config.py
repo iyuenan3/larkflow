@@ -10,7 +10,14 @@ from typing import NamedTuple
 # 角色主配置。**必须排除 BACKUP 段**：`LLM_WRITER_BACKUP_BASE_URL` 长得就像
 # 「角色 writer_backup 的主配置」，不排除就会凭空多出一个没人用的角色，而备用线路
 # 静默失效、配置看起来还完全正常。
-LLM_ROLE_RE = re.compile(r"^LLM_(?:(?P<role>(?!.*_BACKUP\d*_)[A-Z0-9_]+)_)?BASE_URL$")
+#
+# 两个前瞻各挡一半（原来只有后一个，真栈上加第三条线路时漏了前一半）：
+#   · `(?!BACKUP\d*_)`    挡**不带角色名**的 `LLM_BACKUP_BASE_URL` / `LLM_BACKUP2_BASE_URL`，
+#                          它们是**默认角色的备用**，role 组会把它们读成叫 backup / backup2 的角色。
+#   · `(?!.*_BACKUP\d*_)` 挡**带角色名**的 `LLM_WRITER_BACKUP_BASE_URL`。
+# 只写后一个时前一半漏网，因为那条要求 BACKUP 前面有下划线，而 `LLM_BACKUP_…` 里没有。
+LLM_ROLE_RE = re.compile(
+    r"^LLM_(?:(?P<role>(?!BACKUP\d*_)(?!.*_BACKUP\d*_)[A-Z0-9_]+)_)?BASE_URL$")
 # 备用线路：BACKUP / BACKUP2 / BACKUP3…，按序号排队。
 LLM_BACKUP_RE = re.compile(
     r"^LLM_(?:(?P<role>[A-Z0-9_]+)_)?BACKUP(?P<idx>\d*)_"

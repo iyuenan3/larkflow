@@ -46,15 +46,30 @@ class TemplateError(ValueError):
     """模板不合法（结构 / 护栏）。"""
 
 
+def _readable(path: Path) -> bool:
+    """这个路径存在吗。**不能直接用 `Path.exists()`**（真机上踩过）。
+
+    `Path.exists()` 只把 ENOENT / ENOTDIR / EBADF / ELOOP 吞成 False，**EACCES 是往外抛的**。
+    于是当前工作目录恰好对本进程不可读时（`sudo -u` 切到另一个用户、systemd 的
+    `WorkingDirectory` 没配到位、从别人家目录里敲命令），`load_template("contract")` 抛的是
+    `PermissionError: 'contract'`，而它真正想说的只是「当前目录下没有这个文件，去内置模板
+    目录找」。报错信息里那个光秃秃的 `contract` 会把人引到模板名写错的方向上去。
+    """
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 def load_template(name_or_path: str) -> list[dict]:
     """按名字（templates/<name>.yaml）或路径加载模板，返回校验过的 dag。
 
     返回深拷贝：dag 会被 seed 进 state 且受控活图会改它，调用方之间不得共享可变对象。
     """
     path = Path(name_or_path)
-    if not path.exists():
+    if not _readable(path):
         path = TEMPLATES_DIR / f"{name_or_path}.yaml"
-    if not path.exists():
+    if not _readable(path):
         raise TemplateError(f"模板文件不存在: {name_or_path}")
     spec = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(spec, dict) or "nodes" not in spec:

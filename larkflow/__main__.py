@@ -26,11 +26,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from .config import RoleError, env, load_dotenv
+from .doctor import run_checks, verdict
 from .engine.executors import ExecutorError
 from .engine.livegraph import ADD, OPS, UPDATE, GraphEditError
 from .engine.support import UnsupportedInV1
 from .model.template import TemplateError
 from .serve import DEFAULT_EVENT_KEYS, LarkFlowServer
+from .service import InstanceExists
 from .store import DEFAULT_LOCK_TIMEOUT, LockBusy, daemon_lock_for, resolve_db_path
 
 MARK = {"done": "✅", "failed": "❌", "blocked": "⛔", "pending": "…", "skipped": "⊘"}
@@ -142,11 +144,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_global_flags(common, suppress=True)
     subs = ap.add_subparsers(
         dest="cmd",
-        metavar="{serve,start,status,pending,edit,escalations,approve,reject,unblock,reconcile}")
+        metavar="{doctor,serve,start,status,pending,edit,escalations,approve,reject,unblock,reconcile}")
 
     class sub:                      # 每个子命令都带上 common，少写一遍 parents=
         add_parser = staticmethod(
             lambda name, **kw: subs.add_parser(name, parents=[common], **kw))
+
+    sub.add_parser("doctor", help="起服务之前把能在本机查的问题一次查完（只读，不发消息）")
 
     p = sub.add_parser("serve", help="常驻：启动对账 + 起事件泵 + block 到收到信号")
     p.add_argument("--event-key", action="append", default=None,
@@ -376,6 +380,24 @@ def _new_instance_id() -> str:
 
 # ---------- 子命令 ----------
 
+_DOCTOR_MARK = {"ok": "✅", "warn": "⚠️ ", "fail": "❌"}
+
+
+def _cmd_doctor(ns, factory, server_factory, checker=run_checks) -> int:
+    """只读体检。**不经过 factory**：它要在「服务还装配不起来」的时候也能给出诊断，
+    而 `build_real_service` 恰恰会因为角色没配全之类的原因在装配期直接抛。
+    """
+    checks = checker(db_path=ns.db, template=ns.template, profile=ns.profile)
+    lines = [f"{_DOCTOR_MARK[c.level]} {c.name}：{c.detail}"
+             + (f"\n     ↳ {c.fix}" if c.fix else "") for c in checks]
+    v = verdict(checks)
+    tail = {"ok": "可以起 serve 了。", "warn": "能起，但上面几条 ⚠️ 值得先看一眼。",
+            "fail": "现在起会坏，先修掉 ❌ 那几条。"}[v]
+    _emit(ns, "\n".join(lines) + f"\n\n{tail}",
+          {"verdict": v, "checks": [c._asdict() for c in checks]})
+    return 1 if v == "fail" else 0
+
+
 def _cmd_serve(ns, factory, server_factory) -> int:
     """常驻。先抢单例锁：两个 daemon 订同一条事件流会把同一次点击处理两遍。"""
     lock = daemon_lock_for(ns.db)
@@ -397,7 +419,14 @@ def _cmd_start(ns, factory, server_factory) -> int:
     service = factory(ns)
     iid = ns.instance_id or _new_instance_id()
     inputs = dict(ns.inputs or [])
-    service.start(instance_id=iid, reporter=ns.reporter, inputs=inputs, template=ns.template)
+    try:
+        service.start(instance_id=iid, reporter=ns.reporter, inputs=inputs, template=ns.template)
+    except InstanceExists as exc:
+        # 与 status / pending / edit 的 no_such_instance 是同一句口径的反面，同样要自己
+        # 认领：落到 main 那条通吃 except 上会变成 internal_error，脚本分不出「我 --id
+        # 传重了」和「引擎炸了」，而前者是 --id 唯一的常见手误。
+        _emit(ns, str(exc), {"rejected": "instance_exists", "instance_id": iid})
+        return 1
     human, payload = _status_lines(service, iid)
     _emit(ns, f"已起实例 {iid}\n{human}", {"started": iid, **payload})
     return 0
@@ -553,7 +582,7 @@ def _cmd_reconcile(ns, factory, server_factory) -> int:
     return 1 if (report["failed"] or report["errors"]) else 0
 
 
-HANDLERS = {"serve": _cmd_serve, "start": _cmd_start, "status": _cmd_status,
+HANDLERS = {"doctor": _cmd_doctor, "serve": _cmd_serve, "start": _cmd_start, "status": _cmd_status,
             "pending": _cmd_pending, "edit": _cmd_edit, "escalations": _cmd_escalations,
             "approve": _cmd_approve, "reject": _cmd_reject,
             "unblock": _cmd_unblock, "reconcile": _cmd_reconcile}
