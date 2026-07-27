@@ -1,0 +1,90 @@
+; larkflow（飞流）· 一个租户一个实例的 systemd 模板单元
+;
+;   sudo systemctl enable --now larkflow@<租户名>
+;
+; %i = 租户名（一家客户一个，全小写字母数字与连字符）。所有路径都按 %i 分区：一个进程、
+; 一个 SQLite 文件、一个 lark-cli 配置目录、一个 Unix 用户。**这是隔离的全部**，
+; 引擎代码里没有任何租户概念（`grep -rni tenant larkflow/` = 0）。
+;
+; ⚑ 从没在真机上跑过。第一次上机按 AIREADME/DEPLOYMENT.md 的 runbook 逐条来，
+;   每条都有「怎么确认它真成了」。
+
+[Unit]
+Description=larkflow 交付物流转引擎 · 租户 %i
+Documentation=https://github.com/iyuenan3/larkflow
+; 长连接要出网。network-online 而不是 network：后者只保证网卡起来了。
+After=network-online.target
+Wants=network-online.target
+
+; ⚠️ 这两条**必须在 [Unit] 里**，写进 [Service] 会被静默忽略（真机上踩过：systemd 249
+; 明说 "Unknown key name 'StartLimitIntervalSec' in section 'Service', ignoring"，
+; 而 StartLimitBurst 却被收下了，于是配上默认的 10 秒窗口，每轮失败要 9 秒，永远凑不满
+; 10 次，限流形同虚设，实测连重启 16 次仍在 activating）。systemd v230 起它们就搬到 [Unit] 了。
+; 意图：配置写错时停进 failed 让 `systemctl status` 说人话，而不是每 5 秒假装重启。
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=lf-%i
+Group=lf-%i
+WorkingDirectory=/srv/larkflow/%i
+
+; ---- 凭证与配置 ----
+; **故意不用 systemd 的 EnvironmentFile**。它有自己的一套引号规则，而我们要塞进去的
+; 恰好是最容易被引号规则改坏的两类值：`LARKFLOW_ROLES` 是内含双引号的 JSON，LLM 的
+; api_key 常含 `$`。这个项目已经被「`source .env` 把 JSON 引号吃掉」坑过一次（见
+; config.load_dotenv 的注释），不该换个解析器再坑一次。
+; 改由 larkflow 自己的解析器读（规则明确、与 shell 无关、且有测试钉着）。
+; 这里只用 Environment= 放**纯 ASCII、无引号、无 `$`** 的几个，它们必须在进程起来
+; 之前就位（HOME 尤其：lark-cli 用它定位自己的数据目录）。
+; **只设 HOME，故意不设 LARKSUITE_CLI_CONFIG_DIR / _DATA_DIR。**
+; 2026-07-27 在真 Ubuntu 上做过三组对照：
+;   只 HOME              → config.json 落 $HOME/.lark-cli/，密文与 master.key 落 $HOME/.local/share/lark-cli/
+;   HOME + CONFIG_DIR    → config.json 分开了，**密文仍跟着 HOME**
+;   再加 DATA_DIR        → 密文才跟着 DATA_DIR
+; 也就是说 **HOME 一个就已经把两样都隔离干净了**，多设那两个不增加任何隔离，只增加一处
+; 「建 profile 时的 env 与服务运行时的 env 不一致」的失败模式。而那个失败极其隐蔽：
+; profile 建出来看着正常、`profile list` 里也在，服务却在 `auth status` 报
+; `bot: not_configured`，然后照常启动、静默地没有凭证（这个坑当天踩了两次）。
+; 结论：这三个变量只留一个。要改布局请改 HOME。
+Environment=HOME=/srv/larkflow/%i
+Environment=LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1
+Environment=LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1
+; 飞书是境内服务，别让凭证经过代理（lark-cli 自己会为此告警）
+Environment=LARK_CLI_NO_PROXY=1
+
+; ---- 起之前先把诊断打进日志 ----
+; `-` 前缀 = 失败也不挡启动。这是**有意的**：入站长连接会静默死亡（实测 10 小时 48 分
+; 零事件而进程全活），所以 Restart=always 不能被一次体检失败卡住。但每次启动都把体检
+; 结果留在 journald 里，出事时 `journalctl -u larkflow@%i` 第一屏就是「当时配置长什么样」。
+; doctor 是纯本地只读的（--version / auth status / event status 都不出网），不会因为
+; 网络抖动而假红。
+ExecStartPre=-/srv/larkflow/%i/venv/bin/larkflow --env-file /srv/larkflow/%i/larkflow.env doctor
+ExecStart=/srv/larkflow/%i/venv/bin/larkflow --env-file /srv/larkflow/%i/larkflow.env serve
+
+; ---- 重启 ----
+; Restart=always 不是可选项：长连接没有队列，daemon 不在线时人点按钮**当场失败且不补投**
+; （飞书弹「目标回调服务当前未在线」）。启动对账能补回投影，补不回丢掉的点击。
+Restart=always
+RestartSec=5
+; 重启上限见 [Unit] 段（写在这里会被 systemd 静默忽略）。
+
+; 优雅退出要给足：停机流程是「停订阅 → 等在飞的那条事件跑完 → 关 DB」，而一条事件里
+; 可能正在跑 LLM（默认超时 300s）。没排空 daemon 会拒绝关 DB 并以非 0 退出，那是设计
+; 如此（半截写留给下次启动对账兜），不是故障。
+TimeoutStopSec=330
+KillMode=control-group
+
+; ---- 收紧 ----
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/srv/larkflow/%i
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

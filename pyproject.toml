@@ -2,7 +2,12 @@
 name = "larkflow"
 version = "0.0.1"
 description = "飞书原生的交付物流转工作流引擎（LangGraph 驱动）"
-requires-python = ">=3.11"
+# 3.10 而不是 3.11：Ubuntu 22.04 LTS 自带的就是 3.10，而 22.04 的 universe 里只有
+# python3.11 的 **rc1**。要么让客户加第三方 PPA，要么用一个 RC 跑生产，两条都不该选。
+# 依据不是推断：2026-07-27 在真机（Ubuntu 22.04.5 / Python 3.10.12）上全量 504 条测试
+# 一条不改全绿，且四个直接依赖声明的下限都是 3.10 或更低。
+# 「客户机器上不用加任何第三方源」在 FDE 上门部署时是实打实的卖点，别为省一行注释丢掉。
+requires-python = ">=3.10"
 dependencies = [
     "langgraph>=1.2,<2",
     "langgraph-checkpoint-sqlite",
@@ -20,6 +25,14 @@ dev = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
 include = ["larkflow*"]
+
+# 模板 yaml 必须打进包。**这不是锦上添花**：setuptools 默认只收 .py，于是
+# `pip install larkflow` 装出来的包里 `templates/` 只有一个 `__init__.py`，
+# `load_template("contract")` 抛「模板文件不存在」，整个引擎一条流程都跑不起来。
+# 从源码树跑不会暴露（文件就在那儿），只有真装一次才看得见（2026-07-27 真机上撞到）。
+# 「新增业务场景 = 只加一个 yaml」这条产品承诺，在安装态下全靠这三行。
+[tool.setuptools.package-data]
+"larkflow.templates" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
