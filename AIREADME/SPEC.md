@@ -1,7 +1,12 @@
 # SPEC · larkflow
 
-⚑ 部分定型（节点契约含投票 / 分支 / 打回权限 + 引擎契约 + 产出协议已定，seg-1 本地跑通 + 产出闭环实测；卡片视觉 schema / 引擎**网络** API / 生成契约待 dev app + 原型）。
+> **As-built / Legacy Prototype。** 本文只描述当前 Python 原型可以执行的契约，不是目标产品规范。目标产品以 [PRD.md](PRD.md)、[ARCHITECTURE.md](ARCHITECTURE.md) 和 [DAG_TEMPLATE_SPEC.md](DAG_TEMPLATE_SPEC.md) 为准。
+>
+> 当前契约部分定型：节点契约含投票 / 分支 / 打回权限，引擎契约和产出协议已跑通；没有多租户业务数据库、Template v0.1、三级父子实例、个人 Agent Edge 或 Capability Registry。
+>
 > 2026-07-25：**对外契约的 as-built 面从「驱动层 Python 方法」扩到「CLI 子命令」**（ADR-031），见〈引擎对外接口 as-built〉。仍**没有任何网络接口**。
+>
+> DAG Template 的产品目标契约见 [DAG_TEMPLATE_SPEC.md](DAG_TEMPLATE_SPEC.md)。下文“模板节点契约”描述的是当前引擎可执行的 legacy compact form，不代表 v0.1 已落码。
 
 ## 模板节点契约（ADR-015：executor × role + 配置）
 一张模板 = 节点数组，节点：

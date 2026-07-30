@@ -1,60 +1,87 @@
 # ROADMAP · larkflow
 
-> 模型完备、实现分层（ADR-018 分期的细化）。**第一个 win 严格 = v1.0**，不夹带生成 / 子项目；后面每层坐在已证的引擎核心上、风险递减。
+> 状态：Target Delivery Plan · 2026-07-30
+>
+> 原 v1.0–v1.3“合同交付流 + LangGraph 全局运行时”路线已停止扩张。现有代码作为机制原型保留，后续里程碑以 [PRD.md](PRD.md) 的 KRs 为准。
 
-## Now（v1 · 分层交付，每层一个可演示里程碑）
+## Phase 0 · Product evidence and architecture reset
 
-### v1.0 · 第一个 win（引擎核心 + 一张策展合同图 + 卡片轨 + 只读驾驶舱）
+目标：在继续扩代码前验证 beachhead，并切断目标设计与 legacy 原型的混写。
 
-> 分三块看：**引擎侧** / **服务侧**代码已落地全绿；**真栈侧**已跑通第一条链路（2026-07-26）；**前端侧**仍是 0。
-> 「测绿」= 全程 Mock / Stub / `:memory:`，它证的是逻辑自洽，**不证任何一条真栈路径**；真栈那一遍是手工跑的，判据与证据见 CHANGELOG v0.6.0。
+- 完成本轮 AIREADME、ADR 和 DAG Template v0.1 对齐。
+- 访谈 5 家目标企业，回溯最近 30 天跨责任边界流程。
+- 用飞书 Task + 审批 + 文档复刻候选流程，测出 larkflow 的增量价值。
+- 选择一个每月 ≥10 次、有明确 Owner、至少两个责任人的试点流程。
+- 对现有代码做迁移清单：保留 Feishu adapters、幂等、对账、权限纯函数经验；隔离全局 LangGraph/SQLite 假设。
 
-- ✅ 引擎 v1（2026-07-24 headless 跑通，102 测绿）：node/template v1 schema（executor×role + deliverable / reopen / approval_policy）+ 通用 produce/gate 执行体 + 交付物 (容器,region) IO（markdown whole）+ merge 扇入 + 选择性重算运行时 reopen + auto 短路 + 受控活图 edit_graph + 策展合同图 + 真实栈代码。
-- ✅ 通用性收口（2026-07-25，v0.4.0，127 测绿）：tool 数据化能力库 + 护栏①降级 + 纯动作节点 + 打回意见回流 + super-step 屏障 + 打回预算。**判据 = 新增业务场景只加一个 yaml**（`templates/hiring.yaml` 招聘接力为证），`tests/test_generality.py` 钉死。
-- ✅ 服务层 + 权限层 + `blocked` 出口（2026-07-25，v0.5.0，267 测绿）：`larkflow serve` 常驻（启动全实例对账 + 事件泵 + 信号 / 优雅退出）+ `larkflow` CLI 六个子命令 + 多进程共用一个 SQLite（WAL + 跨进程实例锁 + daemon 单例锁）（ADR-031）；ADR-023 打回权限层 + 跨界 escalation 申请；应答权（放行 / 定稿也判身份，ADR-032）；`unblock` 解除通道（ADR-030）；外部写动作本地幂等（ADR-033，重启不再重复派单）。
-- ✅ 真栈接通（2026-07-26，v0.6.0，339 测绿）：dev 飞书自建应用建好并接通（测试组织，profile `larkflow`）+ 事件与回调两栏各自订阅（改完必须发布版本才生效）+ LLM 多角色 env（含备用链与按角色超时，ADR-036）+ 角色 open_id 映射；`build_real_service` 这条路真跑过了，`normalize_event` 照 lark-cli 字段表写的解包与真报文完全对上、一行没改（真报文已脱敏钉进 `tests/test_real_payloads.py`）。
-- ✅ **引擎真起在 alicloud-sh（ADR-007）**（2026-07-26 起，2026-07-27 落地）：租户 `dev` 以 systemd 常驻（`larkflow@.service` 模板单元，一租户一进程一 SQLite 一 Unix 用户），真凭证、入站长连接已建立、定期对账在跑，6 进程 / 282MB。配套：`larkflow doctor`（只读体检，起服务前把能在本机查的一次查完）+ `deploy/bootstrap.sh`（幂等开租户）。**这一趟换来 8 个只有真机才看得见的 bug**，最重的一条是模板 yaml 根本没被打进包（`pip install` 出来的引擎一条流程都跑不起来），详见 DEPLOYMENT。仍未验：长连接跨小时级存活（那正是「静默死亡」，只能靠时间）；在这台机器上跑完一条真实例。
-- ✅ **策展合同图**（商务 + 法律双起草 → 财务 / 法务分头 gate（single 复核）→ merge → 负责人定稿 → auto 格式检查 → 收口）端到端跑通：2026-07-26 在真飞书 + 真 LLM 上八个节点全 done、5 份真实文档。
-- ✅ **win（见 PRD）4/4**（2026-07-26 全部在真飞书 + 真 LLM 上取得）：①真项目跑通 ✅ ②打回**可感知省算** ✅（三条独立证据，见 CHANGELOG v0.6.0）③**运行中改图** ✅（实例 `lf-20260726-173921-8ed07a` 停在两道人工门时 `larkflow edit` 插入一个 `risk_note` 节点并改写 `finalize` 的依赖：`edited=2`、`remapped=2`（两张在人手里的卡被重绑、仍有效）、`attempts` 全空（改图不是打回，没把任何人拖进新一轮、没重复派卡）、审计落 `edits`；同一实例上越权改图被 `unauthorized_edit` 挡住）④auto-approve ✅ 双向。headless 判定版 v0.3.0 已过。**但真人 / 真项目版是 Maxwell 一人扮全部角色跑成的**，非 Maxwell 的真人 = 0，那是采用 gate 的事（见下），win 4/4 证的是引擎能做到，不是有人要。
-- ⬜ 妙搭前端原型（并行轨，ADR-019）：**三命门验证进度 = 0/3**（① 妙搭云托管能否 egress 够到自托管引擎，不能则退「命令走飞书原生轨、引擎只出站」保 ADR-007 ② 妙搭内自定义可交互图库能否跑 ③ 实时数据绑定驱动画布）；v1.0 只做 **P1 项目列表 + P3 只读活图画布 + P2 结构化新建**。创意 HTML 只作视觉稿、不作可行性依据。今天前端能拿到的引擎接口只有 CLI 与进程内方法，**没有任何网络接口**。
-- ✅ 三条「不修不敢拉真人」的引擎留白已收口（2026-07-26，v0.7.0，ADR-040..042）：
-  - ✅ **escalation 的同意 / 拒绝通道**（ADR-040）：追加型账本上用「追加一条裁决记录 + 状态派生」表达已拍板，顺带修掉「旧记录 `status` 恒为 pending」那条 finding。修订 ADR-023 两处：**禁自批**、审批人身份**两把尺**（令牌求交 ∪ 当初真通知到的 open_id）。新增一条作废判据：门已被答复的申请当场作废。
-  - ✅ **打回那一刻关掉旧轮次的飞书待办**（ADR-041）：挂 `_handle` 而不是 `_provision`，因为最难受的孤儿是「被卷进新一轮、但要等上游返工才轮到派单」的旁支节点。
-  - ✅ **审批卡**（ADR-043）：ADR-023 ③ 的「一键同意」名副其实了，审批人在飞书里点按钮即可拍板；封套不带 `interrupt_id`，`_route` 按 `kind` 分流。
-  - ✅ **`edit_graph` 鉴权与审计**（ADR-042）：owner-only + 必署名 + 新的 `edits` 追加型 channel。此前它比无鉴权的 `unblock` 更狠（能直接删掉在等的门让流程静默放行），而 `larkflow edit` 正要把这个入口开到命令行。
-- ⬜ 剩下的引擎侧留白：
-  - 🟠 `build_real_service` 的 `profile` 不从 env 取默认，调用方忘传会**静默**连到另一个 app。
-  - `unblock` 仍没有权限层（`by` 只进审计，`unblock(reopen=…)` 是绕过 ADR-023 的路）。ADR-030 自己写的处方是「拿 `by` 当 actor 过一遍 `reopen_verdict`」。
-  - 改图换负责人不重新派单（ADR-033）；`assignee_role` 解析成飞书群时该节点无人可应答。
-  - human produce 若配 `card_action`，打回时**无法主动作废旧卡**（`update_card` 只吃回调 token，没有按 message_id 改卡的能力），与任务通道不对称（ADR-041 Tradeoff）。
-  - ~~`task.task.update_user_access_v2` **为什么根本不推送**未查明~~ → **2026-07-27 在 alicloud-sh 上推翻**：它推送，而且 larkflow 路由正确。实测 22:04:58 人点完成 → **22:05:00 第 2 轮任务已派出**，整条链（收事件 → resume → `checks` 自动门 → 打回 → 重新派单 → 关旧待办）2 秒跑完。所以「不推送」不是平台行为，最可能是 Mac 上那个跨重启被复用的陈旧 `lark-cli event _bus`（DECISIONS ADR-039 末尾那条线索），它根本没订上任务事件。**定期轮询可以退回安全网角色**，周期可调大。仍未验：轮询这条兜底本身在真机上从没被触发过（今天没轮到它），以及扫描线程的存活。
-  - **daemon 自己没有存活信号**：定期对账只在出错 / 捞回事件时打日志，实例都完成后连续 35 分钟零输出（实测），与「扫描线程已经死了」在日志里完全无法区分。这正是 ADR-038 那条教训落在我们自己身上，还没修。
+**Exit gate：** 至少 3 家企业确认同类问题，且一个试点 Owner 愿意维护并二次使用模板。
 
-### 采用 gate（v1.0 → v1.1 准入，直面头号风险 = 采用）
-- v1.0 win 证的是**引擎能做到**，不等于**有人要**（PRD 头号风险）。进 v1.1 前须过一道采用闸：① 至少一名**非 Maxwell** 参与人在真实项目里其那一环全程走 larkflow 的手完成、且无工具外催定稿 / 私聊追版本；② 3-4 周观察窗内有队友在没人催下**自发起第 2 个真项目**。二者缺失即采用未达成、不进 v1.1（先回头验频次假设，见 PRD）。
+## Phase 1 · Central workflow foundation
 
-### v1.1 · 说人话起项目（入口 + 生成）
-- @bot 意图路由层（intent 分类 + 模板匹配 / 生成 + 抽要素 + 兜底降级）+ **确认步**（AI 提议项目定义、人确认 / 改）。
-- 模板生成升为主路径：种子 few-shot / 纯生成，过护栏 + 确认 + 活图补正，飞轮沉淀（ADR-021 / ADR-022）。
+目标：一个企业能发布模板，并把单层工作包可靠派给人。
 
-### v1.2 · 节点下钻（子项目）
-- 子项目 spawn + 交付物回填父节点 + 父子关联表 + 防下钻失控（深度上限）；打回粒度先做「整个子项目重开」（ADR-024）。
+- PostgreSQL 领域模型：Tenant、Person、Role Binding、Template/Version、Instance、Node、Attempt、Assignment、Audit。
+- 飞书组织同步和必需 Role Slot 解析；歧义时禁止启动。
+- 模板 lifecycle、不可变发布版本、实例快照和基础权限。
+- 业务 DAG scheduler、状态转换、验收/拒绝和新 Attempt。
+- 飞书 Task/IM/Doc 投影、幂等、outbox/inbox 与对账。
+- 从 legacy 原型迁移可复用 adapter；测试继续使用 mock Lark I/O。
 
-### v1.3 · 多人决策 / 分叉
-- 投票门(A 审批) / 决策表决(B) + 条件分支（`when` 守卫 / `skipped` 置灰）+ 会签 approval_policy `any`/`all`/`threshold`（ADR-025）。
+**Demo：** 从已发布模板启动实例，两个真实责任人在飞书完成派单、提交、打回和再次验收；服务重启后状态一致。
 
-## Next（v2 · 共享协同 + 前端可编辑）
-- **共享协同拓扑**：docx `region=section` + 预划 section + 子项目产出回填父 doc 段（先验 docx block_id 跨 update 稳定性）。
-- 妙搭前端画布**可编辑改图**：改图命令回写 / 引擎权威侧校验 / 乐观并发 / 鉴权（SPEC 待填）+ full_stack 前端接引擎读 / 命令 API（三命门验过后，ADR-019）。
-- 子项目内部选择性重算（v1.2 只做整体重开）。
-- 投影到多维表格（项目看板）+ 进度卡。
+## Phase 2 · MVP three-level collaboration
+
+目标：验证产品的核心护城河，而不只是一层任务编排。
+
+- L1/L2/L3 `parent_instance_id`、`level`、Work Contract 和 Contract Summary。
+- 责任人创建子 DAG；L3 强制禁止下钻。
+- 父子权限隔离、交付回填、聚合进度、阻塞和升级。
+- 父层拒绝创建新 Attempt；子 Owner 决定内部重开范围。
+- 企业/部门模板库、发布审核、合规锁和基础运营视图。
+- 跑通至少一个跨部门真实试点。
+
+**Demo：** 发起人只看 L1；部门主管分别展开 L2/L3；内部细节受权限保护；最终交付、打回和审计闭环。
+
+## Phase 3 · Personal Agent edge pilot
+
+目标：证明“待办属于人，Agent 可代执行”在离线和撤权场景下成立。
+
+- ECS 下发安装/注册引导，设备身份、版本和撤销。
+- 标准 Work Package / Result Envelope。
+- Capability Registry 与单节点、单 Attempt、短时 Lease。
+- 支持一条 Claude 或 Codex + lark-cli 执行路径。
+- 离线等待、人工接管、改派、Lease 过期和设备丢失演练。
+- 人类 Gate 仅接受本人确认。
+
+**Demo：** 一项工作先因设备离线保持为人的待办，随后由个人 Agent 执行、责任人确认并被上层验收；撤销设备后无法继续访问。
+
+## Phase 4 · Enterprise onboarding and template flywheel
+
+目标：把一次试点变成可扩展的企业模板库。
+
+- 授权知识源索引、Skill/MCP 注册和策略管理。
+- 访谈/历史材料导入形成候选 Process Map。
+- 候选流程的人审校准、模板推荐和运行数据反馈。
+- Platform / Industry 模板 Fork 到 Enterprise / Department。
+- 显式 diff/merge 升级和脱敏行业沉淀。
+
+自动发现始终生成候选，不自动发布生产模板。
+
+## MVP release gate
+
+MVP = Phase 1–3 全部完成，并满足 PRD 的 6 项 KRs。任何只跑通单层合同流、只展示 DAG 画布或只让 Agent 建待办的版本，都不算 MVP。
 
 ## Later
-- ~~崩溃后对账重建（seg-1 finding D）~~ → ✅ v0.5.0：`reconcile()` 已在 `larkflow serve` 启动时逐实例跑（ADR-031）。真栈上没验过。
-- ~~reopen 预算 / blocked 终态（finding C）~~ → ✅ v0.4.0（ADR-029）+ v0.5.0 补上解除通道（ADR-030）。
-- 五维 AI 评分（可选增强，非 win 核心，ADR-015）。
-- 种子库持续扩充 + 生成飞轮沉淀（ADR-022）。
-- 自建 H5 备选（若妙搭承载不了活图画布再上，ADR-019）；是否落团队租户（ADR-008）。
 
-## 搁置
-- 见 CORE Non-Goals（通用 iPaaS / 从零自造客户端 / 对 C 收费·多租户 SaaS），不在此复述理由。
+- 高级图形化模板编辑、版本可视化 diff/merge。
+- 模板效果分析、SLA 预测和阻塞风险预警。
+- 更多本地 Agent 和受支持执行器。
+- 跨企业协作、跨办公套件或模板市场。
+- 在证据充分后扩展层级或流程表达能力。
+
+## Explicitly parked
+
+- 无限递归 DAG、业务回边和 Agent 作为企业责任人。
+- 一次性“学习企业所有知识”。
+- 自研 IM、云盘、云文档和通用任务系统。
+- 继续为 legacy LangGraph 全局状态增加新的产品领域语义。

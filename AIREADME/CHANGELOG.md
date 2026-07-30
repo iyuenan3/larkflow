@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.8.0-draft · 2026-07-30 · 产品重定位与目标架构重置（ADR-045..050）
+
+- Changed：产品从“合同类交付物流转 + 全局 LangGraph”重定位为飞书原生的企业协作 DAG；合同降为说明案例。
+- Decided：待办只分配给真实人员，个人 Agent 是责任人选择的边缘执行方式；MVP 固定 L1/L2/L3；父子实例用 Work Contract 连接。
+- Added：PRODUCT_STRATEGY 九段战略画布、重写 PRD/CORE/ARCHITECTURE/RELATIONS/ROADMAP/CONVENTIONS、DAG Template Spec v0.1、中央 Capability Registry / Lease 边界。
+- Separated：目标业务真相迁到 PostgreSQL 中央控制面；LangGraph 限定为单个 AI 节点的可选运行时。SPEC 和 DEPLOYMENT 明确标为 legacy prototype as-built。
+- Source boundary：复查《CC 730 PRD v1.2 完整合集 v3》，吸收模板库和三级 DAG 启发，但明确不复制“替代飞书”、Project-DAG 1:1 或 Agent 直接领待办的边界。
+- Implementation：本条只重置产品和架构契约，未声称目标能力已落码。
+
 ## v0.7.0 · 2026-07-26 · 把「不修不敢拉真人进来」的那几条留白收口（ADR-040..043）
 - 背景：真栈 e2e 跑通之后按「敢不敢让第一个非 Maxwell 的人碰它」重排留白，排出来最重的三条恰好都是**机制把人送进一个状态、却没给出口**这同一个病，只是换了地方。ADR-029 的 `blocked` 死局是第一次，这是第二、三、四次。
 - Added: **escalation 的同意 / 拒绝通道**（ADR-040）：`approve_escalation` / `reject_escalation` + `larkflow approve/reject/escalations` 三个子命令。此前 `_escalate` 把申请写进权威 state，而全仓**没有任何 approve / reject 通道**（`status` 硬编码一处写入、reducer 只追加不覆盖，申请落库后物理上不可能再变），且它在**默认路径**上：v0.5.0 把卡上默认打回目标改成「保留要走审批的」之后，默认那颗「打回」按钮天然带跨界目标，一点就落进 escalation，人收到「等人拍板」而那个按钮不存在。

@@ -1,25 +1,39 @@
 # larkflow · 飞流 · AIREADME
-> 飞书原生的**通用**交付物流转工作流引擎（LangGraph 驱动，落到人）｜ 生命周期: 引擎核心 + 服务层已落码（headless 全绿）· 真栈一次没跑过
-> last-synced: 092c753 · 2026-07-25（v0.5.0 的代码与本次文档同批**未提交**）
-<!-- 产品最终形态定稿后的同步锚点；check.sh --drift 据此算 AIREADME 落后 HEAD 多少 commit -->
 
-## 状态
-| 文件 | 状态 | 摘要 |
+> 飞书原生的企业协作 DAG：把跨人、跨部门工作分解为有责任人、可下钻、可验收、可追溯的工作包。
+>
+> 文档状态：2026-07-30 产品重定位草案。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+
+## 阅读顺序
+
+1. [CORE.md](CORE.md)：产品身份、边界和不变量。
+2. [PRODUCT_STRATEGY.md](PRODUCT_STRATEGY.md)：目标市场、价值、取舍和关键假设。
+3. [PRD.md](PRD.md)：MVP 用户问题、范围、体验与验收。
+4. [DAG_TEMPLATE_SPEC.md](DAG_TEMPLATE_SPEC.md)：DAG Template v0.1 目标契约。
+5. [ARCHITECTURE.md](ARCHITECTURE.md)：目标架构、数据权威和原型迁移边界。
+
+## 文档地图
+
+| 文档 | 状态 | 作用 |
 |---|:--:|---|
-| CORE | ✅ | 身份（交付物流转引擎）/ non-goals / 红线（活图·历史·信号·多角色 LLM·前端投影）|
-| RELATIONS | ✅ | 飞书开放平台 / lark-cli / 妙搭前端 / LLM 多角色 / LangGraph；宿主 alicloud-sh |
-| ARCHITECTURE | ✅ | 两层 + 受控活图 + 选择性重算 + 打回权限(防踢皮球) + 节点 2×3 + 投票/分支 + 子项目 + 交付物 (容器,region) + 前端两视角 + 禁改 |
-| PRD | ✅ | win = 证交付物流转 + 打回省算；独立 doc 拓扑；入口 @bot + 生成；前端两视角 |
-| DECISIONS | ✅ | ADR-001..033（012-018 第二轮；019 前端；020 handle 权威；021-025 入口/生成/打回权限/子项目/投票分支；026-029 tool 能力库/护栏①降级/屏障/打回预算；030-033 blocked 解除/常驻服务与多进程/应答权/本地幂等）|
-| CONVENTIONS | ✅ | 节点契约 executor×role / 完成信号 / few-shot 护栏 / 禁用模式 |
-| ROADMAP | ✅ | Now 实现分层 v1.0(win)→v1.1 生成→v1.2 子项目→v1.3 投票分支 / Next v2 共享协同 + 前端可编辑；v1.0 真栈三件套仍是 0 |
-| SPEC | ⚑ | 节点契约(含投票/分支/打回权限) + 引擎契约 + 产出协议 + 对外接口 as-built(驱动层方法 + CLI) 已定；卡片视觉 + 引擎**网络** API + escalation 审批 + 生成契约待定 |
-| CHANGELOG | ✅ | …v0.3.0 引擎 v1.0 headless / v0.4.0 通用性收口 / v0.5.0 服务层 + 权限层 + blocked 出口 |
-| DEPLOYMENT | ⚑ | **形态已落码**（`larkflow serve` + CLI + 多进程 SQLite）但**仍未真部署**；差 dev app + 真栈验证 |
-| MEMORY | ✅ | seg-1 对抗性审查 9 项（去重 6 根因）+ 2026-07-24 产出协议实测 |
+| CORE | Target | 产品身份、用户、non-goals、硬约束 |
+| PRODUCT_STRATEGY | Target | 九段产品战略画布、指标、赌注与实验 |
+| PRD | Target | MVP 需求、优先级、用户旅程和发布验收 |
+| DAG_TEMPLATE_SPEC | Target Draft | 模板作用域、版本、Role Slot、三级子 DAG、权限与锁 |
+| ARCHITECTURE | Target + Gap | 中央控制面、飞书投影、本地 Agent 边缘运行时及迁移差距 |
+| RELATIONS | Target | 飞书、lark-cli、个人 Agent、LLM、MCP/Skill 的系统边界 |
+| ROADMAP | Target | 从现有原型迁移到可试点 MVP 的阶段 |
+| SPEC | As-built | 当前 Python 引擎、legacy YAML 与 CLI 契约 |
+| DEPLOYMENT | As-built | 现有 ECS + SQLite 原型部署实录；不是目标 SaaS 架构 |
+| CONVENTIONS | Target + As-built | 代码、模板、状态和文档约定 |
+| DECISIONS | Append-only | ADR 历史；新 ADR 会显式 supersede 旧结论 |
+| CHANGELOG | Append-only | 已实现变更和产品文档重置记录 |
+| MEMORY | Append-only | 实验、审查和不可丢失的经验 |
 
-## 按任务读
-- 跨项目了解 → CORE + RELATIONS
-- 改架构 → ARCHITECTURE + DECISIONS
-- 部署 / 运维 → DEPLOYMENT
-- 加功能 → PRD + ROADMAP + CONVENTIONS
+## 按任务读取
+
+- 改产品范围：CORE + PRODUCT_STRATEGY + PRD + DECISIONS
+- 改模板：DAG_TEMPLATE_SPEC + CONVENTIONS + PRD
+- 改运行时或数据模型：ARCHITECTURE + SPEC + DECISIONS
+- 改飞书或本地 Agent 集成：RELATIONS + ARCHITECTURE + DEPLOYMENT
+- 判断“设计了还是做了”：先看 ARCHITECTURE 的差距表，再看 SPEC 和代码

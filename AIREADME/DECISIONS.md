@@ -325,3 +325,50 @@
 - Alternatives(否决): 把 drain 超时调长（治不了，管道永不 EOF，多久都超时）；`join` 时不等 `_drain_stderr`（那条线程存在的理由是防止 stderr 写满 64KB 管道把子进程卡死，不等于可以不管它是否退出）；忽略这条故障（见 Tradeoff）。
 - Tradeoff: 这条的代价不是「多打一行日志」。**退出码恒定非 0**，于是「这次停机到底干不干净」这个信号被恒噪声淹没，真出现半截写的那一次也没人看得出来。而这套判据正是 v0.5.1 专门加来解决这个问题的，等于被自己废掉了。修完真机复验：`已停止（干净）。事件 0 条（推进 0 / 跳过 0 / 故障 0）`。
 - 顺带记录（**未解**）：`lark-cli event _bus` 是它自己的**共享单例**，不随我们的 consume 子进程一起走，干净停机后仍然存活并被下一个 daemon 复用。实测见过一个 **3 小时 12 分**的旧 bus 被新起的 consumer 挂上去。ADR-039 那个「`task.task.update_user_access_v2` 根本不推送」的谜，以及 ADR-038 那次「10 小时 48 分零事件」，都可能与这个跨重启复用的旧 bus 有关。~~**这是线索不是结论**，没有验证过。~~ → **2026-07-27 坐实了一半**：换到一台全新宿主（bus 也是全新起的）之后，ADR-039 那个「任务事件根本不推送」当场消失，2 秒内推送并正确路由。所以那条线索对 ADR-039 成立。ADR-038 那次「10 小时 48 分零事件」是否同因**仍未验**（那需要真的跑够十小时）。**运维含义**：换代码 / 换配置之后，只重启 `larkflow serve` 是不够的，旧 bus 会活下来被复用；排查「收不到事件」时第一件事是确认 bus 是不是这一轮新起的（`lark-cli event status` 的 `pid` 与 `uptime_sec`）。
+
+## ADR-045 · 2026-07-30 · 产品重定位为飞书原生的企业协作 DAG
+
+- **Status：Accepted · Target。**
+- Problem：旧定位把“多人/AI 接力产出合同类交付物”当产品中心，容易退化成 Agent 建待办或单场景流程引擎；源 CC730 PRD 的整体边界又是替代飞书，与本项目实际优势冲突。
+- Decision：larkflow 复用飞书 IM、Task、Docs、Drive 和 Directory，负责企业模板、跨人/部门 DAG、责任边界、父子工作契约、验收和审计。合同只作示例，首个 beachhead 由真实频次与协调成本验证。
+- Supersedes：ADR-012 的“交付物流转”产品身份；ADR-018 的合同型首发假设；ADR-019 绑定妙搭为主前端的产品结论。飞书原生方向保留，具体 UI 在原型后决定。
+- Trade-off：产品范围从一个可快速演示的交付物流转器扩大为企业协作系统，必须用试点和分阶段领域模型控制实现风险。
+
+## ADR-046 · 2026-07-30 · 待办只分配给人，个人 Agent 是边缘执行方式
+
+- **Status：Accepted · Target。**
+- Problem：员工电脑可能关机或离线，把企业待办直接分给 Agent 会让责任、提醒、改派和审计依赖设备在线。
+- Decision：每个人工工作包必须解析到唯一真实人员。责任人自行选择 manual、personal_agent 或被允许的 child_dag。员工电脑运行 lark-cli + Claude/Codex，通过中央安装注册、任务领取和结果回传协议工作；离线不改变待办归属或中央状态。人类 Gate 只能由本人确认。
+- Refines：ADR-005。lark-cli 不再只是中央出口/工具手，同时是个人 Agent Edge；中央 adapter 与个人 edge 使用不同身份和权限。
+- Trade-off：需要设备注册、离在线、撤销、升级和人工接管能力，但获得稳定责任边界和多 Agent 可替换性。
+
+## ADR-047 · 2026-07-30 · 业务 DAG 独立于 LangGraph，中央数据库持有业务真相
+
+- **Status：Accepted · Target。**
+- Problem：LangGraph checkpointer 适合恢复 Agent 运行，却不适合作为多租户模板治理、跨人查询、三级权限和长期审计的产品数据库。
+- Decision：目标中央控制面用 PostgreSQL 保存 Tenant、Template/Version、Instance、Node、Attempt、Assignment、Parent/Child 和 Audit。业务调度器解释无环产品 DAG。LangGraph 仅可用于单个复杂 AI 节点内部，其 checkpoint 不是跨人业务真相。
+- Supersedes：ADR-001 的“LangGraph 是整个业务运行时”、ADR-002 的“checkpointer 是单一事实源”、ADR-007/ADR-031 的 SQLite 单机部署作为目标形态。旧实现保留为 as-built 原型和迁移证据。
+- Trade-off：必须拆分现有 service state 与产品领域模型，但避免框架锁定，并获得可查询、可授权、可迁移的企业数据边界。
+
+## ADR-048 · 2026-07-30 · MVP 固定三级 DAG 与父子 Work Contract
+
+- **Status：Accepted · Target。**
+- Problem：跨部门目标会由主管继续拆解，但无限递归会让权限、可见性和进度聚合失控；父层直接操纵子层又会破坏部门责任。
+- Decision：实例最多 L1 企业/跨部门、L2 部门、L3 团队/个人。L3 禁止下钻。父节点责任人不因创建子 DAG 而转移；父子只交换 Work Contract、聚合状态、阻塞、交付物和验收记录。父层拒绝创建父工作包的新 Attempt，子 Owner 决定内部重开范围。
+- Supersedes：ADR-024 的暂定无限递归心智和“子项目”命名；保留独立实例、边界隔离和交付回填思想。
+- Trade-off：少数复杂企业流程需压平或拆成多个顶层实例，换取 MVP 可理解、可授权和可运营。
+
+## ADR-049 · 2026-07-30 · 企业入驻渐进发现，模板发布必须治理
+
+- **Status：Accepted · Target。**
+- Problem：“先学习企业所有知识再画企业 DAG”既不可验证，也带来授权、隐私、准确性和冷启动风险；每次自然语言生成直接运行又会把组织流程交给概率输出。
+- Decision：入驻按授权同步组织、登记 Knowledge/Skill/MCP、访谈流程 Owner、导入历史材料，生成候选 Process Map 和候选模板。候选必须人工校准并走 draft → in_review → published。模板分 platform、industry、enterprise、department；发布版本不可变，实例保存快照，Fork 显式记录来源。
+- Supersedes：ADR-022 的“AI 现场生成流程为主路径”。自然语言和 AI 生成保留为候选创建工具，不直接发布或启动生产流程。
+- Trade-off：早期 onboarding 更依赖服务和流程 Owner，但能积累可信模板与运行数据，形成真正的企业资产。
+
+## ADR-050 · 2026-07-30 · 中央能力治理通过短时 Capability Lease 下发
+
+- **Status：Accepted · Target。**
+- Problem：个人 Agent 需要企业知识、Skill 和 MCP 才能完成工作，但把全局凭证或长期权限下发到员工电脑会扩大泄露与越权面。
+- Decision：中央 Capability Registry 保存逻辑资源、版本、租户范围、策略和 Secret 引用。模板声明需求；执行时按 tenant、person、node、attempt、purpose 签发短时、可撤销、最小权限 Lease。边缘设备不获得企业应用全局凭证。
+- Trade-off：增加策略评估、token/lease 服务和审计成本，换取本地 Agent 可控接入和供应商可替换性。

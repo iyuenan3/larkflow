@@ -1,5 +1,9 @@
 # DEPLOYMENT · larkflow
 
+> **As-built / Legacy Prototype。** 本文保存 2026-07-27 中心化 LangGraph + SQLite 服务在单台 ECS 上的真实部署记录，便于迁移飞书适配器、幂等、对账和运维经验。它不是目标 SaaS 拓扑：目标架构需要 PostgreSQL 中央控制面，以及员工电脑上的个人 Agent Edge，见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+>
+> 除修正事实错误外，不再给这套部署增加新的产品领域能力。个人端不得复用下文的企业 bot 全局凭证；中央端和个人端必须使用不同身份、权限与生命周期。
+
 ✅ **已真部署**（alicloud-sh，2026-07-27）。ADR-007 从立项欠到现在的那笔债还上了：租户 `dev` 以 systemd 常驻，真飞书凭证，**入站长连接已建立**：
 
 ```
@@ -16,7 +20,7 @@
 
 这一趟换来 6 条真机才看得见的东西，全部已修回代码，逐条记在下面各节：模板 yaml 根本没被打进包（装出来的引擎一条流程都跑不起来）、`requires-python` 过严、`Path.exists()` 不吞 EACCES、`ensurepip` 单独成包、`StartLimit*` 写错段被静默忽略、以及凭证隔离只认 `HOME`。
 
-## 目标形态
+## Legacy 原型目标形态
 - **宿主**：alicloud-sh（Ubuntu 22.04.5 / x86_64 / 2 核 / **1.6G 内存**（可用约 1.15G）/ 40G 盘（34G 空闲）；只开 22 端口）。Python 自带 3.10.12，**`ensurepip` 在单独的 `python3.10-venv` 包里**（`python3 -m venv --help` 会过、真建 venv 才报错）。内存这条是硬约束：实测每租户约 6 进程 / 300MB，而定期对账的全量枚举会再吃几百 MB 峰值，**这台机器一个租户就接近满**。
 - **持久化**：LangGraph checkpointer 用 **SQLite**（省内存，单租户 MVP 够）。同一个文件里还有关联表与幂等表。**必须放本地盘**（网络盘上 WAL 与 flock 都不可靠，见〈多进程〉）。
 - **事件入口**：引擎 spawn `lark-cli event consume <EventKey>` 子进程收 NDJSON，出站长连接。**无需任何入站端口**（ADR-007）。

@@ -60,3 +60,27 @@
 - 「修完一轮就拿 agent 攻击这一轮的修复」值得固定下来：这 4 条没有一条是原 review 找出来的，全是**新代码自己带进来的**。
 - 变异测试是判断「测试有没有用」的唯一硬办法。第一次做的时候我用 `git checkout --` 还原变异，把当轮未提交的修复一起冲了（已补进 pitfalls）。**先提交再变异**。
 - 覆盖不到的交互会让变异存活：`reopen_counts` 那条一开始没被抓住，因为测试图里没有人工节点、压根不会触发推进拍。补了「旁支挂一个永不应答的人」后才真正覆盖。
+
+## 2026-07-30 · 产品意图与实现偏移审计
+
+用 pm-skills 的 product-strategy、create-prd、intended-vs-implemented 三套框架，重新核对讨论结论、CC730 源 PRD、AIREADME 与代码。
+
+**产品结论**
+
+- larkflow 不替代飞书，复用其 IM、Task、Docs、Drive 和 Directory。
+- 护城河是可治理模板、跨人/部门 DAG、三级父子工作契约和个人 Agent 协作，不是 Agent 创建待办。
+- 待办属于真实人员；电脑离线不影响责任和流程状态。
+- 企业入驻必须渐进授权、候选发现、人工校准，不能承诺一次性学习全部知识。
+- 产品 DAG 与 LangGraph 解耦；中央业务数据库是目标真相源。
+
+**实现证据**
+
+- `app.py` 仍构造 SQLite `SqliteSaver` 和中央 lark-cli/LLM。
+- `service.py` 明确把 checkpointer 当权威。
+- `model/template.py` 只加载 `nodes`，没有 Template v0.1 顶层元数据、版本和权限。
+- `config.py` 只从静态 env 把角色映射到 `open_id`。
+- 代码中没有 tenant、child instance、设备注册、Capability/Skill/MCP 领域模型。
+
+**避免**
+
+以后每份文档必须标 Target 或 As-built。不能因为某个机制原型真栈跑通，就把它写成目标产品架构；也不能因为目标 PRD 已定，就在 SPEC 里暗示已经实现。
