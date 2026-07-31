@@ -4,7 +4,7 @@
 >
 > 文档状态：2026-08-01 Phase 1 中央工作流基础实现。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
-> last-synced: 00937da · 2026-08-01
+> last-synced: 70d7abe · 2026-08-01
 
 ## 阅读顺序
 
@@ -24,11 +24,11 @@
 | PRODUCT_STRATEGY | ✅ | 范围收敛取舍，明确未做市场验证 |
 | PRD | ✅ | Target 单层 DAG MVP 功能契约 |
 | DAG_TEMPLATE_SPEC | ⚑ | Target Draft，v0.2 模板可选、草稿确认、Owner、编辑和 Attempt |
-| ARCHITECTURE | ✅ | Target 模块化单体、首批 workflow 内核 As-built 和剩余差距 |
+| ARCHITECTURE | ✅ | Target 模块化单体、PostgreSQL 事务仓储 As-built 和剩余差距 |
 | RELATIONS | ✅ | Target 飞书、中央 lark-cli、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | Phase 0 已完成，Phase 1 中央内核已开始实现 |
+| ROADMAP | ✅ | Phase 0 已完成，Phase 1 已落领域内核与 PostgreSQL 持久化切片 |
 | SPEC | ✅ | As-built Python 引擎、legacy YAML 与 CLI 契约 |
-| DEPLOYMENT | ✅ | As-built ECS + SQLite 原型部署实录，不是目标架构 |
+| DEPLOYMENT | ✅ | Legacy ECS 实录与 Target PostgreSQL 14 开发验证边界 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
 | DECISIONS | ✅ | Append-only ADR 历史，新 ADR 显式 supersede 旧范围 |
 | CHANGELOG | ✅ | Append-only 已实现变更和文档收敛记录 |

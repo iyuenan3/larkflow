@@ -1,8 +1,15 @@
 # DEPLOYMENT · larkflow
 
-> **As-built / Legacy Prototype。** 本文保存 2026-07-27 中心化 LangGraph + SQLite 服务在单台 ECS 上的真实部署记录，便于迁移飞书适配器、幂等、对账和运维经验。它不是目标 SaaS 拓扑：目标架构需要 PostgreSQL 中央控制面，以及员工电脑上的个人 Agent Edge，见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+> **As-built / Legacy Prototype + Target PostgreSQL 开发验证。** 本文保存 2026-07-27 中心化 LangGraph + SQLite 服务在单台 ECS 上的真实部署记录，便于迁移飞书适配器、幂等、对账和运维经验。它不是目标 SaaS 拓扑：目标架构是 PostgreSQL 中央控制面的模块化单体，个人 Agent Edge 已移出近期范围，见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 >
 > 除修正事实错误外，不再给这套部署增加新的产品领域能力。个人端不得复用下文的企业 bot 全局凭证；中央端和个人端必须使用不同身份、权限与生命周期。
+
+## Target PostgreSQL 开发验证状态（2026-08-01）
+
+- `alicloud-sh` 已安装并保留 PostgreSQL 14 服务，用作后续 Target adapter 开发验证，不是生产数据库。
+- 本轮用一次性数据库与角色运行 `tests/test_workflow_postgres.py`，验证 migration 重入、聚合往返、乐观并发、审计追加保护、outbox 认领与发布。测试通过后已删除数据库与角色，未保留业务数据或凭证。
+- 测试通过本机 SSH 隧道连接，没有把新仓储接入 `larkflow@dev`。该 systemd 服务仍运行 legacy SQLite 路径，两套持久化没有混接。
+- 验证结束后 PostgreSQL 与 `larkflow@dev` 均为 active，宿主约有 993 MB available memory。下一步仍需常驻 worker、生产数据库角色、备份与升级 runbook，不能把本次验证描述为 Target 已部署。
 
 ✅ **已真部署**（alicloud-sh，2026-07-27）。ADR-007 从立项欠到现在的那笔债还上了：租户 `dev` 以 systemd 常驻，真飞书凭证，**入站长连接已建立**：
 

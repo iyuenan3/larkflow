@@ -21,13 +21,14 @@
 
 目标：一个企业可以从模板或无模板定义启动单层 DAG，并在飞书中可靠推进。
 
-- 已完成第一批离线领域内核：不可变 Instance Snapshot、DAG Contract 核验、草稿确认、NodeInstance、Attempt、显式状态迁移、Scheduler、中央 Node Runner、claim 和内存仓储 Port。
-- PostgreSQL 领域模型：Template、TemplateVersion、Instance、NodeInstance、Attempt、Projection、Audit、Outbox。
+- 已完成领域内核：不可变 Instance Snapshot、DAG Contract 核验、草稿确认、NodeInstance、Attempt、显式状态迁移、Scheduler、中央 Node Runner、claim 和仓储 Port。
+- 已完成 PostgreSQL 14 第一版 schema：Template、TemplateVersion、Instance、NodeInstance、Attempt、Projection、Audit、Outbox。
+- 已完成 Instance 聚合事务仓储、JSONB 快照、乐观并发、追加型 Audit、带租约 Outbox 和 package-data migration；真实 PostgreSQL 14 一次性数据库集成验证已通过。
 - 模板 `draft / enabled / disabled / deleted`、不可变版本和布尔锁。
 - 实例 `draft`、预览、确认启动和丢弃。当前内核已实现确认与丢弃，预览接口待接入。
 - 每个节点的唯一 Owner 解析与服务端授权。当前内核已拒绝非 Owner 提交，企业目录校验待接入。
-- 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则已落码，持久化 worker 与 executor adapter 待接入。
-- 飞书 Task、IM、Doc 投影、稳定幂等键和启动对账。
+- 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则与持久化已落码，常驻 worker、恢复扫描与 executor adapter 待接入。
+- Outbox worker、飞书 Task、IM、Doc 投影、稳定幂等键和启动对账。
 - 从 legacy 原型提炼 adapter、事件韧性和 Mock 测试资产。
 
 **Demo：** 从启用模板和无模板定义各创建一个草稿；确认后在飞书完成 Human、Agent、Tool 混合流程；服务重启后状态和投影一致。

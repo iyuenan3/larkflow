@@ -400,3 +400,13 @@
 - Decision：以 `WorkflowInstance` 聚合保存 Snapshot、NodeInstance 与 NodeAttempt；Scheduler 只负责确认后的初始就绪和依赖解锁；Node Runner 只负责激活节点、签发中央 worker claim、验证 Human Owner 和接受当前 Attempt 结果；应用服务在仓储乐观并发边界内协调三者。第一批使用 copy-on-read 内存仓储验证领域规则，明确不把它当目标持久化。
 - Alternatives(否决)：继续扩展全局 LangGraph state；用飞书 Task 状态作为业务真相；让一个中央类同时持有数据库事务并执行外部调用。
 - Tradeoff：迁移期同时存在 Target 与 legacy 两套模型，代码量暂时增加；换取 PostgreSQL adapter、outbox、飞书投影和 executor adapter 可以沿明确 Port 分批接入，且 529 项离线测试能够独立证明领域规则与 legacy 回归。
+
+## ADR-054 · 2026-08-01 · PostgreSQL 聚合事务与 outbox 划定外部副作用边界
+
+- **Status：Accepted · As-built foundation。**
+- Problem：领域内核如果先写状态再直接调用飞书，外部调用失败会留下半完成状态；如果把数据库事务跨过飞书、LLM 或 Tool 调用，长事务、锁等待和不可控重试会破坏中央调度。审计若独立写入，也可能出现状态已变但审计缺失。
+- Constraint：tenant 必须进入所有业务主键和仓储查询；Instance、Node、Attempt、Audit 与 Outbox 的一次命令结果必须原子提交；migration 必须随 wheel 分发并支持重入；审计不可更新或删除；outbox worker 崩溃后必须能回收过期 claim；数据库事务不得包住任何外部 I/O。
+- Decision：PostgreSQL 保存完整 Instance Snapshot JSONB，同时用规范化 NodeInstance、Dependency 与 Attempt 表支持运行态约束；仓储按 Instance version 做 compare-and-swap，并在同一显式事务内写聚合、AuditEvent 与 OutboxEvent。migration runner 使用事务级 advisory lock。Outbox 以稳定聚合版本去重，通过 `FOR UPDATE SKIP LOCKED` 批量认领，并用 claim token、租期、失败时间和重试时间控制发布。
+- Boundary：Human 激活与所有节点终态写 outbox 请求投影同步。Agent 和 Tool 激活不进入 outbox，而由应用层拿到已提交的 NodeActivation 后立即调用 executor；否则排队延迟会消耗 NodeAttempt 自己的短时 claim，任务出队时可能已经过期。执行结果仍必须带当前 Attempt、节点版本和 claim token 回到服务端。
+- Alternatives(否决)：在数据库事务中直接调用飞书、LLM 或 Tool；用飞书对象状态作为提交日志；当前规模提前引入 Kafka 或 CDC；把 Agent 与 Tool 执行激活也放入通用投影 outbox。
+- Tradeoff：Snapshot 与规范化运行态存在受控重复，换取实例历史自包含和高频状态约束。当前只有 Instance 聚合仓储与 outbox 存储，还没有 Template Service、Projection worker、executor worker、生产备份或 schema 升级 runbook；真实 PostgreSQL 14 验证证明 adapter 路径可执行，不等于生产装配完成。

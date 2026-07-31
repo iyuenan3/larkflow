@@ -114,30 +114,35 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 
 ## 7. 当前 Target 内核 As-built
 
-`larkflow/workflow/` 是第一批目标架构代码，与 legacy `engine/`、`service.py` 和 LangGraph checkpointer 隔离：
+`larkflow/workflow/` 是目标架构代码，与 legacy `engine/`、`service.py` 和 LangGraph checkpointer 隔离：
 
 - `model.py`：不可变 `InstanceSnapshot` 与 `NodeSpec`，以及 Instance、NodeInstance、NodeAttempt 和质量结果。
 - `graph.py`：v0.2 schema、必填工作字段、唯一节点、依赖存在、无环、拓扑、就绪和可达下游校验。
 - `transitions.py`：实例、节点和 Attempt 的显式状态转换表。
 - `scheduler.py`：确认草稿时创建节点与初始 Attempt，根节点进入 ready，依赖完成后解锁直接下游。
 - `runner.py`：Human 节点等待唯一 Owner，Agent 与 Tool 节点使用短时 claim；结果必须匹配当前 Attempt、claim 和节点版本。
-- `repository.py`：仓储 Port 与仅供测试的 copy-on-read 内存实现，使用实例版本拒绝丢失更新。
-- `service.py`：在仓储边界内协调草稿确认、调度、执行结果、授权与实例终态。
+- `events.py`：不可变 AuditEvent、OutboxEvent 以及带租约的 outbox claim 契约。
+- `repository.py`：仓储 Port 与仅供测试的 copy-on-read 内存实现，按 tenant 隔离并使用实例版本拒绝丢失更新。
+- `migrations/` 与 `migrate.py`：PostgreSQL 14 schema、package-data migration 和 advisory lock migration runner。
+- `postgres.py` 与 `serde.py`：JSONB 快照序列化、规范化运行态表、乐观并发仓储、追加型审计与 `FOR UPDATE SKIP LOCKED` outbox。
+- `service.py`：在一次仓储事务内协调草稿确认、调度、执行结果、授权、审计、outbox 与实例终态。
 
-当前 claim 只解决中央 worker 的并发认领，不是已 Deferred 的设备能力租约。该内核没有连接 PostgreSQL、飞书、真实 Agent 或 Tool，也没有替换 legacy 服务装配。
+领域状态、审计与 outbox 在同一事务提交。事务提交后，Human 节点与所有节点状态变化通过 outbox 请求投影同步；Agent 和 Tool 激活直接返回 NodeActivation，由调用方在提交后交给 executor，避免 outbox 排队时间消耗节点 claim 租期。当前 claim 只解决中央 worker 的并发认领，不是已 Deferred 的设备能力租约。
+
+该 adapter 已在一次性 PostgreSQL 14 数据库上验证 migration 重入、完整聚合往返、乐观并发、审计追加保护与 outbox 认领发布。它尚未接入常驻服务、真实飞书、真实 Agent 或 Tool，也没有替换 legacy 服务装配。
 
 ## 8. Intended vs implemented
 
 | Area | Target | 当前仓库 | 差距 |
 |---|---|---|---|
-| 业务真相 | PostgreSQL 领域模型 | 新 workflow aggregate 已落码；持久化仍是测试内存，legacy 仍用 checkpointer | 需要 PostgreSQL adapter 和新装配 |
-| 持久化 | Instance、Node、Attempt、Audit、Outbox | Instance、Node、Attempt 仓储 Port 已有；Audit、Outbox 和 PostgreSQL 未实现 | 需要补数据库事务模型 |
+| 业务真相 | PostgreSQL 领域模型 | 新 workflow aggregate 与 PostgreSQL adapter 已落码；legacy 仍用 checkpointer | 需要新服务装配与迁移入口 |
+| 持久化 | Instance、Node、Attempt、Audit、Outbox | PostgreSQL 14 schema、事务仓储、追加型 Audit 和带租约 Outbox 已实现并真库验证 | 需要生产配置、备份、升级和 worker 运维 |
 | 草稿与模板可选 | 草稿确认、无模板实例 | 新内核支持直接 InstanceSnapshot 草稿与 Owner 确认；模板编译未实现 | 需要模板服务与 importer |
 | 模板 | 简单生命周期、不可变版本、布尔锁 | 只消费 `id/name/nodes` | 未实现 |
 | 责任 | 每节点唯一 Owner，执行器分离 | 新内核已强制 Owner 与 `human/agent/tool` 分离；企业人员有效性尚无 adapter | 需要目录校验与角色解析 |
 | 编辑与重启 | 预览确认、revision、下游 Attempt | 已有活图和选择性重算机制 | 需按新模型提炼 |
-| 飞书投影 | PostgreSQL outbox、幂等、对账 | 已有 CLI adapter、关联表和 reconcile | 可迁移经验 |
-| 运行时 | 独立 Scheduler + Node Runner | 新内核已实现纯领域 Scheduler 与 Node Runner；无 worker、恢复扫描和外部 executor adapter | 需要持久化运行循环与接线 |
+| 飞书投影 | PostgreSQL outbox、幂等、对账 | 新内核能原子写投影请求；legacy 已有 CLI adapter、关联表和 reconcile | 需要 Projection worker、幂等落库与 adapter 接线 |
+| 运行时 | 独立 Scheduler + Node Runner | 新内核已实现纯领域 Scheduler 与 Node Runner；无常驻 worker、恢复扫描和外部 executor adapter | 需要持久化运行循环与接线 |
 
 [SPEC.md](SPEC.md) 和 [DEPLOYMENT.md](DEPLOYMENT.md) 继续描述 As-built 原型，不作为目标产品已实现证据。
 

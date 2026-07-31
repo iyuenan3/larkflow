@@ -1,5 +1,16 @@
 # CHANGELOG · larkflow
 
+## v0.11.0-draft · 2026-08-01 · PostgreSQL 事务持久化与 outbox（ADR-054）
+
+- Added：PostgreSQL 14 第一版 schema，覆盖 Template、TemplateVersion、Instance、NodeInstance、Dependency、Attempt、Projection、Audit 与 Outbox；TemplateVersion 不可变，Audit 只追加。
+- Added：package-data migration 与 advisory lock runner；wheel 安装包已实测包含 migration SQL。
+- Added：Instance 聚合事务仓储、稳定 JSONB Snapshot 序列化、tenant 复合键与实例版本乐观并发。
+- Added：AuditEvent 与带租约的事务 outbox；状态、审计和投影请求在同一事务提交，worker 使用 `FOR UPDATE SKIP LOCKED` 认领、失败重试和过期回收。
+- Changed：WorkflowService 的读写命令显式携带 tenant；草稿创建、确认、节点激活、Human 提交、自动完成与失败都会记录可关联审计。
+- Boundary：Agent 与 Tool 的 NodeActivation 在数据库提交后直接交给 executor，不进入 outbox 排队；outbox 当前只承载可延迟、可重试的外部投影请求。
+- Verified：完整离线套件 539 项通过，PostgreSQL 集成测试 1 项显式启用并在 PostgreSQL 14 真库通过；一次性数据库与角色已删除，未连接真实飞书、Agent 或 Tool。
+- Commit：内容提交 `70d7abe`。
+
 ## v0.10.0-draft · 2026-08-01 · 中央工作流领域内核（ADR-053）
 
 - Added：独立 `larkflow/workflow/` Target 内核，包含不可变 Instance Snapshot、NodeSpec、WorkflowInstance、NodeInstance、NodeAttempt 与简化质量结果。
