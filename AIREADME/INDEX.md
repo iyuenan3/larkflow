@@ -1,41 +1,45 @@
 # larkflow · 飞流 · AIREADME
 
-> 飞书原生的企业协作 DAG：把跨人、跨部门工作分解为有责任人、可下钻、可验收、可追溯的工作包。
+> 飞书原生的企业协作 DAG：把多人流程拆成有依赖、有唯一责任人、可验收和可追溯的节点。
 >
-> 文档状态：2026-07-30 产品重定位草案。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+> 文档状态：2026-08-01 Phase 0 既有设计简化与一致性核验。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
 > last-synced: f4b6d59 · 2026-07-30
 
 ## 阅读顺序
 
 1. [CORE.md](CORE.md)：产品身份、边界和不变量。
-2. [PRODUCT_STRATEGY.md](PRODUCT_STRATEGY.md)：目标市场、价值、取舍和关键假设。
-3. [PRD.md](PRD.md)：MVP 用户问题、范围、体验与验收。
-4. [DAG_TEMPLATE_SPEC.md](DAG_TEMPLATE_SPEC.md)：DAG Template v0.1 目标契约。
+2. [PRODUCT_STRATEGY.md](PRODUCT_STRATEGY.md)：当前证据边界、取舍和成功标准。
+3. [PRD.md](PRD.md)：简化 MVP 的功能、体验和验收。
+4. [DAG_TEMPLATE_SPEC.md](DAG_TEMPLATE_SPEC.md)：DAG Contract v0.2 目标契约。
 5. [ARCHITECTURE.md](ARCHITECTURE.md)：目标架构、数据权威和原型迁移边界。
 
-## 文档地图
+既有设计的范围取舍见 [`research/design-simplification.md`](../research/design-simplification.md)。
 
-| 文档 | 状态 | 作用 |
+## 状态
+
+| 文件 | 状态 | 摘要 |
 |---|:--:|---|
-| CORE | Target | 产品身份、用户、non-goals、硬约束 |
-| PRODUCT_STRATEGY | Target | 九段产品战略画布、指标、赌注与实验 |
-| PRD | Target | MVP 需求、优先级、用户旅程和发布验收 |
-| DAG_TEMPLATE_SPEC | Target Draft | 模板作用域、版本、Role Slot、三级子 DAG、权限与锁 |
-| ARCHITECTURE | Target + Gap | 中央控制面、飞书投影、本地 Agent 边缘运行时及迁移差距 |
-| RELATIONS | Target | 飞书、lark-cli、个人 Agent、LLM、MCP/Skill 的系统边界 |
-| ROADMAP | Target | 从现有原型迁移到可试点 MVP 的阶段 |
-| SPEC | As-built | 当前 Python 引擎、legacy YAML 与 CLI 契约 |
-| DEPLOYMENT | As-built | 现有 ECS + SQLite 原型部署实录；不是目标 SaaS 架构 |
-| CONVENTIONS | Target + As-built | 代码、模板、状态和文档约定 |
-| DECISIONS | Append-only | ADR 历史；新 ADR 会显式 supersede 旧结论 |
-| CHANGELOG | Append-only | 已实现变更和产品文档重置记录 |
-| MEMORY | Append-only | 实验、审查和不可丢失的经验 |
+| CORE | ✅ | Target 身份、简化边界和不变量 |
+| PRODUCT_STRATEGY | ✅ | 范围收敛取舍，明确未做市场验证 |
+| PRD | ✅ | Target 单层 DAG MVP 功能契约 |
+| DAG_TEMPLATE_SPEC | ⚑ | Target Draft，v0.2 模板可选、草稿确认、Owner、编辑和 Attempt |
+| ARCHITECTURE | ✅ | Target 模块化单体、PostgreSQL、飞书投影和 As-built 差距 |
+| RELATIONS | ✅ | Target 飞书、中央 lark-cli、Node Runner 与 LangGraph 边界 |
+| ROADMAP | ✅ | Phase 0 一致性核验到 Phase 1、2 实现路径 |
+| SPEC | ✅ | As-built Python 引擎、legacy YAML 与 CLI 契约 |
+| DEPLOYMENT | ✅ | As-built ECS + SQLite 原型部署实录，不是目标架构 |
+| CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
+| DECISIONS | ✅ | Append-only ADR 历史，新 ADR 显式 supersede 旧范围 |
+| CHANGELOG | ✅ | Append-only 已实现变更和文档收敛记录 |
+| MEMORY | ⚑ | Append-only 经验，仍含待真实运行补全的语义占位 |
 
 ## 按任务读取
 
 - 改产品范围：CORE + PRODUCT_STRATEGY + PRD + DECISIONS
+- 核对既有设计的简化范围：`../research/design-simplification.md` + PRD + DECISIONS
 - 改模板：DAG_TEMPLATE_SPEC + CONVENTIONS + PRD
 - 改运行时或数据模型：ARCHITECTURE + SPEC + DECISIONS
-- 改飞书或本地 Agent 集成：RELATIONS + ARCHITECTURE + DEPLOYMENT
+- 改飞书集成：RELATIONS + ARCHITECTURE + DEPLOYMENT
 - 判断“设计了还是做了”：先看 ARCHITECTURE 的差距表，再看 SPEC 和代码
+- 未来恢复外部验证：`../research/phase-0/README.md`

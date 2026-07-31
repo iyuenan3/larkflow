@@ -63,7 +63,7 @@
 
 ## 2026-07-30 · 产品意图与实现偏移审计
 
-用 pm-skills 的 product-strategy、create-prd、intended-vs-implemented 三套框架，重新核对讨论结论、CC730 源 PRD、AIREADME 与代码。
+用 pm-skills 的 product-strategy、create-prd、intended-vs-implemented 三套框架，重新核对讨论结论、AIREADME 与代码。
 
 **产品结论**
 

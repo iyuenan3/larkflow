@@ -1,87 +1,65 @@
 # ROADMAP · larkflow
 
-> 状态：Target Delivery Plan · 2026-07-30
+> 状态：Target Delivery Plan · 2026-08-01
 >
-> 原 v1.0–v1.3“合同交付流 + LangGraph 全局运行时”路线已停止扩张。现有代码作为机制原型保留，后续里程碑以 [PRD.md](PRD.md) 的 KRs 为准。
+> 原来的三级协作、个人 Agent Edge 和完整能力治理路线已移出近期范围。现有代码作为 legacy 机制原型保留。
 
-## Phase 0 · Product evidence and architecture reset
+## Now · Phase 0 既有设计简化与一致性核验
 
-目标：在继续扩代码前验证 beachhead，并切断目标设计与 legacy 原型的混写。
+目标：以既有设计为底稿，围绕最小闭环做减法，并切断 Target 与 As-built 的混写。
 
-- 完成本轮 AIREADME、ADR 和 DAG Template v0.1 对齐。
-- 访谈 5 家目标企业，回溯最近 30 天跨责任边界流程。
-- 用飞书 Task + 审批 + 文档复刻候选流程，测出 larkflow 的增量价值。
-- 选择一个每月 ≥10 次、有明确 Owner、至少两个责任人的试点流程。
-- 对现有代码做迁移清单：保留 Feishu adapters、幂等、对账、权限纯函数经验；隔离全局 LangGraph/SQLite 假设。
+- 核对既有 AIREADME 的范围、依赖和实现边界。
+- 固定单层 DAG、模板可选、草稿确认、未来区域编辑和节点重启范围。
+- 明确每节点唯一人类 Owner，Human、Agent、Tool 只表示执行器。
+- 从近期范围移除子 DAG、个人 Agent Edge、Capability Lease、RAG、Kafka 和复杂模板治理。
+- 保留飞书 adapter、幂等、对账、权限纯函数和重算机制的迁移价值。
+- 统一 README、PRD、架构、契约、路线图和包描述。
 
-**Exit gate：** 至少 3 家企业确认同类问题，且一个试点 Owner 愿意维护并二次使用模板。
+**Exit gate：** 每项 MVP 都有明确的产品理由和可判定验收；核心文档无范围冲突；市场结论仍标记为未知。
 
-## Phase 1 · Central workflow foundation
+## Next · Phase 1 中央工作流基础
 
-目标：一个企业能发布模板，并把单层工作包可靠派给人。
+目标：一个企业可以从模板或无模板定义启动单层 DAG，并在飞书中可靠推进。
 
-- PostgreSQL 领域模型：Tenant、Person、Role Binding、Template/Version、Instance、Node、Attempt、Assignment、Audit。
-- 飞书组织同步和必需 Role Slot 解析；歧义时禁止启动。
-- 模板 lifecycle、不可变发布版本、实例快照和基础权限。
-- 业务 DAG scheduler、状态转换、验收/拒绝和新 Attempt。
-- 飞书 Task/IM/Doc 投影、幂等、outbox/inbox 与对账。
-- 从 legacy 原型迁移可复用 adapter；测试继续使用 mock Lark I/O。
+- PostgreSQL 领域模型：Template、TemplateVersion、Instance、NodeInstance、Attempt、Projection、Audit、Outbox。
+- 模板 `draft / enabled / disabled / deleted`、不可变版本和布尔锁。
+- 实例 `draft`、预览、确认启动和丢弃。
+- 每个节点的唯一 Owner 解析与服务端授权。
+- 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。
+- 飞书 Task、IM、Doc 投影、稳定幂等键和启动对账。
+- 从 legacy 原型提炼 adapter、事件韧性和 Mock 测试资产。
 
-**Demo：** 从已发布模板启动实例，两个真实责任人在飞书完成派单、提交、打回和再次验收；服务重启后状态一致。
+**Demo：** 从启用模板和无模板定义各创建一个草稿；确认后在飞书完成 Human、Agent、Tool 混合流程；服务重启后状态和投影一致。
 
-## Phase 2 · MVP three-level collaboration
+## Next · Phase 2 受控变化与恢复
 
-目标：验证产品的核心护城河，而不只是一层任务编排。
+目标：让运行中流程可以安全修改、重做和运营，而不覆盖历史。
 
-- L1/L2/L3 `parent_instance_id`、`level`、Work Contract 和 Contract Summary。
-- 责任人创建子 DAG；L3 强制禁止下钻。
-- 父子权限隔离、交付回填、聚合进度、阻塞和升级。
-- 父层拒绝创建新 Attempt；子 Owner 决定内部重开范围。
-- 企业/部门模板库、发布审核、合规锁和基础运营视图。
-- 跑通至少一个跨部门真实试点。
+- 未来区域编辑、影响预览、确认和 `graph_revision` 乐观并发。
+- 节点重启和完整重启的下游影响计算。
+- Attempt 历史、交付物引用和质量记录。
+- `pass/fail + evidence + suggestion` 质量结果与有限 Agent 重试。
+- 暂停、恢复、取消、失败处理、人工接管和运维告警。
+- 投影缺失重建、重复事件与乱序事件验证。
 
-**Demo：** 发起人只看 L1；部门主管分别展开 L2/L3；内部细节受权限保护；最终交付、打回和审计闭环。
+**Demo：** 修改未开始分支并拒绝过期确认；重启中间节点后只重做其下游；旧 Attempt 和审计保持可查。
 
-## Phase 3 · Personal Agent edge pilot
+## Later · 证据驱动的扩展
 
-目标：证明“待办属于人，Agent 可代执行”在离线和撤权场景下成立。
+只有真实使用证明必要时，再评估：
 
-- ECS 下发安装/注册引导，设备身份、版本和撤销。
-- 标准 Work Package / Result Envelope。
-- Capability Registry 与单节点、单 Attempt、短时 Lease。
-- 支持一条 Claude 或 Codex + lark-cli 执行路径。
-- 离线等待、人工接管、改派、Lease 过期和设备丢失演练。
-- 人类 Gate 仅接受本人确认。
+- 模板子 DAG、临时子 DAG和最多三级父子契约。
+- 个人 Agent Edge、设备注册、离在线状态和 Capability Lease。
+- Knowledge、Skill、MCP 注册表及 RAG 模板匹配。
+- 字段级锁、复杂 ACL、模板 Fork、行业分发和图形化编辑器。
+- 数值评分、独立质量服务、Kafka、微服务和公开事件 API。
+- 企业访谈、飞书原生对照、首个场景与商业验证。
 
-**Demo：** 一项工作先因设备离线保持为人的待办，随后由个人 Agent 执行、责任人确认并被上层验收；撤销设备后无法继续访问。
+未来研究协议保留在 [`research/phase-0/`](../research/phase-0/README.md)，目前不是工程启动门，也不能被本轮设计核验视为已经完成。
 
-## Phase 4 · Enterprise onboarding and template flywheel
+## 明确禁止
 
-目标：把一次试点变成可扩展的企业模板库。
-
-- 授权知识源索引、Skill/MCP 注册和策略管理。
-- 访谈/历史材料导入形成候选 Process Map。
-- 候选流程的人审校准、模板推荐和运行数据反馈。
-- Platform / Industry 模板 Fork 到 Enterprise / Department。
-- 显式 diff/merge 升级和脱敏行业沉淀。
-
-自动发现始终生成候选，不自动发布生产模板。
-
-## MVP release gate
-
-MVP = Phase 1–3 全部完成，并满足 PRD 的 6 项 KRs。任何只跑通单层合同流、只展示 DAG 画布或只让 Agent 建待办的版本，都不算 MVP。
-
-## Later
-
-- 高级图形化模板编辑、版本可视化 diff/merge。
-- 模板效果分析、SLA 预测和阻塞风险预警。
-- 更多本地 Agent 和受支持执行器。
-- 跨企业协作、跨办公套件或模板市场。
-- 在证据充分后扩展层级或流程表达能力。
-
-## Explicitly parked
-
-- 无限递归 DAG、业务回边和 Agent 作为企业责任人。
-- 一次性“学习企业所有知识”。
-- 自研 IM、云盘、云文档和通用任务系统。
-- 继续为 legacy LangGraph 全局状态增加新的产品领域语义。
+- 继续把新产品语义写入 legacy LangGraph 全局 state。
+- 把 Agent 当组织责任人或可信权限来源。
+- 用代码量、文档数量或测试通过数替代用户和市场证据。
+- 为尚未出现的规模提前引入 Kafka、微服务或复杂多租户治理。

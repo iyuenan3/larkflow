@@ -1,156 +1,125 @@
 # larkflow · 飞流
 
-> 飞书原生的**交付物流转**工作流引擎（LangGraph 驱动）。
-> 在一张*项目进行中可编辑*的图上，AI、人、工具接力产出并审核一份交付物，任意打回、只重算受影响的部分，直到发起人认可后交付。全程落在飞书里。
+> 飞书原生的企业协作 DAG 系统。它把多人流程拆成有依赖、有唯一责任人、可验收和可追溯的节点。
 
-**状态**：引擎 + 服务层已落码（469 测绿，全程 Mock / Stub / 内存库）· **真飞书 + 真 LLM 上已端到端跑通第一条链路**（2026-07-26，八个节点、5 份真实交付物）。详细真相源见 [`AIREADME/`](AIREADME/INDEX.md)。
+## 当前状态
 
----
+larkflow 正在把既有产品设计收敛为可实现、可核验的最小范围。
 
-## 它解决什么
+- **目标产品**：单企业、单层 DAG 的最小闭环，支持模板可选、草稿确认、Human / Agent / Tool 节点、受控编辑、重启、审计和飞书投影。
+- **当前代码**：LangGraph + SQLite + lark-cli 的 legacy 机制原型，已验证部分飞书投影、打回、幂等和恢复机制。
+- **证据边界**：本轮完成的是既有设计简化与一致性核验，不是访谈、市场或商业验证。
+- **重要边界**：当前原型不是 PostgreSQL 目标架构，不能把 checkpointer、SQLite 或全局 LangGraph state 继续扩展为新产品领域模型。
 
-一份需要多方接力的交付物（合同、PRD、任何文档），传统做法是手动分工、催定稿、追版本、打回后全流程重来。larkflow 把这套协调劳动变成一张可视、可流转、可追溯的工作流：**AI 节点扛收集 / 起草 / 整合的重活，人只在关键处把关（想省事可一键 bypass），交付物反复打回重写不丢版本，流程图中途还能改。**
+产品与架构真相源从 [AIREADME/INDEX.md](AIREADME/INDEX.md) 开始。判断“目标是什么”和“现在做到了什么”时，必须区分 Target 与 As-built。
 
-## 两个场景
+## 简化后的产品闭环
 
-**合同起草（多部门 · 各自产出再合并）**
-AI 并行收集数据（旧合同 / 报价）→ 各部门审数据（拦假消息 / 黑名单供应商）→ AI 并行起草各板块 → 各板块审核（可 bypass）→ AI 整合 → 发起人审核（可打回任一板块）→ 交付合同。
+1. 用户从启用模板或结构化无模板定义创建实例草稿。
+2. 系统展示节点、依赖、唯一人类 Owner、执行器和验收条件。
+3. 用户明确确认启动或丢弃，草稿不会自动执行。
+4. 中央 Scheduler 按依赖调度 Human、Agent 和 Tool 节点，并把责任入口投影到飞书。
+5. 项目 Owner 可以预览并确认只影响未来节点的编辑。
+6. 节点重启会重置该节点及全部可达下游，历史通过 Attempt 保留。
+7. PostgreSQL 保存业务状态、revision、投影记录和审计，飞书对象可以对账和重建。
 
-**PRD 细化（会议驱动 · 同文档协同）**
-会议纪要 + 草稿下发 → 组员在同一飞书文档协同、定稿后发消息通知 → 发起人（或起个 AI 节点）审核 → 打回重写 / 再开会 → 整体评审 → 交付 PRD。
+既有设计的取舍记录见 [research/design-simplification.md](research/design-simplification.md)。
 
-## 核心理念
+## 产品不变量
+
+1. 每个节点必须有唯一人类 Owner，Agent 和 Tool 只是执行器。
+2. 实例先是草稿，经人确认后才能运行。
+3. 模板可选，模板版本不可变，实例保存完整快照。
+4. 运行中编辑只影响未开始区域，并经过预览、确认和 revision 校验。
+5. DAG 保持无环，重做与重启创建新的 Attempt。
+6. 中央数据库是业务真相源，飞书是交互入口和可恢复投影。
+7. 权限、责任、状态和图修改合法性由服务端计算。
+8. LangGraph 只可用于单个复杂 Agent 节点内部。
+
+## MVP 明确不包含
+
+- 独立 Project、IM、搜索、知识库和应用市场全套平台。
+- 模板子 DAG、临时子 DAG和三级下钻。
+- 个人 Agent Edge、设备注册和 Capability Lease。
+- Knowledge、Skill、MCP 注册表和 RAG 模板匹配。
+- 字段级锁、复杂 ACL、五维评分、Kafka、微服务和完整图形化编辑器。
+
+这些能力只有在真实使用证据证明必要时才重新评估。
+
+## 目标架构
 
 ```mermaid
 flowchart LR
-    C[AI 收集资料] --> RA{审核}
-    RA -->|通过| W[AI 起草板块]
-    RA -. 打回 .-> C
-    W --> RB{审核 · 可 bypass}
-    RB -->|通过| M[AI 整合]
-    RB -. 打回 .-> W
-    M --> RF{发起人审核}
-    RF -->|认可| D[(交付物<br/>飞书文档)]
-    RF -. 打回任一板块 .-> W
+    F["飞书<br/>IM / Task / Doc / Drive / Directory"] <-->|"事件、命令、投影、对账"| C["larkflow 模块化单体"]
+    C --> P[("PostgreSQL<br/>Template / Instance / Attempt / Audit")]
+    C --> S["DAG Scheduler"]
+    C --> R["Human / Agent / Tool Node Runner"]
+    R -.-> L["可选 LangGraph<br/>单个 Agent 节点内部"]
 ```
 
-- **受控活图**：图在项目进行中可编辑。冻结线随执行前沿走，已完成 / 在跑的节点冻结，只改未来节点；打回把前沿往回拉、解冻那段重跑。永远只改未来、不改历史。
-- **选择性重算**：打回一组节点，只重算它们 + 其传递下游，旁支复用旧产出，不做无谓重跑。
-- **节点 = 执行体 × 角色**：`executor(tool / llm / human) × role(produce 产出 / gate 把关)`，业务差异全在配置，引擎不为业务新增节点类型。审核策略一个轴：`auto`（bypass）/ `single` / `any` / `all`（会签）。
-- **交付物 = 飞书文档 handle**：统一成飞书文档 / 云盘链接。人可看 / 协同 / 评论审，机器可读正文；版本靠飞书原生，引擎不自建。
-- **单一事实源**：LangGraph checkpointer 是权威，飞书任务 / 文档 / 多维表格是投影，绝不反向写真相。
-
-## 架构（两层）
-
-- **领域图（数据）** = 工作流「是什么」：一张会变的节点依赖图，持久在 checkpointer、投影到飞书。
-- **LangGraph 引擎（运行时）** = 工作流「怎么推进」：一张*固定*的编排器图**解释** state 里的领域图数据，派发就绪节点、跑 tool / llm、human 节点 `interrupt` 持久挂起、打回环回。
-
-图是数据，引擎是解释器；「有环」正是打回 / 选择性重算 / 重启所需。飞书 I/O（收事件 / 建任务 / 发卡 / 读写交付物）全走官方 [lark-cli](https://github.com/larksuite/cli)；LLM 走 OpenAI 兼容接口、按任务角色路由。
+详细模型和迁移差距见 [AIREADME/ARCHITECTURE.md](AIREADME/ARCHITECTURE.md)。目标契约见 [AIREADME/DAG_TEMPLATE_SPEC.md](AIREADME/DAG_TEMPLATE_SPEC.md)。
 
 ## 仓库结构
 
-```
-AIREADME/            AI 真相源（先读 INDEX.md）
+```text
+AIREADME/                         产品、架构、契约、路线和决策真相源
+research/design-simplification.md 既有设计简化与取舍记录
+research/phase-0/                Deferred 的访谈、对照实验协议与迁移清单
 larkflow/
-  engine/            固定编排器图 + 门禁 / 选择性重算 + 受控活图 + tool 能力库（纯函数为主）
-  model/             模板 / 节点契约 + 校验
-  io/                lark-cli 封装（事件 / 任务 / 卡 / 交付物 / 关联表）
-  llm/               LLM 客户端（Stub + OpenAI 兼容多角色路由）
-  templates/         策展模板，**只有 yaml、没有 Python**（合同 / 缺陷 / 招聘）
-  service.py         驱动层：interrupt/resume、飞书投影、改图、对账、打回权限、解除
-  serve.py           常驻服务：启动对账 + 事件泵 + 信号 / 优雅退出
-  store.py           多进程共用一个 SQLite（WAL + busy_timeout + 跨进程实例锁）
-  __main__.py        CLI（serve / start / status / pending / unblock / reconcile）
-  demo.py            本地演示入口（不联网）
-tests/               316 e2e / 单元测试（零外部依赖）
+  engine/                        legacy LangGraph 编排、门禁、返工和活图机制
+  model/                         legacy YAML 节点和模板校验
+  io/                            lark-cli、飞书投影、事件和关联表适配
+  llm/                           Stub 与 OpenAI 兼容多角色路由
+  templates/                     legacy 合同、缺陷和招聘 YAML 模板
+  service.py                     legacy interrupt/resume、投影、权限与对账驱动层
+  serve.py                       legacy 常驻服务和启动对账
+  store.py                       legacy SQLite、WAL 和跨进程锁
+tests/                           离线 pytest 套件
+deploy/                          legacy 单机 ECS 部署资产
 ```
 
-## 本地跑
+迁移资产的逐模块处理方式见 [research/phase-0/migration-inventory.md](research/phase-0/migration-inventory.md)。
 
-引擎用内存 SQLite + Mock 飞书 IO + Stub LLM，**不联网、不碰飞书、不调真 LLM**：
+## 当前阶段
+
+当前 Phase 0 的门是设计一致性，不是外部访谈：
+
+- MVP 能力必须有明确的产品理由和可判定验收。
+- CORE、PRD、架构、模板契约、路线图、README 和包描述必须一致。
+- Target 与 As-built 必须分开。
+- 首个场景、真实频率、增量收益和付费意愿继续标记为未知。
+
+原有访谈和飞书基线协议保留在 [research/phase-0/README.md](research/phase-0/README.md)，当前状态为 Deferred，不阻塞本轮简化设计，也不能被描述为已完成。
+
+## 运行 legacy 原型
+
+下面的命令用于回归当前机制原型，不代表目标产品已经实现。测试使用 Mock Lark I/O、Stub LLM 和临时或内存 SQLite，不访问真实飞书。
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
+python -m venv .venv
+. .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest -q                              # 469 passed
-
-python -m larkflow.demo --auto         # 自动跑一遍合同图，打印「打回省算」的证据
-python -m larkflow.demo                # 交互式：你扮演所有的人，h 看命令
-python -m larkflow.demo --template hiring   # 换一张完全不同的业务图（招聘接力）
+pytest -q
+python -m larkflow.demo --auto
+python -m larkflow.demo --template hiring
 ```
 
-交互式演示里可以：`p` 看卡在谁手上（含交付物链接、可打回候选、上一轮打回意见）、
-`ok 1` 放行、`no 1 biz_draft 账期不对` 当场手选目标打回、`w 1 <正文>` 模拟人在飞书文档里写、
-`doc` 打印交付物正文、`add <id> <标签> after <上游>` 在运行中往图里加节点（受控活图）。
+真实飞书部署会创建任务、卡片和文档，只能在明确配置的开发环境中运行。现有单机部署是 legacy 原型实录，操作前先读 [AIREADME/DEPLOYMENT.md](AIREADME/DEPLOYMENT.md)。
 
-**换一个业务场景 = 新增一个 `templates/<名字>.yaml`，零 Python**：tool 节点的确定性动作由
-`tool: {kind, args}` 从内置能力库选取（`record` / `summarize_links` / `notify` / `noop` /
-`format_check` / `expect_fields`）。`tests/test_generality.py` 把这条钉成硬约束。
+## 文档路由
 
-## 怎么真跑起来（接真飞书）
+- 产品定位与红线：[CORE](AIREADME/CORE.md)
+- 简化依据与目标：[PRODUCT_STRATEGY](AIREADME/PRODUCT_STRATEGY.md)
+- MVP 功能契约：[PRD](AIREADME/PRD.md)
+- 目标架构与实现差距：[ARCHITECTURE](AIREADME/ARCHITECTURE.md)
+- DAG 目标契约：[DAG_TEMPLATE_SPEC](AIREADME/DAG_TEMPLATE_SPEC.md)
+- 当前 legacy 接口：[SPEC](AIREADME/SPEC.md)
+- 推进顺序：[ROADMAP](AIREADME/ROADMAP.md)
+- 决策历史：[DECISIONS](AIREADME/DECISIONS.md)
 
-上面那一节全程在替身里跑。要让它真的在飞书里流转，需要四步：
+## 安全
 
-**1. 建 dev 飞书自建应用**（独立租户，ADR-008）
-在飞书开放平台建企业自建应用，开这几项：
-
-- 权限：`task:task`（建 / 完成任务）、`im:message`（发消息 / 卡片）、`docx:document` + `drive:drive`（交付物文档）
-- 事件与回调 → **回调配置**里开 `card.action.trigger`（卡片按钮回调）。**不开就一个按钮点击也收不到**，而消费端不会报错、只是永远静默。
-- 事件订阅方式选**长连接**（引擎靠 `lark-cli event consume` 出站订阅，宿主**不需要**开任何入站端口 / 域名 / 证书）。
-- 用 `lark-cli auth login` 把这个应用的凭证配进 lark-cli 的 profile（key / token 走 lark-cli 自己的存储，不进本仓库）。
-
-**2. 配 env**（照 `.env.example` 抄一份 `.env`，只填值不入库）
-
-```bash
-LARK_PROFILE=<lark-cli profile>     # 认哪一个飞书应用
-LARKFLOW_DB=/var/lib/larkflow/larkflow.sqlite   # 本地盘，不要放网络盘
-LARKFLOW_ROLES={"财务":"ou_xxx","法务":"ou_xxx","负责人":"ou_xxx"}   # 模板里每个 assignee_role 都要有
-LLM_BASE_URL= / LLM_API_KEY= / LLM_MODEL=       # OpenAI 兼容；按角色再配 LLM_<ROLE>_*
-```
-
-角色没配全会在装配期直接抛（真栈 strict，绝不伪造 `ou_<角色>` 发给飞书）。
-
-**3. 起常驻进程**
-
-```bash
-pip install -e .
-larkflow serve                      # = 启动对账 + 起事件泵 + block（唯一的守护进程）
-```
-
-`serve` 做三件事：① 把 checkpointer 里每个没跑完的实例对一遍账（补上崩溃时丢掉的卡 / 任务，把被 super-step 屏障挡住的分支推到位）；② 每个 EventKey 起一条 `lark-cli event consume` 子进程收 NDJSON；③ 收到 SIGINT / SIGTERM 后停订阅、等在飞的那条事件处理完、关 SQLite。挂 systemd 直接 `ExecStart=/usr/local/bin/larkflow serve`、`Restart=always` 即可。
-
-**4. 起项目、看状态、救场**（另一个进程，与 daemon 写同一个 DB）
-
-```bash
-larkflow start --template contract --reporter ou_xxx \
-        --input 甲方=某某科技 --input 乙方=某某咨询 --input 价款=30万
-larkflow status <实例>                     # 整张图 + 谁在等 + 有没有卡死
-larkflow pending <实例> --actor ou_xxx      # 以某个人的视角看他点得动什么
-larkflow edit <实例> --ops @ops.json --by ou_xxx --reason "加一道审"   # 运行中改图（只动 pending）
-larkflow escalations <实例> [--node <节点>] [--all]   # 谁在等谁拍板（默认只列待批）
-larkflow approve <实例> <节点> --by ou_xxx [--seq N] [--comment "…"]   # 否决换 reject
-larkflow unblock <实例> <节点> --by ou_xxx --reason "改了要素"   # 解除 ⛔
-larkflow reconcile [实例]                   # 手动对账（省略 = 全部）
-larkflow --json status <实例>               # 给脚本读
-```
-
-`edit` 的 `--ops` 收三种来源：字面 JSON、`@文件`、`-`（读 stdin）。报文里全是中文 label、prompt 还常含 `$`，**别在命令行裸写**（shell 的引号剥离 / `$` 展开会把它悄悄改坏，与「别 `source .env`」同一个坑）。CLI 只校验报文形状，合不合法一律由引擎权威侧算。
-
-一次性命令与常驻 `serve` 是两个进程、写同一个 SQLite。这条是**正面处理过的**：DB 开 WAL + `busy_timeout`，同一实例的每一次状态变更再过一把跨进程 flock（`<DB>.locks/`），同一个 DB 只允许一个 `serve`（`<DB>.serve.lock`）。保证与不保证详见 `larkflow/store.py` 顶部。
-
-## 文档
-
-真相源在 [`AIREADME/`](AIREADME/INDEX.md)（跨会话 / 跨项目的 AI 可读文档体系）：
-
-- 定位 / 红线 → [CORE](AIREADME/CORE.md)
-- 架构 / 禁改 → [ARCHITECTURE](AIREADME/ARCHITECTURE.md)，决策理由 → [DECISIONS](AIREADME/DECISIONS.md)
-- 产品 → [PRD](AIREADME/PRD.md)，路线 → [ROADMAP](AIREADME/ROADMAP.md)，对外契约 → [SPEC](AIREADME/SPEC.md)
-
-## 设计红线
-
-单一事实源不破（checkpointer 权威，飞书是投影）· 只改未来不改历史 · 完成靠显式信号（引擎不猜定稿）· key / 凭证不入库 · LLM 走 OpenAI 兼容多角色路由 · 入口只走 lark-cli 事件。
-
----
-
-*引擎与服务层已落码、headless 全绿；下一步是接真飞书跑第一次端到端，见 [ROADMAP](AIREADME/ROADMAP.md)。欢迎 issue 讨论设计。*
+- 不提交凭证、token、真实人员 ID 或生产数据库。
+- 飞书对象和执行器回传都必须经过服务端授权、版本与幂等校验。
+- 测试不得构造 `build_real_service`，不得访问网络或真实飞书资源。

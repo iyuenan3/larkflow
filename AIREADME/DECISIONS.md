@@ -9,7 +9,7 @@
 
 ## ADR-002 · 2026-07-23 · 两层 + 单一事实源 + 飞书投影
 - Problem: 领域对象（待办 / 实例 / 依赖 / 门禁）与引擎执行态如何分工，避免两套真相源打架。
-- Decision: 领域 DAG = 数据模型；实例运行态由 LangGraph checkpointer 持有，是**权威写侧**；飞书任务 / 多维表格 / 文档 = **投影读侧**（从图事件同步）。CQRS 味道，映射 CC 的「单一事实源 + 广播投影」。
+- Decision: 领域 DAG = 数据模型；实例运行态由 LangGraph checkpointer 持有，是**权威写侧**；飞书任务 / 多维表格 / 文档 = **投影读侧**（从图事件同步）。采用「单一事实源 + 广播投影」思路。
 - Alternatives(否决): 领域 DAG 单独存 DB 与 checkpointer 并列（双真相源易漂移）。
 - Tradeoff: 需要一层稳定的「图事件 → 飞书投影」同步。
 
@@ -329,7 +329,7 @@
 ## ADR-045 · 2026-07-30 · 产品重定位为飞书原生的企业协作 DAG
 
 - **Status：Accepted · Target。**
-- Problem：旧定位把“多人/AI 接力产出合同类交付物”当产品中心，容易退化成 Agent 建待办或单场景流程引擎；源 CC730 PRD 的整体边界又是替代飞书，与本项目实际优势冲突。
+- Problem：旧定位把“多人/AI 接力产出合同类交付物”当产品中心，容易退化成 Agent 建待办或单场景流程引擎；参考方案的完整办公平台边界又与本项目实际优势冲突。
 - Decision：larkflow 复用飞书 IM、Task、Docs、Drive 和 Directory，负责企业模板、跨人/部门 DAG、责任边界、父子工作契约、验收和审计。合同只作示例，首个 beachhead 由真实频次与协调成本验证。
 - Supersedes：ADR-012 的“交付物流转”产品身份；ADR-018 的合同型首发假设；ADR-019 绑定妙搭为主前端的产品结论。飞书原生方向保留，具体 UI 在原型后决定。
 - Trade-off：产品范围从一个可快速演示的交付物流转器扩大为企业协作系统，必须用试点和分阶段领域模型控制实现风险。
@@ -372,3 +372,22 @@
 - Problem：个人 Agent 需要企业知识、Skill 和 MCP 才能完成工作，但把全局凭证或长期权限下发到员工电脑会扩大泄露与越权面。
 - Decision：中央 Capability Registry 保存逻辑资源、版本、租户范围、策略和 Secret 引用。模板声明需求；执行时按 tenant、person、node、attempt、purpose 签发短时、可撤销、最小权限 Lease。边缘设备不获得企业应用全局凭证。
 - Trade-off：增加策略评估、token/lease 服务和审计成本，换取本地 Agent 可控接入和供应商可替换性。
+
+## ADR-051 · 2026-08-01 · Phase 0 改为既有设计简化与一致性核验
+
+- **Status：Accepted · Target。**
+- Problem：原 Phase 0 需要企业访谈、历史实例和飞书原生对照，但当前没有执行条件。把空白证据写成验证通过不诚实，把无法执行的市场门长期设为唯一工程入口也无法推进。
+- Decision：当前 Phase 0 改为核对既有设计与最小闭环的一致性，并形成理由明确、可判定验收的简化范围。访谈与对照协议转为 Deferred，完整保留，未来具备条件时恢复。
+- Evidence boundary：设计一致性只允许项目继续做产品与工程设计，不证明场景频率、协调收益、模板维护意愿、市场规模或付费意愿。
+- Supersedes：ADR-045 中“首个 beachhead 必须先由真实频次与协调成本验证才可继续设计”的时序要求。ADR-045 的飞书原生产品身份继续有效。
+- Trade-off：可以在证据受限时继续收敛实现，但商业风险保持未知，后续仍需真实使用验证。
+
+## ADR-052 · 2026-08-01 · 既有产品设计收敛到最小闭环
+
+- **Status：Accepted · Target。**
+- Problem：2026-07-30 的目标设计吸收了三级子 DAG、个人 Agent Edge、能力注册表和复杂模板治理，导致近期范围过大。
+- Decision：MVP 只保留单个顶层 DAG；模板可选；实例先创建草稿并由人确认；模板采用 `draft / enabled / disabled / deleted`、不可变版本和布尔锁；每个节点有唯一人类 Owner，执行器为 Human、Agent 或 Tool；运行中只编辑未来区域并二次确认；节点或完整重启创建新 Attempt 并重置可达下游；质量简化为 `pass/fail + evidence + suggestion`；飞书是投影，PostgreSQL 是业务真相。
+- Architecture：目标先采用模块化单体、独立 Scheduler、中央 Node Runner 和数据库 outbox。LangGraph 只可用于单个复杂 Agent NodeRun。
+- Deferred：模板子 DAG、临时子 DAG、三级父子契约、个人 Agent Edge、Capability Lease、Knowledge/Skill/MCP 注册表、RAG、字段级锁、五维评分、Kafka、微服务和模板市场。
+- Supersedes：ADR-046 的近期个人 Agent Edge 范围、ADR-048 的 MVP 三级 DAG、ADR-049 的近期四级模板与能力入驻、ADR-050 的近期 Capability Lease。ADR-046 的人类责任原则、ADR-047 的数据库权威和 LangGraph 边界继续有效。
+- Trade-off：首版不再证明多层协作或个人 Agent 差异化，换取一个可以形成闭环、可实现和可核验的范围。

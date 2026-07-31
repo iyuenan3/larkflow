@@ -1,12 +1,22 @@
 # CHANGELOG · larkflow
 
+## v0.9.0-draft · 2026-08-01 · 既有设计收敛到最小闭环（ADR-051..052）
+
+- Changed：Phase 0 从外部访谈门改为既有设计简化与一致性核验；访谈和飞书原生对照协议保留为 Deferred，不声称市场验证完成。
+- Confirmed：当前工作以既有设计为底稿，不从零重建产品模型。
+- Simplified：MVP 固定为单层 DAG；模板可选；草稿必须确认；每节点唯一人类 Owner；执行器为 Human、Agent 或 Tool；编辑和重启均先预览后确认；质量结果改为可解释的通过或失败。
+- Deferred：三级子 DAG、个人 Agent Edge、Capability Lease、Knowledge/Skill/MCP 注册表、RAG、复杂模板治理、五维评分、Kafka 和微服务。
+- Architecture：目标改为 PostgreSQL 模块化单体、独立 Scheduler、中央 Node Runner、飞书投影和 outbox；LangGraph 只用于单个复杂 Agent 节点内部。
+- Docs：同步 CORE、PRODUCT_STRATEGY、PRD、ARCHITECTURE、DAG Contract v0.2、RELATIONS、CONVENTIONS、ROADMAP、README、pyproject.toml 和 research 路由。
+- Implementation：本条只收敛产品和架构契约，未修改运行时代码，也未声称目标能力已实现。
+
 ## v0.8.0-draft · 2026-07-30 · 产品重定位与目标架构重置（ADR-045..050）
 
 - Changed：产品从“合同类交付物流转 + 全局 LangGraph”重定位为飞书原生的企业协作 DAG；合同降为说明案例。
 - Decided：待办只分配给真实人员，个人 Agent 是责任人选择的边缘执行方式；MVP 固定 L1/L2/L3；父子实例用 Work Contract 连接。
 - Added：PRODUCT_STRATEGY 九段战略画布、重写 PRD/CORE/ARCHITECTURE/RELATIONS/ROADMAP/CONVENTIONS、DAG Template Spec v0.1、中央 Capability Registry / Lease 边界。
 - Separated：目标业务真相迁到 PostgreSQL 中央控制面；LangGraph 限定为单个 AI 节点的可选运行时。SPEC 和 DEPLOYMENT 明确标为 legacy prototype as-built。
-- Source boundary：复查《CC 730 PRD v1.2 完整合集 v3》，吸收模板库和三级 DAG 启发，但明确不复制“替代飞书”、Project-DAG 1:1 或 Agent 直接领待办的边界。
+- Boundary：吸收模板库和分层 DAG 思路，但明确不复制完整办公平台、Project-DAG 1:1 或 Agent 直接领待办的边界。
 - Implementation：本条只重置产品和架构契约，未声称目标能力已落码。
 
 ## v0.7.0 · 2026-07-26 · 把「不修不敢拉真人进来」的那几条留白收口（ADR-040..043）
