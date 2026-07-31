@@ -139,6 +139,8 @@ class NodeRunner:
         transition_attempt(attempt, AttemptStatus.DONE, now=now)
         attempt.result = FrozenDict(result)
         attempt.quality_result = quality_result
+        attempt.claim_token = None
+        attempt.claim_expires_at = None
 
     def fail_automated(
         self,
@@ -167,6 +169,8 @@ class NodeRunner:
         transition_attempt(attempt, AttemptStatus.FAILED, now=now)
         attempt.error_code = error_code
         attempt.error_message = error_message
+        attempt.claim_token = None
+        attempt.claim_expires_at = None
 
     @staticmethod
     def _current_attempt(

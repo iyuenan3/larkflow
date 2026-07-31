@@ -15,6 +15,7 @@ dependencies = [
     # 真飞书阶段才用；本地骨架走 stub，不强制在测试路径引入
     "openai>=1.40",
     "httpx>=0.27",
+    "psycopg[binary]>=3.2,<4",
 ]
 
 [project.scripts]
@@ -33,6 +34,7 @@ include = ["larkflow*"]
 # 「新增业务场景 = 只加一个 yaml」这条产品承诺，在安装态下全靠这三行。
 [tool.setuptools.package-data]
 "larkflow.templates" = ["*.yaml"]
+"larkflow.workflow.migrations" = ["*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

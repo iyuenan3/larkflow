@@ -4,14 +4,14 @@
 
 ## 当前状态
 
-larkflow 已开始按收敛后的产品设计重建中央工作流，目前完成第一批可离线验证的领域内核。
+larkflow 已开始按收敛后的产品设计重建中央工作流，目前完成领域内核与第一条 PostgreSQL 事务持久化路径。
 
 - **目标产品**：单企业、单层 DAG 的最小闭环，支持模板可选、草稿确认、Human / Agent / Tool 节点、受控编辑、重启、审计和飞书投影。
-- **新内核**：`larkflow/workflow/` 已实现不可变 Instance Snapshot、草稿确认、DAG 校验、节点状态迁移、依赖解锁、Human / Agent / Tool Node Runner、Attempt、claim 与乐观并发保护。
+- **新内核**：`larkflow/workflow/` 已实现不可变 Instance Snapshot、草稿确认、DAG 校验、节点状态迁移、依赖解锁、Human / Agent / Tool Node Runner、Attempt、claim、乐观并发、PostgreSQL 仓储、追加型审计与事务 outbox。
 - **legacy 原型**：LangGraph + SQLite + lark-cli 路径继续保留，用于回归已验证的飞书投影、打回、幂等和恢复机制。
-- **尚未实现**：PostgreSQL 仓储、审计与 outbox、飞书投影接线、受控编辑、重启和生产装配。
+- **尚未实现**：模板服务、飞书投影 worker 与接线、自动执行 worker、受控编辑、重启和生产装配。
 - **证据边界**：本轮完成的是既有设计简化与一致性核验，不是访谈、市场或商业验证。
-- **重要边界**：当前原型不是 PostgreSQL 目标架构，不能把 checkpointer、SQLite 或全局 LangGraph state 继续扩展为新产品领域模型。
+- **重要边界**：新 PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上通过集成验证，但尚未接入常驻服务。legacy 服务仍使用 SQLite，不能把 checkpointer 或全局 LangGraph state 继续扩展为新产品领域模型。
 
 产品与架构真相源从 [AIREADME/INDEX.md](AIREADME/INDEX.md) 开始。判断“目标是什么”和“现在做到了什么”时，必须区分 Target 与 As-built。
 
@@ -68,7 +68,7 @@ AIREADME/                         产品、架构、契约、路线和决策真�
 research/design-simplification.md 既有设计简化与取舍记录
 research/phase-0/                Deferred 的访谈、对照实验协议与迁移清单
 larkflow/
-  workflow/                      Target 中央工作流领域内核、Scheduler、Node Runner 与仓储 Port
+  workflow/                      Target 领域内核、PostgreSQL migration、事务仓储与 outbox
   engine/                        legacy LangGraph 编排、门禁、返工和活图机制
   model/                         legacy YAML 节点和模板校验
   io/                            lark-cli、飞书投影、事件和关联表适配
@@ -85,13 +85,15 @@ deploy/                          legacy 单机 ECS 部署资产
 
 ## 当前阶段
 
-Phase 0 的设计一致性核验已经完成，当前进入 Phase 1 中央工作流基础实现。第一批代码只建立离线可验证的领域边界，不连接真实飞书或云数据库：
+Phase 0 的设计一致性核验已经完成，当前进入 Phase 1 中央工作流基础实现。现有代码建立可离线验证的领域边界，并打通一次性 PostgreSQL 数据库验证，不连接真实飞书：
 
 - Instance Snapshot 无论来自模板还是无模板定义，都进入同一套运行时。
 - 草稿只能由项目 Owner 确认或丢弃，确认后才创建节点与初始 Attempt。
 - Human 节点只接受唯一 Owner 提交，Agent 和 Tool 结果必须匹配当前 claim、Attempt 和节点版本。
 - Scheduler 只在全部依赖完成后解锁节点，任何迟到或陈旧结果都不得改写当前状态。
-- PostgreSQL、outbox 和飞书投影是下一批实现，不把内存仓储描述为目标持久化已完成。
+- PostgreSQL 14 schema、migration runner、事务仓储、追加型 Audit 和带租约的 outbox 已落码；领域状态、审计和 outbox 在同一事务提交。
+- migration SQL 已进入 wheel，真实 PostgreSQL 集成测试使用一次性数据库，完成后删除测试数据库与角色。
+- 当前仍缺常驻 outbox worker、飞书 Projection adapter、新服务装配和生产迁移，因此不能描述为目标产品已经上线。
 
 原有访谈和飞书基线协议保留在 [research/phase-0/README.md](research/phase-0/README.md)，当前状态为 Deferred，不阻塞本轮简化设计，也不能被描述为已完成。
 
@@ -106,9 +108,12 @@ pip install -e ".[dev]"
 
 pytest -q
 pytest -q tests/test_workflow_kernel.py
+pytest -q tests/test_workflow_persistence.py
 python -m larkflow.demo --auto
 python -m larkflow.demo --template hiring
 ```
+
+`tests/test_workflow_postgres.py` 是显式启用的集成测试，只能指向可销毁数据库，并通过 `LARKFLOW_TEST_POSTGRES_DSN` 提供连接。
 
 真实飞书部署会创建任务、卡片和文档，只能在明确配置的开发环境中运行。现有单机部署是 legacy 原型实录，操作前先读 [AIREADME/DEPLOYMENT.md](AIREADME/DEPLOYMENT.md)。
 

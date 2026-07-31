@@ -18,10 +18,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = ROOT / "larkflow" / "templates"
+WORKFLOW_MIGRATIONS = ROOT / "larkflow" / "workflow" / "migrations"
 
 
-def declared_patterns() -> list[str]:
-    """从 pyproject 里抠出 `[tool.setuptools.package-data]` 给 larkflow.templates 的 glob。
+def declared_patterns(package: str = "larkflow.templates") -> list[str]:
+    """从 pyproject 里抠出指定 package-data 的 glob。
 
     手写小解析而不是 tomllib：requires-python 已经放到 3.10（Ubuntu 22.04 自带的那个），
     而 tomllib 是 3.11 才有的。为一条测试把运行时下限顶回去，本末倒置。
@@ -30,8 +31,12 @@ def declared_patterns() -> list[str]:
     block = re.search(r"^\[tool\.setuptools\.package-data\]\s*$(.*?)(?=^\[|\Z)",
                       text, re.M | re.S)
     assert block, "pyproject 里没有 [tool.setuptools.package-data]，模板不会被打进包"
-    line = re.search(r'^"?larkflow\.templates"?\s*=\s*\[(.*?)\]', block.group(1), re.M | re.S)
-    assert line, "package-data 里没有 larkflow.templates 这一项"
+    line = re.search(
+        rf'^"?{re.escape(package)}"?\s*=\s*\[(.*?)\]',
+        block.group(1),
+        re.M | re.S,
+    )
+    assert line, f"package-data 里没有 {package} 这一项"
     return re.findall(r'"([^"]+)"', line.group(1))
 
 
@@ -43,6 +48,21 @@ def test_every_template_file_is_covered_by_a_package_data_pattern():
         assert any(fnmatch.fnmatch(f.name, pat) for pat in pats), (
             f"{f.name} 不被 package-data 的 {pats} 覆盖：装出来的包里不会有它，"
             f"load_template 会报「模板文件不存在」")
+
+
+def test_every_workflow_migration_is_covered_by_package_data():
+    pats = declared_patterns("larkflow.workflow.migrations")
+    migrations = [
+        path
+        for path in WORKFLOW_MIGRATIONS.iterdir()
+        if path.is_file() and path.suffix != ".py"
+    ]
+    assert migrations, "workflow migrations 目录里没有 SQL 文件"
+    for migration in migrations:
+        assert any(fnmatch.fnmatch(migration.name, pat) for pat in pats), (
+            f"{migration.name} 不被 package-data 的 {pats} 覆盖，"
+            "安装后无法初始化 PostgreSQL"
+        )
 
 
 def test_the_templates_shipped_are_the_ones_the_docs_promise():

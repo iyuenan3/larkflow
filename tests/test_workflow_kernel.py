@@ -32,6 +32,7 @@ from larkflow.workflow import (
 
 
 NOW = datetime(2026, 8, 1, 8, 0, tzinfo=timezone.utc)
+TENANT = "tenant_1"
 
 
 def node_work(*, tool_kind: str | None = None) -> dict:
@@ -100,9 +101,10 @@ def build_service(
     )
     service.create_draft(
         instance_id="instance_1",
-        tenant_id="tenant_1",
+        tenant_id=TENANT,
         owner_person_id="person_owner",
         snapshot=snapshot or linear_snapshot(),
+        actor_person_id="person_owner",
     )
     return service, repository
 
@@ -232,9 +234,11 @@ def test_only_instance_owner_can_confirm_and_confirm_creates_initial_attempts():
     service, _ = build_service()
 
     with pytest.raises(AuthorizationError, match="instance owner"):
-        service.confirm_draft("instance_1", actor_person_id="person_editor")
+        service.confirm_draft(TENANT, "instance_1", actor_person_id="person_editor")
 
-    instance = service.confirm_draft("instance_1", actor_person_id="person_owner")
+    instance = service.confirm_draft(
+        TENANT, "instance_1", actor_person_id="person_owner"
+    )
 
     assert instance.status == InstanceStatus.RUNNING
     assert instance.nodes["collect_brief"].status == NodeStatus.READY
@@ -246,20 +250,21 @@ def test_only_instance_owner_can_confirm_and_confirm_creates_initial_attempts():
         AttemptStatus.PENDING,
     ]
     with pytest.raises(TransitionError, match="not a draft"):
-        service.confirm_draft("instance_1", actor_person_id="person_owner")
+        service.confirm_draft(TENANT, "instance_1", actor_person_id="person_owner")
 
 
 def test_human_agent_and_tool_flow_unlocks_successors_and_finishes_instance():
     service, _ = build_service()
-    service.confirm_draft("instance_1", actor_person_id="person_owner")
+    service.confirm_draft(TENANT, "instance_1", actor_person_id="person_owner")
 
-    human = service.dispatch_ready("instance_1")[0]
+    human = service.dispatch_ready(TENANT, "instance_1")[0]
     assert human.executor == ExecutorKind.HUMAN
     assert human.status == NodeStatus.WAITING_HUMAN
     assert human.claim_token is None
 
     with pytest.raises(AuthorizationError, match="node owner"):
         service.submit_human(
+            TENANT,
             "instance_1",
             "collect_brief",
             actor_person_id="person_editor",
@@ -269,6 +274,7 @@ def test_human_agent_and_tool_flow_unlocks_successors_and_finishes_instance():
         )
 
     instance = service.submit_human(
+        TENANT,
         "instance_1",
         "collect_brief",
         actor_person_id="person_owner",
@@ -282,21 +288,26 @@ def test_human_agent_and_tool_flow_unlocks_successors_and_finishes_instance():
     assert instance.nodes["write_draft"].status == NodeStatus.READY
     assert instance.nodes["publish_doc"].status == NodeStatus.PENDING
 
-    agent = service.dispatch_ready("instance_1")[0]
+    agent = service.dispatch_ready(TENANT, "instance_1")[0]
     assert agent.executor == ExecutorKind.AGENT
     assert agent.status == NodeStatus.RUNNING
     assert agent.claim_token == "claim-agent"
 
     with pytest.raises(InvalidClaimError):
         service.complete_automated(
+            TENANT,
             "instance_1",
             "write_draft",
             attempt_no=agent.attempt_no,
             expected_node_version=agent.expected_node_version,
             claim_token="wrong-token",
             result={"document": "draft"},
+            worker_id="worker_1",
         )
-    assert service.get("instance_1").nodes["write_draft"].status == NodeStatus.RUNNING
+    assert (
+        service.get(TENANT, "instance_1").nodes["write_draft"].status
+        == NodeStatus.RUNNING
+    )
 
     quality = QualityResult(
         QualityVerdict.PASS,
@@ -304,6 +315,7 @@ def test_human_agent_and_tool_flow_unlocks_successors_and_finishes_instance():
         suggestion="",
     )
     instance = service.complete_automated(
+        TENANT,
         "instance_1",
         "write_draft",
         attempt_no=agent.attempt_no,
@@ -311,20 +323,25 @@ def test_human_agent_and_tool_flow_unlocks_successors_and_finishes_instance():
         claim_token=agent.claim_token or "",
         result={"document": "draft"},
         quality_result=quality,
+        worker_id="worker_1",
     )
     assert instance.current_attempt("write_draft").quality_result == quality
+    assert instance.current_attempt("write_draft").claim_token is None
+    assert instance.current_attempt("write_draft").claim_expires_at is None
     assert instance.nodes["publish_doc"].status == NodeStatus.READY
 
-    tool = service.dispatch_ready("instance_1")[0]
+    tool = service.dispatch_ready(TENANT, "instance_1")[0]
     assert tool.executor == ExecutorKind.TOOL
     assert tool.claim_token == "claim-tool"
     instance = service.complete_automated(
+        TENANT,
         "instance_1",
         "publish_doc",
         attempt_no=tool.attempt_no,
         expected_node_version=tool.expected_node_version,
         claim_token=tool.claim_token or "",
         result={"url": "https://example.invalid/document"},
+        worker_id="worker_1",
     )
 
     assert instance.status == InstanceStatus.DONE
@@ -351,10 +368,13 @@ def test_fan_in_unlocks_only_after_every_dependency_is_done():
         )
     )
     service, _ = build_service(snapshot)
-    service.confirm_draft("instance_1", actor_person_id="person_owner")
-    activations = {item.node_key: item for item in service.dispatch_ready("instance_1")}
+    service.confirm_draft(TENANT, "instance_1", actor_person_id="person_owner")
+    activations = {
+        item.node_key: item for item in service.dispatch_ready(TENANT, "instance_1")
+    }
 
     instance = service.submit_human(
+        TENANT,
         "instance_1",
         "legal_review",
         actor_person_id="legal",
@@ -365,6 +385,7 @@ def test_fan_in_unlocks_only_after_every_dependency_is_done():
     assert instance.nodes["release"].status == NodeStatus.PENDING
 
     instance = service.submit_human(
+        TENANT,
         "instance_1",
         "brand_review",
         actor_person_id="brand",
@@ -378,11 +399,12 @@ def test_fan_in_unlocks_only_after_every_dependency_is_done():
 def test_stale_version_and_expired_claim_are_rejected_without_mutation():
     clock = Clock()
     service, _ = build_service(clock=clock)
-    service.confirm_draft("instance_1", actor_person_id="person_owner")
-    human = service.dispatch_ready("instance_1")[0]
+    service.confirm_draft(TENANT, "instance_1", actor_person_id="person_owner")
+    human = service.dispatch_ready(TENANT, "instance_1")[0]
 
     with pytest.raises(StaleAttemptError, match="expected version"):
         service.submit_human(
+            TENANT,
             "instance_1",
             "collect_brief",
             actor_person_id="person_owner",
@@ -392,6 +414,7 @@ def test_stale_version_and_expired_claim_are_rejected_without_mutation():
         )
 
     service.submit_human(
+        TENANT,
         "instance_1",
         "collect_brief",
         actor_person_id="person_owner",
@@ -399,19 +422,21 @@ def test_stale_version_and_expired_claim_are_rejected_without_mutation():
         expected_node_version=human.expected_node_version,
         result={"brief": "approved"},
     )
-    agent = service.dispatch_ready("instance_1")[0]
+    agent = service.dispatch_ready(TENANT, "instance_1")[0]
     clock.now += timedelta(minutes=6)
 
     with pytest.raises(ClaimExpiredError):
         service.complete_automated(
+            TENANT,
             "instance_1",
             "write_draft",
             attempt_no=agent.attempt_no,
             expected_node_version=agent.expected_node_version,
             claim_token=agent.claim_token or "",
             result={"document": "late"},
+            worker_id="worker_1",
         )
-    instance = service.get("instance_1")
+    instance = service.get(TENANT, "instance_1")
     assert instance.nodes["write_draft"].status == NodeStatus.RUNNING
     assert instance.current_attempt("write_draft").result is None
 
@@ -429,10 +454,11 @@ def test_automated_failure_records_error_and_fails_instance():
         )
     )
     service, _ = build_service(snapshot)
-    service.confirm_draft("instance_1", actor_person_id="person_owner")
-    activation = service.dispatch_ready("instance_1")[0]
+    service.confirm_draft(TENANT, "instance_1", actor_person_id="person_owner")
+    activation = service.dispatch_ready(TENANT, "instance_1")[0]
 
     instance = service.fail_automated(
+        TENANT,
         "instance_1",
         "sync_data",
         attempt_no=activation.attempt_no,
@@ -440,11 +466,14 @@ def test_automated_failure_records_error_and_fails_instance():
         claim_token=activation.claim_token or "",
         error_code="upstream_timeout",
         error_message="upstream did not answer",
+        worker_id="worker_1",
     )
 
     assert instance.status == InstanceStatus.FAILED
     assert instance.nodes["sync_data"].status == NodeStatus.FAILED
     assert instance.current_attempt("sync_data").error_code == "upstream_timeout"
+    assert instance.current_attempt("sync_data").claim_token is None
+    assert instance.current_attempt("sync_data").claim_expires_at is None
 
 
 def test_failed_instance_rejects_late_result_from_parallel_node():
@@ -467,11 +496,14 @@ def test_failed_instance_rejects_late_result_from_parallel_node():
         )
     )
     service, _ = build_service(snapshot)
-    service.confirm_draft("instance_1", actor_person_id="person_owner")
-    activations = {item.node_key: item for item in service.dispatch_ready("instance_1")}
+    service.confirm_draft(TENANT, "instance_1", actor_person_id="person_owner")
+    activations = {
+        item.node_key: item for item in service.dispatch_ready(TENANT, "instance_1")
+    }
 
     first = activations["first_job"]
     service.fail_automated(
+        TENANT,
         "instance_1",
         "first_job",
         attempt_no=first.attempt_no,
@@ -479,32 +511,35 @@ def test_failed_instance_rejects_late_result_from_parallel_node():
         claim_token=first.claim_token or "",
         error_code="provider_error",
         error_message="provider failed",
+        worker_id="worker_1",
     )
 
     second = activations["second_job"]
     with pytest.raises(TransitionError, match="instance is not running"):
         service.complete_automated(
+            TENANT,
             "instance_1",
             "second_job",
             attempt_no=second.attempt_no,
             expected_node_version=second.expected_node_version,
             claim_token=second.claim_token or "",
             result={"value": "late"},
+            worker_id="worker_1",
         )
-    assert service.get("instance_1").current_attempt("second_job").result is None
+    assert service.get(TENANT, "instance_1").current_attempt("second_job").result is None
 
 
 def test_repository_rejects_lost_updates():
     repository = InMemoryWorkflowRepository()
     instance = WorkflowInstance(
         id="instance_1",
-        tenant_id="tenant_1",
+        tenant_id=TENANT,
         owner_person_id="owner",
         snapshot=linear_snapshot(),
     )
     repository.add(instance)
-    first = repository.get("instance_1")
-    second = repository.get("instance_1")
+    first = repository.get(TENANT, "instance_1")
+    second = repository.get(TENANT, "instance_1")
 
     first.graph_revision = 2
     repository.save(first, expected_version=0)

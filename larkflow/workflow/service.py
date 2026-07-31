@@ -4,9 +4,12 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
+from .events import AuditEvent, OutboxEvent
 from .graph import validate_snapshot
 from .model import (
+    ExecutorKind,
     InstanceSnapshot,
     InstanceStatus,
     NodeActivation,
@@ -30,11 +33,13 @@ class WorkflowService:
         scheduler: Scheduler | None = None,
         runner: NodeRunner | None = None,
         clock: Callable[[], datetime] | None = None,
+        id_factory: Callable[[], str] | None = None,
     ) -> None:
         self.repository = repository
         self.scheduler = scheduler or Scheduler()
         self.runner = runner or NodeRunner()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.id_factory = id_factory or (lambda: str(uuid4()))
 
     def create_draft(
         self,
@@ -43,6 +48,8 @@ class WorkflowService:
         tenant_id: str,
         owner_person_id: str,
         snapshot: InstanceSnapshot,
+        actor_person_id: str,
+        correlation_id: str | None = None,
     ) -> WorkflowInstance:
         if not instance_id.strip():
             raise ValueError("instance_id is required")
@@ -50,47 +57,112 @@ class WorkflowService:
             raise ValueError("tenant_id is required")
         if not owner_person_id.strip():
             raise ValueError("owner_person_id is required")
+        if not actor_person_id.strip():
+            raise ValueError("actor_person_id is required")
         validate_snapshot(snapshot)
+        now = self.clock()
         instance = WorkflowInstance(
             id=instance_id,
             tenant_id=tenant_id,
             owner_person_id=owner_person_id,
             snapshot=snapshot,
-            created_at=self.clock(),
+            created_at=now,
         )
-        self.repository.add(instance)
-        return self.repository.get(instance_id)
+        audit = self._audit(
+            instance,
+            "instance.draft_created",
+            actor_person_id=actor_person_id,
+            correlation_id=correlation_id or self.id_factory(),
+            aggregate_version=0,
+            now=now,
+        )
+        self.repository.add(instance, audit_events=(audit,))
+        return self.repository.get(tenant_id, instance_id)
 
     def confirm_draft(
         self,
+        tenant_id: str,
         instance_id: str,
         *,
         actor_person_id: str,
+        correlation_id: str | None = None,
     ) -> WorkflowInstance:
-        instance = self.repository.get(instance_id)
+        instance = self.repository.get(tenant_id, instance_id)
         expected_version = instance.version
         self._require_instance_owner(instance, actor_person_id)
         if instance.status != InstanceStatus.DRAFT:
             raise TransitionError(f"instance is not a draft: {instance_id}")
-        self.scheduler.confirm(instance, now=self.clock())
-        self.repository.save(instance, expected_version=expected_version)
-        return self.repository.get(instance_id)
+        now = self.clock()
+        self.scheduler.confirm(instance, now=now)
+        correlation_id = correlation_id or self.id_factory()
+        audit = self._audit(
+            instance,
+            "instance.confirmed",
+            actor_person_id=actor_person_id,
+            correlation_id=correlation_id,
+            aggregate_version=expected_version + 1,
+            now=now,
+        )
+        outbox = tuple(
+            self._outbox(
+                instance,
+                event_type="node.projection_create_requested",
+                aggregate_type="node_instance",
+                aggregate_id=node.id,
+                aggregate_version=node.version,
+                payload={
+                    "instance_id": instance.id,
+                    "node_key": node.node_key,
+                    "attempt_no": node.current_attempt_no,
+                },
+                now=now,
+            )
+            for node in instance.nodes.values()
+        )
+        self.repository.save(
+            instance,
+            expected_version=expected_version,
+            audit_events=(audit,),
+            outbox_events=outbox,
+        )
+        return self.repository.get(tenant_id, instance_id)
 
     def discard_draft(
         self,
+        tenant_id: str,
         instance_id: str,
         *,
         actor_person_id: str,
+        correlation_id: str | None = None,
     ) -> WorkflowInstance:
-        instance = self.repository.get(instance_id)
+        instance = self.repository.get(tenant_id, instance_id)
         expected_version = instance.version
         self._require_instance_owner(instance, actor_person_id)
-        transition_instance(instance, InstanceStatus.DISCARDED, now=self.clock())
-        self.repository.save(instance, expected_version=expected_version)
-        return self.repository.get(instance_id)
+        now = self.clock()
+        transition_instance(instance, InstanceStatus.DISCARDED, now=now)
+        audit = self._audit(
+            instance,
+            "instance.discarded",
+            actor_person_id=actor_person_id,
+            correlation_id=correlation_id or self.id_factory(),
+            aggregate_version=expected_version + 1,
+            now=now,
+        )
+        self.repository.save(
+            instance,
+            expected_version=expected_version,
+            audit_events=(audit,),
+        )
+        return self.repository.get(tenant_id, instance_id)
 
-    def dispatch_ready(self, instance_id: str) -> tuple[NodeActivation, ...]:
-        instance = self.repository.get(instance_id)
+    def dispatch_ready(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        *,
+        correlation_id: str | None = None,
+    ) -> tuple[NodeActivation, ...]:
+        instance = self.repository.get(tenant_id, instance_id)
         expected_version = instance.version
         if instance.status != InstanceStatus.RUNNING:
             raise TransitionError(f"instance is not running: {instance_id}")
@@ -101,11 +173,37 @@ class WorkflowService:
             if instance.nodes[spec.key].status == NodeStatus.READY
         )
         if activations:
-            self.repository.save(instance, expected_version=expected_version)
+            correlation_id = correlation_id or self.id_factory()
+            audit_events = tuple(
+                self._audit(
+                    instance,
+                    "node.activated",
+                    actor_person_id=None,
+                    correlation_id=correlation_id,
+                    aggregate_version=expected_version + 1,
+                    now=now,
+                    node_key=activation.node_key,
+                    attempt_no=activation.attempt_no,
+                    payload={"executor": activation.executor.value},
+                )
+                for activation in activations
+            )
+            outbox_events = tuple(
+                self._activation_outbox(instance, activation, now=now)
+                for activation in activations
+                if activation.executor == ExecutorKind.HUMAN
+            )
+            self.repository.save(
+                instance,
+                expected_version=expected_version,
+                audit_events=audit_events,
+                outbox_events=outbox_events,
+            )
         return activations
 
     def submit_human(
         self,
+        tenant_id: str,
         instance_id: str,
         node_key: str,
         *,
@@ -114,8 +212,9 @@ class WorkflowService:
         expected_node_version: int,
         result: Mapping[str, Any],
         quality_result: QualityResult | None = None,
+        correlation_id: str | None = None,
     ) -> WorkflowInstance:
-        instance = self.repository.get(instance_id)
+        instance = self.repository.get(tenant_id, instance_id)
         expected_version = instance.version
         self._require_running(instance)
         now = self.clock()
@@ -130,11 +229,28 @@ class WorkflowService:
             now=now,
         )
         self.scheduler.unlock_after(instance, node_key, now=now)
-        self.repository.save(instance, expected_version=expected_version)
-        return self.repository.get(instance_id)
+        audit_events = self._completion_audits(
+            instance,
+            "node.human_submitted",
+            actor_person_id=actor_person_id,
+            node_key=node_key,
+            attempt_no=attempt_no,
+            correlation_id=correlation_id or self.id_factory(),
+            aggregate_version=expected_version + 1,
+            now=now,
+        )
+        outbox = self._completion_outbox(instance, node_key, now=now)
+        self.repository.save(
+            instance,
+            expected_version=expected_version,
+            audit_events=audit_events,
+            outbox_events=(outbox,),
+        )
+        return self.repository.get(tenant_id, instance_id)
 
     def complete_automated(
         self,
+        tenant_id: str,
         instance_id: str,
         node_key: str,
         *,
@@ -143,8 +259,12 @@ class WorkflowService:
         claim_token: str,
         result: Mapping[str, Any],
         quality_result: QualityResult | None = None,
+        worker_id: str,
+        correlation_id: str | None = None,
     ) -> WorkflowInstance:
-        instance = self.repository.get(instance_id)
+        if not worker_id.strip():
+            raise ValueError("worker_id is required")
+        instance = self.repository.get(tenant_id, instance_id)
         expected_version = instance.version
         self._require_running(instance)
         now = self.clock()
@@ -159,11 +279,29 @@ class WorkflowService:
             now=now,
         )
         self.scheduler.unlock_after(instance, node_key, now=now)
-        self.repository.save(instance, expected_version=expected_version)
-        return self.repository.get(instance_id)
+        audit_events = self._completion_audits(
+            instance,
+            "node.automated_completed",
+            actor_person_id=None,
+            node_key=node_key,
+            attempt_no=attempt_no,
+            correlation_id=correlation_id or self.id_factory(),
+            aggregate_version=expected_version + 1,
+            now=now,
+            payload={"worker_id": worker_id},
+        )
+        outbox = self._completion_outbox(instance, node_key, now=now)
+        self.repository.save(
+            instance,
+            expected_version=expected_version,
+            audit_events=audit_events,
+            outbox_events=(outbox,),
+        )
+        return self.repository.get(tenant_id, instance_id)
 
     def fail_automated(
         self,
+        tenant_id: str,
         instance_id: str,
         node_key: str,
         *,
@@ -172,8 +310,12 @@ class WorkflowService:
         claim_token: str,
         error_code: str,
         error_message: str,
+        worker_id: str,
+        correlation_id: str | None = None,
     ) -> WorkflowInstance:
-        instance = self.repository.get(instance_id)
+        if not worker_id.strip():
+            raise ValueError("worker_id is required")
+        instance = self.repository.get(tenant_id, instance_id)
         expected_version = instance.version
         self._require_running(instance)
         now = self.clock()
@@ -188,11 +330,164 @@ class WorkflowService:
             now=now,
         )
         self.scheduler.fail_instance(instance, now=now)
-        self.repository.save(instance, expected_version=expected_version)
-        return self.repository.get(instance_id)
+        audit = self._audit(
+            instance,
+            "node.automated_failed",
+            actor_person_id=None,
+            correlation_id=correlation_id or self.id_factory(),
+            aggregate_version=expected_version + 1,
+            now=now,
+            node_key=node_key,
+            attempt_no=attempt_no,
+            payload={"worker_id": worker_id, "error_code": error_code},
+        )
+        outbox = self._completion_outbox(instance, node_key, now=now)
+        self.repository.save(
+            instance,
+            expected_version=expected_version,
+            audit_events=(audit,),
+            outbox_events=(outbox,),
+        )
+        return self.repository.get(tenant_id, instance_id)
 
-    def get(self, instance_id: str) -> WorkflowInstance:
-        return self.repository.get(instance_id)
+    def get(self, tenant_id: str, instance_id: str) -> WorkflowInstance:
+        return self.repository.get(tenant_id, instance_id)
+
+    def _audit(
+        self,
+        instance: WorkflowInstance,
+        event_type: str,
+        *,
+        actor_person_id: str | None,
+        correlation_id: str,
+        aggregate_version: int,
+        now: datetime,
+        node_key: str | None = None,
+        attempt_no: int | None = None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> AuditEvent:
+        return AuditEvent(
+            id=self.id_factory(),
+            tenant_id=instance.tenant_id,
+            instance_id=instance.id,
+            event_type=event_type,
+            source="workflow_service",
+            correlation_id=correlation_id,
+            aggregate_version=aggregate_version,
+            occurred_at=now,
+            actor_person_id=actor_person_id,
+            node_key=node_key,
+            attempt_no=attempt_no,
+            payload=payload or {},
+        )
+
+    def _outbox(
+        self,
+        instance: WorkflowInstance,
+        *,
+        event_type: str,
+        aggregate_type: str,
+        aggregate_id: str,
+        aggregate_version: int,
+        payload: Mapping[str, Any],
+        now: datetime,
+    ) -> OutboxEvent:
+        return OutboxEvent(
+            id=self.id_factory(),
+            tenant_id=instance.tenant_id,
+            aggregate_type=aggregate_type,
+            aggregate_id=aggregate_id,
+            aggregate_version=aggregate_version,
+            event_type=event_type,
+            payload=payload,
+            created_at=now,
+            available_at=now,
+        )
+
+    def _activation_outbox(
+        self,
+        instance: WorkflowInstance,
+        activation: NodeActivation,
+        *,
+        now: datetime,
+    ) -> OutboxEvent:
+        return self._outbox(
+            instance,
+            event_type="node.projection_sync_requested",
+            aggregate_type="node_instance",
+            aggregate_id=activation.node_instance_id,
+            aggregate_version=activation.expected_node_version,
+            payload={
+                "instance_id": instance.id,
+                "node_key": activation.node_key,
+                "attempt_no": activation.attempt_no,
+                "expected_node_version": activation.expected_node_version,
+                "claim_token": activation.claim_token,
+            },
+            now=now,
+        )
+
+    def _completion_outbox(
+        self,
+        instance: WorkflowInstance,
+        node_key: str,
+        *,
+        now: datetime,
+    ) -> OutboxEvent:
+        node = instance.nodes[node_key]
+        return self._outbox(
+            instance,
+            event_type="node.projection_sync_requested",
+            aggregate_type="node_instance",
+            aggregate_id=node.id,
+            aggregate_version=node.version,
+            payload={
+                "instance_id": instance.id,
+                "node_key": node_key,
+                "attempt_no": node.current_attempt_no,
+                "status": node.status.value,
+            },
+            now=now,
+        )
+
+    def _completion_audits(
+        self,
+        instance: WorkflowInstance,
+        event_type: str,
+        *,
+        actor_person_id: str | None,
+        node_key: str,
+        attempt_no: int,
+        correlation_id: str,
+        aggregate_version: int,
+        now: datetime,
+        payload: Mapping[str, Any] | None = None,
+    ) -> tuple[AuditEvent, ...]:
+        events = [
+            self._audit(
+                instance,
+                event_type,
+                actor_person_id=actor_person_id,
+                correlation_id=correlation_id,
+                aggregate_version=aggregate_version,
+                now=now,
+                node_key=node_key,
+                attempt_no=attempt_no,
+                payload=payload,
+            )
+        ]
+        if instance.status == InstanceStatus.DONE:
+            events.append(
+                self._audit(
+                    instance,
+                    "instance.completed",
+                    actor_person_id=actor_person_id,
+                    correlation_id=correlation_id,
+                    aggregate_version=aggregate_version,
+                    now=now,
+                )
+            )
+        return tuple(events)
 
     @staticmethod
     def _require_instance_owner(
