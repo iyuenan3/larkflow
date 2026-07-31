@@ -4,10 +4,12 @@
 
 ## 当前状态
 
-larkflow 正在把既有产品设计收敛为可实现、可核验的最小范围。
+larkflow 已开始按收敛后的产品设计重建中央工作流，目前完成第一批可离线验证的领域内核。
 
 - **目标产品**：单企业、单层 DAG 的最小闭环，支持模板可选、草稿确认、Human / Agent / Tool 节点、受控编辑、重启、审计和飞书投影。
-- **当前代码**：LangGraph + SQLite + lark-cli 的 legacy 机制原型，已验证部分飞书投影、打回、幂等和恢复机制。
+- **新内核**：`larkflow/workflow/` 已实现不可变 Instance Snapshot、草稿确认、DAG 校验、节点状态迁移、依赖解锁、Human / Agent / Tool Node Runner、Attempt、claim 与乐观并发保护。
+- **legacy 原型**：LangGraph + SQLite + lark-cli 路径继续保留，用于回归已验证的飞书投影、打回、幂等和恢复机制。
+- **尚未实现**：PostgreSQL 仓储、审计与 outbox、飞书投影接线、受控编辑、重启和生产装配。
 - **证据边界**：本轮完成的是既有设计简化与一致性核验，不是访谈、市场或商业验证。
 - **重要边界**：当前原型不是 PostgreSQL 目标架构，不能把 checkpointer、SQLite 或全局 LangGraph state 继续扩展为新产品领域模型。
 
@@ -66,6 +68,7 @@ AIREADME/                         产品、架构、契约、路线和决策真�
 research/design-simplification.md 既有设计简化与取舍记录
 research/phase-0/                Deferred 的访谈、对照实验协议与迁移清单
 larkflow/
+  workflow/                      Target 中央工作流领域内核、Scheduler、Node Runner 与仓储 Port
   engine/                        legacy LangGraph 编排、门禁、返工和活图机制
   model/                         legacy YAML 节点和模板校验
   io/                            lark-cli、飞书投影、事件和关联表适配
@@ -82,12 +85,13 @@ deploy/                          legacy 单机 ECS 部署资产
 
 ## 当前阶段
 
-当前 Phase 0 的门是设计一致性，不是外部访谈：
+Phase 0 的设计一致性核验已经完成，当前进入 Phase 1 中央工作流基础实现。第一批代码只建立离线可验证的领域边界，不连接真实飞书或云数据库：
 
-- MVP 能力必须有明确的产品理由和可判定验收。
-- CORE、PRD、架构、模板契约、路线图、README 和包描述必须一致。
-- Target 与 As-built 必须分开。
-- 首个场景、真实频率、增量收益和付费意愿继续标记为未知。
+- Instance Snapshot 无论来自模板还是无模板定义，都进入同一套运行时。
+- 草稿只能由项目 Owner 确认或丢弃，确认后才创建节点与初始 Attempt。
+- Human 节点只接受唯一 Owner 提交，Agent 和 Tool 结果必须匹配当前 claim、Attempt 和节点版本。
+- Scheduler 只在全部依赖完成后解锁节点，任何迟到或陈旧结果都不得改写当前状态。
+- PostgreSQL、outbox 和飞书投影是下一批实现，不把内存仓储描述为目标持久化已完成。
 
 原有访谈和飞书基线协议保留在 [research/phase-0/README.md](research/phase-0/README.md)，当前状态为 Deferred，不阻塞本轮简化设计，也不能被描述为已完成。
 
@@ -101,6 +105,7 @@ python -m venv .venv
 pip install -e ".[dev]"
 
 pytest -q
+pytest -q tests/test_workflow_kernel.py
 python -m larkflow.demo --auto
 python -m larkflow.demo --template hiring
 ```
