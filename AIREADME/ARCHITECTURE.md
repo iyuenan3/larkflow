@@ -112,22 +112,36 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 
 业务 DAG 不使用 LangGraph 图或 checkpointer 作为产品模型。LangGraph 可以实现一个复杂 Agent 节点内部的检索、生成和自检，checkpoint 只服务该次 NodeRun 的恢复。简单 Agent 或 Tool 节点无需 LangGraph。
 
-## 7. Intended vs implemented
+## 7. 当前 Target 内核 As-built
+
+`larkflow/workflow/` 是第一批目标架构代码，与 legacy `engine/`、`service.py` 和 LangGraph checkpointer 隔离：
+
+- `model.py`：不可变 `InstanceSnapshot` 与 `NodeSpec`，以及 Instance、NodeInstance、NodeAttempt 和质量结果。
+- `graph.py`：v0.2 schema、必填工作字段、唯一节点、依赖存在、无环、拓扑、就绪和可达下游校验。
+- `transitions.py`：实例、节点和 Attempt 的显式状态转换表。
+- `scheduler.py`：确认草稿时创建节点与初始 Attempt，根节点进入 ready，依赖完成后解锁直接下游。
+- `runner.py`：Human 节点等待唯一 Owner，Agent 与 Tool 节点使用短时 claim；结果必须匹配当前 Attempt、claim 和节点版本。
+- `repository.py`：仓储 Port 与仅供测试的 copy-on-read 内存实现，使用实例版本拒绝丢失更新。
+- `service.py`：在仓储边界内协调草稿确认、调度、执行结果、授权与实例终态。
+
+当前 claim 只解决中央 worker 的并发认领，不是已 Deferred 的设备能力租约。该内核没有连接 PostgreSQL、飞书、真实 Agent 或 Tool，也没有替换 legacy 服务装配。
+
+## 8. Intended vs implemented
 
 | Area | Target | 当前仓库 | 差距 |
 |---|---|---|---|
-| 业务真相 | PostgreSQL 领域模型 | LangGraph checkpointer | 需要替换 |
-| 持久化 | Instance、Node、Attempt、Audit、Outbox | SQLite + LangGraph state | 需要重建 |
-| 草稿与模板可选 | 草稿确认、无模板实例 | 从 legacy YAML 直接启动 | 未实现 |
+| 业务真相 | PostgreSQL 领域模型 | 新 workflow aggregate 已落码；持久化仍是测试内存，legacy 仍用 checkpointer | 需要 PostgreSQL adapter 和新装配 |
+| 持久化 | Instance、Node、Attempt、Audit、Outbox | Instance、Node、Attempt 仓储 Port 已有；Audit、Outbox 和 PostgreSQL 未实现 | 需要补数据库事务模型 |
+| 草稿与模板可选 | 草稿确认、无模板实例 | 新内核支持直接 InstanceSnapshot 草稿与 Owner 确认；模板编译未实现 | 需要模板服务与 importer |
 | 模板 | 简单生命周期、不可变版本、布尔锁 | 只消费 `id/name/nodes` | 未实现 |
-| 责任 | 每节点唯一 Owner，执行器分离 | 静态角色映射，部分节点自动执行 | 部分经验可迁移 |
+| 责任 | 每节点唯一 Owner，执行器分离 | 新内核已强制 Owner 与 `human/agent/tool` 分离；企业人员有效性尚无 adapter | 需要目录校验与角色解析 |
 | 编辑与重启 | 预览确认、revision、下游 Attempt | 已有活图和选择性重算机制 | 需按新模型提炼 |
 | 飞书投影 | PostgreSQL outbox、幂等、对账 | 已有 CLI adapter、关联表和 reconcile | 可迁移经验 |
-| 运行时 | 独立 Scheduler + Node Runner | LangGraph 解释整个业务流 | 需要拆边界 |
+| 运行时 | 独立 Scheduler + Node Runner | 新内核已实现纯领域 Scheduler 与 Node Runner；无 worker、恢复扫描和外部 executor adapter | 需要持久化运行循环与接线 |
 
 [SPEC.md](SPEC.md) 和 [DEPLOYMENT.md](DEPLOYMENT.md) 继续描述 As-built 原型，不作为目标产品已实现证据。
 
-## 8. 安全与运维不变量
+## 9. 安全与运维不变量
 
 - 凭证、token、真实人员 ID 和生产数据不进入模板、日志或仓库。
 - 每个命令按当前 actor、tenant、责任关系、状态和 expected revision 重新授权。

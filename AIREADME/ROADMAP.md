@@ -4,7 +4,7 @@
 >
 > 原来的三级协作、个人 Agent Edge 和完整能力治理路线已移出近期范围。现有代码作为 legacy 机制原型保留。
 
-## Now · Phase 0 既有设计简化与一致性核验
+## Completed · Phase 0 既有设计简化与一致性核验
 
 目标：以既有设计为底稿，围绕最小闭环做减法，并切断 Target 与 As-built 的混写。
 
@@ -17,15 +17,16 @@
 
 **Exit gate：** 每项 MVP 都有明确的产品理由和可判定验收；核心文档无范围冲突；市场结论仍标记为未知。
 
-## Next · Phase 1 中央工作流基础
+## Now · Phase 1 中央工作流基础
 
 目标：一个企业可以从模板或无模板定义启动单层 DAG，并在飞书中可靠推进。
 
+- 已完成第一批离线领域内核：不可变 Instance Snapshot、DAG Contract 核验、草稿确认、NodeInstance、Attempt、显式状态迁移、Scheduler、中央 Node Runner、claim 和内存仓储 Port。
 - PostgreSQL 领域模型：Template、TemplateVersion、Instance、NodeInstance、Attempt、Projection、Audit、Outbox。
 - 模板 `draft / enabled / disabled / deleted`、不可变版本和布尔锁。
-- 实例 `draft`、预览、确认启动和丢弃。
-- 每个节点的唯一 Owner 解析与服务端授权。
-- 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。
+- 实例 `draft`、预览、确认启动和丢弃。当前内核已实现确认与丢弃，预览接口待接入。
+- 每个节点的唯一 Owner 解析与服务端授权。当前内核已拒绝非 Owner 提交，企业目录校验待接入。
+- 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则已落码，持久化 worker 与 executor adapter 待接入。
 - 飞书 Task、IM、Doc 投影、稳定幂等键和启动对账。
 - 从 legacy 原型提炼 adapter、事件韧性和 Mock 测试资产。
 

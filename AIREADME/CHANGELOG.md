@@ -1,5 +1,15 @@
 # CHANGELOG · larkflow
 
+## v0.10.0-draft · 2026-08-01 · 中央工作流领域内核（ADR-053）
+
+- Added：独立 `larkflow/workflow/` Target 内核，包含不可变 Instance Snapshot、NodeSpec、WorkflowInstance、NodeInstance、NodeAttempt 与简化质量结果。
+- Added：v0.2 schema、目标、输出、验收、Tool kind、唯一节点、依赖存在、无环、稳定拓扑、就绪与可达下游校验。
+- Added：显式实例、节点与 Attempt 状态迁移；草稿 Owner 确认或丢弃；根节点就绪、扇入依赖解锁和实例完成判定。
+- Added：中央 Node Runner 对 Human Owner、Agent 和 Tool claim、过期 claim、当前 Attempt 和节点版本进行服务端校验。
+- Added：仓储 Port 与仅用于离线测试的乐观并发内存仓储，结果和输入快照不可变保存。
+- Separated：新内核不引用 legacy LangGraph、SQLite、飞书 adapter 或真实 executor，旧运行路径继续作为回归资产。
+- Verified：完整离线套件 529 项通过，其中新 Target 内核 17 项；未连接 PostgreSQL、真实飞书、真实 Agent、Tool 或云服务器。
+
 ## v0.9.0-draft · 2026-08-01 · 既有设计收敛到最小闭环（ADR-051..052）
 
 - Changed：Phase 0 从外部访谈门改为既有设计简化与一致性核验；访谈和飞书原生对照协议保留为 Deferred，不声称市场验证完成。

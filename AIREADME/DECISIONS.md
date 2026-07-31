@@ -391,3 +391,12 @@
 - Deferred：模板子 DAG、临时子 DAG、三级父子契约、个人 Agent Edge、Capability Lease、Knowledge/Skill/MCP 注册表、RAG、字段级锁、五维评分、Kafka、微服务和模板市场。
 - Supersedes：ADR-046 的近期个人 Agent Edge 范围、ADR-048 的 MVP 三级 DAG、ADR-049 的近期四级模板与能力入驻、ADR-050 的近期 Capability Lease。ADR-046 的人类责任原则、ADR-047 的数据库权威和 LangGraph 边界继续有效。
 - Trade-off：首版不再证明多层协作或个人 Agent 差异化，换取一个可以形成闭环、可实现和可核验的范围。
+
+## ADR-053 · 2026-08-01 · 中央节点拆为工作流聚合、Scheduler 与 Node Runner
+
+- **Status：Accepted · As-built foundation。**
+- Problem：legacy `service.py` 与全局 LangGraph state 同时承担业务真相、调度、执行和飞书投影。若新架构只增加一个巨型 CentralNode 类，旧耦合会换名保留，外部调用期间也难以建立清晰事务边界。
+- Constraint：Instance Snapshot 必须独立于模板来源；每个节点只有一个人类 Owner；Human、Agent 和 Tool 只是执行器；迟到结果不能覆盖当前 Attempt；数据库事务不能跨越 LLM、Tool 或飞书调用。
+- Decision：以 `WorkflowInstance` 聚合保存 Snapshot、NodeInstance 与 NodeAttempt；Scheduler 只负责确认后的初始就绪和依赖解锁；Node Runner 只负责激活节点、签发中央 worker claim、验证 Human Owner 和接受当前 Attempt 结果；应用服务在仓储乐观并发边界内协调三者。第一批使用 copy-on-read 内存仓储验证领域规则，明确不把它当目标持久化。
+- Alternatives(否决)：继续扩展全局 LangGraph state；用飞书 Task 状态作为业务真相；让一个中央类同时持有数据库事务并执行外部调用。
+- Tradeoff：迁移期同时存在 Target 与 legacy 两套模型，代码量暂时增加；换取 PostgreSQL adapter、outbox、飞书投影和 executor adapter 可以沿明确 Port 分批接入，且 529 项离线测试能够独立证明领域规则与 legacy 回归。

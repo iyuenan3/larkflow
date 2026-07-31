@@ -2,9 +2,9 @@
 
 > 飞书原生的企业协作 DAG：把多人流程拆成有依赖、有唯一责任人、可验收和可追溯的节点。
 >
-> 文档状态：2026-08-01 Phase 0 既有设计简化与一致性核验。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+> 文档状态：2026-08-01 Phase 1 中央工作流基础实现。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
-> last-synced: f4b6d59 · 2026-07-30
+> last-synced: 00937da · 2026-08-01
 
 ## 阅读顺序
 
@@ -24,9 +24,9 @@
 | PRODUCT_STRATEGY | ✅ | 范围收敛取舍，明确未做市场验证 |
 | PRD | ✅ | Target 单层 DAG MVP 功能契约 |
 | DAG_TEMPLATE_SPEC | ⚑ | Target Draft，v0.2 模板可选、草稿确认、Owner、编辑和 Attempt |
-| ARCHITECTURE | ✅ | Target 模块化单体、PostgreSQL、飞书投影和 As-built 差距 |
+| ARCHITECTURE | ✅ | Target 模块化单体、首批 workflow 内核 As-built 和剩余差距 |
 | RELATIONS | ✅ | Target 飞书、中央 lark-cli、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | Phase 0 一致性核验到 Phase 1、2 实现路径 |
+| ROADMAP | ✅ | Phase 0 已完成，Phase 1 中央内核已开始实现 |
 | SPEC | ✅ | As-built Python 引擎、legacy YAML 与 CLI 契约 |
 | DEPLOYMENT | ✅ | As-built ECS + SQLite 原型部署实录，不是目标架构 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
