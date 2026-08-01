@@ -94,6 +94,12 @@ class FailingExecutor(AutomatedExecutor):
         raise RuntimeError("provider rejected the request")
 
 
+class SelectiveToolExecutor(RecordingExecutor):
+    def accepts(self, *, executor, work):
+        tool = work.get("tool") or {}
+        return executor == ExecutorKind.TOOL and tool.get("kind") == "tool.allowed"
+
+
 def build_runtime(
     *,
     clock: Clock,
@@ -425,3 +431,89 @@ def test_runnable_scan_is_tenant_scoped_and_includes_expired_claims():
     assert repository.runnable_instance_ids(TENANT, now=clock.now) == (
         "instance_runtime",
     )
+
+
+def test_worker_does_not_claim_an_executor_kind_without_an_adapter():
+    clock = Clock()
+    service, repository = build_runtime(clock=clock)
+    report = WorkflowWorker(
+        service,
+        repository,
+        tenant_id=TENANT,
+        worker_id="worker_1",
+        executors={},
+        clock=clock,
+    ).run_once()
+
+    assert report.candidates == 1
+    assert report.automated_claimed == 0
+    current = service.get(TENANT, "instance_runtime")
+    assert current.nodes["generate"].status == NodeStatus.READY
+    assert current.current_attempt("generate").claimed_by is None
+
+
+def test_worker_does_not_claim_a_tool_kind_rejected_by_its_adapter():
+    clock = Clock()
+    snapshot = InstanceSnapshot(
+        nodes=(
+            NodeSpec(
+                "tool_one",
+                "Tool one",
+                "owner",
+                "tool",
+                work=node_work(tool_kind="tool.not_allowed"),
+            ),
+        )
+    )
+    service, repository = build_runtime(clock=clock, snapshot=snapshot)
+    executor = SelectiveToolExecutor()
+
+    report = WorkflowWorker(
+        service,
+        repository,
+        tenant_id=TENANT,
+        worker_id="worker_1",
+        executors={ExecutorKind.TOOL: executor},
+        clock=clock,
+    ).run_once()
+
+    assert report.automated_claimed == 0
+    assert executor.requests == []
+    current = service.get(TENANT, "instance_runtime")
+    assert current.nodes["tool_one"].status == NodeStatus.READY
+
+
+def test_dispatch_due_skips_unregistered_node_and_claims_registered_node():
+    clock = Clock()
+    snapshot = InstanceSnapshot(
+        nodes=(
+            NodeSpec(
+                "agent_one",
+                "Agent one",
+                "owner",
+                "agent",
+                work={**node_work(), "prompt": "One"},
+            ),
+            NodeSpec(
+                "tool_two",
+                "Tool two",
+                "owner",
+                "tool",
+                work=node_work(tool_kind="tool.two"),
+            ),
+        )
+    )
+    service, _ = build_runtime(clock=clock, snapshot=snapshot)
+
+    activations = service.dispatch_due(
+        TENANT,
+        "instance_runtime",
+        worker_id="worker_1",
+        max_automated=1,
+        automated_node_keys={"tool_two"},
+    )
+
+    assert [item.node_key for item in activations] == ["tool_two"]
+    current = service.get(TENANT, "instance_runtime")
+    assert current.nodes["agent_one"].status == NodeStatus.READY
+    assert current.nodes["tool_two"].status == NodeStatus.RUNNING

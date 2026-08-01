@@ -1,7 +1,7 @@
 """Application service for the first central workflow implementation slice."""
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -182,6 +182,7 @@ class WorkflowService:
         *,
         worker_id: str,
         max_automated: int = 1,
+        automated_node_keys: Collection[str] | None = None,
         correlation_id: str | None = None,
     ) -> tuple[NodeActivation, ...]:
         if not worker_id.strip():
@@ -194,6 +195,7 @@ class WorkflowService:
             worker_id=worker_id,
             max_automated=max_automated,
             recover_expired=True,
+            automated_node_keys=automated_node_keys,
             correlation_id=correlation_id,
         )
 
@@ -205,6 +207,7 @@ class WorkflowService:
         worker_id: str | None,
         max_automated: int | None,
         recover_expired: bool,
+        automated_node_keys: Collection[str] | None = None,
         correlation_id: str | None,
     ) -> tuple[NodeActivation, ...]:
         instance = self.repository.get(tenant_id, instance_id)
@@ -214,6 +217,11 @@ class WorkflowService:
         now = self.clock()
         automated_count = 0
         activations: list[NodeActivation] = []
+        allowed_node_keys = (
+            None
+            if automated_node_keys is None
+            else {str(key) for key in automated_node_keys}
+        )
 
         for spec in instance.snapshot.nodes:
             node = instance.nodes[spec.key]
@@ -229,6 +237,10 @@ class WorkflowService:
                 node = instance.nodes[spec.key]
                 if (
                     node.executor != ExecutorKind.HUMAN
+                    and (
+                        allowed_node_keys is None
+                        or spec.key in allowed_node_keys
+                    )
                     and self.runner.is_reclaimable(instance, spec.key, now=now)
                 ):
                     activations.append(
@@ -245,7 +257,14 @@ class WorkflowService:
             if max_automated is not None and automated_count >= max_automated:
                 break
             node = instance.nodes[spec.key]
-            if node.status == NodeStatus.READY and node.executor != ExecutorKind.HUMAN:
+            if (
+                node.status == NodeStatus.READY
+                and node.executor != ExecutorKind.HUMAN
+                and (
+                    allowed_node_keys is None
+                    or spec.key in allowed_node_keys
+                )
+            ):
                 activations.append(
                     self.runner.activate(
                         instance,

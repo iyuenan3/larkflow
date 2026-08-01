@@ -16,6 +16,13 @@ from .events import (
     OutboxStatus,
 )
 from .migrate import apply_migrations, available_migrations, postgres_connection_factory
+from .config import TargetRuntimeSettings
+from .daemon import (
+    WorkerLoopSettings,
+    WorkerLoopSummary,
+    WorkflowWorkerLoop,
+)
+from .executors import DevelopmentToolExecutor
 from .model import (
     AttemptStatus,
     ExecutorKind,
@@ -67,6 +74,7 @@ __all__ = [
     "ClaimExpiredError",
     "ClaimNotExpiredError",
     "ConcurrentUpdateError",
+    "DevelopmentToolExecutor",
     "ExecutorKind",
     "ExecutionRequest",
     "ExecutionResult",
@@ -95,12 +103,16 @@ __all__ = [
     "QualityVerdict",
     "Scheduler",
     "StaleAttemptError",
+    "TargetRuntimeSettings",
     "TransitionError",
     "WorkflowInstance",
     "WorkflowRepository",
     "WorkflowService",
     "WorkflowWorker",
+    "WorkflowWorkerLoop",
     "WorkflowWorkerReport",
+    "WorkerLoopSettings",
+    "WorkerLoopSummary",
     "apply_migrations",
     "available_migrations",
     "postgres_connection_factory",

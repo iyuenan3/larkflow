@@ -4,14 +4,14 @@
 
 ## 当前状态
 
-larkflow 已开始按收敛后的产品设计重建中央工作流，目前完成领域内核、PostgreSQL 事务持久化路径，以及可单步驱动的自动执行 Runtime Worker。
+larkflow 已开始按收敛后的产品设计重建中央工作流，目前完成领域内核、PostgreSQL 事务持久化路径、自动执行 Runtime Worker 与 Target 常驻服务装配。
 
 - **目标产品**：单企业、单层 DAG 的最小闭环，支持模板可选、草稿确认、Human / Agent / Tool 节点、受控编辑、重启、审计和飞书投影。
-- **新内核**：`larkflow/workflow/` 已实现不可变 Instance Snapshot、草稿确认、DAG 校验、节点状态迁移、依赖解锁、Human / Agent / Tool Node Runner、Attempt、claim、过期认领恢复、单步 Runtime Worker、乐观并发、PostgreSQL 仓储、追加型审计与事务 outbox。
+- **新内核**：`larkflow/workflow/` 已实现不可变 Instance Snapshot、草稿确认、DAG 校验、节点状态迁移、依赖解锁、Human / Agent / Tool Node Runner、Attempt、claim、过期认领恢复、常驻 Runtime Worker、乐观并发、PostgreSQL 仓储、追加型审计与事务 outbox。
 - **legacy 原型**：LangGraph + SQLite + lark-cli 路径继续保留，用于回归已验证的飞书投影、打回、幂等和恢复机制。
-- **尚未实现**：模板服务、飞书投影 worker 与接线、真实 Agent / Tool executor adapter、常驻运行循环、受控编辑、重启和生产装配。
+- **尚未实现**：模板服务、飞书投影 worker 与接线、真实 Agent / Tool executor adapter、受控编辑、重启和生产装配。
 - **证据边界**：本轮完成的是既有设计简化与一致性核验，不是访谈、市场或商业验证。
-- **重要边界**：新 PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上通过集成验证，`alicloud-sh` 也已建立长期 Target 开发库与每日备份，但尚未接入常驻服务。legacy 服务仍使用 SQLite，不能把 checkpointer 或全局 LangGraph state 继续扩展为新产品领域模型。
+- **重要边界**：`alicloud-sh` 已运行独立 `larkflow-target.service`，通过本机 peer authentication 使用长期 Target 开发库；当前只启用明确标注为开发验证用的确定性 Tool adapter，不连接真实 Agent、业务 Tool 或飞书投影。legacy 服务仍使用 SQLite，不能把 checkpointer 或全局 LangGraph state 继续扩展为新产品领域模型。
 
 产品与架构真相源从 [AIREADME/INDEX.md](AIREADME/INDEX.md) 开始。判断“目标是什么”和“现在做到了什么”时，必须区分 Target 与 As-built。
 
@@ -68,7 +68,7 @@ AIREADME/                         产品、架构、契约、路线和决策真�
 research/design-simplification.md 既有设计简化与取舍记录
 research/phase-0/                Deferred 的访谈、对照实验协议与迁移清单
 larkflow/
-  workflow/                      Target 领域内核、Runtime Worker、PostgreSQL migration、事务仓储与 outbox
+  workflow/                      Target 领域内核、CLI、常驻 Runtime Worker、PostgreSQL migration、事务仓储与 outbox
   engine/                        legacy LangGraph 编排、门禁、返工和活图机制
   model/                         legacy YAML 节点和模板校验
   io/                            lark-cli、飞书投影、事件和关联表适配
@@ -78,7 +78,7 @@ larkflow/
   serve.py                       legacy 常驻服务和启动对账
   store.py                       legacy SQLite、WAL 和跨进程锁
 tests/                           离线 pytest 套件
-deploy/                          legacy 单机服务与 Target PostgreSQL 备份资产
+deploy/                          legacy 单机服务、Target Runtime、PostgreSQL 备份资产
 ```
 
 迁移资产的逐模块处理方式见 [research/phase-0/migration-inventory.md](research/phase-0/migration-inventory.md)。
@@ -91,12 +91,14 @@ Phase 0 的设计一致性核验已经完成，当前进入 Phase 1 中央工作
 - 草稿只能由项目 Owner 确认或丢弃，确认后才创建节点与初始 Attempt。
 - Human 节点只接受唯一 Owner 提交，Agent 和 Tool 结果必须匹配当前 claim、Worker 身份、Attempt 和节点版本。
 - Scheduler 只在全部依赖完成后解锁节点，任何迟到或陈旧结果都不得改写当前状态。
-- Runtime Worker 每次只认领一个自动节点，先提交 claim 再调用外部 executor；进程中断后，其他 Worker 可在租约到期时用新 token 接管同一 Attempt。
+- Runtime Worker 每次只认领一个已被 adapter 明确接受的自动节点，先提交 claim 再调用 executor；进程中断后，其他 Worker 可在租约到期时用新 token 接管同一 Attempt。
 - PostgreSQL 14 schema、migration runner、事务仓储、追加型 Audit 和带租约的 outbox 已落码；领域状态、审计和 outbox 在同一事务提交。
 - migration SQL 已进入 wheel，真实 PostgreSQL 集成测试使用一次性数据库，完成后删除测试数据库与角色。
-- `alicloud-sh` 上的长期 Target 开发库只接受本机 peer authentication，已应用两份 migration；每日 custom-format 备份保留约 7 天，并完成过一次新库恢复演练。
+- `larkflow-target` CLI 已提供 migrate、create、confirm、show、submit-human、run-once 与 serve；环境配置由项目 dotenv 解析器读取，不使用 shell `source`。
+- `alicloud-sh` 上的长期 Target 开发库只接受本机 peer authentication，已应用两份 migration；`larkflow-target.service` 以最小权限用户常驻，完成普通执行、SIGTERM 干净停机、SIGKILL 自动拉起和同一 Attempt 租约恢复验证。
+- 每日 custom-format 备份保留约 7 天，并完成过一次新库恢复演练。
 - 自动执行采用 at-least-once 语义，executor 必须使用请求中的稳定幂等键消除重复副作用。
-- 当前仍缺常驻运行循环、真实 executor、outbox worker、飞书 Projection adapter、新服务装配和生产迁移，因此不能描述为目标产品已经上线。
+- 当前仍缺真实 executor、outbox worker、飞书 Projection adapter 和生产迁移，因此不能描述为目标产品已经上线。开发服务中的 `development.echo` 只用于持久化与恢复演练。
 
 原有访谈和飞书基线协议保留在 [research/phase-0/README.md](research/phase-0/README.md)，当前状态为 Deferred，不阻塞本轮简化设计，也不能被描述为已完成。
 
@@ -118,6 +120,16 @@ python -m larkflow.demo --template hiring
 ```
 
 `tests/test_workflow_postgres.py` 是显式启用的集成测试，只能指向可销毁数据库，并通过 `LARKFLOW_TEST_POSTGRES_DSN` 提供连接。
+
+Target 运维入口是独立命令 `larkflow-target`。下面只展示不会调用飞书的控制面命令，真实 DSN 和 tenant 应通过权限收紧的 env 文件提供：
+
+```bash
+larkflow-target --env-file /etc/larkflow-target.env migrate
+larkflow-target --env-file /etc/larkflow-target.env create draft.yaml
+larkflow-target --env-file /etc/larkflow-target.env confirm <instance> --actor <owner>
+larkflow-target --env-file /etc/larkflow-target.env show <instance>
+larkflow-target --env-file /etc/larkflow-target.env serve
+```
 
 真实飞书部署会创建任务、卡片和文档，只能在明确配置的开发环境中运行。现有单机部署是 legacy 原型实录，操作前先读 [AIREADME/DEPLOYMENT.md](AIREADME/DEPLOYMENT.md)。
 

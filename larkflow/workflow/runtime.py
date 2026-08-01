@@ -125,11 +125,13 @@ class WorkflowWorker:
         remaining = 1
         for instance_id in instance_ids:
             try:
+                automated_node_keys = self._eligible_automated_node_keys(instance_id)
                 activations = self.service.dispatch_due(
                     self.tenant_id,
                     instance_id,
                     worker_id=self.worker_id,
                     max_automated=remaining,
+                    automated_node_keys=automated_node_keys,
                 )
             except ConcurrentUpdateError:
                 conflicts += 1
@@ -178,6 +180,20 @@ class WorkflowWorker:
             stale_results=stale_results,
             errors=tuple(errors),
         )
+
+    def _eligible_automated_node_keys(self, instance_id: str) -> frozenset[str]:
+        instance = self.service.get(self.tenant_id, instance_id)
+        eligible = set()
+        for spec in instance.snapshot.nodes:
+            if spec.executor == ExecutorKind.HUMAN:
+                continue
+            executor = self.executors.get(spec.executor)
+            if executor is None:
+                continue
+            accepts = getattr(executor, "accepts", None)
+            if accepts is None or accepts(executor=spec.executor, work=spec.work):
+                eligible.add(spec.key)
+        return frozenset(eligible)
 
     def _execution_request(self, activation: NodeActivation) -> ExecutionRequest:
         instance = self.service.get(self.tenant_id, activation.instance_id)

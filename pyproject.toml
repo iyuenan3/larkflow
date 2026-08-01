@@ -20,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 larkflow = "larkflow.__main__:main"
+larkflow-target = "larkflow.workflow.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
