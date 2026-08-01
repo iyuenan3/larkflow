@@ -78,6 +78,20 @@ def _validate_work(node_key: str, executor: str, work: Mapping[str, object]) -> 
         if not isinstance(kind, str) or not kind.strip():
             raise GraphValidationError(f"tool kind is required: {node_key}")
 
+    if executor == "agent" and "agent" in work:
+        agent = work.get("agent")
+        if not isinstance(agent, Mapping):
+            raise GraphValidationError(f"agent definition must be an object: {node_key}")
+        kind = agent.get("kind")
+        if not isinstance(kind, str) or not kind.strip():
+            raise GraphValidationError(f"agent kind is required: {node_key}")
+        instructions = agent.get("instructions")
+        if not isinstance(instructions, str) or not instructions.strip():
+            raise GraphValidationError(f"agent instructions are required: {node_key}")
+        model_role = agent.get("model_role", "default")
+        if not isinstance(model_role, str) or not model_role.strip():
+            raise GraphValidationError(f"agent model_role is invalid: {node_key}")
+
 
 def _non_empty_sequence(value: object) -> bool:
     return (

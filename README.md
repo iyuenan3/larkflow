@@ -4,14 +4,14 @@
 
 ## 当前状态
 
-larkflow 已开始按收敛后的产品设计重建中央工作流，目前完成领域内核、PostgreSQL 事务持久化、Runtime Worker、Task Projection Worker，以及飞书 Task 完成事件的耐久入站链路。
+larkflow 已开始按收敛后的产品设计重建中央工作流，目前完成领域内核、PostgreSQL 事务持久化、Runtime Worker、首个 LLM Agent executor、Task Projection Worker，以及飞书 Task 完成事件的耐久入站链路。开发环境中的真实 Human-Agent-Human 三节点闭环已经完成。
 
 - **目标产品**：单企业、单层 DAG 的最小闭环，支持模板可选、草稿确认、Human / Agent / Tool 节点、受控编辑、重启、审计和飞书投影。
 - **新内核**：`larkflow/workflow/` 已实现不可变 Instance Snapshot、草稿确认、DAG 校验、节点状态迁移、依赖解锁、Human / Agent / Tool Node Runner、Attempt、claim、过期认领恢复、Runtime / Projection / Inbound Worker、乐观并发、PostgreSQL 仓储、追加型审计、事务 outbox 与耐久 Inbox。
 - **legacy 原型**：LangGraph + SQLite + lark-cli 路径继续保留，用于回归已验证的飞书投影、打回、幂等和恢复机制。
-- **尚未实现**：模板服务、通用飞书命令入站、IM / Doc 投影、真实 Agent / Tool executor adapter、受控编辑、重启和生产装配。
+- **尚未实现**：模板服务、通用飞书命令入站、IM / Doc 投影、业务 Tool executor adapter、受控编辑、重启和生产装配。真实 Agent 闭环只在开发环境和测试组织验证，不能据此描述为生产上线。
 - **证据边界**：本轮完成的是既有设计简化与一致性核验，不是访谈、市场或商业验证。
-- **重要边界**：`alicloud-sh` 已运行 Target Runtime、Projection、凭据侧入站校验和领域侧入站四个独立服务，legacy 服务仍是飞书 EventKey 的唯一消费者。凭据侧只读飞书 Task 详情并写入已验证 Inbox，领域侧不能读取 lark-cli profile，只在校验绑定、Owner、当前 Attempt 和完成人后提交 Human 节点。当前仍不连接真实 Agent、业务 Tool、IM 或 Doc 投影。legacy 服务继续使用 SQLite，不能把 checkpointer 或全局 LangGraph state 扩展为新产品领域模型。
+- **重要边界**：`alicloud-sh` 已运行 Target Runtime、Projection、凭据侧入站校验和领域侧入站四个独立服务，legacy 服务仍是飞书 EventKey 的唯一消费者。凭据侧只读飞书 Task 详情并写入已验证 Inbox，领域侧不能读取 lark-cli profile，只在校验绑定、Owner、当前 Attempt 和完成人后提交 Human 节点。云端 Target 已在明确授权下启用开发用真实 Agent，但尚未接入业务 Tool、IM 或 Doc 投影。legacy 服务继续使用 SQLite，不能把 checkpointer 或全局 LangGraph state 扩展为新产品领域模型。
 
 产品与架构真相源从 [AIREADME/INDEX.md](AIREADME/INDEX.md) 开始。判断“目标是什么”和“现在做到了什么”时，必须区分 Target 与 As-built。
 
@@ -73,7 +73,7 @@ larkflow/
   model/                         legacy YAML 节点和模板校验
   io/                            lark-cli、飞书投影、事件和关联表适配
   llm/                           Stub 与 OpenAI 兼容多角色路由
-  templates/                     legacy 合同、缺陷和招聘 YAML 模板
+  templates/                     legacy YAML 模板与 Target Human-Agent-Human 示例
   service.py                     legacy interrupt/resume、投影、权限与对账驱动层
   serve.py                       legacy 常驻服务和启动对账
   store.py                       legacy SQLite、WAL 和跨进程锁
@@ -92,14 +92,16 @@ Phase 0 的设计一致性核验已经完成，当前进入 Phase 1 中央工作
 - Human 节点只接受唯一 Owner 提交，Agent 和 Tool 结果必须匹配当前 claim、Worker 身份、Attempt 和节点版本。
 - Scheduler 只在全部依赖完成后解锁节点，任何迟到或陈旧结果都不得改写当前状态。
 - Runtime Worker 每次只认领一个已被 adapter 明确接受的自动节点，先提交 claim 再调用 executor；进程中断后，其他 Worker 可在租约到期时用新 token 接管同一 Attempt。
+- `LLMAgentExecutor` 只接受 `work.agent.kind=llm.generate`，使用已提交的实例输入和直接依赖结果生成正文；启动装配会强制最长 LLM 路由预算加安全余量小于节点 claim 租期。
 - PostgreSQL 14 schema、migration runner、事务仓储、追加型 Audit 和带租约的 outbox 已落码；领域状态、审计和 outbox 在同一事务提交。
 - migration SQL 已进入 wheel，真实 PostgreSQL 集成测试使用一次性数据库，完成后删除测试数据库与角色。
 - `larkflow-target` CLI 已提供 migrate、create、confirm、show、submit-human、run-once、serve、project-once、project、inbound-once、inbound、verify-inbound-once 与 verify-inbound；环境配置由项目 dotenv 解析器读取，不使用 shell `source`。
 - `alicloud-sh` 上的长期 Target 开发库只接受本机 peer authentication，已应用四份 migration；Runtime、Projection、入站校验与领域入站四个 systemd 服务常驻，与 legacy 单消费者同时 active。
 - Projection Worker 只认领明确的投影事件，在数据库 claim 提交后调用 lark-cli，以稳定幂等键创建任务，并把 Task GUID、URL、同步版本和完成状态写回 Projection 记录。测试组织中的真实 Human 节点已经从 `waiting_human` 走到实例、节点和飞书任务全部完成。
+- Human Task 会展示节点明确声明的 Instance 输入；下游任务还会展示直接依赖中已提交的 Agent 正文。超长内容只在任务描述中截断，完整输入与结果仍保存在 PostgreSQL。
 - 每日 custom-format 备份保留约 7 天，并完成过一次新库恢复演练。
 - 自动执行采用 at-least-once 语义，executor 必须使用请求中的稳定幂等键消除重复副作用。
-- 当前只接入了 Task 完成事件，仍缺真实 executor、通用飞书命令入站、IM / Doc 投影、完整对账和生产迁移，因此不能描述为目标产品已经上线。开发服务中的 `development.echo` 只用于持久化与恢复演练。
+- 当前只接入了 Task 完成事件；真实 Human-Agent-Human 已在开发云服务器和测试组织完成三节点闭环，两个 Human 结果均为最小业务确认值，Agent 正文已投影到最终任务。业务 Tool、通用飞书命令入站、IM / Doc 投影、完整对账和生产迁移仍缺，因此不能描述为目标产品已经上线。开发服务中的 `development.echo` 只用于持久化与恢复演练。
 
 原有访谈和飞书基线协议保留在 [research/phase-0/README.md](research/phase-0/README.md)，当前状态为 Deferred，不阻塞本轮简化设计，也不能被描述为已完成。
 

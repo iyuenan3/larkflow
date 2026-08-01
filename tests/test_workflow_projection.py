@@ -79,6 +79,51 @@ def human_snapshot() -> InstanceSnapshot:
     )
 
 
+def mixed_snapshot() -> InstanceSnapshot:
+    work = {
+        "objective": "Complete the current step",
+        "inputs": [],
+        "outputs": [{"id": "result", "type": "data"}],
+        "acceptance": ["A result is recorded"],
+    }
+    return InstanceSnapshot(
+        goal="Confirm, generate, and review",
+        inputs={"brief": "Summarize the launch decision"},
+        nodes=(
+            NodeSpec(
+                "confirm",
+                "Confirm brief",
+                "person_reviewer",
+                "human",
+                work={**work, "inputs": ["instance_inputs.brief"]},
+            ),
+            NodeSpec(
+                "draft",
+                "Draft summary",
+                "person_owner",
+                "agent",
+                deps=("confirm",),
+                work={
+                    **work,
+                    "agent": {
+                        "kind": "llm.generate",
+                        "model_role": "default",
+                        "instructions": "Write the summary",
+                    },
+                },
+            ),
+            NodeSpec(
+                "review",
+                "Review summary",
+                "person_reviewer",
+                "human",
+                deps=("draft",),
+                work=work,
+            ),
+        ),
+    )
+
+
 def setup_human(clock: Clock):
     repository = InMemoryWorkflowRepository()
     service = WorkflowService(repository, clock=clock)
@@ -158,6 +203,88 @@ def test_human_task_is_created_after_activation_and_completed_after_submission()
     assert completed.tasks_completed == 1
     assert tasks.completed == ["task-1"]
     assert worker.run_once().claimed == 0
+
+
+def test_final_human_task_contains_the_committed_agent_result():
+    clock = Clock()
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=clock)
+    service.create_draft(
+        instance_id="instance_mixed",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=mixed_snapshot(),
+    )
+    service.confirm_draft(TENANT, "instance_mixed", actor_person_id="person_owner")
+    tasks = RecordingTasks()
+    projection = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        tasks,
+        tenant_id=TENANT,
+        worker_id="projection_1",
+        clock=clock,
+    )
+    assert projection.run_once().noops == 3
+
+    confirmation = service.dispatch_due(
+        TENANT,
+        "instance_mixed",
+        worker_id="runtime_1",
+    )[0]
+    assert projection.run_once().tasks_created == 1
+    confirmation_request = tasks.create_requests[-1]
+    assert "流程输入" in confirmation_request.description
+    assert "[brief]" in confirmation_request.description
+    assert "Summarize the launch decision" in confirmation_request.description
+    service.submit_human(
+        TENANT,
+        "instance_mixed",
+        "confirm",
+        actor_person_id="person_reviewer",
+        attempt_no=confirmation.attempt_no,
+        expected_node_version=confirmation.expected_node_version,
+        result={"approved": True},
+    )
+    agent = service.dispatch_due(
+        TENANT,
+        "instance_mixed",
+        worker_id="runtime_1",
+        max_automated=1,
+    )[0]
+    service.complete_automated(
+        TENANT,
+        "instance_mixed",
+        "draft",
+        attempt_no=agent.attempt_no,
+        expected_node_version=agent.expected_node_version,
+        claim_token=agent.claim_token or "",
+        worker_id="runtime_1",
+        result={
+            "content": "结论：发布条件已经满足。下一步：安排灰度验证。",
+            "agent_kind": "llm.generate",
+            "model_role": "default",
+        },
+    )
+    review = service.dispatch_due(
+        TENANT,
+        "instance_mixed",
+        worker_id="runtime_1",
+    )[0]
+    assert review.node_key == "review"
+
+    report = projection.run_once()
+
+    assert report.tasks_completed == 1
+    assert report.tasks_created == 1
+    final_request = tasks.create_requests[-1]
+    assert final_request.summary == "Review summary"
+    assert "上游结果" in final_request.description
+    assert "[Draft summary / draft]" in final_request.description
+    assert "结论：发布条件已经满足。下一步：安排灰度验证。" in final_request.description
+    assert "agent_kind" not in final_request.description
 
 
 def test_ambiguous_external_create_retries_with_the_same_idempotency_key():

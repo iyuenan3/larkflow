@@ -15,7 +15,8 @@ from typing import Any
 
 import yaml
 
-from larkflow.config import load_dotenv
+from larkflow.config import load_dotenv, load_llm_roles
+from larkflow.llm.client import OpenAICompatLLM
 
 from .config import (
     TargetInboundSettings,
@@ -23,7 +24,7 @@ from .config import (
     TargetRuntimeSettings,
 )
 from .daemon import WorkflowWorkerLoop
-from .executors import DevelopmentToolExecutor
+from .executors import DevelopmentToolExecutor, LLMAgentExecutor
 from .feishu import CliFeishuTaskProjection, CliFeishuTaskReader
 from .inbound import TaskVerificationWorker, WorkflowInboundWorker
 from .inbound_daemon import InboundWorkerLoop, VerificationWorkerLoop
@@ -73,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--lark-identity",
         default=os.environ.get("LARKFLOW_TARGET_LARK_IDENTITY", "bot"),
         choices=("bot", "user"),
+    )
+    parser.add_argument(
+        "--enable-agent-executor",
+        action="store_true",
+        help="enable the OpenAI-compatible llm.generate Agent adapter",
     )
     parser.add_argument(
         "--enable-development-executor",
@@ -387,11 +393,13 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
     )
     if namespace.enable_development_executor:
         settings = replace(settings, enable_development_executor=True)
+    if namespace.enable_agent_executor:
+        settings = replace(settings, enable_agent_executor=True)
     service = WorkflowService(
         repository,
         runner=NodeRunner(claim_ttl=settings.claim_ttl),
     )
-    executor_registry = _executors(settings)
+    executor_registry = _executors(settings, environ=os.environ, log=log)
     worker = WorkflowWorker(
         service,
         repository,
@@ -425,10 +433,64 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
 
 def _executors(
     settings: TargetRuntimeSettings,
+    *,
+    environ: Mapping[str, str] | None = None,
+    log: JsonLogger | None = None,
 ) -> dict[ExecutorKind, AutomatedExecutor]:
-    if not settings.enable_development_executor:
-        return {}
-    return {ExecutorKind.TOOL: DevelopmentToolExecutor()}
+    registry: dict[ExecutorKind, AutomatedExecutor] = {}
+    if settings.enable_agent_executor:
+        values = os.environ if environ is None else environ
+        roles = load_llm_roles(dict(values))
+        if not roles:
+            raise ValueError(
+                "Agent executor requires a complete LLM_BASE_URL, LLM_API_KEY, "
+                "and LLM_MODEL route"
+            )
+        maximum_seconds = _maximum_llm_route_seconds(roles)
+        required_seconds = (
+            maximum_seconds + settings.agent_claim_safety.total_seconds()
+        )
+        if settings.claim_ttl.total_seconds() <= required_seconds:
+            raise ValueError(
+                "Target claim TTL must exceed the longest LLM route budget plus "
+                f"the Agent safety margin ({required_seconds:g}s required)"
+            )
+
+        def note_call(fields: dict[str, Any]) -> None:
+            if log is not None:
+                log("agent_llm_call", fields)
+
+        def note_failover(fields: dict[str, Any]) -> None:
+            if log is not None:
+                log("agent_llm_failover", fields, stream=sys.stderr)
+
+        client = OpenAICompatLLM(
+            roles,
+            on_call=note_call,
+            on_failover=note_failover,
+        )
+        registry[ExecutorKind.AGENT] = LLMAgentExecutor(
+            client,
+            max_prompt_chars=settings.agent_max_prompt_chars,
+            max_result_chars=settings.agent_max_result_chars,
+        )
+    if settings.enable_development_executor:
+        registry[ExecutorKind.TOOL] = DevelopmentToolExecutor()
+    return registry
+
+
+def _maximum_llm_route_seconds(roles: Mapping[str, Mapping[str, Any]]) -> float:
+    """Bound one routed call, including every configured failover link."""
+
+    maximum = 0.0
+    for primary in roles.values():
+        chain = (primary, *(primary.get("fallbacks") or ()))
+        route_seconds = sum(
+            float(link.get("timeout") or OpenAICompatLLM.DEFAULT_TIMEOUT)
+            for link in chain
+        )
+        maximum = max(maximum, route_seconds)
+    return maximum
 
 
 def _install_signal_handlers(

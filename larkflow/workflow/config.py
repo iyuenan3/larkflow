@@ -18,7 +18,11 @@ class TargetRuntimeSettings:
     claim_ttl: timedelta = timedelta(minutes=5)
     candidate_limit: int = 100
     loop: WorkerLoopSettings = WorkerLoopSettings()
+    enable_agent_executor: bool = False
     enable_development_executor: bool = False
+    agent_claim_safety: timedelta = timedelta(seconds=30)
+    agent_max_prompt_chars: int = 20_000
+    agent_max_result_chars: int = 50_000
 
     def __post_init__(self) -> None:
         if not self.dsn.strip():
@@ -31,6 +35,12 @@ class TargetRuntimeSettings:
             raise ValueError("claim_ttl must be positive")
         if self.candidate_limit < 1:
             raise ValueError("candidate_limit must be positive")
+        if self.agent_claim_safety <= timedelta(0):
+            raise ValueError("agent_claim_safety must be positive")
+        if self.agent_max_prompt_chars < 1:
+            raise ValueError("agent_max_prompt_chars must be positive")
+        if self.agent_max_result_chars < 1:
+            raise ValueError("agent_max_result_chars must be positive")
 
     @classmethod
     def from_environ(
@@ -74,8 +84,28 @@ class TargetRuntimeSettings:
                     5.0,
                 ),
             ),
+            enable_agent_executor=_boolean(
+                values.get("LARKFLOW_TARGET_ENABLE_AGENT_EXECUTOR", "false")
+            ),
             enable_development_executor=_boolean(
                 values.get("LARKFLOW_TARGET_ENABLE_DEVELOPMENT_EXECUTOR", "false")
+            ),
+            agent_claim_safety=timedelta(
+                seconds=_positive_float(
+                    values,
+                    "LARKFLOW_TARGET_AGENT_CLAIM_SAFETY_SECONDS",
+                    30.0,
+                )
+            ),
+            agent_max_prompt_chars=_positive_int(
+                values,
+                "LARKFLOW_TARGET_AGENT_MAX_PROMPT_CHARS",
+                20_000,
+            ),
+            agent_max_result_chars=_positive_int(
+                values,
+                "LARKFLOW_TARGET_AGENT_MAX_RESULT_CHARS",
+                50_000,
             ),
         )
 

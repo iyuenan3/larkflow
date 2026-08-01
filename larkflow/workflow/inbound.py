@@ -695,11 +695,7 @@ class WorkflowInboundWorker:
                 actor_person_id=node.owner_person_id,
                 attempt_no=projection.attempt_no,
                 expected_node_version=node.version,
-                result={
-                    "submission": "feishu_task_completed",
-                    "task_guid": task.guid,
-                    "completed_at": task.completed_at,
-                },
+                result={"confirmed": True},
                 correlation_id=event.id,
             )
         except ConcurrentUpdateError:

@@ -70,6 +70,63 @@ class BarrierRepository(PostgresWorkflowRepository):
         return instance
 
 
+def test_postgres_persists_a_dependent_draft_before_nodes_are_materialized():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_draft_{suffix}"
+    instance_id = f"instance_draft_{suffix}"
+    repository = PostgresWorkflowRepository(connection_factory)
+    service = WorkflowService(repository)
+    work = {
+        "objective": "Complete the step",
+        "inputs": [],
+        "outputs": [{"id": "result", "type": "data"}],
+        "acceptance": ["A result exists"],
+    }
+
+    draft = service.create_draft(
+        instance_id=instance_id,
+        tenant_id=tenant_id,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=InstanceSnapshot(
+            nodes=(
+                NodeSpec("first", "First", "person_owner", "human", work=work),
+                NodeSpec(
+                    "second",
+                    "Second",
+                    "person_owner",
+                    "human",
+                    deps=("first",),
+                    work=work,
+                ),
+            )
+        ),
+    )
+
+    assert draft.nodes == {}
+    assert repository.get(tenant_id, instance_id) == draft
+
+    confirmed = service.confirm_draft(
+        tenant_id,
+        instance_id,
+        actor_person_id="person_owner",
+    )
+    assert tuple(confirmed.nodes) == ("first", "second")
+    with connection_factory() as connection:
+        dependencies = connection.execute(
+            """
+            SELECT node_key, dependency_key
+            FROM workflow_node_dependencies
+            WHERE tenant_id = %s AND instance_id = %s
+            """,
+            (tenant_id, instance_id),
+        ).fetchall()
+    assert dependencies == [{"node_key": "second", "dependency_key": "first"}]
+
+
 def test_postgres_round_trip_audit_outbox_and_optimistic_concurrency():
     assert POSTGRES_DSN is not None
     connection_factory = postgres_connection_factory(POSTGRES_DSN)

@@ -520,7 +520,11 @@ class PostgresWorkflowRepository:
                 ),
             )
         for spec in instance.snapshot.nodes:
+            if spec.key not in instance.nodes:
+                continue
             for dependency in spec.deps:
+                if dependency not in instance.nodes:
+                    continue
                 connection.execute(
                     """
                     INSERT INTO workflow_node_dependencies (

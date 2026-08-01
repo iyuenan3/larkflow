@@ -188,11 +188,7 @@ def test_verified_owner_completion_submits_the_current_human_attempt():
     assert restored.nodes["approve"].status == NodeStatus.DONE
     attempt = restored.current_attempt("approve")
     assert attempt.submitted_by_person_id == "person_reviewer"
-    assert attempt.result == {
-        "submission": "feishu_task_completed",
-        "task_guid": "task-1",
-        "completed_at": "1785585600000",
-    }
+    assert attempt.result == {"confirmed": True}
     assert inbox.records(TENANT)[0].outcome == "submitted:human_node"
 
 

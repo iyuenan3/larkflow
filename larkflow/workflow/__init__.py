@@ -31,7 +31,7 @@ from .daemon import (
     WorkerLoopSummary,
     WorkflowWorkerLoop,
 )
-from .executors import DevelopmentToolExecutor
+from .executors import DevelopmentToolExecutor, LLMAgentExecutor
 from .feishu import CliFeishuTaskProjection, CliFeishuTaskReader
 from .inbound import (
     ExternalTaskState,
@@ -142,6 +142,7 @@ __all__ = [
     "InvalidClaimError",
     "InvalidInboxClaimError",
     "InvalidOutboxClaimError",
+    "LLMAgentExecutor",
     "NodeActivation",
     "NodeAttempt",
     "NodeInstance",

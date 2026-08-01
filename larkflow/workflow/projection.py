@@ -5,11 +5,13 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 from typing import Any, Protocol
 from uuid import uuid4
 
 from .model import ExecutorKind, FrozenDict, NodeStatus, WorkflowInstance
 from .repository import OutboxStore, ProjectionStore, WorkflowRepository
+from .serde import to_json_value
 
 
 FEISHU_TASK_KIND = "feishu_task"
@@ -17,6 +19,7 @@ PROJECTION_EVENTS = {
     "node.projection_create_requested",
     "node.projection_sync_requested",
 }
+MAX_DEPENDENCY_CONTEXT_CHARS = 6_000
 
 
 @dataclass(frozen=True)
@@ -260,11 +263,20 @@ class WorkflowProjectionWorker:
         acceptance = "\n".join(
             f"- {item}" for item in spec.work.get("acceptance", ())
         )
-        description = (
-            f"目标：{spec.work.get('objective', '')}\n\n"
-            f"验收条件：\n{acceptance}\n\n"
+        sections = [
+            f"目标：{spec.work.get('objective', '')}",
+            f"验收条件：\n{acceptance}",
+        ]
+        instance_input_context = _instance_input_context(instance, node_key)
+        if instance_input_context:
+            sections.append(f"流程输入：\n{instance_input_context}")
+        dependency_context = _dependency_context(instance, node_key)
+        if dependency_context:
+            sections.append(f"上游结果：\n{dependency_context}")
+        sections.append(
             f"流程：{instance.id}\n节点：{node_key}\nAttempt：{attempt_no}"
         )
+        description = "\n\n".join(sections)
         return TaskProjectionRequest(
             tenant_id=self.tenant_id,
             instance_id=instance.id,
@@ -287,6 +299,80 @@ class _ProjectionOutcome:
     created: bool = False
     completed: bool = False
     noop: bool = False
+
+
+def _dependency_context(instance: WorkflowInstance, node_key: str) -> str:
+    sections = []
+    for dependency_key in instance.snapshot.node(node_key).deps:
+        attempt = instance.current_attempt(dependency_key)
+        if attempt.result is None:
+            continue
+        dependency = instance.snapshot.node(dependency_key)
+        content = attempt.result.get("content")
+        if isinstance(content, str) and content.strip():
+            rendered = content.strip()
+        else:
+            rendered = json.dumps(
+                to_json_value(attempt.result),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        sections.append(f"[{dependency.title} / {dependency_key}]\n{rendered}")
+    text = "\n\n".join(sections)
+    if len(text) <= MAX_DEPENDENCY_CONTEXT_CHARS:
+        return text
+    omitted = len(text) - MAX_DEPENDENCY_CONTEXT_CHARS
+    return (
+        text[:MAX_DEPENDENCY_CONTEXT_CHARS].rstrip()
+        + f"\n\n[内容过长，任务描述省略 {omitted} 个字符，完整结果保存在流程记录中]"
+    )
+
+
+def _instance_input_context(instance: WorkflowInstance, node_key: str) -> str:
+    sections = []
+    for declared_input in instance.snapshot.node(node_key).work.get("inputs", ()):
+        if isinstance(declared_input, str):
+            reference = declared_input
+        elif isinstance(declared_input, Mapping):
+            reference = declared_input.get("ref")
+        else:
+            continue
+        if not isinstance(reference, str) or not reference.startswith(
+            "instance_inputs."
+        ):
+            continue
+        path = reference.removeprefix("instance_inputs.")
+        found, value = _lookup_path(instance.snapshot.inputs, path)
+        if not found:
+            continue
+        if isinstance(value, str):
+            rendered = value
+        else:
+            rendered = json.dumps(
+                to_json_value(value),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        sections.append(f"[{path}]\n{rendered}")
+    text = "\n\n".join(sections)
+    if len(text) <= MAX_DEPENDENCY_CONTEXT_CHARS:
+        return text
+    omitted = len(text) - MAX_DEPENDENCY_CONTEXT_CHARS
+    return (
+        text[:MAX_DEPENDENCY_CONTEXT_CHARS].rstrip()
+        + f"\n\n[内容过长，任务描述省略 {omitted} 个字符，完整输入保存在流程记录中]"
+    )
+
+
+def _lookup_path(root: Mapping[str, Any], path: str) -> tuple[bool, Any]:
+    current: Any = root
+    for part in path.split("."):
+        if not part or not isinstance(current, Mapping) or part not in current:
+            return False, None
+        current = current[part]
+    return True, current
 
 
 def _text(value: Any, field_name: str) -> str:
