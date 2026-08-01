@@ -60,6 +60,13 @@ class InstanceStatus(str, Enum):
     DISCARDED = "discarded"
 
 
+class TemplateStatus(str, Enum):
+    DRAFT = "draft"
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+    DELETED = "deleted"
+
+
 class NodeStatus(str, Enum):
     PENDING = "pending"
     READY = "ready"
@@ -120,6 +127,7 @@ class InstanceSnapshot:
     nodes: tuple[NodeSpec, ...]
     goal: str = ""
     template_version_id: str | None = None
+    locked: bool = False
     inputs: Mapping[str, Any] = field(default_factory=FrozenDict)
     schema_version: str = "0.2"
 
@@ -132,6 +140,52 @@ class InstanceSnapshot:
             if node.key == key:
                 return node
         raise KeyError(key)
+
+
+@dataclass(frozen=True)
+class WorkflowTemplate:
+    id: str
+    tenant_id: str
+    name: str
+    status: TemplateStatus
+    version: int
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "status", TemplateStatus(self.status))
+
+
+@dataclass(frozen=True)
+class WorkflowTemplateVersion:
+    id: str
+    tenant_id: str
+    template_id: str
+    version: int
+    schema_version: str
+    locked: bool
+    definition: Mapping[str, Any]
+    content_hash: str
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "definition", FrozenDict(self.definition))
+
+
+@dataclass(frozen=True)
+class TemplateAuditEvent:
+    id: str
+    tenant_id: str
+    template_id: str
+    event_type: str
+    actor_person_id: str
+    aggregate_version: int
+    payload: Mapping[str, Any]
+    occurred_at: datetime
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "payload", FrozenDict(self.payload))
 
 
 @dataclass

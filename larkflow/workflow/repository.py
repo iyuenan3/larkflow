@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timedelta
 import secrets
 from typing import TYPE_CHECKING, Protocol
@@ -18,7 +19,13 @@ from .events import (
     OutboxRecord,
     OutboxStatus,
 )
-from .model import WorkflowInstance
+from .model import (
+    TemplateAuditEvent,
+    TemplateStatus,
+    WorkflowInstance,
+    WorkflowTemplate,
+    WorkflowTemplateVersion,
+)
 
 
 class InstanceNotFoundError(KeyError):
@@ -30,6 +37,18 @@ class InstanceAlreadyExistsError(RuntimeError):
 
 
 class ConcurrentUpdateError(RuntimeError):
+    pass
+
+
+class TemplateNotFoundError(KeyError):
+    pass
+
+
+class TemplateAlreadyExistsError(RuntimeError):
+    pass
+
+
+class ConcurrentTemplateUpdateError(RuntimeError):
     pass
 
 
@@ -112,6 +131,60 @@ class ProjectionStore(Protocol):
         ...
 
     def save_projection(self, projection: ProjectionRecord) -> None:
+        ...
+
+
+class TemplateStore(Protocol):
+    def add_template(
+        self,
+        template: WorkflowTemplate,
+        initial_version: WorkflowTemplateVersion,
+        event: TemplateAuditEvent,
+    ) -> None:
+        ...
+
+    def get_template(self, tenant_id: str, template_id: str) -> WorkflowTemplate:
+        ...
+
+    def list_templates(self, tenant_id: str) -> tuple[WorkflowTemplate, ...]:
+        ...
+
+    def get_template_version(
+        self,
+        tenant_id: str,
+        template_id: str,
+        version: int | None = None,
+    ) -> WorkflowTemplateVersion:
+        ...
+
+    def add_template_version(
+        self,
+        template_version: WorkflowTemplateVersion,
+        *,
+        expected_template_version: int,
+        updated_at: datetime,
+        event: TemplateAuditEvent,
+    ) -> WorkflowTemplate:
+        ...
+
+    def set_template_status(
+        self,
+        tenant_id: str,
+        template_id: str,
+        *,
+        expected_template_version: int,
+        status: TemplateStatus,
+        updated_at: datetime,
+        deleted_at: datetime | None,
+        event: TemplateAuditEvent,
+    ) -> WorkflowTemplate:
+        ...
+
+    def template_audit_log(
+        self,
+        tenant_id: str,
+        template_id: str,
+    ) -> tuple[TemplateAuditEvent, ...]:
         ...
 
 
@@ -425,3 +498,179 @@ class InMemoryWorkflowRepository:
                 continue
             self._outbox_dedupe.add(dedupe)
             self._outbox[(event.tenant_id, event.id)] = OutboxRecord(event=event)
+
+
+class InMemoryTemplateStore:
+    """Copy-on-read template store with aggregate-version compare-and-swap."""
+
+    def __init__(self) -> None:
+        self._templates: dict[tuple[str, str], WorkflowTemplate] = {}
+        self._versions: dict[tuple[str, str, int], WorkflowTemplateVersion] = {}
+        self._events: list[TemplateAuditEvent] = []
+        self._event_ids: set[tuple[str, str]] = set()
+
+    def add_template(
+        self,
+        template: WorkflowTemplate,
+        initial_version: WorkflowTemplateVersion,
+        event: TemplateAuditEvent,
+    ) -> None:
+        key = (template.tenant_id, template.id)
+        if key in self._templates:
+            raise TemplateAlreadyExistsError(template.id)
+        self._validate_version(template, initial_version, expected_number=1)
+        self._validate_event(template, event, aggregate_version=0)
+        self._templates[key] = deepcopy(template)
+        self._versions[(template.tenant_id, template.id, 1)] = deepcopy(
+            initial_version
+        )
+        self._append_template_event(event)
+
+    def get_template(self, tenant_id: str, template_id: str) -> WorkflowTemplate:
+        try:
+            return deepcopy(self._templates[(tenant_id, template_id)])
+        except KeyError as exc:
+            raise TemplateNotFoundError((tenant_id, template_id)) from exc
+
+    def list_templates(self, tenant_id: str) -> tuple[WorkflowTemplate, ...]:
+        templates = [
+            deepcopy(template)
+            for (item_tenant, _), template in self._templates.items()
+            if item_tenant == tenant_id
+        ]
+        templates.sort(key=lambda item: (item.created_at, item.id))
+        return tuple(templates)
+
+    def get_template_version(
+        self,
+        tenant_id: str,
+        template_id: str,
+        version: int | None = None,
+    ) -> WorkflowTemplateVersion:
+        self.get_template(tenant_id, template_id)
+        if version is None:
+            numbers = [
+                number
+                for item_tenant, item_template, number in self._versions
+                if item_tenant == tenant_id and item_template == template_id
+            ]
+            if not numbers:
+                raise TemplateNotFoundError((tenant_id, template_id, "latest"))
+            version = max(numbers)
+        try:
+            return deepcopy(self._versions[(tenant_id, template_id, version)])
+        except KeyError as exc:
+            raise TemplateNotFoundError((tenant_id, template_id, version)) from exc
+
+    def add_template_version(
+        self,
+        template_version: WorkflowTemplateVersion,
+        *,
+        expected_template_version: int,
+        updated_at: datetime,
+        event: TemplateAuditEvent,
+    ) -> WorkflowTemplate:
+        template = self.get_template(
+            template_version.tenant_id,
+            template_version.template_id,
+        )
+        if template.version != expected_template_version:
+            raise ConcurrentTemplateUpdateError(template.id)
+        latest = self.get_template_version(template.tenant_id, template.id)
+        self._validate_version(
+            template,
+            template_version,
+            expected_number=latest.version + 1,
+        )
+        self._validate_event(
+            template,
+            event,
+            aggregate_version=expected_template_version + 1,
+        )
+        updated = replace(
+            template,
+            version=expected_template_version + 1,
+            updated_at=updated_at,
+        )
+        self._templates[(template.tenant_id, template.id)] = deepcopy(updated)
+        self._versions[
+            (template.tenant_id, template.id, template_version.version)
+        ] = deepcopy(template_version)
+        self._append_template_event(event)
+        return deepcopy(updated)
+
+    def set_template_status(
+        self,
+        tenant_id: str,
+        template_id: str,
+        *,
+        expected_template_version: int,
+        status: TemplateStatus,
+        updated_at: datetime,
+        deleted_at: datetime | None,
+        event: TemplateAuditEvent,
+    ) -> WorkflowTemplate:
+        template = self.get_template(tenant_id, template_id)
+        if template.version != expected_template_version:
+            raise ConcurrentTemplateUpdateError(template.id)
+        self._validate_event(
+            template,
+            event,
+            aggregate_version=expected_template_version + 1,
+        )
+        updated = replace(
+            template,
+            status=TemplateStatus(status),
+            version=expected_template_version + 1,
+            updated_at=updated_at,
+            deleted_at=deleted_at,
+        )
+        self._templates[(tenant_id, template_id)] = deepcopy(updated)
+        self._append_template_event(event)
+        return deepcopy(updated)
+
+    def template_audit_log(
+        self,
+        tenant_id: str,
+        template_id: str,
+    ) -> tuple[TemplateAuditEvent, ...]:
+        return tuple(
+            deepcopy(event)
+            for event in self._events
+            if event.tenant_id == tenant_id and event.template_id == template_id
+        )
+
+    @staticmethod
+    def _validate_version(
+        template: WorkflowTemplate,
+        version: WorkflowTemplateVersion,
+        *,
+        expected_number: int,
+    ) -> None:
+        if (
+            version.tenant_id != template.tenant_id
+            or version.template_id != template.id
+            or version.version != expected_number
+        ):
+            raise ValueError("template version does not belong to the aggregate")
+
+    @staticmethod
+    def _validate_event(
+        template: WorkflowTemplate,
+        event: TemplateAuditEvent,
+        *,
+        aggregate_version: int,
+    ) -> None:
+        if (
+            event.tenant_id != template.tenant_id
+            or event.template_id != template.id
+            or event.aggregate_version != aggregate_version
+        ):
+            raise ValueError("template event does not belong to the aggregate")
+
+    def _append_template_event(self, event: TemplateAuditEvent) -> None:
+        key = (event.tenant_id, event.id)
+        if key in self._event_ids:
+            raise ValueError("duplicate template event id")
+        self._event_ids.add(key)
+        self._events.append(deepcopy(event))

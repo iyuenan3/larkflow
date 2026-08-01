@@ -29,12 +29,19 @@ from .model import (
     NodeAttempt,
     NodeInstance,
     NodeStatus,
+    TemplateAuditEvent,
+    TemplateStatus,
     WorkflowInstance,
+    WorkflowTemplate,
+    WorkflowTemplateVersion,
 )
 from .repository import (
+    ConcurrentTemplateUpdateError,
     ConcurrentUpdateError,
     InstanceAlreadyExistsError,
     InstanceNotFoundError,
+    TemplateAlreadyExistsError,
+    TemplateNotFoundError,
 )
 from .projection import ProjectionRecord
 from .serde import (
@@ -115,6 +122,216 @@ class PostgresWorkflowRepository:
                 (tenant_id, instance_id),
             ).fetchall()
         return self._load_instance(row, nodes, attempts)
+
+    def add_template(
+        self,
+        template: WorkflowTemplate,
+        initial_version: WorkflowTemplateVersion,
+        event: TemplateAuditEvent,
+    ) -> None:
+        self._validate_template_version(template, initial_version, expected_number=1)
+        self._validate_template_event(template, event, aggregate_version=0)
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                inserted = connection.execute(
+                    """
+                    INSERT INTO workflow_templates (
+                        tenant_id, id, name, status, version,
+                        created_at, updated_at, deleted_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (tenant_id, id) DO NOTHING
+                    RETURNING id
+                    """,
+                    (
+                        template.tenant_id,
+                        template.id,
+                        template.name,
+                        template.status.value,
+                        template.version,
+                        template.created_at,
+                        template.updated_at,
+                        template.deleted_at,
+                    ),
+                ).fetchone()
+                if inserted is None:
+                    raise TemplateAlreadyExistsError(template.id)
+                self._insert_template_version(connection, initial_version)
+                self._insert_template_event(connection, event)
+
+    def get_template(self, tenant_id: str, template_id: str) -> WorkflowTemplate:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM workflow_templates
+                WHERE tenant_id = %s AND id = %s
+                """,
+                (tenant_id, template_id),
+            ).fetchone()
+        if row is None:
+            raise TemplateNotFoundError((tenant_id, template_id))
+        return self._template_from_row(row)
+
+    def list_templates(self, tenant_id: str) -> tuple[WorkflowTemplate, ...]:
+        with self.connection_factory() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM workflow_templates
+                WHERE tenant_id = %s
+                ORDER BY created_at, id
+                """,
+                (tenant_id,),
+            ).fetchall()
+        return tuple(self._template_from_row(row) for row in rows)
+
+    def get_template_version(
+        self,
+        tenant_id: str,
+        template_id: str,
+        version: int | None = None,
+    ) -> WorkflowTemplateVersion:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM workflow_template_versions
+                WHERE tenant_id = %s AND template_id = %s
+                  AND (%s::integer IS NULL OR version = %s)
+                ORDER BY version DESC
+                LIMIT 1
+                """,
+                (tenant_id, template_id, version, version),
+            ).fetchone()
+        if row is None:
+            raise TemplateNotFoundError((tenant_id, template_id, version))
+        return self._template_version_from_row(row)
+
+    def add_template_version(
+        self,
+        template_version: WorkflowTemplateVersion,
+        *,
+        expected_template_version: int,
+        updated_at: datetime,
+        event: TemplateAuditEvent,
+    ) -> WorkflowTemplate:
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                row = connection.execute(
+                    """
+                    SELECT * FROM workflow_templates
+                    WHERE tenant_id = %s AND id = %s
+                    FOR UPDATE
+                    """,
+                    (template_version.tenant_id, template_version.template_id),
+                ).fetchone()
+                if row is None:
+                    raise TemplateNotFoundError(
+                        (template_version.tenant_id, template_version.template_id)
+                    )
+                template = self._template_from_row(row)
+                if template.version != expected_template_version:
+                    raise ConcurrentTemplateUpdateError(template.id)
+                latest_number = connection.execute(
+                    """
+                    SELECT max(version) AS version
+                    FROM workflow_template_versions
+                    WHERE tenant_id = %s AND template_id = %s
+                    """,
+                    (template.tenant_id, template.id),
+                ).fetchone()["version"]
+                self._validate_template_version(
+                    template,
+                    template_version,
+                    expected_number=int(latest_number) + 1,
+                )
+                self._validate_template_event(
+                    template,
+                    event,
+                    aggregate_version=expected_template_version + 1,
+                )
+                updated = connection.execute(
+                    """
+                    UPDATE workflow_templates
+                    SET version = version + 1, updated_at = %s
+                    WHERE tenant_id = %s AND id = %s AND version = %s
+                    RETURNING *
+                    """,
+                    (
+                        updated_at,
+                        template.tenant_id,
+                        template.id,
+                        expected_template_version,
+                    ),
+                ).fetchone()
+                if updated is None:
+                    raise ConcurrentTemplateUpdateError(template.id)
+                self._insert_template_version(connection, template_version)
+                self._insert_template_event(connection, event)
+        return self._template_from_row(updated)
+
+    def set_template_status(
+        self,
+        tenant_id: str,
+        template_id: str,
+        *,
+        expected_template_version: int,
+        status: TemplateStatus,
+        updated_at: datetime,
+        deleted_at: datetime | None,
+        event: TemplateAuditEvent,
+    ) -> WorkflowTemplate:
+        current = self.get_template(tenant_id, template_id)
+        self._validate_template_event(
+            current,
+            event,
+            aggregate_version=expected_template_version + 1,
+        )
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                updated = connection.execute(
+                    """
+                    UPDATE workflow_templates
+                    SET status = %s, version = version + 1,
+                        updated_at = %s, deleted_at = %s
+                    WHERE tenant_id = %s AND id = %s AND version = %s
+                    RETURNING *
+                    """,
+                    (
+                        TemplateStatus(status).value,
+                        updated_at,
+                        deleted_at,
+                        tenant_id,
+                        template_id,
+                        expected_template_version,
+                    ),
+                ).fetchone()
+                if updated is None:
+                    exists = connection.execute(
+                        """
+                        SELECT 1 FROM workflow_templates
+                        WHERE tenant_id = %s AND id = %s
+                        """,
+                        (tenant_id, template_id),
+                    ).fetchone()
+                    if exists is None:
+                        raise TemplateNotFoundError((tenant_id, template_id))
+                    raise ConcurrentTemplateUpdateError(template_id)
+                self._insert_template_event(connection, event)
+        return self._template_from_row(updated)
+
+    def template_audit_log(
+        self,
+        tenant_id: str,
+        template_id: str,
+    ) -> tuple[TemplateAuditEvent, ...]:
+        with self.connection_factory() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM workflow_template_events
+                WHERE tenant_id = %s AND template_id = %s
+                ORDER BY aggregate_version, occurred_at, id
+                """,
+                (tenant_id, template_id),
+            ).fetchall()
+        return tuple(self._template_event_from_row(row) for row in rows)
 
     def get_projection(
         self,
@@ -640,6 +857,122 @@ class PostgresWorkflowRepository:
                     event.created_at,
                 ),
             )
+
+    @staticmethod
+    def _insert_template_version(
+        connection: Any,
+        version: WorkflowTemplateVersion,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO workflow_template_versions (
+                tenant_id, id, template_id, version, schema_version,
+                locked, definition, content_hash, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                version.tenant_id,
+                version.id,
+                version.template_id,
+                version.version,
+                version.schema_version,
+                version.locked,
+                Jsonb(to_json_value(version.definition)),
+                version.content_hash,
+                version.created_at,
+            ),
+        )
+
+    @staticmethod
+    def _insert_template_event(connection: Any, event: TemplateAuditEvent) -> None:
+        connection.execute(
+            """
+            INSERT INTO workflow_template_events (
+                tenant_id, id, template_id, event_type,
+                actor_person_id, aggregate_version, payload, occurred_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                event.tenant_id,
+                event.id,
+                event.template_id,
+                event.event_type,
+                event.actor_person_id,
+                event.aggregate_version,
+                Jsonb(to_json_value(event.payload)),
+                event.occurred_at,
+            ),
+        )
+
+    @staticmethod
+    def _validate_template_version(
+        template: WorkflowTemplate,
+        version: WorkflowTemplateVersion,
+        *,
+        expected_number: int,
+    ) -> None:
+        if (
+            version.tenant_id != template.tenant_id
+            or version.template_id != template.id
+            or version.version != expected_number
+        ):
+            raise ValueError("template version does not belong to the aggregate")
+
+    @staticmethod
+    def _validate_template_event(
+        template: WorkflowTemplate,
+        event: TemplateAuditEvent,
+        *,
+        aggregate_version: int,
+    ) -> None:
+        if (
+            event.tenant_id != template.tenant_id
+            or event.template_id != template.id
+            or event.aggregate_version != aggregate_version
+        ):
+            raise ValueError("template event does not belong to the aggregate")
+
+    @staticmethod
+    def _template_from_row(row: dict[str, Any]) -> WorkflowTemplate:
+        return WorkflowTemplate(
+            id=row["id"],
+            tenant_id=row["tenant_id"],
+            name=row["name"],
+            status=TemplateStatus(row["status"]),
+            version=int(row["version"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            deleted_at=row["deleted_at"],
+        )
+
+    @staticmethod
+    def _template_version_from_row(
+        row: dict[str, Any],
+    ) -> WorkflowTemplateVersion:
+        return WorkflowTemplateVersion(
+            id=row["id"],
+            tenant_id=row["tenant_id"],
+            template_id=row["template_id"],
+            version=int(row["version"]),
+            schema_version=row["schema_version"],
+            locked=bool(row["locked"]),
+            definition=row["definition"],
+            content_hash=row["content_hash"],
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _template_event_from_row(row: dict[str, Any]) -> TemplateAuditEvent:
+        return TemplateAuditEvent(
+            id=row["id"],
+            tenant_id=row["tenant_id"],
+            template_id=row["template_id"],
+            event_type=row["event_type"],
+            actor_person_id=row["actor_person_id"],
+            aggregate_version=int(row["aggregate_version"]),
+            payload=row["payload"],
+            occurred_at=row["occurred_at"],
+        )
 
     @staticmethod
     def _load_instance(

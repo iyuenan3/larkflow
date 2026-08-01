@@ -10,12 +10,13 @@ import yaml
 from larkflow.workflow import (
     ExecutionRequest,
     ExecutorKind,
+    InMemoryTemplateStore,
     LLMAgentExecutor,
+    TemplateService,
     TargetRuntimeSettings,
     validate_snapshot,
 )
 from larkflow.workflow.cli import _executors
-from larkflow.workflow.serde import snapshot_from_dict
 
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
@@ -188,10 +189,23 @@ def test_packaged_human_agent_human_template_matches_the_target_contract():
         / "target_agent_review.yaml"
     )
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    document.pop("instance_id")
-    document.pop("owner_person_id")
-
-    snapshot = snapshot_from_dict(document)
+    templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
+    templates.create_template(
+        tenant_id="tenant_agent",
+        actor_person_id="person_owner",
+        document=document,
+    )
+    templates.enable(
+        "tenant_agent",
+        "target_agent_review",
+        actor_person_id="person_owner",
+    )
+    snapshot = templates.instantiate(
+        "tenant_agent",
+        "target_agent_review",
+        inputs={"brief": "验证正式模板入口"},
+        owner_bindings={"project_owner": "person_owner"},
+    )
     validate_snapshot(snapshot)
 
     assert tuple(node.executor.value for node in snapshot.nodes) == (

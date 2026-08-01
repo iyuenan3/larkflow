@@ -79,6 +79,20 @@ class WorkflowService:
         self.repository.add(instance, audit_events=(audit,))
         return self.repository.get(tenant_id, instance_id)
 
+    def preview_draft(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        *,
+        actor_person_id: str,
+    ) -> WorkflowInstance:
+        instance = self.repository.get(tenant_id, instance_id)
+        self._require_instance_owner(instance, actor_person_id)
+        if instance.status != InstanceStatus.DRAFT:
+            raise TransitionError(f"instance is not a draft: {instance_id}")
+        validate_snapshot(instance.snapshot)
+        return instance
+
     def confirm_draft(
         self,
         tenant_id: str,

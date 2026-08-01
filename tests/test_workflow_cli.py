@@ -11,6 +11,11 @@ from larkflow.workflow import (
     WorkflowService,
 )
 from larkflow.workflow.cli import _instance_payload, _load_mapping
+from larkflow.workflow.cli import (
+    _draft_preview_payload,
+    _load_optional_mapping,
+    build_parser,
+)
 
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
@@ -34,6 +39,33 @@ def test_cli_document_loader_accepts_utf8_bom_yaml(tmp_path):
         "instance_id": "instance_1",
         "nodes": [],
     }
+
+
+def test_cli_template_commands_parse_formal_entrypoint_arguments():
+    parser = build_parser()
+
+    created = parser.parse_args(
+        [
+            "--dsn",
+            "postgresql:///test",
+            "--tenant",
+            "tenant_1",
+            "create-from-template",
+            "brief_review",
+            "--instance-id",
+            "instance_1",
+            "--owner",
+            "person_owner",
+            "--bindings",
+            "bindings.yaml",
+        ]
+    )
+    shown = parser.parse_args(["template-show", "brief_review", "--version", "2"])
+
+    assert created.command == "create-from-template"
+    assert created.inputs is None
+    assert shown.version == 2
+    assert _load_optional_mapping(None) == {}
 
 
 def test_status_projection_never_exposes_claim_token():
@@ -67,3 +99,27 @@ def test_status_projection_never_exposes_claim_token():
     assert payload["nodes"][0]["attempt"]["claimed_by"] == "worker_1"
     assert "secret-claim-token" not in repr(payload)
     assert "claim_token" not in payload["nodes"][0]["attempt"]
+
+
+def test_draft_preview_payload_contains_the_materialized_contract():
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=lambda: NOW)
+    instance = service.create_draft(
+        instance_id="instance_preview",
+        tenant_id="tenant_1",
+        owner_person_id="owner_1",
+        actor_person_id="owner_1",
+        snapshot=InstanceSnapshot(
+            template_version_id="brief_review:1",
+            locked=True,
+            inputs={"brief": "Synthetic"},
+            nodes=(NodeSpec("review", "Review", "owner_1", "human", work=work()),),
+        ),
+    )
+
+    payload = _draft_preview_payload(instance)
+
+    assert payload["template_version_id"] == "brief_review:1"
+    assert payload["locked"] is True
+    assert payload["inputs"] == {"brief": "Synthetic"}
+    assert payload["nodes"][0]["work"]["objective"] == "Do the work"

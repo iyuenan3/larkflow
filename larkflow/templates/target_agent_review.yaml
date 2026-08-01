@@ -1,13 +1,19 @@
 schema_version: "0.2"
-instance_id: replace_with_unique_instance_id
-owner_person_id: replace_with_open_id
+template:
+  id: target_agent_review
+  version: 1
+  name: Human-Agent-Human 摘要复核
+  status: draft
+  locked: false
 goal: 人工确认输入，Agent 生成草稿，人工完成复核
-inputs:
-  brief: 请根据本次测试目标生成一份简短、可核验的执行摘要。
+parameters:
+  brief:
+    type: text
+    required: true
 nodes:
-  - key: confirm_brief
+  - id: confirm_brief
     title: 确认生成要求
-    owner_person_id: replace_with_open_id
+    owner_role: project_owner
     executor: human
     deps: []
     work:
@@ -20,9 +26,9 @@ nodes:
       acceptance:
         - 已确认生成要求
 
-  - key: draft_summary
+  - id: draft_summary
     title: 生成执行摘要
-    owner_person_id: replace_with_open_id
+    owner_role: project_owner
     executor: agent
     deps:
       - confirm_brief
@@ -42,9 +48,9 @@ nodes:
         model_role: default
         instructions: 用中文生成不超过 300 字的执行摘要，包含结论、依据和下一步。
 
-  - key: review_summary
+  - id: review_summary
     title: 复核 Agent 执行摘要
-    owner_person_id: replace_with_open_id
+    owner_role: project_owner
     executor: human
     deps:
       - draft_summary

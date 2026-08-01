@@ -26,6 +26,8 @@ from larkflow.workflow import (
     PostgresWorkflowRepository,
     ProjectionRecord,
     TaskCompletionSignal,
+    TemplateService,
+    TemplateStatus,
     WorkflowService,
     WorkflowWorker,
     apply_migrations,
@@ -68,6 +70,105 @@ class BarrierRepository(PostgresWorkflowRepository):
         instance = super().get(tenant_id, instance_id)
         self.barrier.wait(timeout=5)
         return instance
+
+
+def template_document() -> dict:
+    return {
+        "schema_version": "0.2",
+        "template": {
+            "id": "postgres_review",
+            "version": 1,
+            "name": "PostgreSQL review",
+            "status": "draft",
+            "locked": True,
+        },
+        "goal": "Verify template persistence",
+        "parameters": {"brief": {"type": "text", "required": True}},
+        "nodes": [
+            {
+                "id": "review",
+                "title": "Review",
+                "owner_role": "project_owner",
+                "executor": "human",
+                "deps": [],
+                "work": {
+                    "objective": "Review the brief",
+                    "inputs": ["instance_inputs.brief"],
+                    "outputs": [{"id": "decision", "type": "data"}],
+                    "acceptance": ["A decision exists"],
+                },
+            }
+        ],
+    }
+
+
+def test_postgres_persists_template_lifecycle_and_frozen_instance_snapshot():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_template_{suffix}"
+    template_id = f"postgres_review_{suffix}"
+    source = template_document()
+    source["template"]["id"] = template_id
+    instance_id = f"instance_template_{suffix}"
+    repository = PostgresWorkflowRepository(connection_factory)
+    templates = TemplateService(repository)
+
+    template, version = templates.create_template(
+        tenant_id=tenant_id,
+        actor_person_id="person_owner",
+        document=source,
+    )
+    enabled = templates.enable(
+        tenant_id,
+        template_id,
+        actor_person_id="person_owner",
+    )
+    snapshot = templates.instantiate(
+        tenant_id,
+        template_id,
+        inputs={"brief": "Synthetic PostgreSQL validation"},
+        owner_bindings={"project_owner": "person_owner"},
+    )
+    created = WorkflowService(repository).create_draft(
+        instance_id=instance_id,
+        tenant_id=tenant_id,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=snapshot,
+    )
+
+    assert template.status == TemplateStatus.DRAFT
+    assert enabled.status == TemplateStatus.ENABLED
+    assert version.id == f"{template_id}:1"
+    assert created.snapshot.template_version_id == version.id
+    assert created.snapshot.locked is True
+    assert repository.get(tenant_id, instance_id).snapshot == snapshot
+    assert [event.event_type for event in repository.template_audit_log(
+        tenant_id, template_id
+    )] == ["template.created", "template.enabled"]
+
+    with pytest.raises(RaiseException):
+        with connection_factory() as connection:
+            with connection.transaction():
+                connection.execute(
+                    """
+                    UPDATE workflow_template_versions SET locked = false
+                    WHERE tenant_id = %s AND id = %s
+                    """,
+                    (tenant_id, version.id),
+                )
+    with pytest.raises(RaiseException):
+        with connection_factory() as connection:
+            with connection.transaction():
+                connection.execute(
+                    """
+                    DELETE FROM workflow_template_events
+                    WHERE tenant_id = %s AND template_id = %s
+                    """,
+                    (tenant_id, template_id),
+                )
 
 
 def test_postgres_persists_a_dependent_draft_before_nodes_are_materialized():

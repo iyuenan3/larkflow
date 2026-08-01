@@ -26,6 +26,7 @@ def snapshot_to_dict(snapshot: InstanceSnapshot) -> dict[str, Any]:
         "schema_version": snapshot.schema_version,
         "goal": snapshot.goal,
         "template_version_id": snapshot.template_version_id,
+        "locked": snapshot.locked,
         "inputs": to_json_value(snapshot.inputs),
         "nodes": [
             {
@@ -46,6 +47,7 @@ def snapshot_from_dict(data: Mapping[str, Any]) -> InstanceSnapshot:
         schema_version=str(data["schema_version"]),
         goal=str(data.get("goal", "")),
         template_version_id=data.get("template_version_id"),
+        locked=bool(data.get("locked", False)),
         inputs=data.get("inputs") or {},
         nodes=tuple(
             NodeSpec(

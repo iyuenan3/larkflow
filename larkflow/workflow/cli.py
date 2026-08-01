@@ -37,6 +37,7 @@ from .runner import NodeRunner
 from .runtime import AutomatedExecutor, WorkflowWorker
 from .serde import quality_to_dict, snapshot_from_dict, to_json_value
 from .service import WorkflowService
+from .template_service import TemplateService, template_document
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -91,6 +92,59 @@ def build_parser() -> argparse.ArgumentParser:
 
     create = commands.add_parser("create", help="create a draft from YAML or JSON")
     create.add_argument("source", help="document path, or - for stdin")
+
+    template_create = commands.add_parser(
+        "template-create",
+        help="create a draft template and immutable version 1",
+    )
+    template_create.add_argument("source", help="template YAML/JSON path, or -")
+    template_create.add_argument("--actor", required=True)
+
+    template_add = commands.add_parser(
+        "template-add-version",
+        help="append an immutable version to a draft or disabled template",
+    )
+    template_add.add_argument("template_id")
+    template_add.add_argument("source", help="template YAML/JSON path, or -")
+    template_add.add_argument("--actor", required=True)
+
+    for command, description in (
+        ("template-enable", "enable the latest immutable template version"),
+        ("template-disable", "disable a template before changing it"),
+        ("template-delete", "soft-delete a draft or disabled template"),
+    ):
+        lifecycle = commands.add_parser(command, help=description)
+        lifecycle.add_argument("template_id")
+        lifecycle.add_argument("--actor", required=True)
+
+    commands.add_parser("template-list", help="list tenant templates")
+    template_show = commands.add_parser(
+        "template-show",
+        help="show a template and one immutable version",
+    )
+    template_show.add_argument("template_id")
+    template_show.add_argument("--version", type=int)
+
+    create_from_template = commands.add_parser(
+        "create-from-template",
+        help="materialize an enabled template as a frozen draft",
+    )
+    create_from_template.add_argument("template_id")
+    create_from_template.add_argument("--instance-id", required=True)
+    create_from_template.add_argument("--owner", required=True)
+    create_from_template.add_argument(
+        "--bindings",
+        required=True,
+        help="owner-role binding YAML/JSON path, or -",
+    )
+    create_from_template.add_argument(
+        "--inputs",
+        help="template input YAML/JSON path",
+    )
+
+    preview = commands.add_parser("preview", help="validate and preview a draft")
+    preview.add_argument("instance_id")
+    preview.add_argument("--actor", required=True)
 
     confirm = commands.add_parser("confirm", help="confirm and start a draft")
     confirm.add_argument("instance_id")
@@ -178,6 +232,113 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
         log("migrations_applied", {"versions": list(applied)})
     repository = PostgresWorkflowRepository(connection_factory)
     service = WorkflowService(repository)
+    templates = TemplateService(repository)
+
+    if namespace.command == "template-create":
+        template, version = templates.create_template(
+            tenant_id=tenant_id,
+            actor_person_id=namespace.actor,
+            document=_load_mapping(namespace.source),
+        )
+        log("template_created", _template_payload(template, version))
+        return 0
+
+    if namespace.command == "template-add-version":
+        template, version = templates.add_version(
+            tenant_id=tenant_id,
+            template_id=namespace.template_id,
+            actor_person_id=namespace.actor,
+            document=_load_mapping(namespace.source),
+        )
+        log("template_version_added", _template_payload(template, version))
+        return 0
+
+    if namespace.command in {
+        "template-enable",
+        "template-disable",
+        "template-delete",
+    }:
+        transition = {
+            "template-enable": templates.enable,
+            "template-disable": templates.disable,
+            "template-delete": templates.delete,
+        }[namespace.command]
+        template = transition(
+            tenant_id,
+            namespace.template_id,
+            actor_person_id=namespace.actor,
+        )
+        log("template_status_changed", _template_payload(template))
+        return 0
+
+    if namespace.command == "template-list":
+        log(
+            "templates_listed",
+            {
+                "tenant_id": tenant_id,
+                "templates": [
+                    _template_payload(template)
+                    for template in templates.list_templates(tenant_id)
+                ],
+            },
+        )
+        return 0
+
+    if namespace.command == "template-show":
+        template = templates.get_template(tenant_id, namespace.template_id)
+        version = templates.get_version(
+            tenant_id,
+            namespace.template_id,
+            namespace.version,
+        )
+        log(
+            "template_state",
+            {
+                **_template_payload(template, version),
+                "document": template_document(template, version),
+                "audit": [
+                    {
+                        "id": event.id,
+                        "event_type": event.event_type,
+                        "actor_person_id": event.actor_person_id,
+                        "aggregate_version": event.aggregate_version,
+                        "payload": to_json_value(event.payload),
+                        "occurred_at": to_json_value(event.occurred_at),
+                    }
+                    for event in repository.template_audit_log(
+                        tenant_id,
+                        namespace.template_id,
+                    )
+                ],
+            },
+        )
+        return 0
+
+    if namespace.command == "create-from-template":
+        snapshot = templates.instantiate(
+            tenant_id,
+            namespace.template_id,
+            inputs=_load_optional_mapping(namespace.inputs),
+            owner_bindings=_load_mapping(namespace.bindings),
+        )
+        instance = service.create_draft(
+            instance_id=namespace.instance_id,
+            tenant_id=tenant_id,
+            owner_person_id=namespace.owner,
+            actor_person_id=namespace.owner,
+            snapshot=snapshot,
+        )
+        log("template_instance_created", _draft_preview_payload(instance))
+        return 0
+
+    if namespace.command == "preview":
+        instance = service.preview_draft(
+            tenant_id,
+            namespace.instance_id,
+            actor_person_id=namespace.actor,
+        )
+        log("draft_previewed", _draft_preview_payload(instance))
+        return 0
 
     if namespace.command == "create":
         document = _load_mapping(namespace.source)
@@ -525,6 +686,10 @@ def _load_mapping(source: str) -> dict[str, Any]:
     return {str(key): item for key, item in value.items()}
 
 
+def _load_optional_mapping(source: str | None) -> dict[str, Any]:
+    return {} if source is None else _load_mapping(source)
+
+
 def _required(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} is required")
@@ -568,11 +733,61 @@ def _instance_payload(instance: Any) -> dict[str, Any]:
         "version": instance.version,
         "graph_revision": instance.graph_revision,
         "goal": instance.snapshot.goal,
+        "template_version_id": instance.snapshot.template_version_id,
+        "locked": instance.snapshot.locked,
         "created_at": to_json_value(instance.created_at),
         "confirmed_at": to_json_value(instance.confirmed_at),
         "completed_at": to_json_value(instance.completed_at),
         "nodes": nodes,
     }
+
+
+def _draft_preview_payload(instance: Any) -> dict[str, Any]:
+    return {
+        "tenant_id": instance.tenant_id,
+        "instance_id": instance.id,
+        "owner_person_id": instance.owner_person_id,
+        "status": instance.status.value,
+        "template_version_id": instance.snapshot.template_version_id,
+        "locked": instance.snapshot.locked,
+        "schema_version": instance.snapshot.schema_version,
+        "goal": instance.snapshot.goal,
+        "inputs": to_json_value(instance.snapshot.inputs),
+        "nodes": [
+            {
+                "key": node.key,
+                "title": node.title,
+                "owner_person_id": node.owner_person_id,
+                "executor": node.executor.value,
+                "deps": list(node.deps),
+                "work": to_json_value(node.work),
+            }
+            for node in instance.snapshot.nodes
+        ],
+    }
+
+
+def _template_payload(template: Any, version: Any | None = None) -> dict[str, Any]:
+    payload = {
+        "tenant_id": template.tenant_id,
+        "template_id": template.id,
+        "name": template.name,
+        "status": template.status.value,
+        "aggregate_version": template.version,
+        "created_at": to_json_value(template.created_at),
+        "updated_at": to_json_value(template.updated_at),
+        "deleted_at": to_json_value(template.deleted_at),
+    }
+    if version is not None:
+        payload["template_version"] = {
+            "id": version.id,
+            "version": version.version,
+            "schema_version": version.schema_version,
+            "locked": version.locked,
+            "content_hash": version.content_hash,
+            "created_at": to_json_value(version.created_at),
+        }
+    return payload
 
 
 class JsonLogger:
