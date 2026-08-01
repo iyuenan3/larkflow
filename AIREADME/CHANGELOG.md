@@ -5,7 +5,7 @@
 - Fixed：凭据侧 Task 验证不再永久重试。默认最多尝试 24 次，达到预算后写入不可再认领的 `exhausted` 终态，保留终止时间、失败阶段、结果和最后错误。
 - Added：`LARKFLOW_TARGET_INBOUND_VERIFICATION_MAX_ATTEMPTS` 配置、Verification Worker 的 `exhausted` 结构化计数，以及 PostgreSQL migration `0006_inbox_verification_exhaustion`。
 - Verified：先用回归测试证明旧实现会无限重试，再完成 `608 passed, 6 skipped` 全量离线验证。一次性 PostgreSQL 14 数据库应用六份 migration，验证 `exhausted` 写入及隔天不可再次 claim，随后回读确认测试库与临时目录均已删除。
-- Boundary：修复尚未部署到 `alicloud-sh` 的长期开发库与常驻服务；当前部署仍是五份 migration，不能把仓库验证描述为云端已生效。
+- Deployment：升级前备份成功；发布 wheel SHA-256 为 `42c83286964d4fd44f254cc85dc39714e62b953a155391b1faf1059e05287d27`，长期开发库已回读六份 migration，四个 Target 服务与 legacy 消费者均为 active。一条历史失败事件在真实退避到期后进入 `exhausted`，日志回读 `exhausted=1`。该验证仅代表开发环境，不是生产发布。
 
 ## v0.17.0-draft · 2026-08-01 · Target 模板生命周期与正式草稿入口（ADR-061）
 

@@ -137,7 +137,7 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 
 领域状态、审计与 outbox 在同一事务提交。事务提交后，Human 节点与所有节点状态变化通过 outbox 请求投影同步；Agent 和 Tool 激活直接返回 NodeActivation，由 Runtime Worker 在提交后交给 executor，避免数据库事务跨越外部调用。自动执行是 at-least-once，executor 必须使用 tenant-scoped Attempt 幂等键消除重复副作用。Agent 装配还会检查所有显式故障切换线路的超时总和，加上安全余量后必须小于 claim 租期，避免正常慢调用在结果提交前失去租约。当前 claim 只解决中央 Worker 的并发认领，不是已 Deferred 的设备能力租约。
 
-PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration 重入、完整聚合往返、模板并发启用、不可变版本触发器、审计追加保护、outbox、Inbox、双 Worker 竞争、过期认领恢复和验证耗尽终态。`alicloud-sh` 已建立长期 Target 开发库、每日备份，以及 Runtime、Projection、入站校验和领域入站四个 Target 常驻服务。legacy 仍是事件长连接的唯一消费者，只把原始 Task 完成信号持久化，不写 Target 领域状态。凭据侧以 `lf-dev` 读飞书 Task 并写验证结果，领域侧以 `lf_target_dev` 校验 Projection 绑定、当前 Attempt、唯一 Owner、任务来源与完成人后提交 Human 节点，后者不能读取 lark-cli profile。开发环境已启用 Agent，并用真实 Task 和模型完成 Human-Agent-Human 闭环；正式模板 CLI 创建的实例也已完成两个 Human 节点和一个 Agent 节点。通用飞书命令、业务 Tool、IM 或 Doc 投影仍未接入；同机本地备份不构成生产级高可用或灾难恢复。验证耗尽修复目前只在仓库和一次性数据库通过，尚未部署到长期开发服务。
+PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration 重入、完整聚合往返、模板并发启用、不可变版本触发器、审计追加保护、outbox、Inbox、双 Worker 竞争、过期认领恢复和验证耗尽终态。`alicloud-sh` 已建立长期 Target 开发库、每日备份，以及 Runtime、Projection、入站校验和领域入站四个 Target 常驻服务。legacy 仍是事件长连接的唯一消费者，只把原始 Task 完成信号持久化，不写 Target 领域状态。凭据侧以 `lf-dev` 读飞书 Task 并写验证结果，领域侧以 `lf_target_dev` 校验 Projection 绑定、当前 Attempt、唯一 Owner、任务来源与完成人后提交 Human 节点，后者不能读取 lark-cli profile。开发环境已启用 Agent，并用真实 Task 和模型完成 Human-Agent-Human 闭环；正式模板 CLI 创建的实例也已完成两个 Human 节点和一个 Agent 节点。通用飞书命令、业务 Tool、IM 或 Doc 投影仍未接入；同机本地备份不构成生产级高可用或灾难恢复。验证耗尽修复已部署到长期开发服务，历史失败事件已在真实退避到期后进入 `exhausted`。
 
 ## 8. Intended vs implemented
 
