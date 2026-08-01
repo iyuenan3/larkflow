@@ -162,3 +162,9 @@
 - 现象（真实链路）：同一条 `task_completed_update` 在服务端详情长期保持未完成后，凭据侧已经验证失败 24 次，仍按五分钟周期继续认领。实例本身已由另一条可验证事件正确推进，但陈旧 Inbox 记录持续消耗外部读取和日志容量。
 - 根因（已确认）：验证 Worker 的指数退避只限制相邻尝试间隔，状态机仍把每次异常写回可认领的 `failed / verification`，没有终止状态或最大尝试次数。所谓“有界退避”并不等于“有限重试”。
 - 结论：凭据侧默认最多验证 24 次；达到预算后原子写入 `exhausted`、终止时间、失败阶段、结果和最后错误，清除 claim 并停止认领。结构化日志暴露非零耗尽计数，运维必须调查；真实 PostgreSQL 验收同时证明终态不可再 claim，不能只看单元测试或退避计算。
+
+## 2026-08-01 · venv 可写不代表旧安装 metadata 可被服务用户替换
+
+- 现象（已复现）：Target venv 目录与当前包主体属于 `lf_target_dev`，但用该用户执行 `pip install --force-reinstall` 时，在卸载旧包后因旧 `direct_url.json` 属于 root 而报 `Permission denied`，四个已主动停止的 Target 服务不能立即恢复。
+- 根因（已确认）：更早一次安装留下 root 所有的 dist-info 文件。pip 把旧 metadata 临时改名后，服务用户无法删除其中的 root 文件；只检查 venv 顶层和包目录权限会漏掉这个混合所有权。
+- 结论：停服前同时检查目标包 dist-info 的递归所有权，并保留上一 wheel 与数据库备份。遇到失败先把精确的残留 metadata 移出 site-packages，再以 venv 所有者重装、运行 `pip check` 和入口导入验证，最后启动服务并回读 `NRestarts`；不能在未知半安装状态直接起服务。

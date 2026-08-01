@@ -34,7 +34,7 @@
 - `alicloud-sh` 已建立长期 Target 开发库、本机 peer authentication、每日备份、新库恢复演练和 enabled Target 服务；仍缺异机备份、PITR 与生产运行手册。
 - 每个节点的唯一 Owner 解析与服务端授权。当前内核已拒绝非 Owner 提交，企业目录校验待接入。
 - 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则、持久化、常驻 Worker、Agent adapter、真实开发链路与恢复扫描已落码，业务 Tool adapter 待完成。
-- 通用飞书命令入站、IM / Doc 投影、启动全量对账和缺失对象重建。Outbox Worker、Task 创建 / 完成与 Task 完成入站已实现。
+- 已完成启动全量 Task 对账、缺失 Projection 补建和确认删除后的外部 Task 重建；一次性 PostgreSQL 已验证补建、换绑和重入，常驻开发服务已验证现有绑定重入，真实 Task 删除仍待验收。通用飞书命令入站与 IM / Doc 投影仍待实现。
 - 从 legacy 原型提炼 adapter、事件韧性和 Mock 测试资产。
 
 **Demo：** 从启用模板和无模板定义各创建一个草稿；确认后在飞书完成 Human、Agent、Tool 混合流程；服务重启后状态和投影一致。

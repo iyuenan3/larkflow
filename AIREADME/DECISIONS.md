@@ -485,3 +485,13 @@
 - Decision：凭据侧默认最多验证 24 次，保留 5 秒起步、5 分钟封顶的指数退避，总等待窗口约 90 分钟。达到预算仍失败时，使用当前 claim token 原子写入 `exhausted`、终止时间、`outcome=exhausted:verification_attempts`、失败阶段和最后错误，随后清除 claim。`exhausted` 不进入任何 claim 条件，日志单独累计耗尽数。
 - Alternatives(否决)：永久重试；第一次读不到立即丢弃；只限制退避上限而不设总预算；把未验证事件交给领域 Worker 决定；静默标记终止但不保留原因和告警信号。
 - Tradeoff：超过约 90 分钟的真实飞书或凭据故障可能让有效事件进入终态。当前没有自动 redrive 命令，因此非零耗尽必须人工调查；投影全量对账与缺失对象恢复完成后，应由权威状态恢复仍在等待的 Human 节点，而不是重新开启无限事件重试。
+
+## ADR-063 · 2026-08-01 · Task 对账以 PostgreSQL 为权威且只在明确删除时换绑
+
+- **Status：Accepted · Development deployment。**
+- Problem：Outbox 可以恢复未发布事件，但无法修复“事件已发布而 Projection 记录丢失”或“Projection 仍在而飞书 Task 已删除”。若启动时只看进程和 Outbox 状态，当前 Human 责任入口可以永久缺失。
+- Constraint：PostgreSQL 继续是业务权威；飞书读写不进入数据库事务；创建响应丢失时重试必须幂等；权限或瞬时故障不得导致新 Task；两个对账者不得相互覆盖新绑定；已结束流程不补发历史责任入口。
+- Decision：Projection 常驻进程在 Outbox 循环前，按 Instance ID 分页扫描当前 `waiting_human` 节点和尚未收口的已有终态 Projection。没有 Projection 时复用 Attempt 级稳定键创建；已有 Projection 先查 Task，只有 Task v2 返回 `1470404` 才使用 `repair_generation + 1` 派生新稳定键重建。替换 Projection 必须同时匹配旧 GUID、旧幂等键、记录身份和同步版本；响应丢失时下次仍使用同一 repair generation。单个实例失败记入结构化报告后继续其他实例。
+- Deployment：开发服务器已运行该版本；启动和显式对账均只读确认两条现有 Task 绑定不变且无失败。真实删除后的外部重建仍待单独验收。
+- Alternatives(否决)：只重放已发布 Outbox；每次启动无条件重建所有 Task；将任意读失败视为已删除；原地复用已确认删除对象的 client token；无并发条件覆盖 Projection；为已终止且没有 Projection 的历史节点补发任务。
+- Tradeoff：启动时每个活跃 Human Task 多一次只读 API，大租户的启动时间与 API 配额会随当前等待节点数增长。当前只在启动和显式命令中对账，没有周期调度；真实飞书 Task 删除后重建与最小 scope 仍需开发环境验收。

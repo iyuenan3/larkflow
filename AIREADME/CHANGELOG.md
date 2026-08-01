@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.18.0-draft · 2026-08-01 · Target Task 启动对账与缺失重建（ADR-063）
+
+- Added：Projection 常驻循环在消费 Outbox 前按 Instance ID 分页对账；新增 `reconcile-projections` 运维命令与 `LARKFLOW_TARGET_PROJECTION_RECONCILE_BATCH_SIZE`。
+- Recovery：当前 `waiting_human` 节点没有 Projection 时使用原稳定幂等键补建；已绑定 Task 只在飞书明确返回 `1470404` 时使用带 repair generation 的新稳定键重建，并以旧绑定为并发条件换绑。
+- Safety：权限、网络、限流或服务端错误不会被误判为 Task 删除；单个实例失败不阻塞其他实例；已终止节点不补发历史 Task。
+- Verified：完整离线套件 `617 passed, 7 skipped`；回归测试覆盖缺失记录、外部删除、丢失响应、逐实例容错、终态边界、启动顺序和错误码分流。一次性 PostgreSQL 14 数据库应用六份 migration，回读补建 1、重建 1、重入 1，随后删除数据库与临时上传件。
+- Deployment：内容提交 `99af528` 构建 wheel，SHA-256 为 `ed5d597db3d593322a549e02700543f32ef317b2e0dfdab4a2605f7f9fb119e4`。部署前备份成功，四个 Target 服务与 legacy 消费者均回读 active、`NRestarts=0`；启动与手动对账均为 1 个实例、2 个节点、2 条绑定不变且 0 失败。
+- Boundary：开发环境尚未对真实飞书 Task 执行删除后重建，也不代表生产发布。
+
 ## v0.17.1-draft · 2026-08-01 · Inbox 验证有限重试
 
 - Fixed：凭据侧 Task 验证不再永久重试。默认最多尝试 24 次，达到预算后写入不可再认领的 `exhausted` 终态，保留终止时间、失败阶段、结果和最后错误。
