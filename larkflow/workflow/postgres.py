@@ -14,6 +14,13 @@ from .events import (
     OutboxClaim,
     OutboxEvent,
 )
+from .inbound import (
+    InboxClaim,
+    InvalidInboxClaimError,
+    TaskCompletionSignal,
+    task_state_from_dict,
+    task_state_to_dict,
+)
 from .model import (
     AttemptStatus,
     ExecutorKind,
@@ -126,6 +133,22 @@ class PostgresWorkflowRepository:
                   AND kind = %s
                 """,
                 (tenant_id, node_instance_id, attempt_no, kind),
+            ).fetchone()
+        return self._projection_from_row(row) if row is not None else None
+
+    def get_projection_by_external_id(
+        self,
+        tenant_id: str,
+        kind: str,
+        external_id: str,
+    ) -> ProjectionRecord | None:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM workflow_projections
+                WHERE tenant_id = %s AND kind = %s AND external_id = %s
+                """,
+                (tenant_id, kind, external_id),
             ).fetchone()
         return self._projection_from_row(row) if row is not None else None
 
@@ -699,4 +722,302 @@ class PostgresWorkflowRepository:
             state=row["state"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+
+class PostgresWorkflowInbox:
+    """Durable inbox adapter kept separate from aggregate write authority."""
+
+    def __init__(self, connection_factory: ConnectionFactory) -> None:
+        self.connection_factory = connection_factory
+
+    def append_inbox(self, event: TaskCompletionSignal) -> bool:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO workflow_inbox_events (
+                    tenant_id, id, source, event_type, external_id,
+                    event_types, available_at, occurred_at, received_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (tenant_id, id) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    event.tenant_id,
+                    event.id,
+                    "feishu_event_bus",
+                    "task.task.update_user_access_v2",
+                    event.task_guid,
+                    Jsonb(list(event.event_types)),
+                    event.received_at,
+                    event.occurred_at,
+                    event.received_at,
+                ),
+            ).fetchone()
+        return row is not None
+
+    def claim_inbox(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int = 20,
+        claim_ttl: timedelta = timedelta(minutes=2),
+    ) -> tuple[InboxClaim, ...]:
+        if not worker_id.strip():
+            raise ValueError("inbound worker_id is required")
+        if limit < 1:
+            raise ValueError("inbound claim_limit must be positive")
+        if claim_ttl <= timedelta(0):
+            raise ValueError("inbound claim_ttl must be positive")
+        token = secrets.token_urlsafe(24)
+        expires_at = now + claim_ttl
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                rows = connection.execute(
+                    """
+                    WITH selected AS (
+                        SELECT tenant_id, id
+                        FROM workflow_inbox_events
+                        WHERE tenant_id = %s
+                          AND (
+                            (status = 'verified' AND available_at <= %s)
+                            OR (
+                                status = 'failed'
+                                AND failure_stage = 'processing'
+                                AND available_at <= %s
+                            )
+                            OR (status = 'processing' AND claim_expires_at <= %s)
+                          )
+                        ORDER BY available_at, received_at, id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT %s
+                    )
+                    UPDATE workflow_inbox_events AS event
+                    SET status = 'processing',
+                        attempt_count = event.attempt_count + 1,
+                        claimed_by = %s,
+                        claim_token = %s,
+                        claim_expires_at = %s
+                    FROM selected
+                    WHERE event.tenant_id = selected.tenant_id
+                      AND event.id = selected.id
+                    RETURNING event.*
+                    """,
+                    (
+                        tenant_id,
+                        now,
+                        now,
+                        now,
+                        limit,
+                        worker_id,
+                        token,
+                        expires_at,
+                    ),
+                ).fetchall()
+        return tuple(
+            InboxClaim(
+                event=self._event_from_row(row),
+                claim_token=token,
+                claimed_by=worker_id,
+                claim_expires_at=expires_at,
+                attempt_count=int(row["attempt_count"]),
+                task_state=task_state_from_dict(row["verified_payload"])
+                if row["verified_payload"] is not None
+                else None,
+            )
+            for row in rows
+        )
+
+    def claim_inbox_verification(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int = 20,
+        claim_ttl: timedelta = timedelta(minutes=2),
+    ) -> tuple[InboxClaim, ...]:
+        if not worker_id.strip():
+            raise ValueError("verification worker_id is required")
+        if limit < 1:
+            raise ValueError("verification claim_limit must be positive")
+        if claim_ttl <= timedelta(0):
+            raise ValueError("verification claim_ttl must be positive")
+        token = secrets.token_urlsafe(24)
+        expires_at = now + claim_ttl
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                rows = connection.execute(
+                    """
+                    WITH selected AS (
+                        SELECT tenant_id, id
+                        FROM workflow_inbox_events
+                        WHERE tenant_id = %s
+                          AND (
+                            (status = 'pending' AND available_at <= %s)
+                            OR (
+                                status = 'failed'
+                                AND failure_stage = 'verification'
+                                AND available_at <= %s
+                            )
+                            OR (status = 'verifying' AND claim_expires_at <= %s)
+                          )
+                        ORDER BY available_at, received_at, id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT %s
+                    )
+                    UPDATE workflow_inbox_events AS event
+                    SET status = 'verifying',
+                        attempt_count = event.attempt_count + 1,
+                        claimed_by = %s,
+                        claim_token = %s,
+                        claim_expires_at = %s
+                    FROM selected
+                    WHERE event.tenant_id = selected.tenant_id
+                      AND event.id = selected.id
+                    RETURNING event.*
+                    """,
+                    (
+                        tenant_id,
+                        now,
+                        now,
+                        now,
+                        limit,
+                        worker_id,
+                        token,
+                        expires_at,
+                    ),
+                ).fetchall()
+        return tuple(
+            InboxClaim(
+                event=self._event_from_row(row),
+                claim_token=token,
+                claimed_by=worker_id,
+                claim_expires_at=expires_at,
+                attempt_count=int(row["attempt_count"]),
+            )
+            for row in rows
+        )
+
+    def mark_inbox_verified(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        task_state,
+        now: datetime,
+    ) -> None:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                UPDATE workflow_inbox_events
+                SET status = 'verified', verified_payload = %s,
+                    available_at = %s, failure_stage = NULL,
+                    claimed_by = NULL, claim_token = NULL,
+                    claim_expires_at = NULL, last_error = NULL
+                WHERE tenant_id = %s AND id = %s
+                  AND status = 'verifying' AND claim_token = %s
+                RETURNING id
+                """,
+                (
+                    Jsonb(task_state_to_dict(task_state)),
+                    now,
+                    tenant_id,
+                    event_id,
+                    claim_token,
+                ),
+            ).fetchone()
+        if row is None:
+            raise InvalidInboxClaimError(event_id)
+
+    def mark_inbox_verification_failed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                UPDATE workflow_inbox_events
+                SET status = 'failed', available_at = %s,
+                    failure_stage = 'verification', last_error = %s,
+                    claimed_by = NULL, claim_token = NULL,
+                    claim_expires_at = NULL
+                WHERE tenant_id = %s AND id = %s
+                  AND status = 'verifying' AND claim_token = %s
+                RETURNING id
+                """,
+                (retry_at, error, tenant_id, event_id, claim_token),
+            ).fetchone()
+        if row is None:
+            raise InvalidInboxClaimError(event_id)
+
+    def mark_inbox_processed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        outcome: str,
+        now: datetime,
+    ) -> None:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                UPDATE workflow_inbox_events
+                SET status = 'processed', processed_at = %s, outcome = %s,
+                    failure_stage = NULL,
+                    claimed_by = NULL, claim_token = NULL,
+                    claim_expires_at = NULL, last_error = NULL
+                WHERE tenant_id = %s AND id = %s
+                  AND status = 'processing' AND claim_token = %s
+                RETURNING id
+                """,
+                (now, outcome, tenant_id, event_id, claim_token),
+            ).fetchone()
+        if row is None:
+            raise InvalidInboxClaimError(event_id)
+
+    def mark_inbox_failed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                UPDATE workflow_inbox_events
+                SET status = 'failed', available_at = %s, last_error = %s,
+                    failure_stage = 'processing',
+                    claimed_by = NULL, claim_token = NULL,
+                    claim_expires_at = NULL
+                WHERE tenant_id = %s AND id = %s
+                  AND status = 'processing' AND claim_token = %s
+                RETURNING id
+                """,
+                (retry_at, error, tenant_id, event_id, claim_token),
+            ).fetchone()
+        if row is None:
+            raise InvalidInboxClaimError(event_id)
+
+    @staticmethod
+    def _event_from_row(row: dict[str, Any]) -> TaskCompletionSignal:
+        return TaskCompletionSignal(
+            id=row["id"],
+            tenant_id=row["tenant_id"],
+            task_guid=row["external_id"],
+            event_types=tuple(row["event_types"]),
+            occurred_at=row["occurred_at"],
+            received_at=row["received_at"],
         )

@@ -85,6 +85,8 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert [version for version, _ in migrations] == [
         "0001_workflow",
         "0002_runtime_claim_owner",
+        "0003_inbound_task_events",
+        "0004_inbox_verification",
     ]
     sql = migrations[0][1]
     for table in (
@@ -101,6 +103,9 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "workflow_template_versions_immutable" in sql
     assert "workflow_audit_events_append_only" in sql
     assert "ADD COLUMN claimed_by" in migrations[1][1]
+    assert "CREATE TABLE workflow_inbox_events" in migrations[2][1]
+    assert "workflow_projection_external_identity_idx" in migrations[2][1]
+    assert "ADD COLUMN verified_payload" in migrations[3][1]
 
 
 def test_in_memory_repository_is_tenant_scoped():

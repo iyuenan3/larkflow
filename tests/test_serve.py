@@ -336,6 +336,43 @@ def test_a_task_completion_event_from_the_pump_finishes_a_human_produce_node():
     assert len([t for t in io.tasks.values() if t["summary"] == "负责人定稿"]) == 2
 
 
+def test_the_single_event_pump_can_forward_a_task_event_to_target_inbox():
+    svc, io, llm = contract()
+    seen = []
+    observer = lambda key, payload: seen.append((key, payload)) or True
+    srv, pumps = served(svc, event_observers=(observer,))
+    srv.start()
+    payload = event = {
+        "header": {"event_id": "target-event"},
+        "event": {
+            "task_guid": "target-task",
+            "event_types": ["task_completed_update"],
+        },
+    }
+
+    pumps[0].feed(TASK_UPDATE, payload)
+
+    assert seen == [(TASK_UPDATE, event)]
+    assert srv.stats["forwarded"] == 1
+    assert srv.stats["skipped"] == 1
+
+
+def test_a_target_inbox_failure_does_not_block_legacy_event_routing():
+    svc, io, llm = contract()
+    svc.start(instance_id="observer-failure", reporter="ou_owner", inputs=INPUTS)
+
+    def broken(_key, _payload):
+        raise RuntimeError("inbox unavailable")
+
+    srv, pumps = served(svc, event_observers=(broken,))
+    srv.start()
+    pumps[0].feed(CARD_ACTION, cli_card(io, "legal_gate", "通过"))
+
+    assert svc.status("observer-failure")["legal_gate"] == "done"
+    assert srv.stats["handled"] == 1
+    assert srv.stats["errors"] == 1
+
+
 def test_one_failing_event_does_not_kill_the_only_inbound_channel():
     """EventPump 已有一层兜底；这条测的是**我这条路径**真的被它兜住了。"""
     svc, io, llm = contract()

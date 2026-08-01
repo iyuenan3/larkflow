@@ -226,6 +226,23 @@ class InMemoryWorkflowRepository:
         )
         return deepcopy(record) if record is not None else None
 
+    def get_projection_by_external_id(
+        self,
+        tenant_id: str,
+        kind: str,
+        external_id: str,
+    ) -> ProjectionRecord | None:
+        matches = [
+            record
+            for (record_tenant, _, _, record_kind), record in self._projections.items()
+            if record_tenant == tenant_id
+            and record_kind == kind
+            and record.external_id == external_id
+        ]
+        if len(matches) > 1:
+            raise ValueError("projection external identity is not unique")
+        return deepcopy(matches[0]) if matches else None
+
     def save_projection(self, projection: ProjectionRecord) -> None:
         key = (
             projection.tenant_id,

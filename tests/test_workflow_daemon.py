@@ -8,10 +8,15 @@ import pytest
 from larkflow.workflow import (
     DevelopmentToolExecutor,
     ExecutionRequest,
+    InboundWorkerLoop,
+    InboundWorkerReport,
     ProjectionWorkerLoop,
     ProjectionWorkerReport,
+    TargetInboundSettings,
     TargetProjectionSettings,
     TargetRuntimeSettings,
+    VerificationWorkerLoop,
+    VerificationWorkerReport,
     WorkflowWorkerLoop,
     WorkflowWorkerReport,
     WorkerLoopSettings,
@@ -114,6 +119,48 @@ def test_projection_loop_uses_the_same_bounded_backoff_contract():
     assert summary.published == 1
 
 
+def test_inbound_loop_uses_the_same_bounded_backoff_contract():
+    worker = ScriptedWorker(
+        [
+            InboundWorkerReport(),
+            InboundWorkerReport(claimed=1, submitted=1),
+            InboundWorkerReport(),
+        ]
+    )
+    stop = RecordingStop(stop_after_waits=2)
+
+    summary = InboundWorkerLoop(
+        worker,
+        settings=WorkerLoopSettings(0.25, 1.0),
+    ).run(stop)
+
+    assert stop.waits == [0.25, 0.25]
+    assert summary.ticks == 3
+    assert summary.claimed == 1
+    assert summary.submitted == 1
+
+
+def test_verification_loop_uses_the_same_bounded_backoff_contract():
+    worker = ScriptedWorker(
+        [
+            VerificationWorkerReport(),
+            VerificationWorkerReport(claimed=1, verified=1),
+            VerificationWorkerReport(),
+        ]
+    )
+    stop = RecordingStop(stop_after_waits=2)
+
+    summary = VerificationWorkerLoop(
+        worker,
+        settings=WorkerLoopSettings(0.25, 1.0),
+    ).run(stop)
+
+    assert stop.waits == [0.25, 0.25]
+    assert summary.ticks == 3
+    assert summary.claimed == 1
+    assert summary.verified == 1
+
+
 def request(*, kind="development.echo", args=None, executor="tool"):
     return ExecutionRequest(
         tenant_id="tenant_dev",
@@ -203,6 +250,31 @@ def test_projection_settings_have_independent_claim_and_retry_controls(monkeypat
     )
 
     assert settings.worker_id == "host-a:123:projection"
+    assert settings.claim_ttl == timedelta(seconds=60)
+    assert settings.claim_limit == 7
+    assert settings.retry_base == timedelta(seconds=2)
+    assert settings.retry_max == timedelta(seconds=30)
+    assert settings.loop == WorkerLoopSettings(0.5, 2.0)
+
+
+def test_inbound_settings_have_independent_claim_and_retry_controls(monkeypatch):
+    monkeypatch.setattr("larkflow.workflow.config.socket.gethostname", lambda: "host-a")
+    monkeypatch.setattr("larkflow.workflow.config.os.getpid", lambda: 123)
+
+    settings = TargetInboundSettings.from_environ(
+        {
+            "LARKFLOW_TARGET_DSN": "postgresql:///larkflow_target_dev",
+            "LARKFLOW_TARGET_TENANT": "dev",
+            "LARKFLOW_TARGET_INBOUND_CLAIM_TTL_SECONDS": "60",
+            "LARKFLOW_TARGET_INBOUND_CLAIM_LIMIT": "7",
+            "LARKFLOW_TARGET_INBOUND_RETRY_BASE_SECONDS": "2",
+            "LARKFLOW_TARGET_INBOUND_RETRY_MAX_SECONDS": "30",
+            "LARKFLOW_TARGET_INBOUND_IDLE_MIN_SECONDS": "0.5",
+            "LARKFLOW_TARGET_INBOUND_IDLE_MAX_SECONDS": "2",
+        }
+    )
+
+    assert settings.worker_id == "host-a:123:inbound"
     assert settings.claim_ttl == timedelta(seconds=60)
     assert settings.claim_limit == 7
     assert settings.retry_base == timedelta(seconds=2)

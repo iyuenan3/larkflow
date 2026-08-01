@@ -16,12 +16,16 @@ from larkflow.workflow import (
     ExecutionRequest,
     ExecutionResult,
     ExecutorKind,
+    ExternalTaskState,
     InstanceSnapshot,
     InstanceStatus,
+    InvalidInboxClaimError,
     NodeRunner,
     NodeSpec,
+    PostgresWorkflowInbox,
     PostgresWorkflowRepository,
     ProjectionRecord,
+    TaskCompletionSignal,
     WorkflowService,
     WorkflowWorker,
     apply_migrations,
@@ -213,6 +217,86 @@ def test_postgres_round_trip_audit_outbox_and_optimistic_concurrency():
                 )
 
 
+def test_postgres_inbox_dedupes_and_allows_only_one_competing_claim():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_inbox_{suffix}"
+    event = TaskCompletionSignal(
+        id=f"event_{suffix}",
+        tenant_id=tenant_id,
+        task_guid=f"task_{suffix}",
+        event_types=("task_completed_update",),
+        occurred_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        received_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+    )
+    inbox = PostgresWorkflowInbox(connection_factory)
+    assert inbox.append_inbox(event) is True
+    assert inbox.append_inbox(event) is False
+
+    def verify_claim(worker_id):
+        return inbox.claim_inbox_verification(
+            tenant_id,
+            worker_id=worker_id,
+            now=datetime(2026, 8, 1, 10, 1, tzinfo=timezone.utc),
+            limit=1,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        verification_claims = list(
+            pool.map(verify_claim, ("verification_1", "verification_2"))
+        )
+    assert sorted(len(items) for items in verification_claims) == [0, 1]
+    verification = next(items[0] for items in verification_claims if items)
+    inbox.mark_inbox_verified(
+        tenant_id,
+        event.id,
+        claim_token=verification.claim_token,
+        task_state=ExternalTaskState(
+            guid=event.task_guid,
+            status="done",
+            mode=1,
+            completed_at="1785585600000",
+            source=6,
+            extra="binding",
+            assignee_ids=("person_owner",),
+            completed_assignee_ids=("person_owner",),
+        ),
+        now=datetime(2026, 8, 1, 10, 1, tzinfo=timezone.utc),
+    )
+
+    def claim(worker_id):
+        return inbox.claim_inbox(
+            tenant_id,
+            worker_id=worker_id,
+            now=datetime(2026, 8, 1, 10, 1, tzinfo=timezone.utc),
+            limit=1,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        claims = list(pool.map(claim, ("inbound_1", "inbound_2")))
+    assert sorted(len(items) for items in claims) == [0, 1]
+    claimed = next(items[0] for items in claims if items)
+    assert claimed.task_state is not None
+    with pytest.raises(InvalidInboxClaimError):
+        inbox.mark_inbox_processed(
+            tenant_id,
+            event.id,
+            claim_token="wrong",
+            outcome="submitted:human_node",
+            now=datetime(2026, 8, 1, 10, 2, tzinfo=timezone.utc),
+        )
+    inbox.mark_inbox_processed(
+        tenant_id,
+        event.id,
+        claim_token=claimed.claim_token,
+        outcome="submitted:human_node",
+        now=datetime(2026, 8, 1, 10, 2, tzinfo=timezone.utc),
+    )
+    assert claim("inbound_3") == ()
+
+
 def test_postgres_worker_recovers_an_expired_automated_claim():
     assert POSTGRES_DSN is not None
     connection_factory = postgres_connection_factory(POSTGRES_DSN)
@@ -391,3 +475,4 @@ def test_postgres_allows_only_one_worker_to_claim_the_same_node():
             (tenant_id, instance_id),
         ).fetchone()["count"]
     assert activation_count == 1
+    PostgresWorkflowInbox,

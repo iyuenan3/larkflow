@@ -409,10 +409,28 @@ def _cmd_serve(ns, factory, server_factory) -> int:
     try:
         server = server_factory(factory(ns),
                                 event_keys=ns.event_key or list(DEFAULT_EVENT_KEYS),
-                                identity=ns.identity, profile=ns.profile)
+                                identity=ns.identity, profile=ns.profile,
+                                event_observers=_target_event_observers())
         return server.serve_forever()
     finally:
         lock.release()
+
+
+def _target_event_observers():
+    dsn = env("LARKFLOW_TARGET_INBOX_DSN")
+    tenant_id = env("LARKFLOW_TARGET_TENANT")
+    if not dsn and not tenant_id:
+        return ()
+    if not dsn or not tenant_id:
+        raise RuntimeError(
+            "LARKFLOW_TARGET_INBOX_DSN and LARKFLOW_TARGET_TENANT must be set together"
+        )
+    from .workflow.inbound import TaskEventInboxBridge
+    from .workflow.migrate import postgres_connection_factory
+    from .workflow.postgres import PostgresWorkflowInbox
+
+    inbox = PostgresWorkflowInbox(postgres_connection_factory(dsn))
+    return (TaskEventInboxBridge(inbox, tenant_id=tenant_id),)
 
 
 def _cmd_start(ns, factory, server_factory) -> int:

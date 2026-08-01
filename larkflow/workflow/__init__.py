@@ -21,14 +21,39 @@ from .migrate import (
     postgres_connection_factory,
     verify_migrations,
 )
-from .config import TargetProjectionSettings, TargetRuntimeSettings
+from .config import (
+    TargetInboundSettings,
+    TargetProjectionSettings,
+    TargetRuntimeSettings,
+)
 from .daemon import (
     WorkerLoopSettings,
     WorkerLoopSummary,
     WorkflowWorkerLoop,
 )
 from .executors import DevelopmentToolExecutor
-from .feishu import CliFeishuTaskProjection
+from .feishu import CliFeishuTaskProjection, CliFeishuTaskReader
+from .inbound import (
+    ExternalTaskState,
+    InboxClaim,
+    InboxRecord,
+    InboxStatus,
+    InboundWorkerReport,
+    InMemoryWorkflowInbox,
+    InvalidInboxClaimError,
+    TaskCompletionSignal,
+    TaskEventInboxBridge,
+    TaskVerificationWorker,
+    VerificationWorkerReport,
+    WorkflowInboundWorker,
+    WorkflowInboxStore,
+)
+from .inbound_daemon import (
+    InboundLoopSummary,
+    InboundWorkerLoop,
+    VerificationLoopSummary,
+    VerificationWorkerLoop,
+)
 from .model import (
     AttemptStatus,
     ExecutorKind,
@@ -53,7 +78,7 @@ from .repository import (
     ProjectionStore,
     WorkflowRepository,
 )
-from .postgres import PostgresWorkflowRepository
+from .postgres import PostgresWorkflowInbox, PostgresWorkflowRepository
 from .projection import (
     ExternalTask,
     FEISHU_TASK_KIND,
@@ -92,20 +117,30 @@ __all__ = [
     "ClaimNotExpiredError",
     "ConcurrentUpdateError",
     "CliFeishuTaskProjection",
+    "CliFeishuTaskReader",
     "DevelopmentToolExecutor",
     "ExecutorKind",
     "ExecutionRequest",
     "ExecutionResult",
+    "ExternalTaskState",
     "ExternalTask",
     "FEISHU_TASK_KIND",
     "FrozenDict",
     "GraphValidationError",
+    "InboxClaim",
+    "InboxRecord",
+    "InboxStatus",
+    "InboundLoopSummary",
+    "InboundWorkerLoop",
+    "InboundWorkerReport",
+    "InMemoryWorkflowInbox",
     "InMemoryWorkflowRepository",
     "InstanceAlreadyExistsError",
     "InstanceNotFoundError",
     "InstanceSnapshot",
     "InstanceStatus",
     "InvalidClaimError",
+    "InvalidInboxClaimError",
     "InvalidOutboxClaimError",
     "NodeActivation",
     "NodeAttempt",
@@ -118,6 +153,7 @@ __all__ = [
     "OutboxRecord",
     "OutboxStatus",
     "OutboxStore",
+    "PostgresWorkflowInbox",
     "PostgresWorkflowRepository",
     "ProjectionLoopSummary",
     "ProjectionRecord",
@@ -128,18 +164,27 @@ __all__ = [
     "QualityVerdict",
     "Scheduler",
     "StaleAttemptError",
+    "TargetInboundSettings",
     "TargetProjectionSettings",
     "TargetRuntimeSettings",
     "TaskProjectionAdapter",
     "TaskProjectionRequest",
+    "TaskCompletionSignal",
+    "TaskEventInboxBridge",
+    "TaskVerificationWorker",
     "TransitionError",
     "WorkflowInstance",
+    "WorkflowInboundWorker",
+    "WorkflowInboxStore",
     "WorkflowRepository",
     "WorkflowProjectionWorker",
     "WorkflowService",
     "WorkflowWorker",
     "WorkflowWorkerLoop",
     "WorkflowWorkerReport",
+    "VerificationLoopSummary",
+    "VerificationWorkerLoop",
+    "VerificationWorkerReport",
     "WorkerLoopSettings",
     "WorkerLoopSummary",
     "apply_migrations",

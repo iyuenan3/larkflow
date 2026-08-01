@@ -108,19 +108,26 @@ class LarkFlowServer:
     def __init__(self, service, *, event_keys=DEFAULT_EVENT_KEYS, pump_factory=EventPump,
                  on_error=None, identity: str = "bot", profile: str | None = None,
                  signals=_signal, log=None, max_errors: int = 200,
-                 sweep_seconds: float | None = None):
+                 sweep_seconds: float | None = None, event_observers=()):
         self.service = service
         self.event_keys = list(event_keys)
         self.pump_factory = pump_factory
         self.on_error = on_error
         self.identity = identity
         self.profile = profile
+        self.event_observers = tuple(event_observers)
         self.signals = signals
         self.log = log or default_log
         self.pump = None
         self.report: dict = {}
         self.errors: deque = deque(maxlen=max_errors)   # 有界：故障风暴不许把内存吃掉
-        self.stats = {"events": 0, "handled": 0, "skipped": 0, "errors": 0}
+        self.stats = {
+            "events": 0,
+            "handled": 0,
+            "skipped": 0,
+            "forwarded": 0,
+            "errors": 0,
+        }
         self._stopped = threading.Event()
         self._stopping = False
         self._clean_exit = True
@@ -231,7 +238,16 @@ class LarkFlowServer:
         它会 on_error 出来并继续下一条。两处都兜会让故障计数与日志各说各话。
         """
         self._bump("events")
-        result = self.service.resume_from_event(normalize_event(key, payload)) or {}
+        event = normalize_event(key, payload)
+        for observer in self.event_observers:
+            try:
+                forwarded = observer(key, payload)
+            except Exception as exc:
+                self._error(f"event_observer:{type(observer).__name__}", exc)
+                continue
+            if forwarded:
+                self._bump("forwarded")
+        result = self.service.resume_from_event(event) or {}
         if result.get("resumed"):
             self._bump("handled")
         else:
@@ -285,7 +301,7 @@ class LarkFlowServer:
         self._clean_exit = drained
         self.log(f"已停止（{'干净' if drained else '未排空'}）。事件 {self.stats['events']} 条"
                  f"（推进 {self.stats['handled']} / 跳过 {self.stats['skipped']}"
-                 f" / 故障 {self.stats['errors']}）")
+                 f" / 转存 {self.stats['forwarded']} / 故障 {self.stats['errors']}）")
         return drained
 
     def _close_db(self) -> None:

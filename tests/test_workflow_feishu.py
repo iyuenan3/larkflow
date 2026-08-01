@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import pytest
 
-from larkflow.workflow import CliFeishuTaskProjection, TaskProjectionRequest
+from larkflow.workflow import (
+    CliFeishuTaskProjection,
+    CliFeishuTaskReader,
+    TaskProjectionRequest,
+)
 
 
 def request() -> TaskProjectionRequest:
@@ -25,33 +29,36 @@ def test_cli_adapter_uses_guid_and_stable_idempotency_key():
 
     def runner(argv):
         calls.append(argv)
-        return {"guid": "task-guid", "url": "https://example.invalid/task"}
+        return {"task": {"guid": "task-guid", "url": "https://example.invalid/task"}}
 
     adapter = CliFeishuTaskProjection(profile="dev", runner=runner)
     task = adapter.create_task(request())
 
     assert task.guid == "task-guid"
     assert task.url == "https://example.invalid/task"
-    assert calls == [
-        [
-            "lark-cli",
-            "--profile",
-            "dev",
-            "task",
-            "+create",
-            "--summary",
-            "Approve brief",
-            "--description",
-            "Review and approve",
-            "--assignee",
-            "person_1",
-            "--idempotency-key",
-            "lf-idempotency",
-            "--as",
-            "bot",
-            "--json",
-        ]
+    argv = calls[0]
+    assert argv[:8] == [
+        "lark-cli",
+        "--profile",
+        "dev",
+        "task",
+        "tasks",
+        "create",
+        "--user-id-type",
+        "open_id",
     ]
+    assert argv[-3:] == ["--as", "bot", "--json"]
+    payload = __import__("json").loads(argv[argv.index("--data") + 1])
+    assert payload == {
+        "summary": "Approve brief",
+        "description": "Review and approve",
+        "client_token": "lf-idempotency",
+        "extra": "lf-idempotency",
+        "mode": 1,
+        "members": [
+            {"id": "person_1", "type": "user", "role": "assignee"}
+        ],
+    }
 
 
 def test_cli_adapter_completes_by_task_guid():
@@ -80,3 +87,42 @@ def test_cli_adapter_rejects_create_without_guid():
 
     with pytest.raises(ValueError, match="no guid"):
         adapter.create_task(request())
+
+
+def test_cli_task_reader_extracts_only_authorization_fields():
+    calls = []
+    reader = CliFeishuTaskReader(
+        profile="dev",
+        runner=lambda argv: calls.append(argv) or {
+            "task": {
+                "guid": "task-guid",
+                "status": "done",
+                "mode": 1,
+                "completed_at": "123",
+                "source": 6,
+                "extra": "lf-idempotency",
+                "members": [
+                    {"id": "person_1", "type": "user", "role": "assignee"},
+                    {"id": "person_2", "type": "user", "role": "follower"},
+                ],
+                "assignee_related": [
+                    {"id": "person_1", "completed_at": "123"}
+                ],
+            }
+        },
+    )
+
+    task = reader.get_task("task-guid")
+
+    assert task.assignee_ids == ("person_1",)
+    assert task.completed_assignee_ids == ("person_1",)
+    assert task.extra == "lf-idempotency"
+    assert calls[0][-7:] == [
+        "--task-guid",
+        "task-guid",
+        "--user-id-type",
+        "open_id",
+        "--as",
+        "bot",
+        "--json",
+    ]

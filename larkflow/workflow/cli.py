@@ -17,13 +17,19 @@ import yaml
 
 from larkflow.config import load_dotenv
 
-from .config import TargetProjectionSettings, TargetRuntimeSettings
+from .config import (
+    TargetInboundSettings,
+    TargetProjectionSettings,
+    TargetRuntimeSettings,
+)
 from .daemon import WorkflowWorkerLoop
 from .executors import DevelopmentToolExecutor
-from .feishu import CliFeishuTaskProjection
+from .feishu import CliFeishuTaskProjection, CliFeishuTaskReader
+from .inbound import TaskVerificationWorker, WorkflowInboundWorker
+from .inbound_daemon import InboundWorkerLoop, VerificationWorkerLoop
 from .migrate import apply_migrations, postgres_connection_factory, verify_migrations
 from .model import ExecutorKind, QualityResult, QualityVerdict
-from .postgres import PostgresWorkflowRepository
+from .postgres import PostgresWorkflowInbox, PostgresWorkflowRepository
 from .projection import WorkflowProjectionWorker
 from .projection_daemon import ProjectionWorkerLoop
 from .runner import NodeRunner
@@ -54,6 +60,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--projection-worker-id",
         default=os.environ.get("LARKFLOW_TARGET_PROJECTION_WORKER_ID"),
+    )
+    parser.add_argument(
+        "--inbound-worker-id",
+        default=os.environ.get("LARKFLOW_TARGET_INBOUND_WORKER_ID"),
     )
     parser.add_argument(
         "--lark-profile",
@@ -98,6 +108,16 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("serve", help="run worker ticks until SIGINT or SIGTERM")
     commands.add_parser("project-once", help="run one Feishu projection tick")
     commands.add_parser("project", help="project to Feishu until SIGINT or SIGTERM")
+    commands.add_parser("inbound-once", help="run one Feishu inbound event tick")
+    commands.add_parser("inbound", help="consume durable Feishu events until stopped")
+    commands.add_parser(
+        "verify-inbound-once",
+        help="run one credential-side Task verification tick",
+    )
+    commands.add_parser(
+        "verify-inbound",
+        help="verify durable Task events until stopped",
+    )
     return parser
 
 
@@ -138,7 +158,12 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
 
     tenant_id = _required(namespace.tenant, "--tenant or LARKFLOW_TARGET_TENANT")
     projection_command = namespace.command in {"project-once", "project"}
-    if projection_command:
+    inbound_command = namespace.command in {"inbound-once", "inbound"}
+    verification_command = namespace.command in {
+        "verify-inbound-once",
+        "verify-inbound",
+    }
+    if projection_command or inbound_command or verification_command:
         verify_migrations(connection_factory)
         applied = ()
     else:
@@ -205,6 +230,104 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             quality_result=quality,
         )
         log("human_result_submitted", _instance_payload(instance))
+        return 0
+
+    if inbound_command:
+        settings = TargetInboundSettings.from_environ(
+            dsn=dsn,
+            tenant_id=tenant_id,
+            worker_id=namespace.inbound_worker_id,
+        )
+        inbox = PostgresWorkflowInbox(connection_factory)
+        worker = WorkflowInboundWorker(
+            service,
+            repository,
+            repository,
+            inbox,
+            tenant_id=settings.tenant_id,
+            worker_id=settings.worker_id,
+            claim_limit=settings.claim_limit,
+            claim_ttl=settings.claim_ttl,
+            retry_base=settings.retry_base,
+            retry_max=settings.retry_max,
+        )
+        if namespace.command == "inbound-once":
+            report = worker.run_once()
+            log("inbound_tick", InboundWorkerLoop._report_fields(report))
+            return int(bool(report.errors))
+
+        stop_event = Event()
+        _install_signal_handlers(stop_event, log, prefix="inbound")
+        log(
+            "inbound_started",
+            {
+                "tenant_id": settings.tenant_id,
+                "worker_id": settings.worker_id,
+                "claim_ttl_seconds": settings.claim_ttl.total_seconds(),
+                "claim_limit": settings.claim_limit,
+                "retry_base_seconds": settings.retry_base.total_seconds(),
+                "retry_max_seconds": settings.retry_max.total_seconds(),
+                "idle_min_seconds": settings.loop.idle_min_seconds,
+                "idle_max_seconds": settings.loop.idle_max_seconds,
+            },
+        )
+        InboundWorkerLoop(worker, settings=settings.loop, log=log).run(stop_event)
+        return 0
+
+    if verification_command:
+        settings = TargetInboundSettings.from_environ(
+            dsn=dsn,
+            tenant_id=tenant_id,
+            worker_id=namespace.inbound_worker_id,
+        )
+        inbox = PostgresWorkflowInbox(connection_factory)
+        reader = CliFeishuTaskReader(
+            profile=_required(
+                namespace.lark_profile,
+                "--lark-profile or LARKFLOW_TARGET_LARK_PROFILE",
+            ),
+            identity=namespace.lark_identity,
+        )
+        worker = TaskVerificationWorker(
+            inbox,
+            reader,
+            tenant_id=settings.tenant_id,
+            worker_id=settings.worker_id,
+            claim_limit=settings.claim_limit,
+            claim_ttl=settings.claim_ttl,
+            retry_base=settings.retry_base,
+            retry_max=settings.retry_max,
+        )
+        if namespace.command == "verify-inbound-once":
+            report = worker.run_once()
+            log(
+                "inbound_verification_tick",
+                VerificationWorkerLoop._report_fields(report),
+            )
+            return int(bool(report.errors))
+
+        stop_event = Event()
+        _install_signal_handlers(stop_event, log, prefix="inbound_verification")
+        log(
+            "inbound_verification_started",
+            {
+                "tenant_id": settings.tenant_id,
+                "worker_id": settings.worker_id,
+                "claim_ttl_seconds": settings.claim_ttl.total_seconds(),
+                "claim_limit": settings.claim_limit,
+                "retry_base_seconds": settings.retry_base.total_seconds(),
+                "retry_max_seconds": settings.retry_max.total_seconds(),
+                "idle_min_seconds": settings.loop.idle_min_seconds,
+                "idle_max_seconds": settings.loop.idle_max_seconds,
+                "lark_profile": namespace.lark_profile,
+                "lark_identity": namespace.lark_identity,
+            },
+        )
+        VerificationWorkerLoop(
+            worker,
+            settings=settings.loop,
+            log=log,
+        ).run(stop_event)
         return 0
 
     if projection_command:
