@@ -6,10 +6,23 @@
 
 ## Target PostgreSQL 开发验证状态（2026-08-01）
 
-- `alicloud-sh` 已安装并保留 PostgreSQL 14 服务，用作后续 Target adapter 开发验证，不是生产数据库。
-- 本轮用一次性数据库与角色运行 `tests/test_workflow_postgres.py`，验证 migration 重入、聚合往返、乐观并发、审计追加保护、outbox 认领与发布。测试通过后已删除数据库与角色，未保留业务数据或凭证。
-- 测试通过本机 SSH 隧道连接，没有把新仓储接入 `larkflow@dev`。该 systemd 服务仍运行 legacy SQLite 路径，两套持久化没有混接。
-- 验证结束后 PostgreSQL 与 `larkflow@dev` 均为 active，宿主约有 993 MB available memory。下一步仍需常驻 worker、生产数据库角色、备份与升级 runbook，不能把本次验证描述为 Target 已部署。
+- `alicloud-sh` 的 PostgreSQL 14.23 保持 active，`listen_addresses=localhost`，5432 只监听 `127.0.0.1`。宿主系统盘约有 33 GB 可用，内存约有 993 MB available。该数据库是自建 Target 开发环境，不是生产数据库，也不具备托管数据库的高可用能力。
+- 一次性数据库与最小权限密码角色通过本机 SSH 隧道运行完整 `tests/test_workflow_postgres.py`，3 项全部通过：migration 重入、聚合与 outbox 往返、两个真实连接竞争同一节点、过期 claim 恢复。测试前先跑单 Worker 基线；完成后数据库与角色均已删除，并从系统目录回读为 0。
+- 长期开发库为 `larkflow_target_dev`，所有者是无密码角色 `lf_target_dev`。同名 Unix 系统用户通过本机 Unix socket 的 peer authentication 连接；角色不能超级管理、建库、建角色、复制或绕过 RLS，`PUBLIC` 没有数据库连接权。数据库默认 `timezone=UTC`、`statement_timeout=30s`、`lock_timeout=5s`、`idle_in_transaction_session_timeout=60s`。
+- 长期开发库已应用 `0001_workflow` 与 `0002_runtime_claim_owner`，包含 10 张 workflow 表。新仓储仍未接入常驻服务，库内没有业务实例。
+- `larkflow-target-backup.timer` 每天北京时间 03:20 后随机延迟不超过 15 分钟执行 custom-format `pg_dump`，本机保留约 7 天。备份目录权限为 `0700 lf_target_dev:lf_target_dev`，备份文件为 `0600`，backup service 使用 systemd 文件系统与权限沙箱。最新备份已按下述 ACL 流程恢复到一次性新库，回读两份 migration、10 张表、`lf_target_dev` 表所有权和收紧的 schema 权限后删除恢复库。
+- 备份目前只在同一块系统盘，能处理误操作和局部数据损坏，不能处理整机或云盘丢失，也没有 PITR。进入生产前必须增加异机或对象存储副本、恢复演练、容量告警和 PostgreSQL 升级流程。
+- `larkflow@dev` 始终保持 active，仍运行 legacy SQLite 路径；Target PostgreSQL 与 legacy 服务没有混接。
+
+### Target PostgreSQL 运维入口
+
+- 应用身份：systemd 服务以 `lf_target_dev` 运行，通过 `postgresql:///larkflow_target_dev` 连接，不配置数据库密码，不改用 TCP。
+- 手工只读连接：`sudo -u lf_target_dev env --chdir=/ psql -X --dbname=larkflow_target_dev`。
+- migration：由目标应用启动入口调用 package-data migration runner。长期库的初始两份 migration 已落地，后续不得手工改 schema 后跳过 migration ledger。
+- 立即备份：`sudo systemctl start larkflow-target-backup.service`；结果看 `systemctl show larkflow-target-backup.service --property=Result,ExecMainStatus`。
+- 定时器：`systemctl show larkflow-target-backup.timer --property=ActiveState,UnitFileState,NextElapseUSecRealtime`。
+- 恢复：先由 postgres 管理员创建目标库，重建 UTC 与三项 timeout，撤销 `PUBLIC` 对 `public` schema 的 CREATE，并授予 `lf_target_dev` USAGE 与 CREATE；再以 `lf_target_dev` 执行 `pg_restore --exit-on-error --single-transaction --no-acl`。不能直接让应用角色恢复 ACL，`public` schema 不归它所有，pg_restore 只会 warning，目标库会保留默认 PUBLIC CREATE。最终验收同时回读 migration、表所有者、ACL、时区与 timeout。
+- 仓库资产：`deploy/larkflow-target-backup`、`deploy/larkflow-target-backup.service`、`deploy/larkflow-target-backup.timer`。服务器安装位置分别是 `/usr/local/sbin/` 与 `/etc/systemd/system/`。
 
 ✅ **已真部署**（alicloud-sh，2026-07-27）。ADR-007 从立项欠到现在的那笔债还上了：租户 `dev` 以 systemd 常驻，真飞书凭证，**入站长连接已建立**：
 

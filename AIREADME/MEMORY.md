@@ -84,3 +84,9 @@
 **避免**
 
 以后每份文档必须标 Target 或 As-built。不能因为某个机制原型真栈跑通，就把它写成目标产品架构；也不能因为目标 PRD 已定，就在 SPEC 里暗示已经实现。
+
+## 2026-08-01 · 应用角色直接 pg_restore 不会可靠恢复 public schema ACL
+
+- 现象（已复现）：以 `lf_target_dev` 把 custom-format 备份恢复到新库时，业务表、migration 和触发器都成功，但 pg_restore 只对 `public` schema ACL 输出 warning 并以 0 退出；回读发现 PUBLIC 仍有 CREATE 权限。只看退出码会把权限回退当成恢复成功。
+- 根因（已复现）：目标库的 `public` schema 归管理员所有，应用角色不能撤销其默认 ACL。dump 含 ACL 不等于应用角色有权在新库重放 ACL。
+- 结论：恢复前由 postgres 管理员创建数据库并预置 schema ACL，再以应用角色执行 `pg_restore --no-acl`。恢复验收必须回读 migration、表所有者、PUBLIC CREATE=false 和应用角色 CREATE=true，不能只看 pg_restore 退出码或表数量。

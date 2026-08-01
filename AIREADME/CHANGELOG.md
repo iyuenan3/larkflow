@@ -1,5 +1,16 @@
 # CHANGELOG · larkflow
 
+## v0.12.0-draft · 2026-08-01 · Runtime Worker、认领恢复与 Target 开发数据库（ADR-055..056）
+
+- Added：持久化 runnable scan、单步 `WorkflowWorker`、`AutomatedExecutor` Port 与不可变执行请求；请求包含已提交的实例输入、依赖结果、work 和 tenant-scoped Attempt 幂等键。
+- Added：自动节点认领记录 Worker 身份；过期恢复保留同一 Attempt，轮换 token、Worker 与节点版本，旧 Worker 的迟到结果被拒绝。
+- Added：`0002_runtime_claim_owner` migration，wheel 已验证同时包含 Runtime 模块与两份 SQL migration。
+- Added：`alicloud-sh` 长期 Target 开发库、本机 peer authentication、每日 custom-format 备份、约 7 天保留与 systemd 沙箱；仓库增加对应 backup script、service 和 timer。
+- Changed：同步 Worker 每个 tick 最多认领一个自动节点；Human 节点不占自动容量；外部调用始终发生在 claim 提交之后。
+- Verified：完整离线套件 547 项通过；一次性 PostgreSQL 14 数据库的 3 项集成测试全部通过，覆盖 migration、聚合与 outbox、双 Worker 竞争、过期 claim 恢复；测试数据库与角色回读为 0。
+- Verified：长期开发库已应用两份 migration；最新备份按管理员重建数据库默认值与 ACL、应用角色 `--no-acl` 的流程真实恢复到一次性新库，并回读 10 张 workflow 表、正确表所有者、收紧的 schema 权限、UTC 与三项 timeout，恢复库随后删除。
+- Boundary：Target 常驻运行循环、真实 executor、Projection worker 和服务接线仍未实现；本机备份与数据库位于同一故障域，不构成生产级灾难恢复。
+
 ## v0.11.0-draft · 2026-08-01 · PostgreSQL 事务持久化与 outbox（ADR-054）
 
 - Added：PostgreSQL 14 第一版 schema，覆盖 Template、TemplateVersion、Instance、NodeInstance、Dependency、Attempt、Projection、Audit 与 Outbox；TemplateVersion 不可变，Audit 只追加。

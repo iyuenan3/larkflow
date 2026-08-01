@@ -410,3 +410,21 @@
 - Boundary：Human 激活与所有节点终态写 outbox 请求投影同步。Agent 和 Tool 激活不进入 outbox，而由应用层拿到已提交的 NodeActivation 后立即调用 executor；否则排队延迟会消耗 NodeAttempt 自己的短时 claim，任务出队时可能已经过期。执行结果仍必须带当前 Attempt、节点版本和 claim token 回到服务端。
 - Alternatives(否决)：在数据库事务中直接调用飞书、LLM 或 Tool；用飞书对象状态作为提交日志；当前规模提前引入 Kafka 或 CDC；把 Agent 与 Tool 执行激活也放入通用投影 outbox。
 - Tradeoff：Snapshot 与规范化运行态存在受控重复，换取实例历史自包含和高频状态约束。当前只有 Instance 聚合仓储与 outbox 存储，还没有 Template Service、Projection worker、executor worker、生产备份或 schema 升级 runbook；真实 PostgreSQL 14 验证证明 adapter 路径可执行，不等于生产装配完成。
+
+## ADR-055 · 2026-08-01 · 自动执行使用可恢复租约与稳定 Attempt 幂等键
+
+- **Status：Accepted · As-built foundation。**
+- Problem：Agent 或 Tool 节点的 claim 已提交后，Worker 可能在调用 executor 前后进程退出。没有恢复扫描时节点会永久停在 running；恢复时直接创建新 Attempt 又会把同一次逻辑执行拆成两段历史，并让外部幂等失去稳定身份。
+- Constraint：数据库事务不能跨越外部 I/O；迟到结果不得覆盖新认领；Human 节点不占自动执行容量；同步 Worker 不能一次签发多个租约再串行消耗；executor 必须面对 at-least-once 调用。
+- Decision：仓储从持久化状态扫描 ready 节点和已到期自动认领。单步 Runtime Worker 每次最多认领一个自动节点，先提交 `claimed_by + claim_token + claim_expires_at`，再调用 `AutomatedExecutor`。到期恢复保留同一 Attempt，轮换 token、Worker 和节点版本；旧 Worker 的版本、token 或身份任一不匹配即拒绝。外部幂等键固定为 `tenant_id:attempt_id`，恢复前后不变。
+- Alternatives(否决)：把 executor 调用放进数据库事务；把自动执行激活放入通用 projection outbox；恢复时创建新 Attempt；只依赖进程内队列或 Worker 心跳判断失联。
+- Tradeoff：自动执行明确是 at-least-once，executor adapter 必须实现幂等。当前同步 Worker 只提供一个 tick，没有常驻循环、退避或业务重试预算；普通 executor 异常会把实例标记 failed，有限重试留给 Phase 2。
+
+## ADR-056 · 2026-08-01 · Target 开发数据库自建在现有 ECS，并限制为本机 peer authentication
+
+- **Status：Accepted · Development deployment。**
+- Problem：当前预算不支持托管 PostgreSQL，但 Target Runtime 需要长期真实数据库继续开发；只保留一次性测试库无法接入后续常驻 Worker。直接复用超级用户、开放公网 5432 或把长期密码写入 env 都会扩大攻击面。
+- Constraint：现有宿主只有 1.6 GB 内存且同时运行 legacy 服务；legacy SQLite 不能停机或混接；凭证不得进入仓库；开发环境必须有可恢复备份，但不能冒充生产高可用。
+- Decision：在 `alicloud-sh` 的 PostgreSQL 14 上建立 `larkflow_target_dev`，由无密码角色与同名 Unix 服务用户通过本机 Unix socket 的 peer authentication 访问。5432 只监听 localhost，撤销 `PUBLIC` 的数据库连接权，并配置 statement、lock 和 idle transaction 超时。每天生成 custom-format 本地备份、保留约 7 天，并用一次性新库完成真实恢复演练。
+- Alternatives(否决)：现在购买 RDS；继续只用临时数据库；让 Target 复用 legacy SQLite；应用使用 postgres 超级用户；保存长期 TCP 密码；把 PostgreSQL 暴露到公网。
+- Tradeoff：省去托管数据库成本并获得可持续开发环境，但数据库、备份和宿主处于同一故障域，没有异机副本、PITR、自动故障转移或托管升级。该方案只适用于当前开发阶段，生产前必须补异机备份、恢复周期、容量告警与升级流程。
