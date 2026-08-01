@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.17.0-draft · 2026-08-01 · Target 模板生命周期与正式草稿入口（ADR-061）
+
+- Added：`TemplateService`、Template aggregate、不可变 `TemplateVersion`、追加型模板审计、独立 aggregate version 乐观并发，以及 PostgreSQL migration `0005_template_lifecycle`。
+- Added：模板创建、追加版本、启用、停用、逻辑删除、查询、从模板创建冻结草稿和 Owner 只读预览 CLI。模板参数和 `owner_role` 在实例化时解析，Snapshot 保存 `template_version_id` 与 `locked`。
+- Changed：`target_agent_review.yaml` 从手填 Instance 和人员 ID 的样例改为可发布的 v0.2 Target 模板。启用模板固定使用最新版本，修改路径为 `disable -> append version -> enable`。
+- Security：模板拒绝真实人员 ID、模型供应商配置和未知字段；尚未实现的语义不能静默进入版本后在实例化时丢失。已启用版本不可原地修改，草稿预览不写状态或审计，确认启动仍是独立的人类命令。
+- Verified：完整离线套件 `607 passed, 6 skipped`。一次性 PostgreSQL 14 数据库验证五份 migration 重入、模板并发启用恰好一胜一冲突、不可变触发器、模板审计和冻结实例外键，随后删除测试库与脚本。
+- Deployment：部署前备份成功；最终 wheel SHA-256 为 `8fb89a37e11fed5215a8b0177d262216ab3f13a89508929427ef1c8d6601dce3`，前一测试件与功能前 wheel 均作为受限回滚件保留，四个 Target 服务回读 active。正式 CLI 已用合成输入创建、预览并确认模板实例，首个 Human Task 已投影并等待处理。
+
 ## v0.16.1-draft · 2026-08-01 · Target Agent 真实三节点闭环与内容边界收口
 
 - Fixed：飞书 Human 完成只向下游提交 `{confirmed: true}`；Task GUID、完成时间和事件元数据继续保存在 Projection、Inbox 与审计边界，不再混入 Agent 业务输入。

@@ -4,7 +4,7 @@
 >
 > 文档状态：2026-08-01 Phase 1 中央工作流基础实现。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
-> last-synced: 04379cd · 2026-08-01
+> last-synced: 18cf101 · 2026-08-01
 
 ## 阅读顺序
 
@@ -23,15 +23,15 @@
 | CORE | ✅ | Target 身份、简化边界和不变量 |
 | PRODUCT_STRATEGY | ✅ | 范围收敛取舍，明确未做市场验证 |
 | PRD | ✅ | Target 单层 DAG MVP 功能契约 |
-| DAG_TEMPLATE_SPEC | ⚑ | Target Draft，v0.2 模板可选、草稿确认、Owner、编辑和 Attempt |
-| ARCHITECTURE | ✅ | Target 模块化单体、事务仓储、Runtime / Projection / Inbound Worker、Agent adapter 和剩余差距 |
+| DAG_TEMPLATE_SPEC | ⚑ | v0.2 模板生命周期、实例化与草稿预览已实现，编辑和重启仍是 Target |
+| ARCHITECTURE | ✅ | Target 模块化单体、Template / Instance 事务仓储、四类 Worker、Agent adapter 和剩余差距 |
 | RELATIONS | ✅ | Target 飞书、中央 lark-cli、Node Runner、Agent / Projection 与 LangGraph 边界 |
-| ROADMAP | ✅ | Phase 0 已完成，Phase 1 已落内核、持久化、Runtime、Agent、Task Projection 与 Task 入站 |
-| SPEC | ✅ | As-built Python 引擎、legacy YAML 与 CLI 契约 |
-| DEPLOYMENT | ✅ | Legacy ECS 与 Target Runtime / Projection / Inbound、PostgreSQL、备份和恢复实录 |
+| ROADMAP | ✅ | Phase 0 已完成，Phase 1 已落模板、内核、持久化、Runtime、Agent、Task Projection 与 Task 入站 |
+| SPEC | ✅ | As-built Python 引擎、legacy 契约与 Target 模板 CLI / Task 入站 |
+| DEPLOYMENT | ✅ | Legacy ECS 与 Target Template / Runtime / Projection / Inbound、PostgreSQL、备份和恢复实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
 | DECISIONS | ✅ | Append-only ADR 历史，新 ADR 显式 supersede 旧范围 |
-| CHANGELOG | ✅ | Append-only 已实现变更，最新为 Target LLM Agent 执行切片 |
+| CHANGELOG | ✅ | Append-only 已实现变更，最新为 Target 模板生命周期与正式草稿入口 |
 | MEMORY | ⚑ | Append-only 经验，仍含待真实运行补全的语义占位 |
 
 ## 按任务读取

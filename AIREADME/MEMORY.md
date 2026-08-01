@@ -150,3 +150,9 @@
 - 现象（真实链路）：一条 `task_completed_update` 进入 Inbox 后，Task 详情仍连续返回 `todo` 且没有已完成 assignee。凭据侧重试 9 次均拒绝；后续状态可验证的新事件被正常处理，实例只推进一次。
 - 根因（边界确认）：事件说明完成关系发生过变化，不证明读取时仍满足完成、唯一 Owner 与当前 Attempt 条件。
 - 结论：事件只负责唤醒，不能直接提交 Human 节点。失败事件保留并有界退避；只有服务端详情同时满足绑定、`mode=1`、唯一 assignee、完成状态和完成人时，才写入 verified payload。
+
+## 2026-08-01 · wheel 发布件用目录版本化，不能改 wheel 基名
+
+- 现象（已复现）：把 `larkflow-0.0.1-py3-none-any.whl` 重命名为带短哈希的 `larkflow-0.0.1-7d262a55.whl` 后，pip 在读取内容前直接拒绝，报文件名不是合法 wheel。
+- 根因（已确认）：wheel 基名必须符合标准的 distribution、version、build tag、Python tag、ABI tag 和 platform tag 结构，任意插入短哈希会被解析器当成非法标签。
+- 结论：发布件按 `releases/<短哈希>/larkflow-0.0.1-py3-none-any.whl` 保存，目录表达构建身份，wheel 基名保持标准格式。部署前后都回读完整 SHA-256；回滚件遵循同一规则。

@@ -9,30 +9,33 @@
 - `alicloud-sh` 的 PostgreSQL 14.23 保持 active，`listen_addresses=localhost`，5432 只监听 `127.0.0.1`。宿主系统盘约有 33 GB 可用，内存约有 993 MB available。该数据库是自建 Target 开发环境，不是生产数据库，也不具备托管数据库的高可用能力。
 - 一次性数据库与最小权限密码角色通过本机 SSH 隧道运行完整 `tests/test_workflow_postgres.py`，3 项全部通过：migration 重入、聚合与 outbox 往返、两个真实连接竞争同一节点、过期 claim 恢复。测试前先跑单 Worker 基线；完成后数据库与角色均已删除，并从系统目录回读为 0。
 - 长期开发库为 `larkflow_target_dev`，所有者是无密码角色 `lf_target_dev`。同名 Unix 系统用户通过本机 Unix socket 的 peer authentication 连接；角色不能超级管理、建库、建角色、复制或绕过 RLS，`PUBLIC` 没有数据库连接权。数据库默认 `timezone=UTC`、`statement_timeout=30s`、`lock_timeout=5s`、`idle_in_transaction_session_timeout=60s`。
-- 长期开发库已应用 `0001_workflow`、`0002_runtime_claim_owner`、`0003_inbound_task_events` 与 `0004_inbox_verification`，包含 11 张 workflow 表。Inbox 以飞书 event ID 作为 tenant 内幂等键，分开记录校验阶段与领域处理阶段。
+- 长期开发库已应用 `0001_workflow` 到 `0005_template_lifecycle`。第五份 migration 为 Template aggregate 增加乐观并发版本，并增加不可变模板审计事件。Inbox 以飞书 event ID 作为 tenant 内幂等键，分开记录校验阶段与领域处理阶段。
 - Runtime 使用 `/srv/larkflow/target/venv` 中的 wheel，以 `lf_target_dev` 运行并通过 Unix socket peer authentication 连接。`/etc/larkflow-target.env` 为 `0640 root:lf_target_dev`，systemd unit 为 `0644 root:root`。
-- 包含 `llm.generate` Agent adapter 的 wheel 已安装到 Target 独立虚拟环境，四个 Target 服务已重启并回读 active。`/etc/larkflow-target.env` 已在明确授权下启用开发用 OpenAI 兼容主路由，不配置备用线路；`LLM_TIMEOUT=240`、claim TTL 为 300 秒、安全余量为 30 秒，且关闭环境代理继承。env 保持 `0640 root:lf_target_dev`，路由真值不进入仓库或日志。
+- 包含严格字段校验的 Template Service、正式模板 CLI 和 `llm.generate` Agent adapter wheel 已安装到 Target 独立虚拟环境，SHA-256 为 `8fb89a37e11fed5215a8b0177d262216ab3f13a89508929427ef1c8d6601dce3`，四个 Target 服务已重启并回读 active。`/etc/larkflow-target.env` 已在明确授权下启用开发用 OpenAI 兼容主路由，不配置备用线路；`LLM_TIMEOUT=240`、claim TTL 为 300 秒、安全余量为 30 秒，且关闭环境代理继承。env 保持 `0640 root:lf_target_dev`，路由真值不进入仓库或日志。
+- 部署前备份已回读 `Result=success / ExecMainStatus=0`。最终发布件保存在 `releases/8fb89a37/`，前一测试件与功能前版本保存在 `releases/7d262a55/`、`releases/7ebd6582/`。文件均为 `0640 root:lf_target_dev`，可按相同停服、安装、启动步骤回滚。
 - 真实开发实例已在测试飞书组织完成 `Human -> Agent -> Human`：首个 Human Task 完成后只提交 `{confirmed: true}`，真实模型生成 210 字正文，最终 Human Task 精确展示该正文；第二次人工完成后 Instance 与三个 Node / Attempt 全部为 `done`。验证不代表生产上线。
+- 正式模板 CLI 已用合成输入依次完成模板创建、启用、从模板创建草稿、只读预览和确认。实例 `template_entry_20260801_213749` 保存 `target_agent_review:1` 完整快照，首节点为 `waiting_human` 且只生成一条 Task Projection。该流程仍是开发验证，不含用户业务数据。
 - Projection 使用同一 wheel 和独立 `larkflow-target-projection.service`，以持有测试飞书 profile 的 `lf-dev` 运行，不复制加密 app secret。PostgreSQL 同名角色只能 SELECT migration、Instance、Node、Attempt、Outbox 与 Projection，只能 UPDATE Outbox、INSERT / UPDATE Projection，不能更新 Instance 领域状态。`/srv/larkflow/target` 保持 `0750`，只通过 ACL 给 `lf-dev` 路径穿越权限；Projection env 为 `0640 root:lf-dev`，不含飞书密钥。
 - 凭据侧入站校验使用 `larkflow-target-inbound-adapter.service`，以 `lf-dev` 运行并只读飞书 Task 详情。它可以 SELECT / UPDATE Inbox，不能更新 Instance、Node 或 Attempt。领域入站使用 `larkflow-target-inbound.service`，以 `lf_target_dev` 运行，不能读取 legacy 飞书 profile 与应用凭据。
 - `larkflow-target.service`、`larkflow-target-projection.service`、`larkflow-target-inbound-adapter.service`、`larkflow-target-inbound.service` 与 legacy `larkflow@dev` 均 enabled / active。legacy 是 Task EventKey 的唯一消费者，只把原始信号写入 Inbox，不写 Target 领域表。
 - 常驻验证覆盖普通 Tool 完成、SIGTERM 干净退出、SIGKILL 后 5 秒自动拉起，以及租约到期后由不同 Worker 恢复同一 Attempt。有效故障注入最终记录 `recovered=1`、`completed=1`、`stale_results=0` 和 `node.claim_recovered` 审计。
-- `larkflow-target-backup.timer` 每天北京时间 03:20 后随机延迟不超过 15 分钟执行 custom-format `pg_dump`，本机保留约 7 天。备份目录权限为 `0700 lf_target_dev:lf_target_dev`，备份文件为 `0600`，backup service 使用 systemd 文件系统与权限沙箱。最近一次恢复演练在当时只有两份 migration 时完成，已回读表所有权和收紧的 schema 权限并删除恢复库。Inbox migration 已进入备份范围，但含四份 migration 的新恢复演练尚未重跑。
+- `larkflow-target-backup.timer` 每天北京时间 03:20 后随机延迟不超过 15 分钟执行 custom-format `pg_dump`，本机保留约 7 天。备份目录权限为 `0700 lf_target_dev:lf_target_dev`，备份文件为 `0600`，backup service 使用 systemd 文件系统与权限沙箱。最近一次恢复演练在当时只有两份 migration 时完成，已回读表所有权和收紧的 schema 权限并删除恢复库。五份 migration 已进入备份范围，但新版恢复演练尚未重跑。
 - 两阶段 Inbox 已在一次性真实 PostgreSQL 数据库中验证 migration 重入、event ID 去重、校验与领域两组双 Worker 竞争、无效 claim token 拒绝、阶段恢复和最终 `processed` 终态。一次性数据库已删除。
+- Template Service 已在一次性真实 PostgreSQL 14 数据库中验证五份 migration 重入、两路同时启用时一条成功一条并发冲突、版本更新触发器拒绝修改、模板审计追加和冻结实例外键。一次性数据库与远端验证脚本均已删除。
 - 备份目前只在同一块系统盘，能处理误操作和局部数据损坏，不能处理整机或云盘丢失，也没有 PITR。进入生产前必须增加异机或对象存储副本、恢复演练、容量告警和 PostgreSQL 升级流程。
 - `larkflow@dev` 始终保持 active，仍运行 legacy SQLite 路径。Projection 开发服务只复用它的飞书 OS 身份和 profile，不读取 legacy SQLite；Target Runtime 与 legacy 领域状态没有混接。
 
 ### Target PostgreSQL 运维入口
 
 - 应用身份：systemd 服务以 `lf_target_dev` 运行，通过 `postgresql:///larkflow_target_dev` 连接，不配置数据库密码，不改用 TCP。
-- Target CLI：`/srv/larkflow/target/venv/bin/larkflow-target --env-file /etc/larkflow-target.env <command>`；支持 migrate、create、confirm、show、submit-human、run-once、serve、project-once、project、inbound-once、inbound、verify-inbound-once 与 verify-inbound。
+- Target CLI：`/srv/larkflow/target/venv/bin/larkflow-target --env-file /etc/larkflow-target.env <command>`；模板控制面支持 template-create、template-add-version、template-enable、template-disable、template-delete、template-list、template-show、create-from-template 与 preview，并保留实例和四类 Worker 命令。
 - Agent 开关：`LARKFLOW_TARGET_ENABLE_AGENT_EXECUTOR=true`。路由使用 `LLM_BASE_URL / LLM_API_KEY / LLM_MODEL`，单线路可用 `LLM_TIMEOUT` 收紧。启动时会计算主线路与全部备用线路的超时总和，并要求该值加 `LARKFLOW_TARGET_AGENT_CLAIM_SAFETY_SECONDS` 后严格小于 `LARKFLOW_TARGET_CLAIM_TTL_SECONDS`；不满足时服务拒绝启动。
 - Runtime 服务：`systemctl status larkflow-target.service`；日志看 `journalctl -u larkflow-target.service`。
 - Projection 服务：`systemctl status larkflow-target-projection.service`；日志看 `journalctl -u larkflow-target-projection.service`。仓库 unit 与 env 模板为 `deploy/larkflow-target-projection.service`、`deploy/larkflow-target-projection.env.example`。
 - 入站校验服务：`systemctl status larkflow-target-inbound-adapter.service`；日志看 `journalctl -u larkflow-target-inbound-adapter.service`。
 - 领域入站服务：`systemctl status larkflow-target-inbound.service`；日志看 `journalctl -u larkflow-target-inbound.service`。
 - 手工只读连接：`sudo -u lf_target_dev env --chdir=/ psql -X --dbname=larkflow_target_dev`。
-- migration：由目标应用启动入口调用 package-data migration runner。长期库的四份 migration 已落地，后续不得手工改 schema 后跳过 migration ledger。
+- migration：由目标应用启动入口调用 package-data migration runner。长期库的五份 migration 已落地，后续不得手工改 schema 后跳过 migration ledger。
 - 立即备份：`sudo systemctl start larkflow-target-backup.service`；结果看 `systemctl show larkflow-target-backup.service --property=Result,ExecMainStatus`。
 - 定时器：`systemctl show larkflow-target-backup.timer --property=ActiveState,UnitFileState,NextElapseUSecRealtime`。
 - 恢复：先由 postgres 管理员创建目标库，重建 UTC 与三项 timeout，撤销 `PUBLIC` 对 `public` schema 的 CREATE，并授予 `lf_target_dev` USAGE 与 CREATE；再以 `lf_target_dev` 执行 `pg_restore --exit-on-error --single-transaction --no-acl`。不能直接让应用角色恢复 ACL，`public` schema 不归它所有，pg_restore 只会 warning，目标库会保留默认 PUBLIC CREATE。最终验收同时回读 migration、表所有者、ACL、时区与 timeout。

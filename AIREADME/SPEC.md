@@ -104,7 +104,9 @@
 
 ### Target CLI 与 Task 入站 as-built
 
-Target 使用独立 `larkflow-target` CLI，不复用上述 legacy 驱动层。当前命令为 `migrate / create / confirm / show / submit-human / run-once / serve / project-once / project / verify-inbound-once / verify-inbound / inbound-once / inbound`。这些是本机运维入口，仍没有网络 API。
+Target 使用独立 `larkflow-target` CLI，不复用上述 legacy 驱动层。控制面增加 `template-create / template-add-version / template-enable / template-disable / template-delete / template-list / template-show / create-from-template / preview`，并保留 `migrate / create / confirm / show / submit-human` 和四类 Worker 的单步、常驻命令。这些是本机运维入口，仍没有网络 API。
+
+`create-from-template` 只接受 enabled 模板，以最新不可变版本解析参数和 `owner_role -> person_id` 绑定，生成含 `template_version_id` 与 `locked` 的完整 Snapshot。`preview` 仅允许 Instance Owner 读取并重新校验 draft，不写审计、不改变状态；`confirm` 仍需显式调用。
 
 Target Task 入站只接受 `task.task.update_user_access_v2` 中包含 `task_completed_update` 的事件。原始事件只提供 event ID、Task GUID 和事件类型，不作为 actor 证明。服务端必须重新读取 Task 详情，并校验以下条件：
 

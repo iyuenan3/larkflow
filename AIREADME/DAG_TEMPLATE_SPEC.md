@@ -1,6 +1,6 @@
 # DAG Contract v0.2
 
-> 状态：Target Draft · 既有契约简化版 · 当前引擎尚未实现
+> 状态：Target + Partial As-built · 既有契约简化版 · 模板生命周期、实例化和草稿预览已实现，编辑与重启仍待实现
 >
 > 本文中的“必须、应该、可以”分别表示 MUST、SHOULD、MAY。当前 legacy YAML 兼容范围见 [SPEC.md](SPEC.md)。
 
@@ -38,12 +38,14 @@ v0.2 是此前 v0.1 设计的简化，不引入子 DAG、资源注册表、字�
 draft -> enabled -> disabled -> deleted
 ```
 
-- `draft` 可以修改。
+- `draft` 可以追加新版本，但已存在版本本身不可修改。
 - `enabled` 可以创建新实例，但版本内容不可变。
-- `disabled` 不再创建新实例，已有实例不受影响。
+- `disabled` 不再创建新实例，可以追加新版本，已有实例不受影响。
 - `deleted` 是逻辑终态，历史和审计继续保留。
 - 对现有版本的任何内容修改都生成新的 `version`。
 - `locked: true` 表示由该版本创建的实例不允许结构编辑。v0.2 不支持字段级锁。
+- 当前启用入口始终使用最新版本，不另存可漂移的 active pointer。要修改已启用模板，必须按 `disable -> append version -> enable` 执行。
+- 模板 aggregate 以独立 version 做 compare-and-swap，每次生命周期变化和版本追加都写入不可变审计事件。
 
 ## 5. 模板 Schema
 
@@ -70,7 +72,7 @@ nodes:
     work:
       objective: 给出法律风险意见
       inputs:
-        - ref: instance.inputs.contract_ref
+        - instance_inputs.contract_ref
       outputs:
         - id: legal_opinion
           type: document
@@ -104,8 +106,8 @@ Secret、token、真实人员 ID、设备 ID、本地路径和供应商运行时
   work:
     objective: 汇总两份审核意见，不自行消除冲突
     inputs:
-      - ref: nodes.legal_review.outputs.legal_opinion
-      - ref: nodes.finance_review.outputs.finance_opinion
+      - dependencies.legal_review
+      - dependencies.finance_review
     outputs:
       - id: merged_result
         type: document
@@ -122,7 +124,6 @@ Secret、token、真实人员 ID、设备 ID、本地路径和供应商运行时
 ```
 
 | 字段 | 规则 |
-|---|---|
 | `id` | 图内唯一的 lower `snake_case` |
 | `title` | 面向用户的工作名称 |
 | `deps` | 已存在节点 ID 数组 |
@@ -135,7 +136,7 @@ Secret、token、真实人员 ID、设备 ID、本地路径和供应商运行时
 | `work.agent.kind` | Agent 必填，当前实现只接受 `llm.generate` |
 | `work.agent.model_role` | 非空逻辑模型角色，默认 `default` |
 | `work.agent.instructions` | 非空节点指令，不得包含长期凭证 |
-| `retry.max_attempts` | Agent 可选，使用服务端允许范围内的有限正整数 |
+| `retry.max_attempts` | Target 字段，当前 Template Service 尚未实现，提交时会按未知字段拒绝 |
 
 Tool 节点还应声明数据化的 `tool.kind` 和非敏感参数。Agent 节点通过 `work.agent` 声明逻辑 kind、`model_role` 和节点指令，不得把模型供应商、base URL、长期凭证或 LangGraph checkpoint 固化为业务契约。
 
@@ -160,7 +161,7 @@ instance:
   nodes: []
 ```
 
-若来自模板，`template_ref` 保存 `template_id + version`。无论来源如何，确认启动时都必须冻结完整图、输入、Owner 绑定和验收字段。
+若来自模板，`template_version_id` 保存 `template_id:version`，并把该版本的 `locked` 值写入快照。无论来源如何，创建草稿时都必须冻结完整图、输入、Owner 绑定和验收字段，后续模板变化不回写实例。
 
 草稿确认流程：
 
@@ -228,7 +229,7 @@ quality:
 
 1. Schema 与必填字段合法。
 2. 节点 ID 唯一，依赖存在，图无环。
-3. 所有输入只引用实例参数或传递祖先输出。
+3. 所有输入只引用实例参数或已声明的直接依赖；更远祖先必须通过依赖节点显式传递。
 4. 所有必需输出和验收条件存在。
 5. 每个节点有唯一有效 Owner。
 6. Tool kind、Agent kind、模型逻辑角色和 retry 配置在服务端允许列表内。
@@ -238,7 +239,7 @@ quality:
 
 ## 14. 当前兼容性
 
-当前 `larkflow/templates/*.yaml` 是 legacy compact form，加载器主要消费 `id/name/nodes`，执行器尚不识别模板生命周期、可选模板实例、版本级锁和独立 Instance Snapshot。旧模板不能被静默标记为符合 v0.2，迁移必须经过显式转换和校验。
+Target 的 `target_agent_review.yaml` 已转换为本文 v0.2 形状，并通过 Template Service 实例化。其余 YAML 仍是 legacy compact form，只由 legacy 加载器消费。旧模板不能被静默标记为符合 v0.2，迁移必须经过显式转换和校验。
 
 ## 15. 后置能力
 

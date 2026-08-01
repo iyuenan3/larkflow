@@ -466,3 +466,13 @@
 - Security：Target Runtime 使用独立 OS 身份。复制其他服务已有的 `LLM_API_KEY` 会扩大凭证可读边界，机器管理授权不自动等于该复制授权；开发部署应使用专属 key，或在说明风险后取得明确复用授权。
 - Alternatives(否决)：继续让 Agent 节点保持 ready 但无 executor；复用 legacy `prompt / model_role` 顶层形状；在数据库事务内调用模型；静默截断持久化结果；只比较一个 timeout 而忽略备用链；默认把 legacy key 复制给 Target。
 - Tradeoff：模型调用仍是 at-least-once，Worker 崩溃后可能重复生成和计费，稳定请求标识只提供审计与可选 adapter 幂等，不代表供应商已保证幂等。当前只有单次生成，没有有限业务重试、质量闭环或复杂 LangGraph NodeRun；云端真链路在独立凭证装配前保持未验证。
+
+## ADR-061 · 2026-08-01 · 模板启用使用最新不可变版本，变更采用停用后追加
+
+- **Status：Accepted · As-built foundation。**
+- Problem：数据库已有 Template 与 TemplateVersion 表，但没有领域服务、模板 aggregate 并发版本、生命周期审计或正式实例化入口。若另加 active version pointer，它可能与模板状态和最新版本漂移；若允许 enabled 模板直接追加版本，两个并发管理员可能在不知情时改变后续实例来源。
+- Constraint：模板版本不可更新或删除；实例必须保存完整图、参数、Owner 绑定、模板版本和锁状态；模板不得保存真实人员 ID、供应商端点或长期凭证；所有数据库事务都不能跨越飞书、LLM 或 Tool 调用。
+- Decision：Template aggregate 使用独立 version 做 compare-and-swap，并把生命周期变化和版本追加写入 `workflow_template_events`。`draft` 与 `disabled` 可追加严格连续的新版本，`enabled` 只允许实例化最新版本，不允许追加；修改路径固定为 `disable -> append version -> enable`，因此不设置 active pointer。实例化要求参数和逻辑 Owner 角色精确绑定，并生成含 `template_version_id` 与 `locked` 的冻结 Snapshot。`preview` 只读校验 draft，`confirm` 保持独立命令。
+- Alternatives(否决)：允许原地更新版本；在 enabled 状态静默追加；另存 active pointer；把人员 ID 或模型配置写进模板；创建草稿后自动确认启动。
+- Evidence：离线测试覆盖生命周期、输入类型、角色绑定、非法引用、供应商配置、Owner 授权和只读预览。一次性 PostgreSQL 14 数据库中的两路并发启用恰好一条成功、一条命中 optimistic concurrency，版本触发器拒绝更新，实例外键与冻结快照均回读一致。
+- Tradeoff：当前每次启用都选择最新版本，简单且确定，但暂不支持同时灰度多个版本。角色绑定仍由调用方提供，企业目录有效性校验和模板管理界面尚未实现；`locked` 已进入快照，真正的运行中编辑命令仍在 Phase 2。
