@@ -14,6 +14,9 @@ from larkflow.workflow import (
     NodeSpec,
     NodeStatus,
     ProjectionRecord,
+    TASK_POLL_EVENT,
+    TASK_POLL_SOURCE,
+    TaskCompletionPoller,
     TaskVerificationWorker,
     TaskEventInboxBridge,
     WorkflowInboundWorker,
@@ -191,6 +194,143 @@ def test_verified_owner_completion_submits_the_current_human_attempt():
     assert attempt.submitted_by_person_id == "person_reviewer"
     assert attempt.result == {"confirmed": True}
     assert inbox.records(TENANT)[0].outcome == "submitted:human_node"
+
+
+def test_completion_poll_enqueues_a_durable_deduped_signal_and_reuses_intake():
+    clock = Clock()
+    service, repository, inbox, _ = setup_inbound(clock)
+    reader = TaskReader(task_state())
+    poller = TaskCompletionPoller(
+        repository,
+        repository,
+        inbox,
+        reader,
+        tenant_id=TENANT,
+        batch_size=1,
+        clock=clock,
+    )
+
+    first = poller.run_once()
+    second = poller.run_once()
+
+    assert first.instances_scanned == 1
+    assert first.nodes_scanned == 1
+    assert first.tasks_read == 1
+    assert first.completions_observed == 1
+    assert first.signals_appended == 1
+    assert second.duplicates == 1
+    record = inbox.records(TENANT)[0]
+    assert record.event.id.startswith("task-poll-")
+    assert record.event.source == TASK_POLL_SOURCE
+    assert record.event.event_type == TASK_POLL_EVENT
+    assert record.event.occurred_at == NOW
+
+    assert verify(inbox, reader, clock).run_once().verified == 1
+    assert worker(service, repository, inbox, clock).run_once().submitted == 1
+    assert (
+        service.get(TENANT, "instance_inbound").nodes["approve"].status
+        == NodeStatus.DONE
+    )
+
+
+def test_completion_poll_keeps_todo_tasks_out_of_the_inbox():
+    clock = Clock()
+    _, repository, inbox, _ = setup_inbound(clock)
+    poller = TaskCompletionPoller(
+        repository,
+        repository,
+        inbox,
+        TaskReader(task_state(status="todo", completed_at=None)),
+        tenant_id=TENANT,
+        clock=clock,
+    )
+
+    report = poller.run_once()
+
+    assert report.tasks_read == 1
+    assert report.pending == 1
+    assert report.signals_appended == 0
+    assert report.failed == 0
+    assert inbox.records(TENANT) == ()
+
+
+def test_completion_poll_isolates_one_task_read_failure():
+    clock = Clock()
+    service, repository, inbox, _ = setup_inbound(clock)
+    service.create_draft(
+        instance_id="instance_other",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=InstanceSnapshot(
+            nodes=(
+                NodeSpec(
+                    "approve_other",
+                    "Approve other brief",
+                    "person_reviewer",
+                    "human",
+                    work={
+                        "objective": "Approve",
+                        "inputs": [],
+                        "outputs": [{"id": "decision", "type": "data"}],
+                        "acceptance": ["A decision exists"],
+                    },
+                ),
+            )
+        ),
+    )
+    service.confirm_draft(
+        TENANT,
+        "instance_other",
+        actor_person_id="person_owner",
+    )
+    activation = service.dispatch_due(
+        TENANT,
+        "instance_other",
+        worker_id="runtime-1",
+    )[0]
+    node = service.get(TENANT, "instance_other").nodes["approve_other"]
+    repository.save_projection(
+        ProjectionRecord(
+            id="projection-2",
+            tenant_id=TENANT,
+            instance_id="instance_other",
+            node_instance_id=node.id,
+            attempt_no=activation.attempt_no,
+            kind=FEISHU_TASK_KIND,
+            external_id="task-2",
+            external_url="https://example.invalid/task-2",
+            idempotency_key="lf-binding-2",
+            sync_version=node.version,
+            state={"node_status": "waiting_human", "completed": False},
+            created_at=clock.now,
+            updated_at=clock.now,
+        )
+    )
+
+    class PartlyFailingReader:
+        def get_task(self, task_guid):
+            if task_guid == "task-1":
+                raise RuntimeError("temporary read failure")
+            return task_state(guid=task_guid)
+
+    report = TaskCompletionPoller(
+        repository,
+        repository,
+        inbox,
+        PartlyFailingReader(),
+        tenant_id=TENANT,
+        batch_size=1,
+        clock=clock,
+    ).run_once()
+
+    assert report.instances_scanned == 2
+    assert report.failed == 1
+    assert report.signals_appended == 1
+    assert report.errors == (
+        "instance_inbound/approve: RuntimeError: temporary read failure",
+    )
+    assert inbox.records(TENANT)[0].event.task_guid == "task-2"
 
 
 def test_readback_lag_retries_then_submits_without_losing_the_event():

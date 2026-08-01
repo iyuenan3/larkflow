@@ -120,6 +120,8 @@ class TargetProjectionSettings:
     retry_base: timedelta = timedelta(seconds=5)
     retry_max: timedelta = timedelta(minutes=5)
     reconcile_batch_size: int = 100
+    completion_poll_seconds: float = 30.0
+    completion_poll_batch_size: int = 100
     loop: WorkerLoopSettings = WorkerLoopSettings()
 
     def __post_init__(self) -> None:
@@ -137,6 +139,10 @@ class TargetProjectionSettings:
             raise ValueError("projection retry delays are invalid")
         if self.reconcile_batch_size < 1:
             raise ValueError("projection reconcile_batch_size must be positive")
+        if self.completion_poll_seconds <= 0:
+            raise ValueError("completion_poll_seconds must be positive")
+        if self.completion_poll_batch_size < 1:
+            raise ValueError("completion_poll_batch_size must be positive")
 
     @classmethod
     def from_environ(
@@ -186,6 +192,16 @@ class TargetProjectionSettings:
             reconcile_batch_size=_positive_int(
                 values,
                 "LARKFLOW_TARGET_PROJECTION_RECONCILE_BATCH_SIZE",
+                100,
+            ),
+            completion_poll_seconds=_positive_float(
+                values,
+                "LARKFLOW_TARGET_COMPLETION_POLL_SECONDS",
+                30.0,
+            ),
+            completion_poll_batch_size=_positive_int(
+                values,
+                "LARKFLOW_TARGET_COMPLETION_POLL_BATCH_SIZE",
                 100,
             ),
             loop=WorkerLoopSettings(

@@ -4,14 +4,14 @@
 
 ## 当前状态
 
-larkflow 已开始按收敛后的产品设计重建中央工作流，目前完成模板生命周期、草稿预览、领域内核、PostgreSQL 事务持久化、Runtime Worker、首个 LLM Agent executor、Task Projection Worker，以及飞书 Task 完成事件的耐久入站链路。开发环境中的真实 Human-Agent-Human 三节点闭环已经完成。
+larkflow 已开始按收敛后的产品设计重建中央工作流，目前完成模板生命周期、草稿预览、领域内核、PostgreSQL 事务持久化、Runtime Worker、首个 LLM Agent executor、Task Projection Worker，以及飞书 Task 完成状态的耐久入站链路。开发环境中的真实 Human-Agent-Human 三节点闭环已经完成。
 
 - **目标产品**：单企业、单层 DAG 的最小闭环，支持模板可选、草稿确认、Human / Agent / Tool 节点、受控编辑、重启、审计和飞书投影。
 - **新内核**：`larkflow/workflow/` 已实现模板生命周期和不可变版本、角色绑定和冻结 Instance Snapshot、草稿预览与确认、DAG 校验、节点状态迁移、依赖解锁、Human / Agent / Tool Node Runner、Attempt、claim、过期认领恢复、Runtime / Projection / Inbound Worker、乐观并发、PostgreSQL 仓储、追加型审计、事务 outbox 与耐久 Inbox。凭据侧 Task 验证默认最多尝试 24 次，超限进入不可再认领的 `exhausted` 终态并保留终止时间、失败阶段、结果和最后错误。
 - **legacy 原型**：LangGraph + SQLite + lark-cli 路径继续保留，用于回归已验证的飞书投影、打回、幂等和恢复机制。
 - **尚未实现**：通用飞书命令入站、IM / Doc 投影、业务 Tool executor adapter、受控编辑、重启、企业目录校验和生产装配。真实 Agent 与模板入口只在开发环境和测试组织验证，不能据此描述为生产上线。
 - **证据边界**：本轮完成的是既有设计简化与一致性核验，不是访谈、市场或商业验证。
-- **重要边界**：`alicloud-sh` 已运行 Target Runtime、Projection、凭据侧入站校验和领域侧入站四个独立服务，legacy 服务仍是飞书 EventKey 的唯一消费者。凭据侧只读飞书 Task 详情并写入已验证 Inbox，领域侧不能读取 lark-cli profile，只在校验绑定、Owner、当前 Attempt 和完成人后提交 Human 节点。云端 Target 已在明确授权下启用开发用真实 Agent，但尚未接入业务 Tool、IM 或 Doc 投影。legacy 服务继续使用 SQLite，不能把 checkpointer 或全局 LangGraph state 扩展为新产品领域模型。
+- **重要边界**：`alicloud-sh` 已运行 Target Runtime、Projection、凭据侧入站校验和领域侧入站四个独立服务。Projection 周期读取当前 Human Task，观察到完成后只写耐久 Inbox；事件可降低延迟，但不是可靠性前提。凭据侧仍会重新读取 Task 并写入已验证 Inbox，领域侧不能读取 lark-cli profile，只在校验绑定、Owner、当前 Attempt 和完成人后提交 Human 节点。云端 Target 已在明确授权下启用开发用真实 Agent，但尚未接入业务 Tool、IM 或 Doc 投影。legacy 服务继续使用 SQLite，不能把 checkpointer 或全局 LangGraph state 扩展为新产品领域模型。
 
 产品与架构真相源从 [AIREADME/INDEX.md](AIREADME/INDEX.md) 开始。判断“目标是什么”和“现在做到了什么”时，必须区分 Target 与 As-built。
 
@@ -103,7 +103,7 @@ Phase 0 的设计一致性核验已经完成，当前进入 Phase 1 中央工作
 - Human Task 会展示节点明确声明的 Instance 输入；下游任务还会展示直接依赖中已提交的 Agent 正文。超长内容只在任务描述中截断，完整输入与结果仍保存在 PostgreSQL。
 - 每日 custom-format 备份保留约 7 天，并完成过一次新库恢复演练。
 - 自动执行采用 at-least-once 语义，executor 必须使用请求中的稳定幂等键消除重复副作用。
-- 当前只接入了 Task 完成事件；真实 Human-Agent-Human 已在开发云服务器和测试组织完成三节点闭环，正式模板创建的实例也已完成两个 Human Task 与一个真实 Agent 节点。两个 Human 结果均为最小业务确认值，Agent 正文已投影到最终任务。业务 Tool、通用飞书命令入站、IM / Doc 投影和生产迁移仍缺，因此不能描述为目标产品已经上线。开发服务中的 `development.echo` 只用于持久化与恢复演练。
+- 当前只接入了 Task 完成状态轮询和可选事件唤醒；真实 Human-Agent-Human 已在开发云服务器和测试组织完成三节点闭环，正式模板创建的实例也已完成两个 Human Task 与一个真实 Agent 节点。两个 Human 结果均为最小业务确认值，Agent 正文已投影到最终任务。业务 Tool、通用飞书命令入站、IM / Doc 投影和生产迁移仍缺，因此不能描述为目标产品已经上线。开发服务中的 `development.echo` 只用于持久化与恢复演练。
 
 原有访谈和飞书基线协议保留在 [research/phase-0/README.md](research/phase-0/README.md)，当前状态为 Deferred，不阻塞本轮简化设计，也不能被描述为已完成。
 
@@ -140,7 +140,7 @@ larkflow-target --env-file /etc/larkflow-target.env show <instance>
 larkflow-target --env-file /etc/larkflow-target.env serve
 ```
 
-`reconcile-projections` 会只读查询并可能重建飞书 Task，因此只能使用持有开发 profile 的 Projection env 显式执行：`larkflow-target --env-file /etc/larkflow-target-projection.env reconcile-projections`。
+`reconcile-projections` 会只读查询并可能重建飞书 Task，因此只能使用持有开发 profile 的 Projection env 显式执行：`larkflow-target --env-file /etc/larkflow-target-projection.env reconcile-projections`。`reconcile-completions` 使用同一身份立即扫描当前 Human Task，只把已完成状态写入耐久 Inbox，不直接提交节点。
 
 真实飞书部署会创建任务、卡片和文档，只能在明确配置的开发环境中运行。现有单机部署是 legacy 原型实录，操作前先读 [AIREADME/DEPLOYMENT.md](AIREADME/DEPLOYMENT.md)。
 

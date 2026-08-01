@@ -45,6 +45,8 @@ class TaskCompletionSignal:
     event_types: tuple[str, ...]
     occurred_at: datetime
     received_at: datetime
+    source: str = "feishu_event_bus"
+    event_type: str = TASK_UPDATE_EVENT
 
 
 @dataclass

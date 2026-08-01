@@ -4,8 +4,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from threading import Event
+import time
 from typing import Any
 
+from .completion_poll import CompletionPollReport, TaskCompletionPoller
 from .daemon import WorkerLoopSettings
 from .projection import (
     ProjectionReconciliationReport,
@@ -25,6 +27,17 @@ class ProjectionLoopSummary:
     reconciliation_unchanged: int = 0
     reconciliation_failed: int = 0
     reconciliation_interrupted: int = 0
+    completion_poll_runs: int = 0
+    completion_poll_instances: int = 0
+    completion_poll_nodes: int = 0
+    completion_poll_tasks_read: int = 0
+    completions_observed: int = 0
+    completion_signals_appended: int = 0
+    completion_signal_duplicates: int = 0
+    completion_poll_pending: int = 0
+    completion_poll_missing_projections: int = 0
+    completion_poll_failed: int = 0
+    completion_poll_interrupted: int = 0
     ticks: int = 0
     tick_errors: int = 0
     claimed: int = 0
@@ -44,13 +57,21 @@ class ProjectionWorkerLoop:
         *,
         settings: WorkerLoopSettings | None = None,
         reconcile_batch_size: int = 100,
+        completion_poller: TaskCompletionPoller | None = None,
+        completion_poll_seconds: float = 30.0,
+        monotonic: Callable[[], float] | None = None,
         log: LogEvent | None = None,
     ) -> None:
         if reconcile_batch_size < 1:
             raise ValueError("reconcile_batch_size must be positive")
+        if completion_poll_seconds <= 0:
+            raise ValueError("completion_poll_seconds must be positive")
         self.worker = worker
         self.settings = settings or WorkerLoopSettings()
         self.reconcile_batch_size = reconcile_batch_size
+        self.completion_poller = completion_poller
+        self.completion_poll_seconds = completion_poll_seconds
+        self.monotonic = monotonic or time.monotonic
         self.log = log or (lambda _event, _fields: None)
 
     def run(self, stop_event: Event) -> ProjectionLoopSummary:
@@ -62,6 +83,17 @@ class ProjectionWorkerLoop:
             "reconciliation_unchanged": 0,
             "reconciliation_failed": 0,
             "reconciliation_interrupted": 0,
+            "completion_poll_runs": 0,
+            "completion_poll_instances": 0,
+            "completion_poll_nodes": 0,
+            "completion_poll_tasks_read": 0,
+            "completions_observed": 0,
+            "completion_signals_appended": 0,
+            "completion_signal_duplicates": 0,
+            "completion_poll_pending": 0,
+            "completion_poll_missing_projections": 0,
+            "completion_poll_failed": 0,
+            "completion_poll_interrupted": 0,
             "ticks": 0,
             "tick_errors": 0,
             "claimed": 0,
@@ -95,7 +127,34 @@ class ProjectionWorkerLoop:
                 "projection_reconciled",
                 self._reconciliation_fields(reconciliation),
             )
+        next_completion_poll = self.monotonic()
         while not stop_event.is_set():
+            poll_now = self.monotonic()
+            if (
+                self.completion_poller is not None
+                and poll_now >= next_completion_poll
+            ):
+                totals["completion_poll_runs"] += 1
+                try:
+                    completion = self.completion_poller.run_once(
+                        stop_requested=stop_event.is_set,
+                    )
+                except Exception as exc:
+                    totals["completion_poll_failed"] += 1
+                    self.log(
+                        "completion_poll_failed",
+                        {
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        },
+                    )
+                else:
+                    self._add_completion_report(totals, completion)
+                    self.log(
+                        "completion_poll",
+                        self._completion_fields(completion),
+                    )
+                next_completion_poll = poll_now + self.completion_poll_seconds
             try:
                 report = self.worker.run_once()
             except Exception as exc:
@@ -144,6 +203,26 @@ class ProjectionWorkerLoop:
             totals[field] += int(getattr(report, field))
 
     @staticmethod
+    def _add_completion_report(
+        totals: dict[str, int],
+        report: CompletionPollReport,
+    ) -> None:
+        mapping = {
+            "completion_poll_instances": "instances_scanned",
+            "completion_poll_nodes": "nodes_scanned",
+            "completion_poll_tasks_read": "tasks_read",
+            "completions_observed": "completions_observed",
+            "completion_signals_appended": "signals_appended",
+            "completion_signal_duplicates": "duplicates",
+            "completion_poll_pending": "pending",
+            "completion_poll_missing_projections": "missing_projections",
+            "completion_poll_failed": "failed",
+            "completion_poll_interrupted": "interrupted",
+        }
+        for total_field, report_field in mapping.items():
+            totals[total_field] += int(getattr(report, report_field))
+
+    @staticmethod
     def _report_fields(report: ProjectionWorkerReport) -> dict[str, Any]:
         return {
             "claimed": report.claimed,
@@ -169,6 +248,15 @@ class ProjectionWorkerLoop:
             "failed": report.failed,
             "interrupted": report.interrupted,
             "errors": list(report.errors),
+        }
+
+    @staticmethod
+    def _completion_fields(report: CompletionPollReport) -> dict[str, Any]:
+        return {
+            field: getattr(report, field)
+            if field != "errors"
+            else list(report.errors)
+            for field in report.__dataclass_fields__
         }
 
     @staticmethod

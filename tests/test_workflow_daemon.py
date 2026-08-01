@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from larkflow.workflow import (
+    CompletionPollReport,
     DevelopmentToolExecutor,
     ExecutionRequest,
     InboundWorkerLoop,
@@ -64,6 +65,24 @@ class RecordingStop:
         if len(self.waits) >= self.stop_after_waits:
             self.stopped = True
         return self.stopped
+
+
+class ScriptedPoller:
+    def __init__(self, reports):
+        self.reports = iter(reports)
+        self.calls = 0
+
+    def run_once(self, **_kwargs):
+        self.calls += 1
+        return next(self.reports)
+
+
+class ScriptedMonotonic:
+    def __init__(self, values):
+        self.values = iter(values)
+
+    def __call__(self):
+        return next(self.values)
 
 
 def test_idle_loop_uses_bounded_exponential_backoff():
@@ -135,6 +154,46 @@ def test_projection_loop_uses_the_same_bounded_backoff_contract():
     assert summary.reconciled_nodes == 3
     assert summary.tasks_rebuilt == 1
     assert events[0][0] == "projection_reconciled"
+
+
+def test_projection_loop_runs_completion_poll_immediately_and_periodically():
+    worker = ScriptedWorker([ProjectionWorkerReport()] * 3)
+    poller = ScriptedPoller(
+        [
+            CompletionPollReport(
+                instances_scanned=1,
+                nodes_scanned=1,
+                tasks_read=1,
+                pending=1,
+            ),
+            CompletionPollReport(
+                instances_scanned=1,
+                nodes_scanned=1,
+                tasks_read=1,
+                completions_observed=1,
+                signals_appended=1,
+            ),
+        ]
+    )
+    stop = RecordingStop(stop_after_waits=3)
+    events = []
+
+    summary = ProjectionWorkerLoop(
+        worker,
+        settings=WorkerLoopSettings(0.25, 1.0),
+        completion_poller=poller,
+        completion_poll_seconds=2,
+        monotonic=ScriptedMonotonic([0, 0, 1, 2]),
+        log=lambda event, fields: events.append((event, fields)),
+    ).run(stop)
+
+    assert poller.calls == 2
+    assert summary.completion_poll_runs == 2
+    assert summary.completion_poll_tasks_read == 2
+    assert summary.completion_poll_pending == 1
+    assert summary.completions_observed == 1
+    assert summary.completion_signals_appended == 1
+    assert [event for event, _ in events].count("completion_poll") == 2
 
 
 def test_inbound_loop_uses_the_same_bounded_backoff_contract():
@@ -270,6 +329,8 @@ def test_projection_settings_have_independent_claim_and_retry_controls(monkeypat
             "LARKFLOW_TARGET_PROJECTION_RETRY_BASE_SECONDS": "2",
             "LARKFLOW_TARGET_PROJECTION_RETRY_MAX_SECONDS": "30",
             "LARKFLOW_TARGET_PROJECTION_RECONCILE_BATCH_SIZE": "11",
+            "LARKFLOW_TARGET_COMPLETION_POLL_SECONDS": "17.5",
+            "LARKFLOW_TARGET_COMPLETION_POLL_BATCH_SIZE": "13",
             "LARKFLOW_TARGET_PROJECTION_IDLE_MIN_SECONDS": "0.5",
             "LARKFLOW_TARGET_PROJECTION_IDLE_MAX_SECONDS": "2",
         }
@@ -281,6 +342,8 @@ def test_projection_settings_have_independent_claim_and_retry_controls(monkeypat
     assert settings.retry_base == timedelta(seconds=2)
     assert settings.retry_max == timedelta(seconds=30)
     assert settings.reconcile_batch_size == 11
+    assert settings.completion_poll_seconds == 17.5
+    assert settings.completion_poll_batch_size == 13
     assert settings.loop == WorkerLoopSettings(0.5, 2.0)
 
 

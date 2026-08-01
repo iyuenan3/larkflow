@@ -1170,8 +1170,8 @@ class PostgresWorkflowInbox:
                 (
                     event.tenant_id,
                     event.id,
-                    "feishu_event_bus",
-                    "task.task.update_user_access_v2",
+                    event.source,
+                    event.event_type,
                     event.task_guid,
                     Jsonb(list(event.event_types)),
                     event.received_at,
@@ -1473,4 +1473,6 @@ class PostgresWorkflowInbox:
             event_types=tuple(row["event_types"]),
             occurred_at=row["occurred_at"],
             received_at=row["received_at"],
+            source=row["source"],
+            event_type=row["event_type"],
         )

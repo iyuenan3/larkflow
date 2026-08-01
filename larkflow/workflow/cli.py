@@ -18,6 +18,7 @@ import yaml
 from larkflow.config import load_dotenv, load_llm_roles
 from larkflow.llm.client import OpenAICompatLLM
 
+from .completion_poll import TaskCompletionPoller
 from .config import (
     TargetInboundSettings,
     TargetProjectionSettings,
@@ -171,6 +172,10 @@ def build_parser() -> argparse.ArgumentParser:
         "reconcile-projections",
         help="rebuild missing current Human Task projections",
     )
+    commands.add_parser(
+        "reconcile-completions",
+        help="poll current Human Tasks and enqueue observed completions",
+    )
     commands.add_parser("project", help="project to Feishu until SIGINT or SIGTERM")
     commands.add_parser("inbound-once", help="run one Feishu inbound event tick")
     commands.add_parser("inbound", help="consume durable Feishu events until stopped")
@@ -224,6 +229,7 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
     projection_command = namespace.command in {
         "project-once",
         "reconcile-projections",
+        "reconcile-completions",
         "project",
     }
     inbound_command = namespace.command in {"inbound-once", "inbound"}
@@ -513,12 +519,25 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             tenant_id=tenant_id,
             worker_id=namespace.projection_worker_id,
         )
+        lark_profile = _required(
+            namespace.lark_profile,
+            "--lark-profile or LARKFLOW_TARGET_LARK_PROFILE",
+        )
         task_adapter = CliFeishuTaskProjection(
-            profile=_required(
-                namespace.lark_profile,
-                "--lark-profile or LARKFLOW_TARGET_LARK_PROFILE",
-            ),
+            profile=lark_profile,
             identity=namespace.lark_identity,
+        )
+        task_reader = CliFeishuTaskReader(
+            profile=lark_profile,
+            identity=namespace.lark_identity,
+        )
+        completion_poller = TaskCompletionPoller(
+            repository,
+            repository,
+            PostgresWorkflowInbox(connection_factory),
+            task_reader,
+            tenant_id=settings.tenant_id,
+            batch_size=settings.completion_poll_batch_size,
         )
         worker = WorkflowProjectionWorker(
             repository,
@@ -545,6 +564,13 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 ProjectionWorkerLoop._reconciliation_fields(report),
             )
             return int(bool(report.errors) or report.interrupted)
+        if namespace.command == "reconcile-completions":
+            report = completion_poller.run_once()
+            log(
+                "completion_poll",
+                ProjectionWorkerLoop._completion_fields(report),
+            )
+            return int(bool(report.errors) or report.interrupted)
 
         stop_event = Event()
         _install_signal_handlers(stop_event, log, prefix="projection")
@@ -558,6 +584,10 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 "retry_base_seconds": settings.retry_base.total_seconds(),
                 "retry_max_seconds": settings.retry_max.total_seconds(),
                 "reconcile_batch_size": settings.reconcile_batch_size,
+                "completion_poll_seconds": settings.completion_poll_seconds,
+                "completion_poll_batch_size": (
+                    settings.completion_poll_batch_size
+                ),
                 "idle_min_seconds": settings.loop.idle_min_seconds,
                 "idle_max_seconds": settings.loop.idle_max_seconds,
                 "lark_profile": namespace.lark_profile,
@@ -568,6 +598,8 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             worker,
             settings=settings.loop,
             reconcile_batch_size=settings.reconcile_batch_size,
+            completion_poller=completion_poller,
+            completion_poll_seconds=settings.completion_poll_seconds,
             log=log,
         ).run(stop_event)
         return 0

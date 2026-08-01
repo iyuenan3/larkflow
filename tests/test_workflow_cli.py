@@ -74,6 +74,12 @@ def test_cli_exposes_projection_reconciliation_as_an_explicit_command():
     assert parsed.command == "reconcile-projections"
 
 
+def test_cli_exposes_completion_reconciliation_as_an_explicit_command():
+    parsed = build_parser().parse_args(["reconcile-completions"])
+
+    assert parsed.command == "reconcile-completions"
+
+
 def test_status_projection_never_exposes_claim_token():
     repository = InMemoryWorkflowRepository()
     service = WorkflowService(

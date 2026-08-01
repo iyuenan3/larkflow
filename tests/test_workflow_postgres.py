@@ -490,6 +490,8 @@ def test_postgres_inbox_dedupes_and_allows_only_one_competing_claim():
         event_types=("task_completed_update",),
         occurred_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
         received_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        source="feishu_task_poll",
+        event_type="larkflow.task.completion_reconciled_v1",
     )
     inbox = PostgresWorkflowInbox(connection_factory)
     assert inbox.append_inbox(event) is True
@@ -509,6 +511,11 @@ def test_postgres_inbox_dedupes_and_allows_only_one_competing_claim():
         )
     assert sorted(len(items) for items in verification_claims) == [0, 1]
     verification = next(items[0] for items in verification_claims if items)
+    assert verification.event.source == "feishu_task_poll"
+    assert (
+        verification.event.event_type
+        == "larkflow.task.completion_reconciled_v1"
+    )
     inbox.mark_inbox_verified(
         tenant_id,
         event.id,

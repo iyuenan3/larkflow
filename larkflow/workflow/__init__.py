@@ -26,6 +26,12 @@ from .config import (
     TargetProjectionSettings,
     TargetRuntimeSettings,
 )
+from .completion_poll import (
+    CompletionPollReport,
+    TASK_POLL_EVENT,
+    TASK_POLL_SOURCE,
+    TaskCompletionPoller,
+)
 from .daemon import (
     WorkerLoopSettings,
     WorkerLoopSummary,
@@ -137,6 +143,7 @@ __all__ = [
     "ClaimNotExpiredError",
     "ConcurrentTemplateUpdateError",
     "ConcurrentUpdateError",
+    "CompletionPollReport",
     "CliFeishuTaskProjection",
     "CliFeishuTaskReader",
     "DevelopmentToolExecutor",
@@ -193,6 +200,9 @@ __all__ = [
     "TargetInboundSettings",
     "TargetProjectionSettings",
     "TargetRuntimeSettings",
+    "TASK_POLL_EVENT",
+    "TASK_POLL_SOURCE",
+    "TaskCompletionPoller",
     "TaskProjectionAdapter",
     "TaskProjectionRequest",
     "TaskCompletionSignal",
