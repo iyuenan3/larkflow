@@ -464,6 +464,7 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             claim_ttl=settings.claim_ttl,
             retry_base=settings.retry_base,
             retry_max=settings.retry_max,
+            max_attempts=settings.verification_max_attempts,
         )
         if namespace.command == "verify-inbound-once":
             report = worker.run_once()
@@ -484,6 +485,7 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 "claim_limit": settings.claim_limit,
                 "retry_base_seconds": settings.retry_base.total_seconds(),
                 "retry_max_seconds": settings.retry_max.total_seconds(),
+                "verification_max_attempts": settings.verification_max_attempts,
                 "idle_min_seconds": settings.loop.idle_min_seconds,
                 "idle_max_seconds": settings.loop.idle_max_seconds,
                 "lark_profile": namespace.lark_profile,

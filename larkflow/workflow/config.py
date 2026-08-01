@@ -204,6 +204,7 @@ class TargetInboundSettings:
     claim_limit: int = 20
     retry_base: timedelta = timedelta(seconds=5)
     retry_max: timedelta = timedelta(minutes=5)
+    verification_max_attempts: int = 24
     loop: WorkerLoopSettings = WorkerLoopSettings()
 
     def __post_init__(self) -> None:
@@ -219,6 +220,8 @@ class TargetInboundSettings:
             raise ValueError("inbound claim_limit must be positive")
         if self.retry_base <= timedelta(0) or self.retry_max < self.retry_base:
             raise ValueError("inbound retry delays are invalid")
+        if self.verification_max_attempts < 1:
+            raise ValueError("inbound verification_max_attempts must be positive")
 
     @classmethod
     def from_environ(
@@ -264,6 +267,11 @@ class TargetInboundSettings:
                     "LARKFLOW_TARGET_INBOUND_RETRY_MAX_SECONDS",
                     300.0,
                 )
+            ),
+            verification_max_attempts=_positive_int(
+                values,
+                "LARKFLOW_TARGET_INBOUND_VERIFICATION_MAX_ATTEMPTS",
+                24,
             ),
             loop=WorkerLoopSettings(
                 idle_min_seconds=_positive_float(

@@ -115,6 +115,7 @@ class VerificationLoopSummary:
     claimed: int = 0
     verified: int = 0
     failed: int = 0
+    exhausted: int = 0
 
 
 class VerificationWorkerLoop:
@@ -137,6 +138,7 @@ class VerificationWorkerLoop:
             "claimed": 0,
             "verified": 0,
             "failed": 0,
+            "exhausted": 0,
         }
         while not stop_event.is_set():
             try:
@@ -155,7 +157,7 @@ class VerificationWorkerLoop:
                 )
                 continue
             totals["ticks"] += 1
-            for field in ("claimed", "verified", "failed"):
+            for field in ("claimed", "verified", "failed", "exhausted"):
                 totals[field] += int(getattr(report, field))
             if report.claimed or report.errors:
                 self.log(
@@ -181,6 +183,7 @@ class VerificationWorkerLoop:
             "claimed": report.claimed,
             "verified": report.verified,
             "failed": report.failed,
+            "exhausted": report.exhausted,
             "errors": list(report.errors),
         }
 

@@ -7,7 +7,7 @@
 larkflow 已开始按收敛后的产品设计重建中央工作流，目前完成模板生命周期、草稿预览、领域内核、PostgreSQL 事务持久化、Runtime Worker、首个 LLM Agent executor、Task Projection Worker，以及飞书 Task 完成事件的耐久入站链路。开发环境中的真实 Human-Agent-Human 三节点闭环已经完成。
 
 - **目标产品**：单企业、单层 DAG 的最小闭环，支持模板可选、草稿确认、Human / Agent / Tool 节点、受控编辑、重启、审计和飞书投影。
-- **新内核**：`larkflow/workflow/` 已实现模板生命周期和不可变版本、角色绑定和冻结 Instance Snapshot、草稿预览与确认、DAG 校验、节点状态迁移、依赖解锁、Human / Agent / Tool Node Runner、Attempt、claim、过期认领恢复、Runtime / Projection / Inbound Worker、乐观并发、PostgreSQL 仓储、追加型审计、事务 outbox 与耐久 Inbox。
+- **新内核**：`larkflow/workflow/` 已实现模板生命周期和不可变版本、角色绑定和冻结 Instance Snapshot、草稿预览与确认、DAG 校验、节点状态迁移、依赖解锁、Human / Agent / Tool Node Runner、Attempt、claim、过期认领恢复、Runtime / Projection / Inbound Worker、乐观并发、PostgreSQL 仓储、追加型审计、事务 outbox 与耐久 Inbox。凭据侧 Task 验证默认最多尝试 24 次，超限进入不可再认领的 `exhausted` 终态并保留终止时间、失败阶段、结果和最后错误。
 - **legacy 原型**：LangGraph + SQLite + lark-cli 路径继续保留，用于回归已验证的飞书投影、打回、幂等和恢复机制。
 - **尚未实现**：通用飞书命令入站、IM / Doc 投影、业务 Tool executor adapter、受控编辑、重启、企业目录校验和生产装配。真实 Agent 与模板入口只在开发环境和测试组织验证，不能据此描述为生产上线。
 - **证据边界**：本轮完成的是既有设计简化与一致性核验，不是访谈、市场或商业验证。
@@ -96,14 +96,14 @@ Phase 0 的设计一致性核验已经完成，当前进入 Phase 1 中央工作
 - Runtime Worker 每次只认领一个已被 adapter 明确接受的自动节点，先提交 claim 再调用 executor；进程中断后，其他 Worker 可在租约到期时用新 token 接管同一 Attempt。
 - `LLMAgentExecutor` 只接受 `work.agent.kind=llm.generate`，使用已提交的实例输入和直接依赖结果生成正文；启动装配会强制最长 LLM 路由预算加安全余量小于节点 claim 租期。
 - PostgreSQL 14 schema、migration runner、事务仓储、追加型 Audit 和带租约的 outbox 已落码；领域状态、审计和 outbox 在同一事务提交。
-- migration SQL 已进入 wheel，真实 PostgreSQL 集成测试使用一次性数据库，完成后删除测试数据库与角色。
+- migration SQL 已进入 wheel；仓库当前包含六份 migration，最新一份增加 Inbox 验证耗尽终态。真实 PostgreSQL 集成测试使用一次性数据库，完成后删除测试数据库与临时文件。
 - `larkflow-target` CLI 已提供模板创建、追加版本、启用、停用、逻辑删除、查询，从模板创建草稿和预览，以及实例确认、状态、Human 提交和四类 Worker 命令；环境配置由项目 dotenv 解析器读取，不使用 shell `source`。
-- `alicloud-sh` 上的长期 Target 开发库只接受本机 peer authentication，已应用五份 migration；Runtime、Projection、入站校验与领域入站四个 systemd 服务常驻，与 legacy 单消费者同时 active。
+- `alicloud-sh` 上的长期 Target 开发库只接受本机 peer authentication，当前仍应用五份 migration；Runtime、Projection、入站校验与领域入站四个 systemd 服务常驻，与 legacy 单消费者同时 active。第六份 migration 和有限验证重试已在一次性真实数据库验证，尚未部署到长期开发服务。
 - Projection Worker 只认领明确的投影事件，在数据库 claim 提交后调用 lark-cli，以稳定幂等键创建任务，并把 Task GUID、URL、同步版本和完成状态写回 Projection 记录。测试组织中的真实 Human 节点已经从 `waiting_human` 走到实例、节点和飞书任务全部完成。
 - Human Task 会展示节点明确声明的 Instance 输入；下游任务还会展示直接依赖中已提交的 Agent 正文。超长内容只在任务描述中截断，完整输入与结果仍保存在 PostgreSQL。
 - 每日 custom-format 备份保留约 7 天，并完成过一次新库恢复演练。
 - 自动执行采用 at-least-once 语义，executor 必须使用请求中的稳定幂等键消除重复副作用。
-- 当前只接入了 Task 完成事件；真实 Human-Agent-Human 已在开发云服务器和测试组织完成三节点闭环，两个 Human 结果均为最小业务确认值，Agent 正文已投影到最终任务。业务 Tool、通用飞书命令入站、IM / Doc 投影、完整对账和生产迁移仍缺，因此不能描述为目标产品已经上线。开发服务中的 `development.echo` 只用于持久化与恢复演练。
+- 当前只接入了 Task 完成事件；真实 Human-Agent-Human 已在开发云服务器和测试组织完成三节点闭环，正式模板创建的实例也已完成两个 Human Task 与一个真实 Agent 节点。两个 Human 结果均为最小业务确认值，Agent 正文已投影到最终任务。业务 Tool、通用飞书命令入站、IM / Doc 投影、完整对账和生产迁移仍缺，因此不能描述为目标产品已经上线。开发服务中的 `development.echo` 只用于持久化与恢复演练。
 
 原有访谈和飞书基线协议保留在 [research/phase-0/README.md](research/phase-0/README.md)，当前状态为 Deferred，不阻塞本轮简化设计，也不能被描述为已完成。
 

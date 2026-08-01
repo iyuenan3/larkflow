@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import os
 from threading import Barrier
@@ -453,6 +454,48 @@ def test_postgres_inbox_dedupes_and_allows_only_one_competing_claim():
         now=datetime(2026, 8, 1, 10, 2, tzinfo=timezone.utc),
     )
     assert claim("inbound_3") == ()
+
+    exhausted_event = replace(
+        event,
+        id=f"event_exhausted_{suffix}",
+        task_guid=f"task_exhausted_{suffix}",
+    )
+    assert inbox.append_inbox(exhausted_event) is True
+    exhausted_claim = inbox.claim_inbox_verification(
+        tenant_id,
+        worker_id="verification_exhausted",
+        now=datetime(2026, 8, 1, 10, 3, tzinfo=timezone.utc),
+        limit=1,
+    )[0]
+    inbox.mark_inbox_verification_exhausted(
+        tenant_id,
+        exhausted_event.id,
+        claim_token=exhausted_claim.claim_token,
+        error="Task completion is still not visible; exhausted after 2 attempts",
+        now=datetime(2026, 8, 1, 10, 4, tzinfo=timezone.utc),
+    )
+    with connection_factory() as connection:
+        exhausted_row = connection.execute(
+            """
+            SELECT status, processed_at, outcome, failure_stage, last_error
+            FROM workflow_inbox_events
+            WHERE tenant_id = %s AND id = %s
+            """,
+            (tenant_id, exhausted_event.id),
+        ).fetchone()
+    assert exhausted_row == {
+        "status": "exhausted",
+        "processed_at": datetime(2026, 8, 1, 10, 4, tzinfo=timezone.utc),
+        "outcome": "exhausted:verification_attempts",
+        "failure_stage": "verification",
+        "last_error": "Task completion is still not visible; exhausted after 2 attempts",
+    }
+    assert inbox.claim_inbox_verification(
+        tenant_id,
+        worker_id="verification_after_exhaustion",
+        now=datetime(2026, 8, 2, 10, 4, tzinfo=timezone.utc),
+        limit=1,
+    ) == ()
 
 
 def test_postgres_worker_recovers_an_expired_automated_claim():

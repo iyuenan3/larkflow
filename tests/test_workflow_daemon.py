@@ -144,7 +144,12 @@ def test_verification_loop_uses_the_same_bounded_backoff_contract():
     worker = ScriptedWorker(
         [
             VerificationWorkerReport(),
-            VerificationWorkerReport(claimed=1, verified=1),
+            VerificationWorkerReport(
+                claimed=2,
+                verified=1,
+                failed=1,
+                exhausted=1,
+            ),
             VerificationWorkerReport(),
         ]
     )
@@ -157,8 +162,10 @@ def test_verification_loop_uses_the_same_bounded_backoff_contract():
 
     assert stop.waits == [0.25, 0.25]
     assert summary.ticks == 3
-    assert summary.claimed == 1
+    assert summary.claimed == 2
     assert summary.verified == 1
+    assert summary.failed == 1
+    assert summary.exhausted == 1
 
 
 def request(*, kind="development.echo", args=None, executor="tool"):
@@ -269,6 +276,7 @@ def test_inbound_settings_have_independent_claim_and_retry_controls(monkeypatch)
             "LARKFLOW_TARGET_INBOUND_CLAIM_LIMIT": "7",
             "LARKFLOW_TARGET_INBOUND_RETRY_BASE_SECONDS": "2",
             "LARKFLOW_TARGET_INBOUND_RETRY_MAX_SECONDS": "30",
+            "LARKFLOW_TARGET_INBOUND_VERIFICATION_MAX_ATTEMPTS": "9",
             "LARKFLOW_TARGET_INBOUND_IDLE_MIN_SECONDS": "0.5",
             "LARKFLOW_TARGET_INBOUND_IDLE_MAX_SECONDS": "2",
         }
@@ -279,4 +287,5 @@ def test_inbound_settings_have_independent_claim_and_retry_controls(monkeypatch)
     assert settings.claim_limit == 7
     assert settings.retry_base == timedelta(seconds=2)
     assert settings.retry_max == timedelta(seconds=30)
+    assert settings.verification_max_attempts == 9
     assert settings.loop == WorkerLoopSettings(0.5, 2.0)

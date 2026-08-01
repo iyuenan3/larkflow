@@ -88,6 +88,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0003_inbound_task_events",
         "0004_inbox_verification",
         "0005_template_lifecycle",
+        "0006_inbox_verification_exhaustion",
     ]
     sql = migrations[0][1]
     for table in (
@@ -110,6 +111,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "ADD COLUMN version" in migrations[4][1]
     assert "CREATE TABLE workflow_template_events" in migrations[4][1]
     assert "workflow_template_events_append_only" in migrations[4][1]
+    assert "'exhausted'" in migrations[5][1]
 
 
 def test_in_memory_repository_is_tenant_scoped():

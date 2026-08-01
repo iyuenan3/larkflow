@@ -1296,6 +1296,34 @@ class PostgresWorkflowInbox:
         if row is None:
             raise InvalidInboxClaimError(event_id)
 
+    def mark_inbox_verification_exhausted(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        now: datetime,
+    ) -> None:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                UPDATE workflow_inbox_events
+                SET status = 'exhausted', available_at = %s,
+                    processed_at = %s,
+                    outcome = 'exhausted:verification_attempts',
+                    failure_stage = 'verification', last_error = %s,
+                    claimed_by = NULL, claim_token = NULL,
+                    claim_expires_at = NULL
+                WHERE tenant_id = %s AND id = %s
+                  AND status = 'verifying' AND claim_token = %s
+                RETURNING id
+                """,
+                (now, now, error, tenant_id, event_id, claim_token),
+            ).fetchone()
+        if row is None:
+            raise InvalidInboxClaimError(event_id)
+
     def mark_inbox_processed(
         self,
         tenant_id: str,

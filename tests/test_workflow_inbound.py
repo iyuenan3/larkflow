@@ -130,13 +130,14 @@ def event(event_id="event-1"):
     }
 
 
-def verify(inbox, reader, clock):
+def verify(inbox, reader, clock, *, max_attempts=24):
     return TaskVerificationWorker(
         inbox,
         reader,
         tenant_id=TENANT,
         worker_id="verification-1",
         clock=clock,
+        max_attempts=max_attempts,
     )
 
 
@@ -211,6 +212,35 @@ def test_readback_lag_retries_then_submits_without_losing_the_event():
     assert second.verified == 1
     assert inbound.run_once().submitted == 1
     assert inbox.records(TENANT)[0].attempt_count == 3
+
+
+def test_verification_stops_retrying_after_the_attempt_budget_is_exhausted():
+    clock = Clock()
+    _, _, inbox, bridge = setup_inbound(clock)
+    bridge("task.task.update_user_access_v2", event("event-exhausted"))
+    reader = TaskReader(task_state(status="todo", completed_at=None))
+    verification = verify(inbox, reader, clock, max_attempts=2)
+
+    first = verification.run_once()
+    assert first.failed == 1
+    assert first.exhausted == 0
+
+    clock.now += timedelta(seconds=5)
+    second = verification.run_once()
+    record = inbox.records(TENANT)[0]
+
+    assert second.failed == 1
+    assert second.exhausted == 1
+    assert record.status == InboxStatus.EXHAUSTED
+    assert record.attempt_count == 2
+    assert record.processed_at == clock.now
+    assert record.outcome == "exhausted:verification_attempts"
+    assert record.failure_stage == "verification"
+    assert "exhausted after 2 attempts" in (record.last_error or "")
+
+    clock.now += timedelta(days=1)
+    assert verification.run_once().claimed == 0
+    assert reader.calls == ["task-1", "task-1"]
 
 
 def test_old_or_unbound_tasks_cannot_advance_target_state():

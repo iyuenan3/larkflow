@@ -26,6 +26,7 @@ class InboxStatus(str, Enum):
     PROCESSING = "processing"
     PROCESSED = "processed"
     FAILED = "failed"
+    EXHAUSTED = "exhausted"
 
 
 class InvalidInboxClaimError(RuntimeError):
@@ -176,6 +177,17 @@ class WorkflowInboxStore(Protocol):
         claim_token: str,
         error: str,
         retry_at: datetime,
+    ) -> None:
+        ...
+
+    def mark_inbox_verification_exhausted(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        now: datetime,
     ) -> None:
         ...
 
@@ -350,6 +362,32 @@ class InMemoryWorkflowInbox:
             record.last_error = error
             record.failure_stage = "verification"
 
+    def mark_inbox_verification_exhausted(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        now: datetime,
+    ) -> None:
+        with self._lock:
+            record = self._claimed(
+                tenant_id,
+                event_id,
+                claim_token,
+                expected=InboxStatus.VERIFYING,
+            )
+            record.status = InboxStatus.EXHAUSTED
+            record.available_at = now
+            record.processed_at = now
+            record.outcome = "exhausted:verification_attempts"
+            record.claimed_by = None
+            record.claim_token = None
+            record.claim_expires_at = None
+            record.last_error = error
+            record.failure_stage = "verification"
+
     def mark_inbox_processed(
         self,
         tenant_id: str,
@@ -476,6 +514,7 @@ class VerificationWorkerReport:
     claimed: int = 0
     verified: int = 0
     failed: int = 0
+    exhausted: int = 0
     errors: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -494,12 +533,15 @@ class TaskVerificationWorker:
         claim_ttl: timedelta = timedelta(minutes=2),
         retry_base: timedelta = timedelta(seconds=5),
         retry_max: timedelta = timedelta(minutes=5),
+        max_attempts: int = 24,
     ) -> None:
         _validate_claim(worker_id, claim_limit, claim_ttl)
         if not tenant_id.strip():
             raise ValueError("Target tenant_id is required")
         if retry_base <= timedelta(0) or retry_max < retry_base:
             raise ValueError("verification retry delays are invalid")
+        if max_attempts < 1:
+            raise ValueError("verification max_attempts must be positive")
         self.inbox = inbox
         self.task_reader = task_reader
         self.tenant_id = tenant_id
@@ -509,6 +551,7 @@ class TaskVerificationWorker:
         self.claim_ttl = claim_ttl
         self.retry_base = retry_base
         self.retry_max = retry_max
+        self.max_attempts = max_attempts
 
     def run_once(self) -> VerificationWorkerReport:
         now = self.clock()
@@ -521,6 +564,7 @@ class TaskVerificationWorker:
         )
         verified = 0
         failed = 0
+        exhausted = 0
         errors = []
         for claim in claims:
             try:
@@ -536,6 +580,20 @@ class TaskVerificationWorker:
             except Exception as exc:
                 failed += 1
                 error = f"{claim.event.id}: {type(exc).__name__}: {exc}"
+                if claim.attempt_count >= self.max_attempts:
+                    exhausted += 1
+                    error = (
+                        f"{error}; exhausted after {self.max_attempts} attempts"
+                    )
+                    errors.append(error)
+                    self.inbox.mark_inbox_verification_exhausted(
+                        self.tenant_id,
+                        claim.event.id,
+                        claim_token=claim.claim_token,
+                        error=error,
+                        now=now,
+                    )
+                    continue
                 errors.append(error)
                 self.inbox.mark_inbox_verification_failed(
                     self.tenant_id,
@@ -557,6 +615,7 @@ class TaskVerificationWorker:
             claimed=len(claims),
             verified=verified,
             failed=failed,
+            exhausted=exhausted,
             errors=tuple(errors),
         )
 
