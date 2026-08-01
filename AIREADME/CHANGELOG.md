@@ -1,5 +1,16 @@
 # CHANGELOG · larkflow
 
+## v0.14.0-draft · 2026-08-01 · Feishu Task Projection Worker 真栈闭环（ADR-058）
+
+- Added：独立 `WorkflowProjectionWorker`、常驻 `ProjectionWorkerLoop`、Feishu Task adapter、Projection Store Port 与 PostgreSQL UPSERT。
+- Added：`larkflow-target project-once / project`、独立 env 配置、只读 migration 验证和收紧权限的 systemd unit。
+- Changed：Outbox claim 支持按事件类型过滤；Projection 只认领两类节点投影事件，不会占用未来其他消费者的事件。
+- Resilience：Task 创建使用稳定幂等键；外部已创建但响应丢失时，重试复用同一任务。Task 完成按 GUID 调用，Projection 保存同步版本与完成状态，失败使用有界指数重试。
+- Verified：完整离线套件 569 项通过，3 项真实 PostgreSQL 集成测试按默认配置跳过；wheel 包含 Projection、Feishu adapter 与 migration。
+- Verified：`alicloud-sh` 上 6 条历史非 Human outbox 以 noop 发布；测试组织中的真实 Human 节点创建 1 条飞书任务，提交后实例、节点与 Projection 均为 done / completed，日志记录 `tasks_created=1` 与 `tasks_completed=1`。最终 9 条 outbox 全部 published。
+- Deployment：`larkflow-target-projection.service` enabled / active，使用现有测试 profile 而不复制密钥；数据库身份只能更新 Outbox 与 Projection，不能更新领域状态。Runtime、Projection、legacy 与 PostgreSQL 同时 active。
+- Boundary：当前只实现 Task 出站创建 / 完成，不包含飞书入站事件、IM / Doc 投影、启动全量对账、真实 Agent / Tool 或生产身份拓扑。
+
 ## v0.13.0-draft · 2026-08-01 · Target 常驻服务、CLI 与真机重启恢复（ADR-057）
 
 - Added：独立 `larkflow-target` CLI，提供 migrate、create、confirm、show、submit-human、run-once 与 serve。

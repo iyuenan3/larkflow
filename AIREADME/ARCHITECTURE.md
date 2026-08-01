@@ -128,25 +128,27 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 - `service.py`：在一次仓储事务内协调草稿确认、调度、执行结果、授权、审计、outbox 与实例终态。
 - `runtime.py`：单步 `WorkflowWorker` 与 `AutomatedExecutor` Port。每个 tick 最多认领一个自动节点，先提交 claim，再调用外部 executor；外部异常写回失败，进程级崩溃留下的认领由租约恢复。
 - `daemon.py` 与 `config.py`：常驻轮询、可中断的有界空闲退避、瞬时 tick 故障隔离、Worker 身份和 Target env 配置。
-- `cli.py`：独立 `larkflow-target` 运维入口，提供 migration、草稿创建、确认、状态、Human 提交、单步执行与常驻服务。
+- `projection.py` 与 `projection_daemon.py`：只认领投影事件的 Outbox Worker、Feishu Task Projection Port、稳定幂等键、Projection 记录和独立常驻循环。
+- `feishu.py`：基于 lark-cli 的 Task adapter，使用 `data.guid` 作为外部身份，并按 Task GUID 完成任务。
+- `cli.py`：独立 `larkflow-target` 运维入口，提供 migration、草稿创建、确认、状态、Human 提交、Runtime 单步 / 常驻和 Projection 单步 / 常驻服务。
 - `executors.py`：只用于开发验证的 `development.echo` Tool adapter。Runtime 在 claim 前按 adapter 能力筛选具体节点，未接受的 Tool kind 保持 ready，不会先认领后失败。
 
 领域状态、审计与 outbox 在同一事务提交。事务提交后，Human 节点与所有节点状态变化通过 outbox 请求投影同步；Agent 和 Tool 激活直接返回 NodeActivation，由 Runtime Worker 在提交后交给 executor，避免数据库事务跨越外部调用。自动执行是 at-least-once，executor 必须使用 tenant-scoped Attempt 幂等键消除重复副作用。当前 claim 只解决中央 Worker 的并发认领，不是已 Deferred 的设备能力租约。
 
-该 adapter 已在一次性 PostgreSQL 14 数据库上验证 migration 重入、完整聚合往返、审计追加保护、outbox、双 Worker 竞争与过期认领恢复。`alicloud-sh` 已建立只接受本机 peer authentication 的长期 Target 开发库、每日备份和独立 `larkflow-target.service`。常驻服务已真实完成普通执行、SIGTERM 干净停机、SIGKILL 自动拉起和同一 Attempt 租约恢复。当前只启用开发验证 adapter，尚未接入真实飞书、Agent 或业务 Tool；同机本地备份不构成生产级高可用或灾难恢复。
+PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration 重入、完整聚合往返、审计追加保护、outbox、双 Worker 竞争与过期认领恢复。`alicloud-sh` 已建立长期 Target 开发库、每日备份、`larkflow-target.service` 与 `larkflow-target-projection.service`。Runtime 常驻服务已真实完成普通执行、SIGTERM 干净停机、SIGKILL 自动拉起和同一 Attempt 租约恢复。Projection 常驻服务已在测试组织完成 Human 节点的飞书 Task 创建与完成，数据库中的实例、节点、Projection 和 9 条 outbox 均回读为合法终态。当前仍未接入飞书入站事件、真实 Agent、业务 Tool、IM 或 Doc 投影；同机本地备份不构成生产级高可用或灾难恢复。
 
 ## 8. Intended vs implemented
 
 | Area | Target | 当前仓库 | 差距 |
 |---|---|---|---|
-| 业务真相 | PostgreSQL 领域模型 | 新 workflow aggregate、PostgreSQL adapter、独立 CLI 与常驻服务已落码；legacy 仍用 checkpointer | 需要模板、投影与真实 adapter 进入新装配 |
+| 业务真相 | PostgreSQL 领域模型 | 新 workflow aggregate、PostgreSQL adapter、独立 CLI、Runtime 与 Projection 常驻服务已落码；legacy 仍用 checkpointer | 需要模板、飞书入站与真实 executor 进入新装配 |
 | 持久化 | Instance、Node、Attempt、Audit、Outbox | PostgreSQL 14 schema、事务仓储、追加型 Audit 和带租约 Outbox 已实现并真库验证；长期开发库与本地每日备份已建立 | 需要异机备份、PITR、升级、容量告警和生产装配 |
 | 草稿与模板可选 | 草稿确认、无模板实例 | 新内核支持直接 InstanceSnapshot 草稿与 Owner 确认；模板编译未实现 | 需要模板服务与 importer |
 | 模板 | 简单生命周期、不可变版本、布尔锁 | 只消费 `id/name/nodes` | 未实现 |
 | 责任 | 每节点唯一 Owner，执行器分离 | 新内核已强制 Owner 与 `human/agent/tool` 分离；企业人员有效性尚无 adapter | 需要目录校验与角色解析 |
 | 编辑与重启 | 预览确认、revision、下游 Attempt | 已有活图和选择性重算机制 | 需按新模型提炼 |
-| 飞书投影 | PostgreSQL outbox、幂等、对账 | 新内核能原子写投影请求；legacy 已有 CLI adapter、关联表和 reconcile | 需要 Projection worker、幂等落库与 adapter 接线 |
-| 运行时 | 独立 Scheduler + Node Runner | 新内核已实现 Scheduler、Node Runner、持久化 runnable scan、常驻 Runtime Worker、能力过滤、优雅停机与过期 claim 恢复 | 需要真实 executor adapter 与 Projection worker 接线 |
+| 飞书投影 | PostgreSQL outbox、幂等、对账 | Human Task 创建 / 完成、稳定幂等键、Projection 落库、失败重试和独立常驻 Worker 已真栈验证 | 需要入站 Task 事件、启动全量对账、IM / Doc 投影与缺失对象重建 |
+| 运行时 | 独立 Scheduler + Node Runner | 新内核已实现 Scheduler、Node Runner、持久化 runnable scan、Runtime / Projection Worker、能力过滤、优雅停机与过期 claim 恢复 | 需要真实 Agent 与业务 Tool executor adapter |
 
 [SPEC.md](SPEC.md) 和 [DEPLOYMENT.md](DEPLOYMENT.md) 继续描述 As-built 原型，不作为目标产品已实现证据。
 

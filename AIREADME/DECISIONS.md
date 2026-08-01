@@ -437,3 +437,13 @@
 - Decision：新增独立 `larkflow-target` CLI 与常驻 Worker loop，使用最小和最大间隔的可中断指数退避、结构化日志、`hostname:pid` Worker identity 和 systemd `Restart=on-failure`。Worker 在读取不可变 Snapshot 后调用 adapter 的能力判定，把允许的 node key 交给事务服务认领。开发环境只注册 `development.echo`，用于普通执行与崩溃恢复演练。
 - Alternatives(否决)：复用 legacy `larkflow serve`；用 cron 反复执行 run-once；只按 Human / Agent / Tool 三类粗粒度认领；未配置 adapter 时先 claim 再失败；在 systemd unit 中保存数据库密码。
 - Tradeoff：每个候选实例在 claim 前多一次聚合读取，换取不会误认领未知能力。当前服务能证明持久化运行和恢复，不提供真实 Agent、业务 Tool 或飞书投影；Projection worker 接入前 outbox 会持续积压。
+
+## ADR-058 · 2026-08-01 · Feishu Task Projection 使用独立 Outbox Worker 与受限数据库身份
+
+- **Status：Accepted · Development deployment。**
+- Problem：Human 节点已经能进入 `waiting_human`，但 outbox 没有消费者，责任入口无法到达飞书。若 Projection 与 Runtime 共用进程，飞书故障会影响领域调度；若复制 Linux lark-cli 的加密配置与 master key，又会扩大凭据访问边界。
+- Constraint：数据库事务不得跨越飞书调用；外部创建是 at-least-once；不同 outbox 消费者不能互相认领事件；Task GUID、幂等键和同步版本必须持久化；Projection 身份不得更新 Instance、Node 或 Attempt；测试不得访问真实飞书。
+- Decision：新增独立 Projection Worker，只认领 `node.projection_create_requested` 与 `node.projection_sync_requested`。Worker 先提交 outbox claim，再以 `tenant + node_instance + attempt + kind` 派生稳定幂等键调用 lark-cli，随后 UPSERT Projection 并发布 outbox；失败按有界指数时间重试。Human 进入 `waiting_human` 后创建任务，节点进入 done、failed 或 canceled 后按 Task GUID 完成任务。非 Human 投影事件发布为 noop，其他事件留给其所属消费者。
+- Deployment：开发机不复制飞书凭据。Projection systemd 服务以现有 `lf-dev` OS 身份运行，复用该身份下的测试 profile；同名 PostgreSQL peer 角色只有所需表的 SELECT、Outbox UPDATE 与 Projection INSERT / UPDATE。它通过单用户 ACL 穿越 Target venv，不能读取 Runtime env，也不能写领域状态。Projection 启动只读验证 migration，不获得 schema DDL 权限。
+- Alternatives(否决)：在领域事务中直接调用飞书；把 Projection 合进 Runtime loop；复制 lark-cli 的 config、密文和 master key；让 Projection 使用 `lf_target_dev` 的完整数据库权限；不按事件类型过滤共享 outbox。
+- Tradeoff：当前开发部署复用了 legacy OS 身份来持有测试飞书凭据，仍不是生产身份拓扑。Task 创建 / 完成已真栈验证，但入站事件、IM / Doc 投影、启动全量对账、缺失对象重建和最小飞书 scope 回归仍未完成。

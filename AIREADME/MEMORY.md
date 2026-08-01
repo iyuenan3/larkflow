@@ -96,3 +96,15 @@
 - 现象（已复现）：第一次 recovery 演练在状态回读时看到节点 running，但下一条 SSH 命令真正送达 SIGKILL 前，20 秒内的执行已经完成。systemd 确实换了 PID，但日志是 `recovered=0`；若只看自动拉起，会把空闲进程重启误报成 Attempt 恢复成功。
 - 根因（已复现）：状态采样、工具往返和 kill 之间存在时间窗；“曾经 running”不等于“kill 时仍 running”。
 - 结论：恢复验收必须同时保留 kill 前当前 claim、被杀 PID、重启后不同 Worker、相同 Attempt ID、递增节点版本、`node.claim_recovered` 审计和最终 `recovered=1`。缺任一项都只能证明部分链路，不能声称崩溃恢复通过。
+
+## 2026-08-01 · 共享 outbox 的消费者必须在认领时过滤事件类型
+
+- 现象（设计复核）：Projection Worker 若调用无类型过滤的通用 `claim_outbox`，当前只有投影事件时看不出问题；未来加入通知或 webhook 事件后，它会先认领不属于自己的事件，再永久失败重试。
+- 根因（已确认）：消费者边界只写在 `_project()` 的处理分支，数据库认领没有表达所属事件集合。处理后才拒绝已经太晚，租约和失败状态已经被错误消费者改写。
+- 结论：事件所有权必须进入 `FOR UPDATE SKIP LOCKED` 的选取条件。Projection 只认领两类节点投影事件，未知事件保持原状态，留给所属消费者。
+
+## 2026-08-01 · Linux lark-cli 凭据不能通过复制 master key 来共享
+
+- 现象（已确认）：为新服务用户复制 `config.json`、加密 app secret 与 `master.key` 虽然能快速复用测试应用，但等于把可解密凭据完整复制给另一个身份，扩大访问边界。
+- 根因（已确认）：Linux 的 lark-cli keychain 实际是本地密文文件加同目录主密钥，不具备 OS 钥匙串的不可导出隔离。
+- 结论：当前开发 Projection 以已有凭据所有者 `lf-dev` 运行，只给该身份最小数据库权限，并通过单用户 ACL 复用 Target venv。生产部署应使用独立中央 adapter 身份和独立凭据生命周期，不能把该过渡拓扑当成目标形态。

@@ -4,7 +4,7 @@
 >
 > 文档状态：2026-08-01 Phase 1 中央工作流基础实现。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
-> last-synced: 2c7ad85 · 2026-08-01
+> last-synced: f09e1a3 · 2026-08-01
 
 ## 阅读顺序
 
@@ -24,14 +24,14 @@
 | PRODUCT_STRATEGY | ✅ | 范围收敛取舍，明确未做市场验证 |
 | PRD | ✅ | Target 单层 DAG MVP 功能契约 |
 | DAG_TEMPLATE_SPEC | ⚑ | Target Draft，v0.2 模板可选、草稿确认、Owner、编辑和 Attempt |
-| ARCHITECTURE | ✅ | Target 模块化单体、事务仓储、常驻 Runtime Worker 和剩余差距 |
-| RELATIONS | ✅ | Target 飞书、中央 lark-cli、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | Phase 0 已完成，Phase 1 已落领域内核、持久化与常驻 Runtime Worker |
+| ARCHITECTURE | ✅ | Target 模块化单体、事务仓储、Runtime / Projection Worker 和剩余差距 |
+| RELATIONS | ✅ | Target 飞书、中央 lark-cli、Node Runner、Projection 与 LangGraph 边界 |
+| ROADMAP | ✅ | Phase 0 已完成，Phase 1 已落领域内核、持久化、Runtime 与 Task Projection |
 | SPEC | ✅ | As-built Python 引擎、legacy YAML 与 CLI 契约 |
-| DEPLOYMENT | ✅ | Legacy ECS 与 Target Runtime、PostgreSQL 开发库、备份和恢复实录 |
+| DEPLOYMENT | ✅ | Legacy ECS 与 Target Runtime / Projection、PostgreSQL、备份和恢复实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
 | DECISIONS | ✅ | Append-only ADR 历史，新 ADR 显式 supersede 旧范围 |
-| CHANGELOG | ✅ | Append-only 已实现变更，最新为 Target 常驻服务装配 |
+| CHANGELOG | ✅ | Append-only 已实现变更，最新为飞书 Task Projection 真栈闭环 |
 | MEMORY | ⚑ | Append-only 经验，仍含待真实运行补全的语义占位 |
 
 ## 按任务读取
