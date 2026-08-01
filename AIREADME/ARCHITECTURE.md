@@ -130,14 +130,14 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 - `runtime.py`：单步 `WorkflowWorker` 与 `AutomatedExecutor` Port。每个 tick 最多认领一个自动节点，先提交 claim，再调用外部 executor；外部异常写回失败，进程级崩溃留下的认领由租约恢复。
 - `daemon.py` 与 `config.py`：常驻轮询、可中断的有界空闲退避、瞬时 tick 故障隔离、Worker 身份和 Target env 配置。
 - `projection.py` 与 `projection_daemon.py`：只认领投影事件的 Outbox Worker、Feishu Task Projection Port、稳定幂等键、Projection 记录和独立常驻循环。Human Task 描述会带入节点明确声明的 Instance 输入和直接依赖中已提交的结果，Agent 正文优先展示并设置长度上限。
-- `inbound.py` 与 `inbound_daemon.py`：以飞书 `event_id` 去重的 PostgreSQL Inbox，以及凭据侧校验与领域侧提交两阶段 Worker。两阶段分别 claim，失败后有界重试，过期 claim 可被其他 Worker 恢复。
+- `inbound.py` 与 `inbound_daemon.py`：以飞书 `event_id` 去重的 PostgreSQL Inbox，以及凭据侧校验与领域侧提交两阶段 Worker。两阶段分别 claim，失败后指数退避，过期 claim 可被其他 Worker 恢复。凭据侧默认最多验证 24 次，耗尽后写入带终止时间、阶段、结果和最后错误的 `exhausted` 终态，结构化日志暴露耗尽计数，且该事件不再被认领。
 - `feishu.py`：基于 lark-cli 的 Task adapter。创建使用原生 Task API、稳定 client token、`mode=1`、唯一 Owner assignee 和稳定绑定字段；入站校验只读 Task 详情。
 - `cli.py`：独立 `larkflow-target` 运维入口，提供模板全生命周期、从模板创建草稿、预览、确认、状态、Human 提交，以及 Runtime、Projection、入站校验和领域入站的单步 / 常驻服务。
 - `executors.py`：包含只接受 `work.agent.kind=llm.generate` 的 `LLMAgentExecutor`，以及只用于开发验证的 `development.echo` Tool adapter。Agent 使用提交时冻结的实例输入与依赖结果，返回正文、逻辑模型角色和稳定请求标识；Runtime 在 claim 前按 adapter 能力筛选具体节点，未接受的 kind 保持 ready，不会先认领后失败。
 
 领域状态、审计与 outbox 在同一事务提交。事务提交后，Human 节点与所有节点状态变化通过 outbox 请求投影同步；Agent 和 Tool 激活直接返回 NodeActivation，由 Runtime Worker 在提交后交给 executor，避免数据库事务跨越外部调用。自动执行是 at-least-once，executor 必须使用 tenant-scoped Attempt 幂等键消除重复副作用。Agent 装配还会检查所有显式故障切换线路的超时总和，加上安全余量后必须小于 claim 租期，避免正常慢调用在结果提交前失去租约。当前 claim 只解决中央 Worker 的并发认领，不是已 Deferred 的设备能力租约。
 
-PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration 重入、完整聚合往返、模板并发启用、不可变版本触发器、审计追加保护、outbox、Inbox、双 Worker 竞争与过期认领恢复。`alicloud-sh` 已建立长期 Target 开发库、每日备份，以及 Runtime、Projection、入站校验和领域入站四个 Target 常驻服务。legacy 仍是事件长连接的唯一消费者，只把原始 Task 完成信号持久化，不写 Target 领域状态。凭据侧以 `lf-dev` 读飞书 Task 并写验证结果，领域侧以 `lf_target_dev` 校验 Projection 绑定、当前 Attempt、唯一 Owner、任务来源与完成人后提交 Human 节点，后者不能读取 lark-cli profile。开发环境已启用 Agent，并用真实 Task 和模型完成 Human-Agent-Human 闭环；正式模板 CLI 也已用合成输入创建、预览、确认实例并投影首个 Human Task。通用飞书命令、业务 Tool、IM 或 Doc 投影仍未接入；同机本地备份不构成生产级高可用或灾难恢复。
+PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration 重入、完整聚合往返、模板并发启用、不可变版本触发器、审计追加保护、outbox、Inbox、双 Worker 竞争、过期认领恢复和验证耗尽终态。`alicloud-sh` 已建立长期 Target 开发库、每日备份，以及 Runtime、Projection、入站校验和领域入站四个 Target 常驻服务。legacy 仍是事件长连接的唯一消费者，只把原始 Task 完成信号持久化，不写 Target 领域状态。凭据侧以 `lf-dev` 读飞书 Task 并写验证结果，领域侧以 `lf_target_dev` 校验 Projection 绑定、当前 Attempt、唯一 Owner、任务来源与完成人后提交 Human 节点，后者不能读取 lark-cli profile。开发环境已启用 Agent，并用真实 Task 和模型完成 Human-Agent-Human 闭环；正式模板 CLI 创建的实例也已完成两个 Human 节点和一个 Agent 节点。通用飞书命令、业务 Tool、IM 或 Doc 投影仍未接入；同机本地备份不构成生产级高可用或灾难恢复。验证耗尽修复目前只在仓库和一次性数据库通过，尚未部署到长期开发服务。
 
 ## 8. Intended vs implemented
 

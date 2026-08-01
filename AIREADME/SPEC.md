@@ -118,6 +118,8 @@ Target Task 入站只接受 `task.task.update_user_access_v2` 中包含 `task_co
 
 通过后以 Owner 作为经服务端核验的 actor 调用同一 Human 提交领域命令，event ID 同时作为 Inbox 幂等键与审计关联。旧的无绑定任务、`mode=2` 任务、非当前 Attempt 或非 Owner 完成均不能推进领域状态。
 
+凭据侧详情读取失败或完成状态暂不可见时，按 `LARKFLOW_TARGET_INBOUND_RETRY_BASE_SECONDS` 到 `LARKFLOW_TARGET_INBOUND_RETRY_MAX_SECONDS` 做指数退避。`LARKFLOW_TARGET_INBOUND_VERIFICATION_MAX_ATTEMPTS` 默认 24；达到预算仍无法验证时，Inbox 进入 `exhausted` 终态，写入 `processed_at`、`outcome=exhausted:verification_attempts`、`failure_stage=verification` 与最后错误，不生成 verified payload，也不允许领域 Worker 认领。验证日志包含 `exhausted` 计数，运维必须对非零值告警并人工调查，不能静默丢弃。
+
 ## 飞书事件订阅 EventKey（研究证实为静态常量，不需 dev app 上下文）
 - `card.action.trigger`（仅 bot）：卡片按钮点击。路由键塞按钮 `behaviors[].callback.value`，原样回传为 `action_value`（自描述 `{thread_id, interrupt_id, node_id, passed, reopen}`，与 gate 产出的 `passed`/`reopen` 逐字对齐）。⚠️ dev app 须在开发者后台开「事件与回调 → 回调配置」，否则静默零事件。
 - `task.task.update_user_access_v2`（user|bot）：任务事件。完成 = `.event.event_types[]` 含 `task_completed_update`（自行 filter）；`.event.task_guid` 经关联表回映射到 `(thread_id, interrupt_id)`。

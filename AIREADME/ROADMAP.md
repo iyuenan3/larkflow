@@ -27,10 +27,10 @@
 - 已完成单步 Runtime Worker、持久化 runnable scan、Worker 身份认领、精确租约到期恢复与稳定 Attempt 幂等键；真实 PostgreSQL 双 Worker 竞争和崩溃恢复验证已通过。
 - 已完成独立 `larkflow-target` CLI、常驻轮询、有界退避、SIGTERM 干净停机、adapter 能力过滤与 systemd 服务装配；SIGKILL 后新 Worker 接管同一 Attempt 已在真机验证。
 - 已完成独立 Projection Worker、事件类型过滤、Task adapter、稳定幂等键、Projection 落库、失败重试和 systemd 服务装配；测试组织中的 Human Task 创建与完成闭环已真实通过。
-- 已完成 Task 完成事件的耐久入站：legacy 保持 EventKey 单消费者，以 event ID 去重写入 PostgreSQL Inbox；凭据侧回读飞书 Task，领域侧再校验 Projection 绑定、当前 Attempt、唯一 Owner 和完成人后提交 Human 节点。
+- 已完成 Task 完成事件的耐久入站：legacy 保持 EventKey 单消费者，以 event ID 去重写入 PostgreSQL Inbox；凭据侧回读飞书 Task，领域侧再校验 Projection 绑定、当前 Attempt、唯一 Owner 和完成人后提交 Human 节点。凭据验证默认最多尝试 24 次，耗尽后进入可审计且不可再认领的终态并暴露结构化告警信号。
 - 已完成首个 `llm.generate` Agent adapter、OpenAI 兼容逻辑角色路由、claim 与 LLM 超时预算校验，以及 Agent 正文到下游 Human Task 的投影；开发云服务器与测试组织中的真实 Human-Agent-Human 三节点闭环已通过。
 - 已完成 Template Service：`draft / enabled / disabled / deleted`、不可变版本、布尔锁、角色与参数绑定、追加型模板审计和 aggregate version 乐观并发；真实 PostgreSQL 同时启用竞争验证已通过。
-- 已完成从启用模板生成冻结草稿、Owner 只读预览和正式 CLI 入口；开发环境已用合成输入创建、预览、确认模板实例并投影首个 Human Task。
+- 已完成从启用模板生成冻结草稿、Owner 只读预览和正式 CLI 入口；开发环境已用合成输入创建、预览、确认模板实例，并完成正式模板的真实 `Human -> Agent -> Human` 闭环。
 - `alicloud-sh` 已建立长期 Target 开发库、本机 peer authentication、每日备份、新库恢复演练和 enabled Target 服务；仍缺异机备份、PITR 与生产运行手册。
 - 每个节点的唯一 Owner 解析与服务端授权。当前内核已拒绝非 Owner 提交，企业目录校验待接入。
 - 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则、持久化、常驻 Worker、Agent adapter、真实开发链路与恢复扫描已落码，业务 Tool adapter 待完成。

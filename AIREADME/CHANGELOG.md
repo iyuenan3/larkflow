@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.17.1-draft · 2026-08-01 · Inbox 验证有限重试
+
+- Fixed：凭据侧 Task 验证不再永久重试。默认最多尝试 24 次，达到预算后写入不可再认领的 `exhausted` 终态，保留终止时间、失败阶段、结果和最后错误。
+- Added：`LARKFLOW_TARGET_INBOUND_VERIFICATION_MAX_ATTEMPTS` 配置、Verification Worker 的 `exhausted` 结构化计数，以及 PostgreSQL migration `0006_inbox_verification_exhaustion`。
+- Verified：先用回归测试证明旧实现会无限重试，再完成 `608 passed, 6 skipped` 全量离线验证。一次性 PostgreSQL 14 数据库应用六份 migration，验证 `exhausted` 写入及隔天不可再次 claim，随后回读确认测试库与临时目录均已删除。
+- Boundary：修复尚未部署到 `alicloud-sh` 的长期开发库与常驻服务；当前部署仍是五份 migration，不能把仓库验证描述为云端已生效。
+
 ## v0.17.0-draft · 2026-08-01 · Target 模板生命周期与正式草稿入口（ADR-061）
 
 - Added：`TemplateService`、Template aggregate、不可变 `TemplateVersion`、追加型模板审计、独立 aggregate version 乐观并发，以及 PostgreSQL migration `0005_template_lifecycle`。
