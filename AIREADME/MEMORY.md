@@ -90,3 +90,9 @@
 - 现象（已复现）：以 `lf_target_dev` 把 custom-format 备份恢复到新库时，业务表、migration 和触发器都成功，但 pg_restore 只对 `public` schema ACL 输出 warning 并以 0 退出；回读发现 PUBLIC 仍有 CREATE 权限。只看退出码会把权限回退当成恢复成功。
 - 根因（已复现）：目标库的 `public` schema 归管理员所有，应用角色不能撤销其默认 ACL。dump 含 ACL 不等于应用角色有权在新库重放 ACL。
 - 结论：恢复前由 postgres 管理员创建数据库并预置 schema ACL，再以应用角色执行 `pg_restore --no-acl`。恢复验收必须回读 migration、表所有者、PUBLIC CREATE=false 和应用角色 CREATE=true，不能只看 pg_restore 退出码或表数量。
+
+## 2026-08-01 · 故障注入必须证明 kill 发生在 claim 尚未完成时
+
+- 现象（已复现）：第一次 recovery 演练在状态回读时看到节点 running，但下一条 SSH 命令真正送达 SIGKILL 前，20 秒内的执行已经完成。systemd 确实换了 PID，但日志是 `recovered=0`；若只看自动拉起，会把空闲进程重启误报成 Attempt 恢复成功。
+- 根因（已复现）：状态采样、工具往返和 kill 之间存在时间窗；“曾经 running”不等于“kill 时仍 running”。
+- 结论：恢复验收必须同时保留 kill 前当前 claim、被杀 PID、重启后不同 Worker、相同 Attempt ID、递增节点版本、`node.claim_recovered` 审计和最终 `recovered=1`。缺任一项都只能证明部分链路，不能声称崩溃恢复通过。

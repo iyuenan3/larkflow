@@ -1,5 +1,15 @@
 # CHANGELOG · larkflow
 
+## v0.13.0-draft · 2026-08-01 · Target 常驻服务、CLI 与真机重启恢复（ADR-057）
+
+- Added：独立 `larkflow-target` CLI，提供 migrate、create、confirm、show、submit-human、run-once 与 serve。
+- Added：常驻 Worker loop、有界空闲退避、瞬时 tick 故障隔离、SIGINT / SIGTERM 干净停止、结构化 JSON 日志与进程级 Worker identity。
+- Added：开发验证专用 `development.echo` Tool adapter、Target env 示例和收紧权限的 systemd unit。
+- Changed：Runtime 在 claim 前按 adapter 能力筛选具体节点；未注册 executor 或未接受的 Tool kind 保持 ready，不会被错误认领后标记失败。
+- Verified：完整离线套件 559 项通过；wheel 包含新 CLI 与 Runtime 模块；`alicloud-sh` 的 Target 服务 enabled / active，普通执行、SIGTERM 干净停机、SIGKILL 自动拉起、同一 Attempt 换 Worker 恢复均已真实通过。
+- Verified：有效恢复中 Attempt ID 保持不变，Worker PID 与 claim token 轮换，节点版本递增，最终日志为 `recovered=1`、`completed=1`、`stale_results=0`，审计追加 `node.claim_recovered`。
+- Boundary：开发服务只启用确定性测试 adapter，不是真实 Agent 或业务 Tool；6 条投影 outbox 仍为 pending，尚未连接飞书 Projection worker。
+
 ## v0.12.0-draft · 2026-08-01 · Runtime Worker、认领恢复与 Target 开发数据库（ADR-055..056）
 
 - Added：持久化 runnable scan、单步 `WorkflowWorker`、`AutomatedExecutor` Port 与不可变执行请求；请求包含已提交的实例输入、依赖结果、work 和 tenant-scoped Attempt 幂等键。

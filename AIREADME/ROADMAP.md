@@ -25,11 +25,12 @@
 - 已完成 PostgreSQL 14 第一版 schema：Template、TemplateVersion、Instance、NodeInstance、Attempt、Projection、Audit、Outbox。
 - 已完成 Instance 聚合事务仓储、JSONB 快照、乐观并发、追加型 Audit、带租约 Outbox 和 package-data migration；真实 PostgreSQL 14 一次性数据库集成验证已通过。
 - 已完成单步 Runtime Worker、持久化 runnable scan、Worker 身份认领、精确租约到期恢复与稳定 Attempt 幂等键；真实 PostgreSQL 双 Worker 竞争和崩溃恢复验证已通过。
-- `alicloud-sh` 已建立长期 Target 开发库、本机 peer authentication、每日备份和新库恢复演练；仍缺异机备份、PITR 与生产运行手册。
+- 已完成独立 `larkflow-target` CLI、常驻轮询、有界退避、SIGTERM 干净停机、adapter 能力过滤与 systemd 服务装配；SIGKILL 后新 Worker 接管同一 Attempt 已在真机验证。
+- `alicloud-sh` 已建立长期 Target 开发库、本机 peer authentication、每日备份、新库恢复演练和 enabled Target 服务；仍缺异机备份、PITR 与生产运行手册。
 - 模板 `draft / enabled / disabled / deleted`、不可变版本和布尔锁。
 - 实例 `draft`、预览、确认启动和丢弃。当前内核已实现确认与丢弃，预览接口待接入。
 - 每个节点的唯一 Owner 解析与服务端授权。当前内核已拒绝非 Owner 提交，企业目录校验待接入。
-- 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则、持久化、单步 Worker 与恢复扫描已落码，常驻运行循环和真实 executor adapter 待接入。
+- 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则、持久化、常驻 Worker 与恢复扫描已落码，真实 executor adapter 待接入。
 - Outbox worker、飞书 Task、IM、Doc 投影、稳定幂等键和启动对账。
 - 从 legacy 原型提炼 adapter、事件韧性和 Mock 测试资产。
 

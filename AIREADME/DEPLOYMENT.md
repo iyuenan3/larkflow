@@ -1,6 +1,6 @@
 # DEPLOYMENT · larkflow
 
-> **As-built / Legacy Prototype + Target PostgreSQL 开发验证。** 本文保存 2026-07-27 中心化 LangGraph + SQLite 服务在单台 ECS 上的真实部署记录，便于迁移飞书适配器、幂等、对账和运维经验。它不是目标 SaaS 拓扑：目标架构是 PostgreSQL 中央控制面的模块化单体，个人 Agent Edge 已移出近期范围，见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+> **As-built / Legacy Prototype + Target Runtime 开发部署。** 本文保存 legacy LangGraph + SQLite 服务与 Target PostgreSQL Runtime 在单台 ECS 上的真实部署记录。它不是目标 SaaS 拓扑：目标架构是 PostgreSQL 中央控制面的模块化单体，个人 Agent Edge 已移出近期范围，见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 >
 > 除修正事实错误外，不再给这套部署增加新的产品领域能力。个人端不得复用下文的企业 bot 全局凭证；中央端和个人端必须使用不同身份、权限与生命周期。
 
@@ -9,7 +9,9 @@
 - `alicloud-sh` 的 PostgreSQL 14.23 保持 active，`listen_addresses=localhost`，5432 只监听 `127.0.0.1`。宿主系统盘约有 33 GB 可用，内存约有 993 MB available。该数据库是自建 Target 开发环境，不是生产数据库，也不具备托管数据库的高可用能力。
 - 一次性数据库与最小权限密码角色通过本机 SSH 隧道运行完整 `tests/test_workflow_postgres.py`，3 项全部通过：migration 重入、聚合与 outbox 往返、两个真实连接竞争同一节点、过期 claim 恢复。测试前先跑单 Worker 基线；完成后数据库与角色均已删除，并从系统目录回读为 0。
 - 长期开发库为 `larkflow_target_dev`，所有者是无密码角色 `lf_target_dev`。同名 Unix 系统用户通过本机 Unix socket 的 peer authentication 连接；角色不能超级管理、建库、建角色、复制或绕过 RLS，`PUBLIC` 没有数据库连接权。数据库默认 `timezone=UTC`、`statement_timeout=30s`、`lock_timeout=5s`、`idle_in_transaction_session_timeout=60s`。
-- 长期开发库已应用 `0001_workflow` 与 `0002_runtime_claim_owner`，包含 10 张 workflow 表。新仓储仍未接入常驻服务，库内没有业务实例。
+- 长期开发库已应用 `0001_workflow` 与 `0002_runtime_claim_owner`，包含 10 张 workflow 表。独立 `larkflow-target.service` 已接入该库；当前保留 3 个已完成验证实例和 6 条 pending outbox，后者等待 Projection worker，不代表已投影到飞书。
+- Target 服务使用 `/srv/larkflow/target/venv` 中的 wheel，以 `lf_target_dev` 运行并通过 Unix socket peer authentication 连接。`/etc/larkflow-target.env` 为 `0640 root:lf_target_dev`，systemd unit 为 `0644 root:root`；服务 enabled / active，legacy `larkflow@dev` 同时保持 active。
+- 常驻验证覆盖普通 Tool 完成、SIGTERM 干净退出、SIGKILL 后 5 秒自动拉起，以及租约到期后由不同 Worker 恢复同一 Attempt。有效故障注入最终记录 `recovered=1`、`completed=1`、`stale_results=0` 和 `node.claim_recovered` 审计。
 - `larkflow-target-backup.timer` 每天北京时间 03:20 后随机延迟不超过 15 分钟执行 custom-format `pg_dump`，本机保留约 7 天。备份目录权限为 `0700 lf_target_dev:lf_target_dev`，备份文件为 `0600`，backup service 使用 systemd 文件系统与权限沙箱。最新备份已按下述 ACL 流程恢复到一次性新库，回读两份 migration、10 张表、`lf_target_dev` 表所有权和收紧的 schema 权限后删除恢复库。
 - 备份目前只在同一块系统盘，能处理误操作和局部数据损坏，不能处理整机或云盘丢失，也没有 PITR。进入生产前必须增加异机或对象存储副本、恢复演练、容量告警和 PostgreSQL 升级流程。
 - `larkflow@dev` 始终保持 active，仍运行 legacy SQLite 路径；Target PostgreSQL 与 legacy 服务没有混接。
@@ -17,6 +19,8 @@
 ### Target PostgreSQL 运维入口
 
 - 应用身份：systemd 服务以 `lf_target_dev` 运行，通过 `postgresql:///larkflow_target_dev` 连接，不配置数据库密码，不改用 TCP。
+- Target CLI：`/srv/larkflow/target/venv/bin/larkflow-target --env-file /etc/larkflow-target.env <command>`；支持 migrate、create、confirm、show、submit-human、run-once 与 serve。
+- Target 服务：`systemctl status larkflow-target.service`；日志看 `journalctl -u larkflow-target.service`。仓库 unit 与 env 模板为 `deploy/larkflow-target.service`、`deploy/larkflow-target.env.example`。
 - 手工只读连接：`sudo -u lf_target_dev env --chdir=/ psql -X --dbname=larkflow_target_dev`。
 - migration：由目标应用启动入口调用 package-data migration runner。长期库的初始两份 migration 已落地，后续不得手工改 schema 后跳过 migration ledger。
 - 立即备份：`sudo systemctl start larkflow-target-backup.service`；结果看 `systemctl show larkflow-target-backup.service --property=Result,ExecMainStatus`。

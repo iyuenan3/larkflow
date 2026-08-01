@@ -428,3 +428,12 @@
 - Decision：在 `alicloud-sh` 的 PostgreSQL 14 上建立 `larkflow_target_dev`，由无密码角色与同名 Unix 服务用户通过本机 Unix socket 的 peer authentication 访问。5432 只监听 localhost，撤销 `PUBLIC` 的数据库连接权，并配置 statement、lock 和 idle transaction 超时。每天生成 custom-format 本地备份、保留约 7 天，并用一次性新库完成真实恢复演练。
 - Alternatives(否决)：现在购买 RDS；继续只用临时数据库；让 Target 复用 legacy SQLite；应用使用 postgres 超级用户；保存长期 TCP 密码；把 PostgreSQL 暴露到公网。
 - Tradeoff：省去托管数据库成本并获得可持续开发环境，但数据库、备份和宿主处于同一故障域，没有异机副本、PITR、自动故障转移或托管升级。该方案只适用于当前开发阶段，生产前必须补异机备份、恢复周期、容量告警与升级流程。
+
+## ADR-057 · 2026-08-01 · Target 运行时使用独立 CLI、能力过滤与 systemd 常驻进程
+
+- **Status：Accepted · Development deployment。**
+- Problem：单步 Worker 已能证明 claim 规则，但没有可持续运行、可停机和可被 systemd 拉起的应用入口。若只按 `executor=tool` 选择 adapter，开发 adapter 会先认领自己不支持的业务 Tool kind，再把节点错误标成失败。
+- Constraint：Target 与 legacy CLI、服务和持久化必须隔离；启动时先验证 migration 与数据库权限；空闲轮询不能忙等；SIGTERM 必须唤醒等待并留下干净停止证据；瞬时数据库错误不得杀死 daemon；只有 adapter 明确接受的具体节点才能在 claim 前进入候选集。
+- Decision：新增独立 `larkflow-target` CLI 与常驻 Worker loop，使用最小和最大间隔的可中断指数退避、结构化日志、`hostname:pid` Worker identity 和 systemd `Restart=on-failure`。Worker 在读取不可变 Snapshot 后调用 adapter 的能力判定，把允许的 node key 交给事务服务认领。开发环境只注册 `development.echo`，用于普通执行与崩溃恢复演练。
+- Alternatives(否决)：复用 legacy `larkflow serve`；用 cron 反复执行 run-once；只按 Human / Agent / Tool 三类粗粒度认领；未配置 adapter 时先 claim 再失败；在 systemd unit 中保存数据库密码。
+- Tradeoff：每个候选实例在 claim 前多一次聚合读取，换取不会误认领未知能力。当前服务能证明持久化运行和恢复，不提供真实 Agent、业务 Tool 或飞书投影；Projection worker 接入前 outbox 会持续积压。
