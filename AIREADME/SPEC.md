@@ -104,13 +104,15 @@
 
 ### Target CLI 与 Task 入站 as-built
 
-Target 使用独立 `larkflow-target` CLI，不复用上述 legacy 驱动层。控制面增加 `template-create / template-add-version / template-enable / template-disable / template-delete / template-list / template-show / create-from-template / preview / reconcile-projections`，并保留 `migrate / create / confirm / show / submit-human` 和四类 Worker 的单步、常驻命令。这些是本机运维入口，仍没有网络 API。
+Target 使用独立 `larkflow-target` CLI，不复用上述 legacy 驱动层。控制面增加 `template-create / template-add-version / template-enable / template-disable / template-delete / template-list / template-show / create-from-template / preview / reconcile-projections / reconcile-completions`，并保留 `migrate / create / confirm / show / submit-human` 和四类 Worker 的单步、常驻命令。这些是本机运维入口，仍没有网络 API。
 
 `create-from-template` 只接受 enabled 模板，以最新不可变版本解析参数和 `owner_role -> person_id` 绑定，生成含 `template_version_id` 与 `locked` 的完整 Snapshot。`preview` 仅允许 Instance Owner 读取并重新校验 draft，不写审计、不改变状态；`confirm` 仍需显式调用。
 
 `project` 在进入 Outbox 循环前调用与 `reconcile-projections` 相同的全量对账路径。对账按 Instance ID 分页，默认每批 100，可用 `LARKFLOW_TARGET_PROJECTION_RECONCILE_BATCH_SIZE` 调整。它只对当前 `waiting_human` 节点补建缺失 Task；已有 Task 先只读查询，只有 Task v2 明确返回资源不存在码 `1470404` 才使用下一 repair generation 的稳定 client token 重建，并以旧 GUID 和旧幂等键为并发条件原子更换 Projection 绑定。任意其他读取失败只记入结构化错误并继续其他实例，不重建。终态 Human 节点不补发历史 Task；若已有 Projection 仍未完成，对账会收口其完成状态。
 
-Target Task 入站只接受 `task.task.update_user_access_v2` 中包含 `task_completed_update` 的事件。原始事件只提供 event ID、Task GUID 和事件类型，不作为 actor 证明。服务端必须重新读取 Task 详情，并校验以下条件：
+Target Task 完成发现以周期状态轮询为可靠路径。`project` 启动后立即扫描，此后默认每 30 秒读取当前 `waiting_human` 节点绑定的 Task；周期与每批实例数分别由 `LARKFLOW_TARGET_COMPLETION_POLL_SECONDS` 和 `LARKFLOW_TARGET_COMPLETION_POLL_BATCH_SIZE` 控制。只在 Task 详情明确为完成且存在完成时间时，以 tenant、Projection、Task GUID 和完成时间派生稳定信号 ID，写入 PostgreSQL Inbox。`reconcile-completions` 可显式执行同一次扫描。单个 Task 读取失败只进入结构化报告，不阻塞其他节点。
+
+`task.task.update_user_access_v2` 中包含 `task_completed_update` 的事件仍可作为低延迟入口，但不再是 Human 节点推进的可靠性前提。轮询信号和原始事件都只提供 Task GUID 与变化提示，不作为 actor 证明。服务端必须重新读取 Task 详情，并校验以下条件：
 
 - Task GUID 对应当前 Human Attempt 的 Projection。
 - Task 绑定字段与 Projection 的稳定幂等键一致。
@@ -118,7 +120,7 @@ Target Task 入站只接受 `task.task.update_user_access_v2` 中包含 `task_co
 - Task 状态已完成，完成人集合严格等于该 Owner。
 - Node 仍是 `waiting_human`，Attempt 仍是当前轮次。
 
-通过后以 Owner 作为经服务端核验的 actor 调用同一 Human 提交领域命令，event ID 同时作为 Inbox 幂等键与审计关联。旧的无绑定任务、`mode=2` 任务、非当前 Attempt 或非 Owner 完成均不能推进领域状态。
+通过后以 Owner 作为经服务端核验的 actor 调用同一 Human 提交领域命令，入口信号 ID 同时作为 Inbox 幂等键与审计关联。旧的无绑定任务、`mode=2` 任务、非当前 Attempt 或非 Owner 完成均不能推进领域状态。
 
 凭据侧详情读取失败或完成状态暂不可见时，按 `LARKFLOW_TARGET_INBOUND_RETRY_BASE_SECONDS` 到 `LARKFLOW_TARGET_INBOUND_RETRY_MAX_SECONDS` 做指数退避。`LARKFLOW_TARGET_INBOUND_VERIFICATION_MAX_ATTEMPTS` 默认 24；达到预算仍无法验证时，Inbox 进入 `exhausted` 终态，写入 `processed_at`、`outcome=exhausted:verification_attempts`、`failure_stage=verification` 与最后错误，不生成 verified payload，也不允许领域 Worker 认领。验证日志包含 `exhausted` 计数，运维必须对非零值告警并人工调查，不能静默丢弃。
 

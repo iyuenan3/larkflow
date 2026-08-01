@@ -496,3 +496,14 @@
 - Alternatives(否决)：只重放已发布 Outbox；每次启动无条件重建所有 Task；将任意读失败视为已删除；原地复用已确认删除对象的 client token；无并发条件覆盖 Projection；为已终止且没有 Projection 的历史节点补发任务。
 - Tradeoff：启动时每个活跃 Human Task 多一次只读 API，大租户的启动时间与 API 配额会随当前等待节点数增长。当前只在启动和显式命令中对账，没有周期调度；真实飞书 Task 删除后重建与最小 scope 仍需开发环境验收。
 - Evidence（2026-08-02）：专用单 Human 实例的旧 Task 被确认删除并读回 `1470404` 后，对账只重建 1 条、将 Projection 原子换绑到不同 GUID、写入 `repair_generation=1`；第二次对账不再重建。人工完成新 Task 后，凭据侧验证和领域侧提交各成功处理 1 条，修复后的 Projection 保持绑定并进入完成态。该证据完成真实删除重建及后续入站验收，最小 scope 回归仍未完成。
+
+## ADR-064 · 2026-08-02 · Human Task 完成以周期读回为可靠入口
+
+- **Status：Accepted · As-built foundation。**
+- Problem：开发应用在线版本中的 Task 变化事件使用用户身份，而服务器只装配 bot profile。即使临时放宽应用 scope，bot EventKey 消费者仍收不到测试组织中人工完成 Task 的事件，外部 Task 已完成但 Target Human 节点永久停在 `waiting_human`。把事件总线进程存活或应用版本发布成功视为链路健康，无法证明完成信号可达。
+- Constraint：不能信任事件或轮询结果中的 actor；任何飞书读取都不得进入领域数据库事务；可靠路径必须耐久、幂等、可恢复；单个 Task 读取失败不能阻塞其他实例；不能为此新增持有更宽权限的领域服务。
+- Decision：现有 Projection 服务周期扫描当前 `waiting_human` 节点的 Task Projection，默认每 30 秒按 Instance ID 分页读取 Task。只有详情明确为 `done` 且存在完成时间时，才以 tenant、Projection、Task GUID 和完成时间派生稳定信号 ID，写入 PostgreSQL Inbox。已有凭据验证 Worker 仍在事务外重新读取 Task，领域 Worker 仍校验当前 Attempt、Projection 绑定、应用来源、唯一 Owner 与完成人。飞书事件保留为可选低延迟信号，但不再承担可靠性。
+- Operations：新增 `reconcile-completions` 一次性命令，以及 `LARKFLOW_TARGET_COMPLETION_POLL_SECONDS` 和 `LARKFLOW_TARGET_COMPLETION_POLL_BATCH_SIZE`。常驻 Projection 每次扫描输出结构化计数，启动后立即执行一次，后续按单调时钟调度。轮询与事件重复到达由 Inbox 幂等和领域状态校验共同吸收。
+- Alternatives(否决)：要求服务器登录用户 profile；继续扩大应用 scope 等待 bot 事件；让 legacy 定时扫描 Target 状态；轮询发现完成后直接提交 Human 节点；新增第五个 Target daemon 和另一套凭据。
+- Tradeoff：每个等待中的 Human Task 会产生周期只读 API 调用，调用量随活跃责任入口线性增长。当前单企业开发阶段接受 30 秒延迟与轮询成本；进入更大规模前应增加分页游标、速率预算、抖动和失败告警，而不是重新把事件当成唯一可靠通道。
+- Evidence：完整离线套件 `622 passed, 7 skipped`。开发服务器首次扫描读取 3 个当前 Human Task，观察到 2 个完成、1 个待办，新增 2 条 Inbox 信号；凭据侧验证 2 条，领域侧提交 2 条，两个滞留实例、Node 与 Projection 随后全部完成。显式重跑只读取剩余待办 Task，新增信号为 0。五个服务均为 active、`NRestarts=0`。该验证使用已回归的最小业务 scope；临时应用版本管理 scope 尚未移除。

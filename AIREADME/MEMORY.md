@@ -168,3 +168,9 @@
 - 现象（已复现）：Target venv 目录与当前包主体属于 `lf_target_dev`，但用该用户执行 `pip install --force-reinstall` 时，在卸载旧包后因旧 `direct_url.json` 属于 root 而报 `Permission denied`，四个已主动停止的 Target 服务不能立即恢复。
 - 根因（已确认）：更早一次安装留下 root 所有的 dist-info 文件。pip 把旧 metadata 临时改名后，服务用户无法删除其中的 root 文件；只检查 venv 顶层和包目录权限会漏掉这个混合所有权。
 - 结论：停服前同时检查目标包 dist-info 的递归所有权，并保留上一 wheel 与数据库备份。遇到失败先把精确的残留 metadata 移出 site-packages，再以 venv 所有者重装、运行 `pip check` 和入口导入验证，最后启动服务并回读 `NRestarts`；不能在未知半安装状态直接起服务。
+
+## 2026-08-02 · EventKey 消费者在线不证明当前身份能收到事件
+
+- 现象（真实链路）：飞书应用版本已发布，bot 事件总线与 legacy 消费进程均在线，人工完成 Task 后服务端事件计数仍为零。临时扩大 Task scope 后复测结果不变，外部 Task 已是 `done`，Target 节点仍停在 `waiting_human`。
+- 根因（已确认）：在线应用版本中的 Task 变化事件按用户身份交付，而开发服务器只装配 bot profile。进程、连接与 scope 都正常，仍不等于当前身份存在可达的事件投递路径。
+- 结论：Human Task 完成必须由周期状态读回兜底，事件只用于降低延迟。轮询观察结果仍不能证明 actor，必须先写耐久 Inbox，再沿既有凭据回读和领域授权两阶段推进。健康检查应包含周期扫描结构化计数与真实状态闭环，不能只看长连接和进程。
