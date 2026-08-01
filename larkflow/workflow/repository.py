@@ -1,10 +1,14 @@
 """Persistence port and deterministic in-memory implementation."""
 from __future__ import annotations
 
+from collections.abc import Collection
 from copy import deepcopy
 from datetime import datetime, timedelta
 import secrets
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from .projection import ProjectionRecord
 
 from .events import (
     AuditEvent,
@@ -71,6 +75,7 @@ class OutboxStore(Protocol):
         now: datetime,
         limit: int = 100,
         claim_ttl: timedelta = timedelta(minutes=5),
+        event_types: Collection[str] | None = None,
     ) -> tuple[OutboxClaim, ...]:
         ...
 
@@ -96,6 +101,20 @@ class OutboxStore(Protocol):
         ...
 
 
+class ProjectionStore(Protocol):
+    def get_projection(
+        self,
+        tenant_id: str,
+        node_instance_id: str,
+        attempt_no: int,
+        kind: str,
+    ) -> ProjectionRecord | None:
+        ...
+
+    def save_projection(self, projection: ProjectionRecord) -> None:
+        ...
+
+
 class InMemoryWorkflowRepository:
     """Copy-on-read repository that exercises optimistic concurrency in tests."""
 
@@ -105,6 +124,7 @@ class InMemoryWorkflowRepository:
         self._audit_ids: set[tuple[str, str]] = set()
         self._outbox: dict[tuple[str, str], OutboxRecord] = {}
         self._outbox_dedupe: set[tuple[str, tuple[str, str, str, int]]] = set()
+        self._projections: dict[tuple[str, str, int, str], ProjectionRecord] = {}
 
     def add(
         self,
@@ -194,6 +214,45 @@ class InMemoryWorkflowRepository:
             if record_tenant == tenant_id
         )
 
+    def get_projection(
+        self,
+        tenant_id: str,
+        node_instance_id: str,
+        attempt_no: int,
+        kind: str,
+    ) -> ProjectionRecord | None:
+        record = self._projections.get(
+            (tenant_id, node_instance_id, attempt_no, kind)
+        )
+        return deepcopy(record) if record is not None else None
+
+    def save_projection(self, projection: ProjectionRecord) -> None:
+        key = (
+            projection.tenant_id,
+            projection.node_instance_id,
+            projection.attempt_no,
+            projection.kind,
+        )
+        existing = self._projections.get(key)
+        if existing is not None:
+            if existing.idempotency_key != projection.idempotency_key:
+                raise ValueError("projection idempotency key cannot change")
+            if (
+                existing.external_id is not None
+                and existing.external_id != projection.external_id
+            ):
+                raise ValueError("projection external id cannot change")
+            if projection.sync_version < existing.sync_version:
+                raise ValueError("projection sync version cannot move backwards")
+        self._projections[key] = deepcopy(projection)
+
+    def projection_records(self, tenant_id: str) -> tuple[ProjectionRecord, ...]:
+        return tuple(
+            deepcopy(record)
+            for (record_tenant, _, _, _), record in self._projections.items()
+            if record_tenant == tenant_id
+        )
+
     def claim_outbox(
         self,
         tenant_id: str,
@@ -202,6 +261,7 @@ class InMemoryWorkflowRepository:
         now: datetime,
         limit: int = 100,
         claim_ttl: timedelta = timedelta(minutes=5),
+        event_types: Collection[str] | None = None,
     ) -> tuple[OutboxClaim, ...]:
         if not worker_id.strip():
             raise ValueError("worker_id is required")
@@ -209,12 +269,19 @@ class InMemoryWorkflowRepository:
             raise ValueError("limit must be positive")
         if claim_ttl <= timedelta(0):
             raise ValueError("claim_ttl must be positive")
+        accepted_types = set(event_types) if event_types is not None else None
+        if accepted_types == set():
+            return ()
         candidates = sorted(
             (
                 record
                 for (record_tenant, _), record in self._outbox.items()
                 if record_tenant == tenant_id
                 and self._claimable(record, now)
+                and (
+                    accepted_types is None
+                    or record.event.event_type in accepted_types
+                )
             ),
             key=lambda record: (
                 record.event.available_at,

@@ -1,0 +1,314 @@
+"""Transactional outbox projection tests."""
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from larkflow.workflow import (
+    ExternalTask,
+    FEISHU_TASK_KIND,
+    InMemoryWorkflowRepository,
+    InstanceSnapshot,
+    NodeSpec,
+    NodeStatus,
+    OutboxEvent,
+    OutboxStatus,
+    WorkflowInstance,
+    WorkflowProjectionWorker,
+    WorkflowService,
+)
+
+
+NOW = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+TENANT = "tenant_projection"
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = NOW
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+class RecordingTasks:
+    def __init__(self, *, fail_after_creates: int = 0) -> None:
+        self.fail_after_creates = fail_after_creates
+        self.create_requests = []
+        self.completed = []
+        self.tasks = {}
+
+    def create_task(self, request):
+        self.create_requests.append(request)
+        existing = self.tasks.get(request.idempotency_key)
+        if existing is not None:
+            return existing
+        task = ExternalTask(
+            guid=f"task-{len(self.tasks) + 1}",
+            url=f"https://example.invalid/tasks/{len(self.tasks) + 1}",
+        )
+        self.tasks[request.idempotency_key] = task
+        if self.fail_after_creates:
+            self.fail_after_creates -= 1
+            raise RuntimeError("Feishu response was lost after task creation")
+        return task
+
+    def complete_task(self, task_guid):
+        self.completed.append(task_guid)
+
+
+def human_snapshot() -> InstanceSnapshot:
+    return InstanceSnapshot(
+        goal="Approve the launch brief",
+        nodes=(
+            NodeSpec(
+                "approve",
+                "Approve brief",
+                "person_reviewer",
+                "human",
+                work={
+                    "objective": "Approve the launch brief",
+                    "inputs": [],
+                    "outputs": [{"id": "decision", "type": "data"}],
+                    "acceptance": ["A decision is recorded"],
+                },
+            ),
+        ),
+    )
+
+
+def setup_human(clock: Clock):
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=clock)
+    service.create_draft(
+        instance_id="instance_projection",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=human_snapshot(),
+    )
+    service.confirm_draft(
+        TENANT,
+        "instance_projection",
+        actor_person_id="person_owner",
+    )
+    tasks = RecordingTasks()
+    worker = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        tasks,
+        tenant_id=TENANT,
+        worker_id="projection_1",
+        clock=clock,
+        id_factory=lambda: "projection_1",
+    )
+    return service, repository, tasks, worker
+
+
+def test_human_task_is_created_after_activation_and_completed_after_submission():
+    clock = Clock()
+    service, repository, tasks, worker = setup_human(clock)
+
+    initial = worker.run_once()
+    assert initial.claimed == 1
+    assert initial.noops == 1
+    assert tasks.create_requests == []
+
+    activation = service.dispatch_due(
+        TENANT,
+        "instance_projection",
+        worker_id="runtime_1",
+    )[0]
+    assert activation.status == NodeStatus.WAITING_HUMAN
+    created = worker.run_once()
+    assert created.tasks_created == 1
+    request = tasks.create_requests[0]
+    assert request.owner_person_id == "person_reviewer"
+    assert request.summary == "Approve brief"
+    assert request.idempotency_key.startswith("lf-")
+    assert len(request.idempotency_key) == 51
+
+    node = service.get(TENANT, "instance_projection").nodes["approve"]
+    projection = repository.get_projection(
+        TENANT,
+        node.id,
+        1,
+        FEISHU_TASK_KIND,
+    )
+    assert projection is not None
+    assert projection.external_id == "task-1"
+    assert projection.state == {
+        "node_status": NodeStatus.WAITING_HUMAN.value,
+        "completed": False,
+    }
+
+    service.submit_human(
+        TENANT,
+        "instance_projection",
+        "approve",
+        actor_person_id="person_reviewer",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        result={"decision": "approved"},
+    )
+    completed = worker.run_once()
+    assert completed.tasks_completed == 1
+    assert tasks.completed == ["task-1"]
+    assert worker.run_once().claimed == 0
+
+
+def test_ambiguous_external_create_retries_with_the_same_idempotency_key():
+    clock = Clock()
+    service, repository, _, initial_worker = setup_human(clock)
+    assert initial_worker.run_once().noops == 1
+    service.dispatch_due(
+        TENANT,
+        "instance_projection",
+        worker_id="runtime_1",
+    )
+    tasks = RecordingTasks(fail_after_creates=1)
+    worker = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        tasks,
+        tenant_id=TENANT,
+        worker_id="projection_1",
+        clock=clock,
+        retry_base=timedelta(seconds=5),
+        retry_max=timedelta(seconds=20),
+    )
+
+    report = worker.run_once()
+    assert report.claimed == 1
+    assert report.published == 0
+    assert report.failed == 1
+    failed = [
+        record
+        for record in repository.outbox_records(TENANT)
+        if record.status == OutboxStatus.FAILED
+    ]
+    assert len(failed) == 1
+    assert "RuntimeError" in (failed[0].last_error or "")
+    assert len(tasks.tasks) == 1
+    assert repository.projection_records(TENANT) == ()
+    assert worker.run_once().claimed == 0
+
+    clock.now += timedelta(seconds=5)
+    recovered = worker.run_once()
+    assert recovered.tasks_created == 1
+    assert recovered.failed == 0
+    assert len(tasks.create_requests) == 2
+    assert (
+        tasks.create_requests[0].idempotency_key
+        == tasks.create_requests[1].idempotency_key
+    )
+    assert len(tasks.tasks) == 1
+
+
+def test_non_human_projection_events_are_published_without_external_io():
+    clock = Clock()
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=clock)
+    service.create_draft(
+        instance_id="instance_tool",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=InstanceSnapshot(
+            nodes=(
+                NodeSpec(
+                    "publish",
+                    "Publish",
+                    "person_owner",
+                    "tool",
+                    work={
+                        "objective": "Publish",
+                        "inputs": [],
+                        "outputs": [{"id": "url", "type": "data"}],
+                        "acceptance": ["A URL exists"],
+                        "tool": {"kind": "document.publish", "args": {}},
+                    },
+                ),
+            )
+        ),
+    )
+    service.confirm_draft(TENANT, "instance_tool", actor_person_id="person_owner")
+    tasks = RecordingTasks()
+    worker = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        tasks,
+        tenant_id=TENANT,
+        worker_id="projection_1",
+        clock=clock,
+    )
+
+    report = worker.run_once()
+
+    assert report.published == 1
+    assert report.noops == 1
+    assert tasks.create_requests == []
+    assert repository.projection_records(TENANT) == ()
+
+
+def test_projection_worker_does_not_claim_events_owned_by_other_consumers():
+    clock = Clock()
+    repository = InMemoryWorkflowRepository()
+    aggregate = WorkflowInstance(
+        id="instance_other_event",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        snapshot=InstanceSnapshot(nodes=()),
+        created_at=NOW,
+    )
+    repository.add(
+        aggregate,
+        outbox_events=(
+            OutboxEvent(
+                id="outbox_other",
+                tenant_id=TENANT,
+                aggregate_type="instance",
+                aggregate_id=aggregate.id,
+                aggregate_version=0,
+                event_type="instance.notification_requested",
+                payload={"instance_id": aggregate.id},
+                created_at=NOW,
+                available_at=NOW,
+            ),
+        ),
+    )
+    worker = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        RecordingTasks(),
+        tenant_id=TENANT,
+        worker_id="projection_1",
+        clock=clock,
+    )
+
+    assert worker.run_once().claimed == 0
+    assert repository.outbox_records(TENANT)[0].status == OutboxStatus.PENDING
+
+
+def test_projection_identity_and_version_cannot_change():
+    clock = Clock()
+    service, repository, _, worker = setup_human(clock)
+    service.dispatch_due(
+        TENANT,
+        "instance_projection",
+        worker_id="runtime_1",
+    )
+    worker.run_once()
+    projection = repository.projection_records(TENANT)[0]
+
+    with pytest.raises(ValueError, match="external id"):
+        repository.save_projection(replace(projection, external_id="task-other"))
+
+    with pytest.raises(ValueError, match="version"):
+        repository.save_projection(replace(projection, sync_version=-1))

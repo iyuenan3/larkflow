@@ -1,7 +1,7 @@
 """PostgreSQL persistence adapter for the target workflow aggregate."""
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import datetime, timedelta
 import secrets
 from typing import Any
@@ -29,6 +29,7 @@ from .repository import (
     InstanceAlreadyExistsError,
     InstanceNotFoundError,
 )
+from .projection import ProjectionRecord
 from .serde import (
     quality_from_dict,
     quality_to_dict,
@@ -107,6 +108,78 @@ class PostgresWorkflowRepository:
                 (tenant_id, instance_id),
             ).fetchall()
         return self._load_instance(row, nodes, attempts)
+
+    def get_projection(
+        self,
+        tenant_id: str,
+        node_instance_id: str,
+        attempt_no: int,
+        kind: str,
+    ) -> ProjectionRecord | None:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM workflow_projections
+                WHERE tenant_id = %s
+                  AND node_instance_id = %s
+                  AND attempt_no = %s
+                  AND kind = %s
+                """,
+                (tenant_id, node_instance_id, attempt_no, kind),
+            ).fetchone()
+        return self._projection_from_row(row) if row is not None else None
+
+    def save_projection(self, projection: ProjectionRecord) -> None:
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                row = connection.execute(
+                    """
+                    INSERT INTO workflow_projections (
+                        tenant_id, id, instance_id, node_instance_id,
+                        attempt_no, kind, external_id, external_url,
+                        idempotency_key, sync_version, state,
+                        created_at, updated_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT (
+                        tenant_id, node_instance_id, attempt_no, kind
+                    ) DO UPDATE SET
+                        external_id = EXCLUDED.external_id,
+                        external_url = EXCLUDED.external_url,
+                        sync_version = GREATEST(
+                            workflow_projections.sync_version,
+                            EXCLUDED.sync_version
+                        ),
+                        state = EXCLUDED.state,
+                        updated_at = EXCLUDED.updated_at
+                    WHERE workflow_projections.idempotency_key = EXCLUDED.idempotency_key
+                      AND (
+                        workflow_projections.external_id IS NULL
+                        OR workflow_projections.external_id = EXCLUDED.external_id
+                      )
+                      AND EXCLUDED.sync_version >= workflow_projections.sync_version
+                    RETURNING *
+                    """,
+                    (
+                        projection.tenant_id,
+                        projection.id,
+                        projection.instance_id,
+                        projection.node_instance_id,
+                        projection.attempt_no,
+                        projection.kind,
+                        projection.external_id,
+                        projection.external_url,
+                        projection.idempotency_key,
+                        projection.sync_version,
+                        Jsonb(to_json_value(projection.state)),
+                        projection.created_at,
+                        projection.updated_at,
+                    ),
+                ).fetchone()
+                if row is None:
+                    raise ValueError("projection identity or version cannot change")
 
     def runnable_instance_ids(
         self,
@@ -227,6 +300,7 @@ class PostgresWorkflowRepository:
         now: datetime,
         limit: int = 100,
         claim_ttl: timedelta = timedelta(minutes=5),
+        event_types: Collection[str] | None = None,
     ) -> tuple[OutboxClaim, ...]:
         if not worker_id.strip():
             raise ValueError("worker_id is required")
@@ -234,6 +308,11 @@ class PostgresWorkflowRepository:
             raise ValueError("limit must be positive")
         if claim_ttl <= timedelta(0):
             raise ValueError("claim_ttl must be positive")
+        accepted_types = (
+            sorted(set(event_types)) if event_types is not None else None
+        )
+        if accepted_types == []:
+            return ()
         claim_token = secrets.token_urlsafe(24)
         claim_expires_at = now + claim_ttl
         with self.connection_factory() as connection:
@@ -244,6 +323,7 @@ class PostgresWorkflowRepository:
                         SELECT tenant_id, id
                         FROM workflow_outbox_events
                         WHERE tenant_id = %s
+                          AND (%s::text[] IS NULL OR event_type = ANY(%s::text[]))
                           AND (
                             (status IN ('pending', 'failed') AND available_at <= %s)
                             OR (status = 'processing' AND claim_expires_at <= %s)
@@ -265,6 +345,8 @@ class PostgresWorkflowRepository:
                     """,
                     (
                         tenant_id,
+                        accepted_types,
+                        accepted_types,
                         now,
                         now,
                         limit,
@@ -599,4 +681,22 @@ class PostgresWorkflowRepository:
             payload=row["payload"],
             created_at=row["created_at"],
             available_at=row["available_at"],
+        )
+
+    @staticmethod
+    def _projection_from_row(row: dict[str, Any]) -> ProjectionRecord:
+        return ProjectionRecord(
+            id=row["id"],
+            tenant_id=row["tenant_id"],
+            instance_id=row["instance_id"],
+            node_instance_id=row["node_instance_id"],
+            attempt_no=int(row["attempt_no"]),
+            kind=row["kind"],
+            external_id=row["external_id"],
+            external_url=row["external_url"],
+            idempotency_key=row["idempotency_key"],
+            sync_version=int(row["sync_version"]),
+            state=row["state"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )

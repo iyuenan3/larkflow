@@ -8,6 +8,9 @@ import pytest
 from larkflow.workflow import (
     DevelopmentToolExecutor,
     ExecutionRequest,
+    ProjectionWorkerLoop,
+    ProjectionWorkerReport,
+    TargetProjectionSettings,
     TargetRuntimeSettings,
     WorkflowWorkerLoop,
     WorkflowWorkerReport,
@@ -90,6 +93,27 @@ def test_progress_resets_backoff_and_transient_errors_do_not_kill_loop():
     ]
 
 
+def test_projection_loop_uses_the_same_bounded_backoff_contract():
+    worker = ScriptedWorker(
+        [
+            ProjectionWorkerReport(),
+            ProjectionWorkerReport(claimed=1, published=1, noops=1),
+            ProjectionWorkerReport(),
+        ]
+    )
+    stop = RecordingStop(stop_after_waits=2)
+
+    summary = ProjectionWorkerLoop(
+        worker,
+        settings=WorkerLoopSettings(0.25, 1.0),
+    ).run(stop)
+
+    assert stop.waits == [0.25, 0.25]
+    assert summary.ticks == 3
+    assert summary.claimed == 1
+    assert summary.published == 1
+
+
 def request(*, kind="development.echo", args=None, executor="tool"):
     return ExecutionRequest(
         tenant_id="tenant_dev",
@@ -159,3 +183,28 @@ def test_target_settings_use_peer_dsn_and_derive_worker_identity(monkeypatch):
     assert settings.claim_ttl == timedelta(seconds=30)
     assert settings.loop == WorkerLoopSettings(0.5, 2.0)
     assert settings.enable_development_executor is True
+
+
+def test_projection_settings_have_independent_claim_and_retry_controls(monkeypatch):
+    monkeypatch.setattr("larkflow.workflow.config.socket.gethostname", lambda: "host-a")
+    monkeypatch.setattr("larkflow.workflow.config.os.getpid", lambda: 123)
+
+    settings = TargetProjectionSettings.from_environ(
+        {
+            "LARKFLOW_TARGET_DSN": "postgresql:///larkflow_target_dev",
+            "LARKFLOW_TARGET_TENANT": "dev",
+            "LARKFLOW_TARGET_PROJECTION_CLAIM_TTL_SECONDS": "60",
+            "LARKFLOW_TARGET_PROJECTION_CLAIM_LIMIT": "7",
+            "LARKFLOW_TARGET_PROJECTION_RETRY_BASE_SECONDS": "2",
+            "LARKFLOW_TARGET_PROJECTION_RETRY_MAX_SECONDS": "30",
+            "LARKFLOW_TARGET_PROJECTION_IDLE_MIN_SECONDS": "0.5",
+            "LARKFLOW_TARGET_PROJECTION_IDLE_MAX_SECONDS": "2",
+        }
+    )
+
+    assert settings.worker_id == "host-a:123:projection"
+    assert settings.claim_ttl == timedelta(seconds=60)
+    assert settings.claim_limit == 7
+    assert settings.retry_base == timedelta(seconds=2)
+    assert settings.retry_max == timedelta(seconds=30)
+    assert settings.loop == WorkerLoopSettings(0.5, 2.0)

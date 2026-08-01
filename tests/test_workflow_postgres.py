@@ -21,6 +21,7 @@ from larkflow.workflow import (
     NodeRunner,
     NodeSpec,
     PostgresWorkflowRepository,
+    ProjectionRecord,
     WorkflowService,
     WorkflowWorker,
     apply_migrations,
@@ -155,6 +156,30 @@ def test_postgres_round_trip_audit_outbox_and_optimistic_concurrency():
         "instance.completed",
     }
     assert outbox_count == 2
+
+    node = restored.nodes["publish"]
+    projection = ProjectionRecord(
+        id=f"projection_{suffix}",
+        tenant_id=tenant_id,
+        instance_id=instance_id,
+        node_instance_id=node.id,
+        attempt_no=1,
+        kind="feishu_task",
+        external_id=f"task_{suffix}",
+        external_url="https://example.invalid/task",
+        idempotency_key=f"idem_{suffix}",
+        sync_version=node.version,
+        state={"node_status": "done", "completed": True},
+        created_at=datetime(2026, 8, 1, 10, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 8, 1, 10, 1, tzinfo=timezone.utc),
+    )
+    repository.save_projection(projection)
+    assert repository.get_projection(
+        tenant_id,
+        node.id,
+        1,
+        "feishu_task",
+    ) == projection
 
     claim = repository.claim_outbox(
         tenant_id,

@@ -15,14 +15,20 @@ from .events import (
     OutboxRecord,
     OutboxStatus,
 )
-from .migrate import apply_migrations, available_migrations, postgres_connection_factory
-from .config import TargetRuntimeSettings
+from .migrate import (
+    apply_migrations,
+    available_migrations,
+    postgres_connection_factory,
+    verify_migrations,
+)
+from .config import TargetProjectionSettings, TargetRuntimeSettings
 from .daemon import (
     WorkerLoopSettings,
     WorkerLoopSummary,
     WorkflowWorkerLoop,
 )
 from .executors import DevelopmentToolExecutor
+from .feishu import CliFeishuTaskProjection
 from .model import (
     AttemptStatus,
     ExecutorKind,
@@ -44,9 +50,20 @@ from .repository import (
     InstanceAlreadyExistsError,
     InstanceNotFoundError,
     OutboxStore,
+    ProjectionStore,
     WorkflowRepository,
 )
 from .postgres import PostgresWorkflowRepository
+from .projection import (
+    ExternalTask,
+    FEISHU_TASK_KIND,
+    ProjectionRecord,
+    ProjectionWorkerReport,
+    TaskProjectionAdapter,
+    TaskProjectionRequest,
+    WorkflowProjectionWorker,
+)
+from .projection_daemon import ProjectionLoopSummary, ProjectionWorkerLoop
 from .runtime import (
     AutomatedExecutor,
     ExecutionRequest,
@@ -74,10 +91,13 @@ __all__ = [
     "ClaimExpiredError",
     "ClaimNotExpiredError",
     "ConcurrentUpdateError",
+    "CliFeishuTaskProjection",
     "DevelopmentToolExecutor",
     "ExecutorKind",
     "ExecutionRequest",
     "ExecutionResult",
+    "ExternalTask",
+    "FEISHU_TASK_KIND",
     "FrozenDict",
     "GraphValidationError",
     "InMemoryWorkflowRepository",
@@ -99,14 +119,23 @@ __all__ = [
     "OutboxStatus",
     "OutboxStore",
     "PostgresWorkflowRepository",
+    "ProjectionLoopSummary",
+    "ProjectionRecord",
+    "ProjectionStore",
+    "ProjectionWorkerLoop",
+    "ProjectionWorkerReport",
     "QualityResult",
     "QualityVerdict",
     "Scheduler",
     "StaleAttemptError",
+    "TargetProjectionSettings",
     "TargetRuntimeSettings",
+    "TaskProjectionAdapter",
+    "TaskProjectionRequest",
     "TransitionError",
     "WorkflowInstance",
     "WorkflowRepository",
+    "WorkflowProjectionWorker",
     "WorkflowService",
     "WorkflowWorker",
     "WorkflowWorkerLoop",
@@ -120,4 +149,5 @@ __all__ = [
     "ready_node_keys",
     "topological_order",
     "validate_snapshot",
+    "verify_migrations",
 ]

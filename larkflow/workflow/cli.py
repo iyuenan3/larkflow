@@ -17,12 +17,15 @@ import yaml
 
 from larkflow.config import load_dotenv
 
-from .config import TargetRuntimeSettings
+from .config import TargetProjectionSettings, TargetRuntimeSettings
 from .daemon import WorkflowWorkerLoop
 from .executors import DevelopmentToolExecutor
-from .migrate import apply_migrations, postgres_connection_factory
+from .feishu import CliFeishuTaskProjection
+from .migrate import apply_migrations, postgres_connection_factory, verify_migrations
 from .model import ExecutorKind, QualityResult, QualityVerdict
 from .postgres import PostgresWorkflowRepository
+from .projection import WorkflowProjectionWorker
+from .projection_daemon import ProjectionWorkerLoop
 from .runner import NodeRunner
 from .runtime import AutomatedExecutor, WorkflowWorker
 from .serde import quality_to_dict, snapshot_from_dict, to_json_value
@@ -47,6 +50,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--worker-id",
         default=os.environ.get("LARKFLOW_TARGET_WORKER_ID"),
+    )
+    parser.add_argument(
+        "--projection-worker-id",
+        default=os.environ.get("LARKFLOW_TARGET_PROJECTION_WORKER_ID"),
+    )
+    parser.add_argument(
+        "--lark-profile",
+        default=os.environ.get("LARKFLOW_TARGET_LARK_PROFILE"),
+    )
+    parser.add_argument(
+        "--lark-identity",
+        default=os.environ.get("LARKFLOW_TARGET_LARK_IDENTITY", "bot"),
+        choices=("bot", "user"),
     )
     parser.add_argument(
         "--enable-development-executor",
@@ -80,6 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("run-once", help="run one durable worker tick")
     commands.add_parser("serve", help="run worker ticks until SIGINT or SIGTERM")
+    commands.add_parser("project-once", help="run one Feishu projection tick")
+    commands.add_parser("project", help="project to Feishu until SIGINT or SIGTERM")
     return parser
 
 
@@ -119,7 +137,12 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
         return 0
 
     tenant_id = _required(namespace.tenant, "--tenant or LARKFLOW_TARGET_TENANT")
-    applied = apply_migrations(connection_factory)
+    projection_command = namespace.command in {"project-once", "project"}
+    if projection_command:
+        verify_migrations(connection_factory)
+        applied = ()
+    else:
+        applied = apply_migrations(connection_factory)
     if applied:
         log("migrations_applied", {"versions": list(applied)})
     repository = PostgresWorkflowRepository(connection_factory)
@@ -184,6 +207,56 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
         log("human_result_submitted", _instance_payload(instance))
         return 0
 
+    if projection_command:
+        settings = TargetProjectionSettings.from_environ(
+            dsn=dsn,
+            tenant_id=tenant_id,
+            worker_id=namespace.projection_worker_id,
+        )
+        task_adapter = CliFeishuTaskProjection(
+            profile=_required(
+                namespace.lark_profile,
+                "--lark-profile or LARKFLOW_TARGET_LARK_PROFILE",
+            ),
+            identity=namespace.lark_identity,
+        )
+        worker = WorkflowProjectionWorker(
+            repository,
+            repository,
+            repository,
+            task_adapter,
+            tenant_id=settings.tenant_id,
+            worker_id=settings.worker_id,
+            claim_limit=settings.claim_limit,
+            claim_ttl=settings.claim_ttl,
+            retry_base=settings.retry_base,
+            retry_max=settings.retry_max,
+        )
+        if namespace.command == "project-once":
+            report = worker.run_once()
+            log("projection_tick", ProjectionWorkerLoop._report_fields(report))
+            return int(bool(report.errors))
+
+        stop_event = Event()
+        _install_signal_handlers(stop_event, log, prefix="projection")
+        log(
+            "projection_started",
+            {
+                "tenant_id": settings.tenant_id,
+                "worker_id": settings.worker_id,
+                "claim_ttl_seconds": settings.claim_ttl.total_seconds(),
+                "claim_limit": settings.claim_limit,
+                "retry_base_seconds": settings.retry_base.total_seconds(),
+                "retry_max_seconds": settings.retry_max.total_seconds(),
+                "idle_min_seconds": settings.loop.idle_min_seconds,
+                "idle_max_seconds": settings.loop.idle_max_seconds,
+                "lark_profile": namespace.lark_profile,
+                "lark_identity": namespace.lark_identity,
+            },
+        )
+        ProjectionWorkerLoop(worker, settings=settings.loop, log=log).run(stop_event)
+        return 0
+
     settings = TargetRuntimeSettings.from_environ(
         dsn=dsn,
         tenant_id=tenant_id,
@@ -235,9 +308,14 @@ def _executors(
     return {ExecutorKind.TOOL: DevelopmentToolExecutor()}
 
 
-def _install_signal_handlers(stop_event: Event, log: JsonLogger) -> None:
+def _install_signal_handlers(
+    stop_event: Event,
+    log: JsonLogger,
+    *,
+    prefix: str = "worker",
+) -> None:
     def stop(signum: int, _frame: Any) -> None:
-        log("worker_stop_requested", {"signal": signal.Signals(signum).name})
+        log(f"{prefix}_stop_requested", {"signal": signal.Signals(signum).name})
         stop_event.set()
 
     signal.signal(signal.SIGINT, stop)

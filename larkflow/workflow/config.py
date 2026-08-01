@@ -80,6 +80,91 @@ class TargetRuntimeSettings:
         )
 
 
+@dataclass(frozen=True)
+class TargetProjectionSettings:
+    dsn: str
+    tenant_id: str
+    worker_id: str
+    claim_ttl: timedelta = timedelta(minutes=2)
+    claim_limit: int = 20
+    retry_base: timedelta = timedelta(seconds=5)
+    retry_max: timedelta = timedelta(minutes=5)
+    loop: WorkerLoopSettings = WorkerLoopSettings()
+
+    def __post_init__(self) -> None:
+        if not self.dsn.strip():
+            raise ValueError("Target PostgreSQL DSN is required")
+        if not self.tenant_id.strip():
+            raise ValueError("Target tenant_id is required")
+        if not self.worker_id.strip():
+            raise ValueError("Target projection worker_id is required")
+        if self.claim_ttl <= timedelta(0):
+            raise ValueError("projection claim_ttl must be positive")
+        if self.claim_limit < 1:
+            raise ValueError("projection claim_limit must be positive")
+        if self.retry_base <= timedelta(0) or self.retry_max < self.retry_base:
+            raise ValueError("projection retry delays are invalid")
+
+    @classmethod
+    def from_environ(
+        cls,
+        environ: Mapping[str, str] | None = None,
+        *,
+        dsn: str | None = None,
+        tenant_id: str | None = None,
+        worker_id: str | None = None,
+    ) -> TargetProjectionSettings:
+        values = os.environ if environ is None else environ
+        identity = (
+            worker_id
+            or values.get("LARKFLOW_TARGET_PROJECTION_WORKER_ID")
+            or f"{socket.gethostname()}:{os.getpid()}:projection"
+        )
+        return cls(
+            dsn=dsn or values.get("LARKFLOW_TARGET_DSN", ""),
+            tenant_id=tenant_id or values.get("LARKFLOW_TARGET_TENANT", ""),
+            worker_id=identity,
+            claim_ttl=timedelta(
+                seconds=_positive_float(
+                    values,
+                    "LARKFLOW_TARGET_PROJECTION_CLAIM_TTL_SECONDS",
+                    120.0,
+                )
+            ),
+            claim_limit=_positive_int(
+                values,
+                "LARKFLOW_TARGET_PROJECTION_CLAIM_LIMIT",
+                20,
+            ),
+            retry_base=timedelta(
+                seconds=_positive_float(
+                    values,
+                    "LARKFLOW_TARGET_PROJECTION_RETRY_BASE_SECONDS",
+                    5.0,
+                )
+            ),
+            retry_max=timedelta(
+                seconds=_positive_float(
+                    values,
+                    "LARKFLOW_TARGET_PROJECTION_RETRY_MAX_SECONDS",
+                    300.0,
+                )
+            ),
+            loop=WorkerLoopSettings(
+                idle_min_seconds=_positive_float(
+                    values,
+                    "LARKFLOW_TARGET_PROJECTION_IDLE_MIN_SECONDS",
+                    0.25,
+                ),
+                idle_max_seconds=_positive_float(
+                    values,
+                    "LARKFLOW_TARGET_PROJECTION_IDLE_MAX_SECONDS",
+                    5.0,
+                ),
+            ),
+        )
+
+
 def _positive_float(
     values: Mapping[str, str],
     key: str,

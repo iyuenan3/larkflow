@@ -56,3 +56,26 @@ def apply_migrations(connection_factory: ConnectionFactory) -> tuple[str, ...]:
                 )
                 applied.append(version)
     return tuple(applied)
+
+
+def verify_migrations(connection_factory: ConnectionFactory) -> None:
+    """Fail read-only workers fast when the authoritative schema is incomplete."""
+    with connection_factory() as connection:
+        table = connection.execute(
+            "SELECT to_regclass('public.workflow_schema_migrations') AS name"
+        ).fetchone()
+        if table is None or table["name"] is None:
+            raise RuntimeError("Target workflow schema has not been migrated")
+        rows = connection.execute(
+            "SELECT version FROM workflow_schema_migrations"
+        ).fetchall()
+    applied = {row["version"] for row in rows}
+    missing = [
+        version
+        for version, _ in available_migrations()
+        if version not in applied
+    ]
+    if missing:
+        raise RuntimeError(
+            "Target workflow schema is missing migrations: " + ", ".join(missing)
+        )
