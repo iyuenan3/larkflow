@@ -8,6 +8,7 @@
 - Verified：完整离线套件 `617 passed, 7 skipped`；回归测试覆盖缺失记录、外部删除、丢失响应、逐实例容错、终态边界、启动顺序和错误码分流。一次性 PostgreSQL 14 数据库应用六份 migration，回读补建 1、重建 1、重入 1，随后删除数据库与临时上传件。
 - Deployment：内容提交 `99af528` 构建 wheel，SHA-256 为 `ed5d597db3d593322a549e02700543f32ef317b2e0dfdab4a2605f7f9fb119e4`。部署前备份成功，四个 Target 服务与 legacy 消费者均回读 active、`NRestarts=0`；启动与手动对账均为 1 个实例、2 个节点、2 条绑定不变且 0 失败。
 - Boundary：开发环境尚未对真实飞书 Task 执行删除后重建，也不代表生产发布。
+- Acceptance：随后以专用单 Human 实例完成开发环境真栈验收。删除前对账 3 条绑定全部不变；删除后 Task 读取返回 `1470404`，下一次对账只重建 1 条并原子换绑，`repair_generation=1`；再对账 3 条全部不变。2026-08-02 人工完成新 Task 后，凭据侧验证 1 条、领域侧提交 1 条且均无失败，Instance、Node、Attempt 和 Projection 均进入完成态，Inbox 为 `processed`。该证据关闭上一行的开发环境删除验收缺口，不改变非生产边界。
 
 ## v0.17.1-draft · 2026-08-01 · Inbox 验证有限重试
 

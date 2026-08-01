@@ -17,7 +17,7 @@ larkflow 复用飞书的：
 
 MVP 只保留一种角色：中央 Feishu Adapter。它运行在服务端，以明确的企业应用身份收事件、写任务、消息和文档，并执行投影对账。
 
-当前 As-built 已接入三个窄切片：独立 Projection Worker 从 PostgreSQL outbox 认领 Human 节点事件，通过 lark-cli 创建或完成飞书任务，并在启动时按 PostgreSQL 权威状态分页对账、补建缺失记录、重建经飞书确认已不存在的当前 Task；Task 完成事件由 legacy 单消费者写入耐久 Inbox，再由凭据侧和领域侧两个独立 Worker 先后校验飞书当前状态与 Target 领域状态；`llm.generate` Agent adapter 在提交 claim 后读取冻结输入并通过 OpenAI 兼容逻辑角色生成正文。外部调用不在数据库事务中，飞书任务不是流程真相。对账已部署开发环境并验证现有绑定重入，真实 Task 删除场景仍未验收；IM、Doc 与通用命令入站仍未接入。
+当前 As-built 已接入三个窄切片：独立 Projection Worker 从 PostgreSQL outbox 认领 Human 节点事件，通过 lark-cli 创建或完成飞书任务，并在启动时按 PostgreSQL 权威状态分页对账、补建缺失记录、重建经飞书确认已不存在的当前 Task；Task 完成事件由 legacy 单消费者写入耐久 Inbox，再由凭据侧和领域侧两个独立 Worker 先后校验飞书当前状态与 Target 领域状态；`llm.generate` Agent adapter 在提交 claim 后读取冻结输入并通过 OpenAI 兼容逻辑角色生成正文。外部调用不在数据库事务中，飞书任务不是流程真相。对账已在开发环境完成现有绑定重入、真实 Task 删除重建及修复后完成入站验收；IM、Doc 与通用命令入站仍未接入。
 
 服务器使用自己的 lark-cli 与飞书应用 profile，不连接开发者电脑上的 lark-cli。持有 profile 的 OS 身份只负责飞书读写与 Inbox 校验，领域服务身份不获得飞书凭据。
 

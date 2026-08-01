@@ -495,3 +495,4 @@
 - Deployment：开发服务器已运行该版本；启动和显式对账均只读确认两条现有 Task 绑定不变且无失败。真实删除后的外部重建仍待单独验收。
 - Alternatives(否决)：只重放已发布 Outbox；每次启动无条件重建所有 Task；将任意读失败视为已删除；原地复用已确认删除对象的 client token；无并发条件覆盖 Projection；为已终止且没有 Projection 的历史节点补发任务。
 - Tradeoff：启动时每个活跃 Human Task 多一次只读 API，大租户的启动时间与 API 配额会随当前等待节点数增长。当前只在启动和显式命令中对账，没有周期调度；真实飞书 Task 删除后重建与最小 scope 仍需开发环境验收。
+- Evidence（2026-08-02）：专用单 Human 实例的旧 Task 被确认删除并读回 `1470404` 后，对账只重建 1 条、将 Projection 原子换绑到不同 GUID、写入 `repair_generation=1`；第二次对账不再重建。人工完成新 Task 后，凭据侧验证和领域侧提交各成功处理 1 条，修复后的 Projection 保持绑定并进入完成态。该证据完成真实删除重建及后续入站验收，最小 scope 回归仍未完成。
