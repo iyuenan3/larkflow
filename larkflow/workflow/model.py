@@ -158,6 +158,7 @@ class NodeAttempt:
     input_snapshot: Mapping[str, Any] = field(default_factory=dict)
     result: Mapping[str, Any] | None = None
     quality_result: QualityResult | None = None
+    claimed_by: str | None = None
     claim_token: str | None = None
     claim_expires_at: datetime | None = None
     started_at: datetime | None = None
@@ -198,5 +199,7 @@ class NodeActivation:
     executor: ExecutorKind
     status: NodeStatus
     expected_node_version: int
+    claimed_by: str | None = None
     claim_token: str | None = None
     claim_expires_at: datetime | None = None
+    recovered: bool = False

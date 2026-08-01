@@ -82,7 +82,10 @@ def test_snapshot_json_round_trip_preserves_runtime_contract():
 def test_packaged_migration_contains_required_tables_and_guards():
     migrations = available_migrations()
 
-    assert [version for version, _ in migrations] == ["0001_workflow"]
+    assert [version for version, _ in migrations] == [
+        "0001_workflow",
+        "0002_runtime_claim_owner",
+    ]
     sql = migrations[0][1]
     for table in (
         "workflow_templates",
@@ -97,6 +100,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         assert f"CREATE TABLE {table}" in sql
     assert "workflow_template_versions_immutable" in sql
     assert "workflow_audit_events_append_only" in sql
+    assert "ADD COLUMN claimed_by" in migrations[1][1]
 
 
 def test_in_memory_repository_is_tenant_scoped():

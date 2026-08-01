@@ -40,9 +40,17 @@ from .repository import (
     WorkflowRepository,
 )
 from .postgres import PostgresWorkflowRepository
+from .runtime import (
+    AutomatedExecutor,
+    ExecutionRequest,
+    ExecutionResult,
+    WorkflowWorker,
+    WorkflowWorkerReport,
+)
 from .runner import (
     AuthorizationError,
     ClaimExpiredError,
+    ClaimNotExpiredError,
     InvalidClaimError,
     NodeRunner,
     StaleAttemptError,
@@ -55,9 +63,13 @@ __all__ = [
     "AttemptStatus",
     "AuditEvent",
     "AuthorizationError",
+    "AutomatedExecutor",
     "ClaimExpiredError",
+    "ClaimNotExpiredError",
     "ConcurrentUpdateError",
     "ExecutorKind",
+    "ExecutionRequest",
+    "ExecutionResult",
     "FrozenDict",
     "GraphValidationError",
     "InMemoryWorkflowRepository",
@@ -87,6 +99,8 @@ __all__ = [
     "WorkflowInstance",
     "WorkflowRepository",
     "WorkflowService",
+    "WorkflowWorker",
+    "WorkflowWorkerReport",
     "apply_migrations",
     "available_migrations",
     "postgres_connection_factory",

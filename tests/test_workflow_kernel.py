@@ -288,7 +288,9 @@ def test_human_agent_and_tool_flow_unlocks_successors_and_finishes_instance():
     assert instance.nodes["write_draft"].status == NodeStatus.READY
     assert instance.nodes["publish_doc"].status == NodeStatus.PENDING
 
-    agent = service.dispatch_ready(TENANT, "instance_1")[0]
+    agent = service.dispatch_ready(
+        TENANT, "instance_1", worker_id="worker_1"
+    )[0]
     assert agent.executor == ExecutorKind.AGENT
     assert agent.status == NodeStatus.RUNNING
     assert agent.claim_token == "claim-agent"
@@ -330,7 +332,9 @@ def test_human_agent_and_tool_flow_unlocks_successors_and_finishes_instance():
     assert instance.current_attempt("write_draft").claim_expires_at is None
     assert instance.nodes["publish_doc"].status == NodeStatus.READY
 
-    tool = service.dispatch_ready(TENANT, "instance_1")[0]
+    tool = service.dispatch_ready(
+        TENANT, "instance_1", worker_id="worker_1"
+    )[0]
     assert tool.executor == ExecutorKind.TOOL
     assert tool.claim_token == "claim-tool"
     instance = service.complete_automated(
@@ -422,7 +426,9 @@ def test_stale_version_and_expired_claim_are_rejected_without_mutation():
         expected_node_version=human.expected_node_version,
         result={"brief": "approved"},
     )
-    agent = service.dispatch_ready(TENANT, "instance_1")[0]
+    agent = service.dispatch_ready(
+        TENANT, "instance_1", worker_id="worker_1"
+    )[0]
     clock.now += timedelta(minutes=6)
 
     with pytest.raises(ClaimExpiredError):
@@ -455,7 +461,9 @@ def test_automated_failure_records_error_and_fails_instance():
     )
     service, _ = build_service(snapshot)
     service.confirm_draft(TENANT, "instance_1", actor_person_id="person_owner")
-    activation = service.dispatch_ready(TENANT, "instance_1")[0]
+    activation = service.dispatch_ready(
+        TENANT, "instance_1", worker_id="worker_1"
+    )[0]
 
     instance = service.fail_automated(
         TENANT,
@@ -498,7 +506,13 @@ def test_failed_instance_rejects_late_result_from_parallel_node():
     service, _ = build_service(snapshot)
     service.confirm_draft(TENANT, "instance_1", actor_person_id="person_owner")
     activations = {
-        item.node_key: item for item in service.dispatch_ready(TENANT, "instance_1")
+        item.node_key: item
+        for item in service.dispatch_ready(
+            TENANT,
+            "instance_1",
+            worker_id="worker_1",
+            max_automated=2,
+        )
     }
 
     first = activations["first_job"]

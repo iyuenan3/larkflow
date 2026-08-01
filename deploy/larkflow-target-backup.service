@@ -1,0 +1,20 @@
+[Unit]
+Description=Back up the larkflow Target PostgreSQL database
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+User=lf_target_dev
+Group=lf_target_dev
+UMask=0077
+ExecStart=/usr/local/sbin/larkflow-target-backup
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/var/backups/larkflow-postgres

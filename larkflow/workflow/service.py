@@ -160,31 +160,119 @@ class WorkflowService:
         tenant_id: str,
         instance_id: str,
         *,
+        worker_id: str | None = None,
+        max_automated: int = 1,
         correlation_id: str | None = None,
+    ) -> tuple[NodeActivation, ...]:
+        if max_automated < 0:
+            raise ValueError("max_automated cannot be negative")
+        return self._dispatch(
+            tenant_id,
+            instance_id,
+            worker_id=worker_id,
+            max_automated=max_automated,
+            recover_expired=False,
+            correlation_id=correlation_id,
+        )
+
+    def dispatch_due(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        *,
+        worker_id: str,
+        max_automated: int = 1,
+        correlation_id: str | None = None,
+    ) -> tuple[NodeActivation, ...]:
+        if not worker_id.strip():
+            raise ValueError("worker_id is required")
+        if max_automated < 0:
+            raise ValueError("max_automated cannot be negative")
+        return self._dispatch(
+            tenant_id,
+            instance_id,
+            worker_id=worker_id,
+            max_automated=max_automated,
+            recover_expired=True,
+            correlation_id=correlation_id,
+        )
+
+    def _dispatch(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        *,
+        worker_id: str | None,
+        max_automated: int | None,
+        recover_expired: bool,
+        correlation_id: str | None,
     ) -> tuple[NodeActivation, ...]:
         instance = self.repository.get(tenant_id, instance_id)
         expected_version = instance.version
         if instance.status != InstanceStatus.RUNNING:
             raise TransitionError(f"instance is not running: {instance_id}")
         now = self.clock()
-        activations = tuple(
-            self.runner.activate(instance, spec.key, now=now)
-            for spec in instance.snapshot.nodes
-            if instance.nodes[spec.key].status == NodeStatus.READY
-        )
+        automated_count = 0
+        activations: list[NodeActivation] = []
+
+        for spec in instance.snapshot.nodes:
+            node = instance.nodes[spec.key]
+            if node.status == NodeStatus.READY and node.executor == ExecutorKind.HUMAN:
+                activations.append(
+                    self.runner.activate(instance, spec.key, now=now)
+                )
+
+        if recover_expired:
+            for spec in instance.snapshot.nodes:
+                if max_automated is not None and automated_count >= max_automated:
+                    break
+                node = instance.nodes[spec.key]
+                if (
+                    node.executor != ExecutorKind.HUMAN
+                    and self.runner.is_reclaimable(instance, spec.key, now=now)
+                ):
+                    activations.append(
+                        self.runner.reclaim_expired(
+                            instance,
+                            spec.key,
+                            worker_id=worker_id or "",
+                            now=now,
+                        )
+                    )
+                    automated_count += 1
+
+        for spec in instance.snapshot.nodes:
+            if max_automated is not None and automated_count >= max_automated:
+                break
+            node = instance.nodes[spec.key]
+            if node.status == NodeStatus.READY and node.executor != ExecutorKind.HUMAN:
+                activations.append(
+                    self.runner.activate(
+                        instance,
+                        spec.key,
+                        worker_id=worker_id,
+                        now=now,
+                    )
+                )
+                automated_count += 1
         if activations:
             correlation_id = correlation_id or self.id_factory()
             audit_events = tuple(
                 self._audit(
                     instance,
-                    "node.activated",
+                    "node.claim_recovered"
+                    if activation.recovered
+                    else "node.activated",
                     actor_person_id=None,
                     correlation_id=correlation_id,
                     aggregate_version=expected_version + 1,
                     now=now,
                     node_key=activation.node_key,
                     attempt_no=activation.attempt_no,
-                    payload={"executor": activation.executor.value},
+                    payload={
+                        "executor": activation.executor.value,
+                        "worker_id": activation.claimed_by,
+                    },
                 )
                 for activation in activations
             )
@@ -199,7 +287,7 @@ class WorkflowService:
                 audit_events=audit_events,
                 outbox_events=outbox_events,
             )
-        return activations
+        return tuple(activations)
 
     def submit_human(
         self,
@@ -274,6 +362,7 @@ class WorkflowService:
             attempt_no=attempt_no,
             expected_node_version=expected_node_version,
             claim_token=claim_token,
+            worker_id=worker_id,
             result=result,
             quality_result=quality_result,
             now=now,
@@ -325,6 +414,7 @@ class WorkflowService:
             attempt_no=attempt_no,
             expected_node_version=expected_node_version,
             claim_token=claim_token,
+            worker_id=worker_id,
             error_code=error_code,
             error_message=error_message,
             now=now,

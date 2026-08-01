@@ -108,6 +108,53 @@ class PostgresWorkflowRepository:
             ).fetchall()
         return self._load_instance(row, nodes, attempts)
 
+    def runnable_instance_ids(
+        self,
+        tenant_id: str,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> tuple[str, ...]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        with self.connection_factory() as connection:
+            rows = connection.execute(
+                """
+                SELECT node.instance_id,
+                       min(
+                           CASE
+                               WHEN node.status = 'ready' THEN node.ready_at
+                               ELSE attempt.claim_expires_at
+                           END
+                       ) AS due_at
+                FROM workflow_node_instances AS node
+                JOIN workflow_instances AS instance
+                  ON instance.tenant_id = node.tenant_id
+                 AND instance.id = node.instance_id
+                LEFT JOIN workflow_node_attempts AS attempt
+                  ON attempt.tenant_id = node.tenant_id
+                 AND attempt.instance_id = node.instance_id
+                 AND attempt.node_key = node.node_key
+                 AND attempt.attempt_no = node.current_attempt_no
+                WHERE node.tenant_id = %s
+                  AND instance.status = 'running'
+                  AND (
+                      node.status = 'ready'
+                      OR (
+                          node.status = 'running'
+                          AND node.executor IN ('agent', 'tool')
+                          AND attempt.status = 'running'
+                          AND attempt.claim_expires_at <= %s
+                      )
+                  )
+                GROUP BY node.instance_id
+                ORDER BY due_at, node.instance_id
+                LIMIT %s
+                """,
+                (tenant_id, now, limit),
+            ).fetchall()
+        return tuple(row["instance_id"] for row in rows)
+
     def save(
         self,
         instance: WorkflowInstance,
@@ -384,18 +431,19 @@ class PostgresWorkflowRepository:
                 INSERT INTO workflow_node_attempts (
                     tenant_id, instance_id, node_key, attempt_no, id,
                     node_instance_id, status, input_snapshot, result,
-                    quality_result, claim_token, claim_expires_at,
+                    quality_result, claimed_by, claim_token, claim_expires_at,
                     started_at, completed_at, submitted_by_person_id,
                     error_code, error_message
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (tenant_id, instance_id, node_key, attempt_no) DO UPDATE SET
                     status = EXCLUDED.status,
                     input_snapshot = EXCLUDED.input_snapshot,
                     result = EXCLUDED.result,
                     quality_result = EXCLUDED.quality_result,
+                    claimed_by = EXCLUDED.claimed_by,
                     claim_token = EXCLUDED.claim_token,
                     claim_expires_at = EXCLUDED.claim_expires_at,
                     started_at = EXCLUDED.started_at,
@@ -417,6 +465,7 @@ class PostgresWorkflowRepository:
                     Jsonb(quality_to_dict(attempt.quality_result))
                     if attempt.quality_result is not None
                     else None,
+                    attempt.claimed_by,
                     attempt.claim_token,
                     attempt.claim_expires_at,
                     attempt.started_at,
@@ -527,6 +576,7 @@ class PostgresWorkflowRepository:
                 if attempt_row["result"] is not None
                 else None,
                 quality_result=quality_from_dict(attempt_row["quality_result"]),
+                claimed_by=attempt_row["claimed_by"],
                 claim_token=attempt_row["claim_token"],
                 claim_expires_at=attempt_row["claim_expires_at"],
                 started_at=attempt_row["started_at"],

@@ -39,6 +39,15 @@ class WorkflowRepository(Protocol):
     ) -> None:
         ...
 
+    def runnable_instance_ids(
+        self,
+        tenant_id: str,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> tuple[str, ...]:
+        ...
+
     def get(self, tenant_id: str, instance_id: str) -> WorkflowInstance:
         ...
 
@@ -110,6 +119,38 @@ class InMemoryWorkflowRepository:
         self._validate_events(instance, audit_events, outbox_events)
         self._instances[key] = deepcopy(instance)
         self._append_events(audit_events, outbox_events)
+
+    def runnable_instance_ids(
+        self,
+        tenant_id: str,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> tuple[str, ...]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        candidates: list[tuple[datetime, str]] = []
+        for (instance_tenant, instance_id), instance in self._instances.items():
+            if instance_tenant != tenant_id or instance.status.value != "running":
+                continue
+            due_times: list[datetime] = []
+            for node_key, node in instance.nodes.items():
+                if node.status.value == "ready" and node.ready_at is not None:
+                    due_times.append(node.ready_at)
+                    continue
+                if node.executor.value == "human" or node.status.value != "running":
+                    continue
+                attempt = instance.current_attempt(node_key)
+                if (
+                    attempt.status.value == "running"
+                    and attempt.claim_expires_at is not None
+                    and attempt.claim_expires_at <= now
+                ):
+                    due_times.append(attempt.claim_expires_at)
+            if due_times:
+                candidates.append((min(due_times), instance_id))
+        candidates.sort()
+        return tuple(instance_id for _, instance_id in candidates[:limit])
 
     def get(self, tenant_id: str, instance_id: str) -> WorkflowInstance:
         try:

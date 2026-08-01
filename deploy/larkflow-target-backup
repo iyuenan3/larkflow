@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+umask 077
+
+backup_dir="/var/backups/larkflow-postgres"
+database="larkflow_target_dev"
+stamp="$(TZ=Asia/Shanghai date '+%Y%m%dT%H%M%S%z')"
+partial="${backup_dir}/.${database}-${stamp}.dump.partial"
+backup="${backup_dir}/${database}-${stamp}.dump"
+
+cleanup_partial() {
+    if [[ -f "$partial" ]]; then
+        /usr/bin/unlink -- "$partial"
+    fi
+}
+
+trap cleanup_partial EXIT
+/usr/bin/pg_dump --dbname="$database" --format=custom --file="$partial"
+/usr/bin/pg_restore --list "$partial" >/dev/null
+/usr/bin/mv -- "$partial" "$backup"
+trap - EXIT
+
+/usr/bin/find "$backup_dir" -maxdepth 1 -type f \
+    -name "${database}-*.dump" -mtime +6 -delete

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the larkflow Target PostgreSQL backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:20:00 Asia/Shanghai
+RandomizedDelaySec=15m
+Persistent=true
+AccuracySec=1m
+Unit=larkflow-target-backup.service
+
+[Install]
+WantedBy=timers.target
