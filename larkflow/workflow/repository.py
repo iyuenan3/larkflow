@@ -74,6 +74,15 @@ class WorkflowRepository(Protocol):
     def get(self, tenant_id: str, instance_id: str) -> WorkflowInstance:
         ...
 
+    def projection_instance_ids(
+        self,
+        tenant_id: str,
+        *,
+        after_id: str | None = None,
+        limit: int = 100,
+    ) -> tuple[str, ...]:
+        ...
+
     def save(
         self,
         instance: WorkflowInstance,
@@ -131,6 +140,15 @@ class ProjectionStore(Protocol):
         ...
 
     def save_projection(self, projection: ProjectionRecord) -> None:
+        ...
+
+    def replace_projection_external(
+        self,
+        projection: ProjectionRecord,
+        *,
+        expected_external_id: str,
+        expected_idempotency_key: str,
+    ) -> None:
         ...
 
 
@@ -251,6 +269,44 @@ class InMemoryWorkflowRepository:
         except KeyError as exc:
             raise InstanceNotFoundError((tenant_id, instance_id)) from exc
 
+    def projection_instance_ids(
+        self,
+        tenant_id: str,
+        *,
+        after_id: str | None = None,
+        limit: int = 100,
+    ) -> tuple[str, ...]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        candidates = sorted(
+            instance_id
+            for (instance_tenant, instance_id), instance in self._instances.items()
+            if instance_tenant == tenant_id
+            and (after_id is None or instance_id > after_id)
+            and any(
+                node.executor.value == "human"
+                and (
+                    node.status.value == "waiting_human"
+                    or (
+                        node.status.value in {"done", "failed", "canceled"}
+                        and (
+                            projection := self._projections.get(
+                                (
+                                    tenant_id,
+                                    node.id,
+                                    node.current_attempt_no,
+                                    "feishu_task",
+                                )
+                            )
+                        ) is not None
+                        and not bool(projection.state.get("completed"))
+                    )
+                )
+                for node in instance.nodes.values()
+            )
+        )
+        return tuple(candidates[:limit])
+
     def save(
         self,
         instance: WorkflowInstance,
@@ -334,6 +390,30 @@ class InMemoryWorkflowRepository:
                 raise ValueError("projection external id cannot change")
             if projection.sync_version < existing.sync_version:
                 raise ValueError("projection sync version cannot move backwards")
+        self._projections[key] = deepcopy(projection)
+
+    def replace_projection_external(
+        self,
+        projection: ProjectionRecord,
+        *,
+        expected_external_id: str,
+        expected_idempotency_key: str,
+    ) -> None:
+        key = (
+            projection.tenant_id,
+            projection.node_instance_id,
+            projection.attempt_no,
+            projection.kind,
+        )
+        existing = self._projections.get(key)
+        if (
+            existing is None
+            or existing.id != projection.id
+            or existing.external_id != expected_external_id
+            or existing.idempotency_key != expected_idempotency_key
+            or projection.sync_version < existing.sync_version
+        ):
+            raise ValueError("projection replacement lost a concurrent update")
         self._projections[key] = deepcopy(projection)
 
     def projection_records(self, tenant_id: str) -> tuple[ProjectionRecord, ...]:

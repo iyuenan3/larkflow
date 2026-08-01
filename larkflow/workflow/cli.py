@@ -167,6 +167,10 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("run-once", help="run one durable worker tick")
     commands.add_parser("serve", help="run worker ticks until SIGINT or SIGTERM")
     commands.add_parser("project-once", help="run one Feishu projection tick")
+    commands.add_parser(
+        "reconcile-projections",
+        help="rebuild missing current Human Task projections",
+    )
     commands.add_parser("project", help="project to Feishu until SIGINT or SIGTERM")
     commands.add_parser("inbound-once", help="run one Feishu inbound event tick")
     commands.add_parser("inbound", help="consume durable Feishu events until stopped")
@@ -217,7 +221,11 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
         return 0
 
     tenant_id = _required(namespace.tenant, "--tenant or LARKFLOW_TARGET_TENANT")
-    projection_command = namespace.command in {"project-once", "project"}
+    projection_command = namespace.command in {
+        "project-once",
+        "reconcile-projections",
+        "project",
+    }
     inbound_command = namespace.command in {"inbound-once", "inbound"}
     verification_command = namespace.command in {
         "verify-inbound-once",
@@ -528,6 +536,15 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             report = worker.run_once()
             log("projection_tick", ProjectionWorkerLoop._report_fields(report))
             return int(bool(report.errors))
+        if namespace.command == "reconcile-projections":
+            report = worker.reconcile_all(
+                batch_size=settings.reconcile_batch_size,
+            )
+            log(
+                "projection_reconciled",
+                ProjectionWorkerLoop._reconciliation_fields(report),
+            )
+            return int(bool(report.errors) or report.interrupted)
 
         stop_event = Event()
         _install_signal_handlers(stop_event, log, prefix="projection")
@@ -540,13 +557,19 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 "claim_limit": settings.claim_limit,
                 "retry_base_seconds": settings.retry_base.total_seconds(),
                 "retry_max_seconds": settings.retry_max.total_seconds(),
+                "reconcile_batch_size": settings.reconcile_batch_size,
                 "idle_min_seconds": settings.loop.idle_min_seconds,
                 "idle_max_seconds": settings.loop.idle_max_seconds,
                 "lark_profile": namespace.lark_profile,
                 "lark_identity": namespace.lark_identity,
             },
         )
-        ProjectionWorkerLoop(worker, settings=settings.loop, log=log).run(stop_event)
+        ProjectionWorkerLoop(
+            worker,
+            settings=settings.loop,
+            reconcile_batch_size=settings.reconcile_batch_size,
+            log=log,
+        ).run(stop_event)
         return 0
 
     settings = TargetRuntimeSettings.from_environ(

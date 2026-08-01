@@ -11,6 +11,7 @@ from larkflow.workflow import (
     InboundWorkerLoop,
     InboundWorkerReport,
     ProjectionWorkerLoop,
+    ProjectionReconciliationReport,
     ProjectionWorkerReport,
     TargetInboundSettings,
     TargetProjectionSettings,
@@ -30,6 +31,16 @@ class ScriptedWorker:
     def __init__(self, items):
         self.items = iter(items)
         self.calls = 0
+        self.reconcile_calls = 0
+
+    def reconcile_all(self, **_kwargs):
+        self.reconcile_calls += 1
+        return ProjectionReconciliationReport(
+            instances_scanned=2,
+            nodes_scanned=3,
+            tasks_created=1,
+            unchanged=2,
+        )
 
     def run_once(self):
         self.calls += 1
@@ -108,15 +119,22 @@ def test_projection_loop_uses_the_same_bounded_backoff_contract():
     )
     stop = RecordingStop(stop_after_waits=2)
 
+    events = []
     summary = ProjectionWorkerLoop(
         worker,
         settings=WorkerLoopSettings(0.25, 1.0),
+        log=lambda event, fields: events.append((event, fields)),
     ).run(stop)
 
+    assert worker.reconcile_calls == 1
     assert stop.waits == [0.25, 0.25]
     assert summary.ticks == 3
     assert summary.claimed == 1
     assert summary.published == 1
+    assert summary.reconciled_instances == 2
+    assert summary.reconciled_nodes == 3
+    assert summary.tasks_rebuilt == 1
+    assert events[0][0] == "projection_reconciled"
 
 
 def test_inbound_loop_uses_the_same_bounded_backoff_contract():
@@ -251,6 +269,7 @@ def test_projection_settings_have_independent_claim_and_retry_controls(monkeypat
             "LARKFLOW_TARGET_PROJECTION_CLAIM_LIMIT": "7",
             "LARKFLOW_TARGET_PROJECTION_RETRY_BASE_SECONDS": "2",
             "LARKFLOW_TARGET_PROJECTION_RETRY_MAX_SECONDS": "30",
+            "LARKFLOW_TARGET_PROJECTION_RECONCILE_BATCH_SIZE": "11",
             "LARKFLOW_TARGET_PROJECTION_IDLE_MIN_SECONDS": "0.5",
             "LARKFLOW_TARGET_PROJECTION_IDLE_MAX_SECONDS": "2",
         }
@@ -261,6 +280,7 @@ def test_projection_settings_have_independent_claim_and_retry_controls(monkeypat
     assert settings.claim_limit == 7
     assert settings.retry_base == timedelta(seconds=2)
     assert settings.retry_max == timedelta(seconds=30)
+    assert settings.reconcile_batch_size == 11
     assert settings.loop == WorkerLoopSettings(0.5, 2.0)
 
 

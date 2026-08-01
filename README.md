@@ -99,11 +99,11 @@ Phase 0 的设计一致性核验已经完成，当前进入 Phase 1 中央工作
 - migration SQL 已进入 wheel；仓库当前包含六份 migration，最新一份增加 Inbox 验证耗尽终态。真实 PostgreSQL 集成测试使用一次性数据库，完成后删除测试数据库与临时文件。
 - `larkflow-target` CLI 已提供模板创建、追加版本、启用、停用、逻辑删除、查询，从模板创建草稿和预览，以及实例确认、状态、Human 提交和四类 Worker 命令；环境配置由项目 dotenv 解析器读取，不使用 shell `source`。
 - `alicloud-sh` 上的长期 Target 开发库只接受本机 peer authentication，已应用六份 migration；Runtime、Projection、入站校验与领域入站四个 systemd 服务常驻，与 legacy 单消费者同时 active。凭据侧验证默认最多尝试 24 次，一条历史失败事件已在升级后进入不可再认领的 `exhausted` 终态。
-- Projection Worker 只认领明确的投影事件，在数据库 claim 提交后调用 lark-cli，以稳定幂等键创建任务，并把 Task GUID、URL、同步版本和完成状态写回 Projection 记录。测试组织中的真实 Human 节点已经从 `waiting_human` 走到实例、节点和飞书任务全部完成。
+- Projection Worker 只认领明确的投影事件，在数据库 claim 提交后调用 lark-cli，以稳定幂等键创建任务，并把 Task GUID、URL、同步版本和完成状态写回 Projection 记录。仓库已实现启动全量对账：以 PostgreSQL 为权威分页扫描当前 Human 责任入口，补建缺失记录，并在飞书明确返回 Task 不存在时使用新一代稳定幂等键重建；权限或网络错误不会被误判为删除。该修复已通过一次性 PostgreSQL 验证，尚未部署到常驻开发服务。
 - Human Task 会展示节点明确声明的 Instance 输入；下游任务还会展示直接依赖中已提交的 Agent 正文。超长内容只在任务描述中截断，完整输入与结果仍保存在 PostgreSQL。
 - 每日 custom-format 备份保留约 7 天，并完成过一次新库恢复演练。
 - 自动执行采用 at-least-once 语义，executor 必须使用请求中的稳定幂等键消除重复副作用。
-- 当前只接入了 Task 完成事件；真实 Human-Agent-Human 已在开发云服务器和测试组织完成三节点闭环，正式模板创建的实例也已完成两个 Human Task 与一个真实 Agent 节点。两个 Human 结果均为最小业务确认值，Agent 正文已投影到最终任务。业务 Tool、通用飞书命令入站、IM / Doc 投影、完整对账和生产迁移仍缺，因此不能描述为目标产品已经上线。开发服务中的 `development.echo` 只用于持久化与恢复演练。
+- 当前只接入了 Task 完成事件；真实 Human-Agent-Human 已在开发云服务器和测试组织完成三节点闭环，正式模板创建的实例也已完成两个 Human Task 与一个真实 Agent 节点。两个 Human 结果均为最小业务确认值，Agent 正文已投影到最终任务。业务 Tool、通用飞书命令入站、IM / Doc 投影、对账真实飞书删除场景的验收、开发服务部署和生产迁移仍缺，因此不能描述为目标产品已经上线。开发服务中的 `development.echo` 只用于持久化与恢复演练。
 
 原有访谈和飞书基线协议保留在 [research/phase-0/README.md](research/phase-0/README.md)，当前状态为 Deferred，不阻塞本轮简化设计，也不能被描述为已完成。
 
@@ -139,6 +139,8 @@ larkflow-target --env-file /etc/larkflow-target.env confirm <instance> --actor <
 larkflow-target --env-file /etc/larkflow-target.env show <instance>
 larkflow-target --env-file /etc/larkflow-target.env serve
 ```
+
+`reconcile-projections` 会只读查询并可能重建飞书 Task，因此只能使用持有开发 profile 的 Projection env 显式执行：`larkflow-target --env-file /etc/larkflow-target-projection.env reconcile-projections`。
 
 真实飞书部署会创建任务、卡片和文档，只能在明确配置的开发环境中运行。现有单机部署是 legacy 原型实录，操作前先读 [AIREADME/DEPLOYMENT.md](AIREADME/DEPLOYMENT.md)。
 

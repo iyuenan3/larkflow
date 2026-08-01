@@ -17,6 +17,7 @@ from larkflow.workflow import (
     ExecutionRequest,
     ExecutionResult,
     ExecutorKind,
+    ExternalTask,
     ExternalTaskState,
     InstanceSnapshot,
     InstanceStatus,
@@ -30,6 +31,7 @@ from larkflow.workflow import (
     TemplateService,
     TemplateStatus,
     WorkflowService,
+    WorkflowProjectionWorker,
     WorkflowWorker,
     apply_migrations,
     postgres_connection_factory,
@@ -58,6 +60,32 @@ class RecordingExecutor(AutomatedExecutor):
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         self.requests.append(request)
         return ExecutionResult(result={"value": "recovered"})
+
+
+class RecordingProjectionTasks:
+    def __init__(self) -> None:
+        self.tasks = {}
+        self.next_task_number = 1
+
+    def create_task(self, request):
+        existing = self.tasks.get(request.idempotency_key)
+        if existing is not None:
+            return existing
+        task = ExternalTask(guid=f"task_{self.next_task_number}")
+        self.next_task_number += 1
+        self.tasks[request.idempotency_key] = task
+        return task
+
+    def complete_task(self, _task_guid):
+        return None
+
+    def task_exists(self, task_guid):
+        return any(task.guid == task_guid for task in self.tasks.values())
+
+    def delete_task(self, task_guid):
+        self.tasks = {
+            key: task for key, task in self.tasks.items() if task.guid != task_guid
+        }
 
 
 class BarrierRepository(PostgresWorkflowRepository):
@@ -374,6 +402,79 @@ def test_postgres_round_trip_audit_outbox_and_optimistic_concurrency():
                     """,
                     (tenant_id, instance_id),
                 )
+
+
+def test_postgres_projection_reconciliation_rebuilds_missing_tasks():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_projection_{suffix}"
+    instance_id = f"instance_projection_{suffix}"
+    repository = PostgresWorkflowRepository(connection_factory)
+    service = WorkflowService(repository)
+    work = {
+        "objective": "Review the brief",
+        "inputs": [],
+        "outputs": [{"id": "decision", "type": "data"}],
+        "acceptance": ["A decision exists"],
+    }
+    service.create_draft(
+        instance_id=instance_id,
+        tenant_id=tenant_id,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=InstanceSnapshot(
+            nodes=(
+                NodeSpec(
+                    "review",
+                    "Review",
+                    "person_owner",
+                    "human",
+                    work=work,
+                ),
+            )
+        ),
+    )
+    service.confirm_draft(tenant_id, instance_id, actor_person_id="person_owner")
+    assert repository.projection_instance_ids(tenant_id) == ()
+    service.dispatch_due(tenant_id, instance_id, worker_id="runtime_1")
+    assert repository.projection_instance_ids(tenant_id) == (instance_id,)
+    tasks = RecordingProjectionTasks()
+    worker = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        tasks,
+        tenant_id=tenant_id,
+        worker_id="projection_1",
+    )
+
+    created = worker.reconcile_all(batch_size=1)
+
+    assert created.tasks_created == 1
+    node = repository.get(tenant_id, instance_id).nodes["review"]
+    original = repository.get_projection(
+        tenant_id,
+        node.id,
+        1,
+        "feishu_task",
+    )
+    assert original is not None
+    tasks.delete_task(original.external_id or "")
+
+    rebuilt = worker.reconcile_all(batch_size=1)
+
+    replacement = repository.get_projection(
+        tenant_id,
+        node.id,
+        1,
+        "feishu_task",
+    )
+    assert replacement is not None
+    assert rebuilt.tasks_recreated == 1
+    assert replacement.external_id != original.external_id
+    assert replacement.state["repair_generation"] == 1
 
 
 def test_postgres_inbox_dedupes_and_allows_only_one_competing_claim():

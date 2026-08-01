@@ -68,6 +68,9 @@ class TaskProjectionAdapter(Protocol):
     def complete_task(self, task_guid: str) -> None:
         ...
 
+    def task_exists(self, task_guid: str) -> bool:
+        ...
+
 
 @dataclass(frozen=True)
 class ProjectionWorkerReport:
@@ -77,6 +80,19 @@ class ProjectionWorkerReport:
     tasks_completed: int = 0
     noops: int = 0
     failed: int = 0
+    errors: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class ProjectionReconciliationReport:
+    instances_scanned: int = 0
+    nodes_scanned: int = 0
+    tasks_created: int = 0
+    tasks_recreated: int = 0
+    tasks_completed: int = 0
+    unchanged: int = 0
+    failed: int = 0
+    interrupted: bool = False
     errors: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -173,6 +189,93 @@ class WorkflowProjectionWorker:
             errors=tuple(errors),
         )
 
+    def reconcile_all(
+        self,
+        *,
+        batch_size: int = 100,
+        stop_requested: Callable[[], bool] | None = None,
+    ) -> ProjectionReconciliationReport:
+        """Repair current Human projections from PostgreSQL authority."""
+        if batch_size < 1:
+            raise ValueError("reconciliation batch_size must be positive")
+        should_stop = stop_requested or (lambda: False)
+        totals = {
+            "instances_scanned": 0,
+            "nodes_scanned": 0,
+            "tasks_created": 0,
+            "tasks_recreated": 0,
+            "tasks_completed": 0,
+            "unchanged": 0,
+            "failed": 0,
+        }
+        errors = []
+        after_id = None
+        interrupted = False
+        while True:
+            if should_stop():
+                interrupted = True
+                break
+            instance_ids = self.repository.projection_instance_ids(
+                self.tenant_id,
+                after_id=after_id,
+                limit=batch_size,
+            )
+            if not instance_ids:
+                break
+            for instance_id in instance_ids:
+                after_id = instance_id
+                if should_stop():
+                    interrupted = True
+                    break
+                totals["instances_scanned"] += 1
+                try:
+                    instance = self.repository.get(self.tenant_id, instance_id)
+                except Exception as exc:
+                    totals["failed"] += 1
+                    errors.append(
+                        f"{instance_id}: {type(exc).__name__}: {exc}"
+                    )
+                    continue
+                for node_key in sorted(instance.nodes):
+                    node = instance.nodes[node_key]
+                    if (
+                        node.executor != ExecutorKind.HUMAN
+                        or node.status in {NodeStatus.PENDING, NodeStatus.READY}
+                    ):
+                        continue
+                    if should_stop():
+                        interrupted = True
+                        break
+                    totals["nodes_scanned"] += 1
+                    try:
+                        outcome = self._project_node(
+                            instance,
+                            node_key,
+                            node.current_attempt_no,
+                            now=self.clock(),
+                            verify_external=True,
+                        )
+                    except Exception as exc:
+                        totals["failed"] += 1
+                        errors.append(
+                            f"{instance_id}/{node_key}: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                        continue
+                    totals["tasks_created"] += int(outcome.created)
+                    totals["tasks_recreated"] += int(outcome.recreated)
+                    totals["tasks_completed"] += int(outcome.completed)
+                    totals["unchanged"] += int(outcome.noop)
+                if interrupted:
+                    break
+            if interrupted or len(instance_ids) < batch_size:
+                break
+        return ProjectionReconciliationReport(
+            **totals,
+            interrupted=interrupted,
+            errors=tuple(errors),
+        )
+
     def _project(self, event: Any, *, now: datetime) -> _ProjectionOutcome:
         if event.aggregate_type != "node_instance" or event.event_type not in PROJECTION_EVENTS:
             raise ValueError(f"unsupported projection event: {event.event_type}")
@@ -183,6 +286,18 @@ class WorkflowProjectionWorker:
         node = instance.nodes[node_key]
         if node.id != event.aggregate_id:
             raise ValueError("projection event aggregate does not match the current node")
+        return self._project_node(instance, node_key, attempt_no, now=now)
+
+    def _project_node(
+        self,
+        instance: WorkflowInstance,
+        node_key: str,
+        attempt_no: int,
+        *,
+        now: datetime,
+        verify_external: bool = False,
+    ) -> _ProjectionOutcome:
+        node = instance.nodes[node_key]
         if node.executor != ExecutorKind.HUMAN:
             return _ProjectionOutcome(noop=True)
         if node.status in {NodeStatus.PENDING, NodeStatus.READY}:
@@ -196,7 +311,15 @@ class WorkflowProjectionWorker:
             FEISHU_TASK_KIND,
         )
         created = False
+        recreated = False
+        terminal = node.status in {
+            NodeStatus.DONE,
+            NodeStatus.FAILED,
+            NodeStatus.CANCELED,
+        }
         if record is None:
+            if terminal:
+                return _ProjectionOutcome(noop=True)
             request = self._task_request(instance, node_key, attempt_no)
             external = self.task_adapter.create_task(request)
             if not external.guid.strip():
@@ -221,15 +344,36 @@ class WorkflowProjectionWorker:
 
         if not record.external_id:
             raise ValueError("Feishu task projection has no external id")
-        terminal = node.status in {
-            NodeStatus.DONE,
-            NodeStatus.FAILED,
-            NodeStatus.CANCELED,
-        }
+        if (
+            verify_external
+            and not created
+            and not terminal
+            and not self.task_adapter.task_exists(record.external_id)
+        ):
+            record = self._recreate_task(
+                instance,
+                node_key,
+                attempt_no,
+                record=record,
+                now=now,
+            )
+            recreated = True
         completed = False
         if terminal and not bool(record.state.get("completed")):
             self.task_adapter.complete_task(record.external_id)
             completed = True
+        desired_state = {"node_status": node.status.value, "completed": terminal}
+        repair_generation = _repair_generation(record.state)
+        if repair_generation:
+            desired_state["repair_generation"] = repair_generation
+        if (
+            not created
+            and not recreated
+            and not completed
+            and record.sync_version >= node.version
+            and dict(record.state) == desired_state
+        ):
+            return _ProjectionOutcome(noop=True)
         updated = ProjectionRecord(
             id=record.id,
             tenant_id=record.tenant_id,
@@ -241,24 +385,78 @@ class WorkflowProjectionWorker:
             external_url=record.external_url,
             idempotency_key=record.idempotency_key,
             sync_version=max(record.sync_version, node.version),
-            state={"node_status": node.status.value, "completed": terminal},
+            state=desired_state,
             created_at=record.created_at,
             updated_at=now,
         )
         self.projections.save_projection(updated)
-        return _ProjectionOutcome(created=created, completed=completed)
+        return _ProjectionOutcome(
+            created=created,
+            recreated=recreated,
+            completed=completed,
+        )
+
+    def _recreate_task(
+        self,
+        instance: WorkflowInstance,
+        node_key: str,
+        attempt_no: int,
+        *,
+        record: ProjectionRecord,
+        now: datetime,
+    ) -> ProjectionRecord:
+        generation = _repair_generation(record.state) + 1
+        request = self._task_request(
+            instance,
+            node_key,
+            attempt_no,
+            repair_generation=generation,
+        )
+        external = self.task_adapter.create_task(request)
+        if not external.guid.strip():
+            raise ValueError("Feishu task recreate returned an empty guid")
+        node = instance.nodes[node_key]
+        replacement = ProjectionRecord(
+            id=record.id,
+            tenant_id=record.tenant_id,
+            instance_id=record.instance_id,
+            node_instance_id=record.node_instance_id,
+            attempt_no=record.attempt_no,
+            kind=record.kind,
+            external_id=external.guid,
+            external_url=external.url,
+            idempotency_key=request.idempotency_key,
+            sync_version=max(record.sync_version, node.version),
+            state={
+                "node_status": node.status.value,
+                "completed": False,
+                "repair_generation": generation,
+            },
+            created_at=record.created_at,
+            updated_at=now,
+        )
+        self.projections.replace_projection_external(
+            replacement,
+            expected_external_id=record.external_id or "",
+            expected_idempotency_key=record.idempotency_key,
+        )
+        return replacement
 
     def _task_request(
         self,
         instance: WorkflowInstance,
         node_key: str,
         attempt_no: int,
+        *,
+        repair_generation: int = 0,
     ) -> TaskProjectionRequest:
         node = instance.nodes[node_key]
         spec = instance.snapshot.node(node_key)
         identity = (
             f"{self.tenant_id}:{node.id}:{attempt_no}:{FEISHU_TASK_KIND}"
         )
+        if repair_generation:
+            identity += f":repair:{repair_generation}"
         digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:48]
         acceptance = "\n".join(
             f"- {item}" for item in spec.work.get("acceptance", ())
@@ -297,8 +495,22 @@ class WorkflowProjectionWorker:
 @dataclass(frozen=True)
 class _ProjectionOutcome:
     created: bool = False
+    recreated: bool = False
     completed: bool = False
     noop: bool = False
+
+
+def _repair_generation(state: Mapping[str, Any]) -> int:
+    value = state.get("repair_generation", 0)
+    if isinstance(value, bool):
+        raise ValueError("projection repair_generation is invalid")
+    try:
+        generation = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("projection repair_generation is invalid") from exc
+    if generation < 0:
+        raise ValueError("projection repair_generation is invalid")
+    return generation
 
 
 def _dependency_context(instance: WorkflowInstance, node_key: str) -> str:

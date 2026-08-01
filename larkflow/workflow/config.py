@@ -119,6 +119,7 @@ class TargetProjectionSettings:
     claim_limit: int = 20
     retry_base: timedelta = timedelta(seconds=5)
     retry_max: timedelta = timedelta(minutes=5)
+    reconcile_batch_size: int = 100
     loop: WorkerLoopSettings = WorkerLoopSettings()
 
     def __post_init__(self) -> None:
@@ -134,6 +135,8 @@ class TargetProjectionSettings:
             raise ValueError("projection claim_limit must be positive")
         if self.retry_base <= timedelta(0) or self.retry_max < self.retry_base:
             raise ValueError("projection retry delays are invalid")
+        if self.reconcile_batch_size < 1:
+            raise ValueError("projection reconcile_batch_size must be positive")
 
     @classmethod
     def from_environ(
@@ -179,6 +182,11 @@ class TargetProjectionSettings:
                     "LARKFLOW_TARGET_PROJECTION_RETRY_MAX_SECONDS",
                     300.0,
                 )
+            ),
+            reconcile_batch_size=_positive_int(
+                values,
+                "LARKFLOW_TARGET_PROJECTION_RECONCILE_BATCH_SIZE",
+                100,
             ),
             loop=WorkerLoopSettings(
                 idle_min_seconds=_positive_float(

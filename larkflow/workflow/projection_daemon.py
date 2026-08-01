@@ -7,7 +7,11 @@ from threading import Event
 from typing import Any
 
 from .daemon import WorkerLoopSettings
-from .projection import ProjectionWorkerReport, WorkflowProjectionWorker
+from .projection import (
+    ProjectionReconciliationReport,
+    ProjectionWorkerReport,
+    WorkflowProjectionWorker,
+)
 
 
 LogEvent = Callable[[str, dict[str, Any]], None]
@@ -15,6 +19,12 @@ LogEvent = Callable[[str, dict[str, Any]], None]
 
 @dataclass(frozen=True)
 class ProjectionLoopSummary:
+    reconciled_instances: int = 0
+    reconciled_nodes: int = 0
+    tasks_rebuilt: int = 0
+    reconciliation_unchanged: int = 0
+    reconciliation_failed: int = 0
+    reconciliation_interrupted: int = 0
     ticks: int = 0
     tick_errors: int = 0
     claimed: int = 0
@@ -33,15 +43,25 @@ class ProjectionWorkerLoop:
         worker: WorkflowProjectionWorker,
         *,
         settings: WorkerLoopSettings | None = None,
+        reconcile_batch_size: int = 100,
         log: LogEvent | None = None,
     ) -> None:
+        if reconcile_batch_size < 1:
+            raise ValueError("reconcile_batch_size must be positive")
         self.worker = worker
         self.settings = settings or WorkerLoopSettings()
+        self.reconcile_batch_size = reconcile_batch_size
         self.log = log or (lambda _event, _fields: None)
 
     def run(self, stop_event: Event) -> ProjectionLoopSummary:
         idle_seconds = self.settings.idle_min_seconds
         totals = {
+            "reconciled_instances": 0,
+            "reconciled_nodes": 0,
+            "tasks_rebuilt": 0,
+            "reconciliation_unchanged": 0,
+            "reconciliation_failed": 0,
+            "reconciliation_interrupted": 0,
             "ticks": 0,
             "tick_errors": 0,
             "claimed": 0,
@@ -51,6 +71,30 @@ class ProjectionWorkerLoop:
             "noops": 0,
             "failed": 0,
         }
+        try:
+            reconciliation = self.worker.reconcile_all(
+                batch_size=self.reconcile_batch_size,
+                stop_requested=stop_event.is_set,
+            )
+        except Exception as exc:
+            totals["reconciliation_failed"] = 1
+            self.log(
+                "projection_reconciliation_failed",
+                {"error_type": type(exc).__name__, "error": str(exc)},
+            )
+        else:
+            totals["reconciled_instances"] = reconciliation.instances_scanned
+            totals["reconciled_nodes"] = reconciliation.nodes_scanned
+            totals["tasks_rebuilt"] = (
+                reconciliation.tasks_created + reconciliation.tasks_recreated
+            )
+            totals["reconciliation_unchanged"] = reconciliation.unchanged
+            totals["reconciliation_failed"] = reconciliation.failed
+            totals["reconciliation_interrupted"] = int(reconciliation.interrupted)
+            self.log(
+                "projection_reconciled",
+                self._reconciliation_fields(reconciliation),
+            )
         while not stop_event.is_set():
             try:
                 report = self.worker.run_once()
@@ -108,6 +152,22 @@ class ProjectionWorkerLoop:
             "tasks_completed": report.tasks_completed,
             "noops": report.noops,
             "failed": report.failed,
+            "errors": list(report.errors),
+        }
+
+    @staticmethod
+    def _reconciliation_fields(
+        report: ProjectionReconciliationReport,
+    ) -> dict[str, Any]:
+        return {
+            "instances_scanned": report.instances_scanned,
+            "nodes_scanned": report.nodes_scanned,
+            "tasks_created": report.tasks_created,
+            "tasks_recreated": report.tasks_recreated,
+            "tasks_completed": report.tasks_completed,
+            "unchanged": report.unchanged,
+            "failed": report.failed,
+            "interrupted": report.interrupted,
             "errors": list(report.errors),
         }
 

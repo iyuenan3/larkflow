@@ -353,6 +353,46 @@ class PostgresWorkflowRepository:
             ).fetchone()
         return self._projection_from_row(row) if row is not None else None
 
+    def projection_instance_ids(
+        self,
+        tenant_id: str,
+        *,
+        after_id: str | None = None,
+        limit: int = 100,
+    ) -> tuple[str, ...]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        with self.connection_factory() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT instance.id
+                FROM workflow_instances AS instance
+                JOIN workflow_node_instances AS node
+                  ON node.tenant_id = instance.tenant_id
+                 AND node.instance_id = instance.id
+                LEFT JOIN workflow_projections AS projection
+                  ON projection.tenant_id = node.tenant_id
+                 AND projection.node_instance_id = node.id
+                 AND projection.attempt_no = node.current_attempt_no
+                 AND projection.kind = 'feishu_task'
+                WHERE instance.tenant_id = %s
+                  AND (%s::text IS NULL OR instance.id > %s)
+                  AND node.executor = 'human'
+                  AND (
+                    node.status = 'waiting_human'
+                    OR (
+                      node.status IN ('done', 'failed', 'canceled')
+                      AND projection.id IS NOT NULL
+                      AND coalesce(projection.state->>'completed', 'false') <> 'true'
+                    )
+                  )
+                ORDER BY instance.id
+                LIMIT %s
+                """,
+                (tenant_id, after_id, after_id, limit),
+            ).fetchall()
+        return tuple(str(row["id"]) for row in rows)
+
     def get_projection_by_external_id(
         self,
         tenant_id: str,
@@ -420,6 +460,54 @@ class PostgresWorkflowRepository:
                 ).fetchone()
                 if row is None:
                     raise ValueError("projection identity or version cannot change")
+
+    def replace_projection_external(
+        self,
+        projection: ProjectionRecord,
+        *,
+        expected_external_id: str,
+        expected_idempotency_key: str,
+    ) -> None:
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                row = connection.execute(
+                    """
+                    UPDATE workflow_projections
+                    SET external_id = %s,
+                        external_url = %s,
+                        idempotency_key = %s,
+                        sync_version = %s,
+                        state = %s,
+                        updated_at = %s
+                    WHERE tenant_id = %s
+                      AND node_instance_id = %s
+                      AND attempt_no = %s
+                      AND kind = %s
+                      AND id = %s
+                      AND external_id = %s
+                      AND idempotency_key = %s
+                      AND sync_version <= %s
+                    RETURNING id
+                    """,
+                    (
+                        projection.external_id,
+                        projection.external_url,
+                        projection.idempotency_key,
+                        projection.sync_version,
+                        Jsonb(to_json_value(projection.state)),
+                        projection.updated_at,
+                        projection.tenant_id,
+                        projection.node_instance_id,
+                        projection.attempt_no,
+                        projection.kind,
+                        projection.id,
+                        expected_external_id,
+                        expected_idempotency_key,
+                        projection.sync_version,
+                    ),
+                ).fetchone()
+                if row is None:
+                    raise ValueError("projection replacement lost a concurrent update")
 
     def runnable_instance_ids(
         self,

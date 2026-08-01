@@ -68,6 +68,12 @@ def test_cli_template_commands_parse_formal_entrypoint_arguments():
     assert _load_optional_mapping(None) == {}
 
 
+def test_cli_exposes_projection_reconciliation_as_an_explicit_command():
+    parsed = build_parser().parse_args(["reconcile-projections"])
+
+    assert parsed.command == "reconcile-projections"
+
+
 def test_status_projection_never_exposes_claim_token():
     repository = InMemoryWorkflowRepository()
     service = WorkflowService(

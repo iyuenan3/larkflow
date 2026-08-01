@@ -39,6 +39,8 @@ class RecordingTasks:
         self.create_requests = []
         self.completed = []
         self.tasks = {}
+        self.next_task_number = 1
+        self.existence_checks = []
 
     def create_task(self, request):
         self.create_requests.append(request)
@@ -46,9 +48,10 @@ class RecordingTasks:
         if existing is not None:
             return existing
         task = ExternalTask(
-            guid=f"task-{len(self.tasks) + 1}",
-            url=f"https://example.invalid/tasks/{len(self.tasks) + 1}",
+            guid=f"task-{self.next_task_number}",
+            url=f"https://example.invalid/tasks/{self.next_task_number}",
         )
+        self.next_task_number += 1
         self.tasks[request.idempotency_key] = task
         if self.fail_after_creates:
             self.fail_after_creates -= 1
@@ -57,6 +60,15 @@ class RecordingTasks:
 
     def complete_task(self, task_guid):
         self.completed.append(task_guid)
+
+    def task_exists(self, task_guid):
+        self.existence_checks.append(task_guid)
+        return any(task.guid == task_guid for task in self.tasks.values())
+
+    def delete_task(self, task_guid):
+        self.tasks = {
+            key: task for key, task in self.tasks.items() if task.guid != task_guid
+        }
 
 
 def human_snapshot() -> InstanceSnapshot:
@@ -439,3 +451,180 @@ def test_projection_identity_and_version_cannot_change():
 
     with pytest.raises(ValueError, match="version"):
         repository.save_projection(replace(projection, sync_version=-1))
+
+
+def test_startup_reconciliation_rebuilds_a_missing_current_human_task():
+    clock = Clock()
+    service, repository, tasks, worker = setup_human(clock)
+    service.dispatch_due(
+        TENANT,
+        "instance_projection",
+        worker_id="runtime_1",
+    )
+
+    rebuilt = worker.reconcile_all(batch_size=1)
+
+    assert rebuilt.instances_scanned == 1
+    assert rebuilt.nodes_scanned == 1
+    assert rebuilt.tasks_created == 1
+    assert rebuilt.failed == 0
+    assert len(tasks.create_requests) == 1
+    assert tasks.existence_checks == []
+    assert len(repository.projection_records(TENANT)) == 1
+
+    unchanged = worker.reconcile_all(batch_size=1)
+
+    assert unchanged.unchanged == 1
+    assert unchanged.tasks_created == 0
+    assert len(tasks.create_requests) == 1
+    assert tasks.existence_checks == ["task-1"]
+
+
+def test_startup_reconciliation_continues_after_one_instance_fails():
+    clock = Clock()
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=clock)
+    for instance_id in ("instance_a", "instance_b"):
+        service.create_draft(
+            instance_id=instance_id,
+            tenant_id=TENANT,
+            owner_person_id="person_owner",
+            actor_person_id="person_owner",
+            snapshot=human_snapshot(),
+        )
+        service.confirm_draft(TENANT, instance_id, actor_person_id="person_owner")
+        service.dispatch_due(TENANT, instance_id, worker_id="runtime_1")
+    tasks = RecordingTasks(fail_after_creates=1)
+    worker = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        tasks,
+        tenant_id=TENANT,
+        worker_id="projection_1",
+        clock=clock,
+    )
+
+    first = worker.reconcile_all(batch_size=1)
+
+    assert first.instances_scanned == 2
+    assert first.nodes_scanned == 2
+    assert first.tasks_created == 1
+    assert first.failed == 1
+    assert "instance_a" in first.errors[0]
+    assert len(tasks.tasks) == 2
+    assert len(repository.projection_records(TENANT)) == 1
+
+    recovered = worker.reconcile_all(batch_size=1)
+
+    assert recovered.tasks_created == 1
+    assert recovered.unchanged == 1
+    assert recovered.failed == 0
+    assert len(tasks.tasks) == 2
+    assert len(repository.projection_records(TENANT)) == 2
+
+
+def test_startup_reconciliation_does_not_create_a_missing_terminal_task():
+    clock = Clock()
+    service, repository, tasks, worker = setup_human(clock)
+    activation = service.dispatch_due(
+        TENANT,
+        "instance_projection",
+        worker_id="runtime_1",
+    )[0]
+    service.submit_human(
+        TENANT,
+        "instance_projection",
+        "approve",
+        actor_person_id="person_reviewer",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        result={"decision": "approved"},
+    )
+
+    report = worker.reconcile_all()
+
+    assert report.tasks_created == 0
+    assert report.tasks_completed == 0
+    assert report.instances_scanned == 0
+    assert report.nodes_scanned == 0
+    assert tasks.create_requests == []
+
+
+def test_startup_reconciliation_completes_an_existing_terminal_task():
+    clock = Clock()
+    service, _, tasks, worker = setup_human(clock)
+    activation = service.dispatch_due(
+        TENANT,
+        "instance_projection",
+        worker_id="runtime_1",
+    )[0]
+    assert worker.reconcile_all().tasks_created == 1
+    service.submit_human(
+        TENANT,
+        "instance_projection",
+        "approve",
+        actor_person_id="person_reviewer",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        result={"decision": "approved"},
+    )
+
+    report = worker.reconcile_all()
+
+    assert report.tasks_completed == 1
+    assert tasks.completed == ["task-1"]
+
+
+def test_startup_reconciliation_recreates_a_confirmed_missing_external_task():
+    clock = Clock()
+    service, repository, tasks, worker = setup_human(clock)
+    service.dispatch_due(
+        TENANT,
+        "instance_projection",
+        worker_id="runtime_1",
+    )
+    assert worker.reconcile_all().tasks_created == 1
+    original = repository.projection_records(TENANT)[0]
+    tasks.delete_task(original.external_id or "")
+
+    rebuilt = worker.reconcile_all()
+
+    current = repository.projection_records(TENANT)[0]
+    assert rebuilt.tasks_recreated == 1
+    assert current.external_id == "task-2"
+    assert current.external_id != original.external_id
+    assert current.idempotency_key != original.idempotency_key
+    assert current.state["repair_generation"] == 1
+
+    unchanged = worker.reconcile_all()
+    assert unchanged.unchanged == 1
+    assert len(tasks.create_requests) == 2
+
+
+def test_missing_task_recreation_reuses_one_repair_key_after_a_lost_response():
+    clock = Clock()
+    service, repository, tasks, worker = setup_human(clock)
+    service.dispatch_due(
+        TENANT,
+        "instance_projection",
+        worker_id="runtime_1",
+    )
+    assert worker.reconcile_all().tasks_created == 1
+    original = repository.projection_records(TENANT)[0]
+    tasks.delete_task(original.external_id or "")
+    tasks.fail_after_creates = 1
+
+    lost = worker.reconcile_all()
+
+    assert lost.failed == 1
+    assert repository.projection_records(TENANT)[0] == original
+    repair_key = tasks.create_requests[-1].idempotency_key
+
+    recovered = worker.reconcile_all()
+
+    replacement = repository.projection_records(TENANT)[0]
+    assert recovered.tasks_recreated == 1
+    assert tasks.create_requests[-1].idempotency_key == repair_key
+    assert replacement.external_id == "task-2"
+    assert len(tasks.tasks) == 1

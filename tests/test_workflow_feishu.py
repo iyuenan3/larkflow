@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from larkflow.io.cli import LarkCliError
 from larkflow.workflow import (
     CliFeishuTaskProjection,
     CliFeishuTaskReader,
@@ -87,6 +88,42 @@ def test_cli_adapter_rejects_create_without_guid():
 
     with pytest.raises(ValueError, match="no guid"):
         adapter.create_task(request())
+
+
+def test_cli_adapter_distinguishes_missing_tasks_from_other_read_failures():
+    missing = CliFeishuTaskProjection(
+        profile="dev",
+        runner=lambda _argv: (_ for _ in ()).throw(
+            LarkCliError("missing", error={"code": 1470404})
+        ),
+    )
+    forbidden = CliFeishuTaskProjection(
+        profile="dev",
+        runner=lambda _argv: (_ for _ in ()).throw(
+            LarkCliError("forbidden", error={"code": 1470403})
+        ),
+    )
+
+    assert missing.task_exists("task-guid") is False
+    with pytest.raises(LarkCliError, match="forbidden"):
+        forbidden.task_exists("task-guid")
+
+
+def test_cli_adapter_confirms_the_expected_task_guid_exists():
+    adapter = CliFeishuTaskProjection(
+        profile="dev",
+        runner=lambda _argv: {
+            "task": {
+                "guid": "task-guid",
+                "status": "todo",
+                "mode": 1,
+                "members": [],
+                "assignee_related": [],
+            }
+        },
+    )
+
+    assert adapter.task_exists("task-guid") is True
 
 
 def test_cli_task_reader_extracts_only_authorization_fields():

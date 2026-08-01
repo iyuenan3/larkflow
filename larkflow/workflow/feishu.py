@@ -5,7 +5,7 @@ from collections.abc import Callable
 import json
 from typing import Any
 
-from larkflow.io.cli import run_cli
+from larkflow.io.cli import LarkCliError, run_cli
 
 from .inbound import ExternalTaskState
 from .projection import ExternalTask, TaskProjectionRequest
@@ -85,6 +85,25 @@ class CliFeishuTaskProjection:
                 self.identity,
             ]
         )
+
+    def task_exists(self, task_guid: str) -> bool:
+        if not task_guid.strip():
+            raise ValueError("Feishu task guid is required")
+        reader = CliFeishuTaskReader(
+            profile=self.profile,
+            identity=self.identity,
+            executable=self.executable,
+            runner=self.runner,
+        )
+        try:
+            task = reader.get_task(task_guid)
+        except LarkCliError as exc:
+            if str(exc.error.get("code")) == "1470404":
+                return False
+            raise
+        if task.guid != task_guid:
+            raise ValueError("lark-cli task get returned a different guid")
+        return True
 
     def _run(self, args: list[str]) -> dict[str, Any]:
         argv = [self.executable, "--profile", self.profile, *args, "--json"]
