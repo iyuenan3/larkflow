@@ -17,7 +17,7 @@ larkflow 复用飞书的：
 
 MVP 只保留一种角色：中央 Feishu Adapter。它运行在服务端，以明确的企业应用身份收事件、写任务、消息和文档，并执行投影对账。
 
-当前 As-built 已接入两个窄切片：独立 Projection Worker 从 PostgreSQL outbox 认领 Human 节点事件，通过 lark-cli 创建或完成飞书任务；Task 完成事件由 legacy 单消费者写入耐久 Inbox，再由凭据侧和领域侧两个独立 Worker 先后校验飞书当前状态与 Target 领域状态。外部调用不在数据库事务中，飞书任务不是流程真相。IM、Doc、通用命令入站与启动全量对账尚未接入 Target。
+当前 As-built 已接入三个窄切片：独立 Projection Worker 从 PostgreSQL outbox 认领 Human 节点事件，通过 lark-cli 创建或完成飞书任务；Task 完成事件由 legacy 单消费者写入耐久 Inbox，再由凭据侧和领域侧两个独立 Worker 先后校验飞书当前状态与 Target 领域状态；`llm.generate` Agent adapter 在提交 claim 后读取冻结输入并通过 OpenAI 兼容逻辑角色生成正文。外部调用不在数据库事务中，飞书任务不是流程真相。Agent 云端真链路、IM、Doc、通用命令入站与启动全量对账尚未接入 Target 开发部署。
 
 服务器使用自己的 lark-cli 与飞书应用 profile，不连接开发者电脑上的 lark-cli。持有 profile 的 OS 身份只负责飞书读写与 Inbox 校验，领域服务身份不获得飞书凭据。
 
@@ -26,6 +26,8 @@ MVP 只保留一种角色：中央 Feishu Adapter。它运行在服务端，以�
 ## Agent 与 Tool
 
 Agent 和 Tool 是中央 Node Runner 的可替换执行器。它们收到单节点、单 Attempt 的工作输入，返回标准结果和证据。它们不能直接改图、改派 Owner、越过确认门或修改其他节点状态。
+
+当前 Agent 实现只允许声明式 `llm.generate`，输入来自已提交的 Instance Snapshot 和直接依赖结果。稳定 Attempt 请求标识用于审计与 adapter 幂等；模型调用自身仍可能在 Worker 崩溃后重复计费，不能把请求标识描述为供应商已保证的幂等。
 
 所有自动节点仍有唯一人类 Owner。执行失败、重试超限或需要业务判断时，由 Owner 接管。
 

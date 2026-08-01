@@ -28,11 +28,12 @@
 - 已完成独立 `larkflow-target` CLI、常驻轮询、有界退避、SIGTERM 干净停机、adapter 能力过滤与 systemd 服务装配；SIGKILL 后新 Worker 接管同一 Attempt 已在真机验证。
 - 已完成独立 Projection Worker、事件类型过滤、Task adapter、稳定幂等键、Projection 落库、失败重试和 systemd 服务装配；测试组织中的 Human Task 创建与完成闭环已真实通过。
 - 已完成 Task 完成事件的耐久入站：legacy 保持 EventKey 单消费者，以 event ID 去重写入 PostgreSQL Inbox；凭据侧回读飞书 Task，领域侧再校验 Projection 绑定、当前 Attempt、唯一 Owner 和完成人后提交 Human 节点。
+- 已完成首个 `llm.generate` Agent adapter、OpenAI 兼容逻辑角色路由、claim 与 LLM 超时预算校验，以及 Agent 正文到下游 Human Task 的投影；开发云服务器与测试组织中的真实 Human-Agent-Human 三节点闭环已通过。
 - `alicloud-sh` 已建立长期 Target 开发库、本机 peer authentication、每日备份、新库恢复演练和 enabled Target 服务；仍缺异机备份、PITR 与生产运行手册。
 - 模板 `draft / enabled / disabled / deleted`、不可变版本和布尔锁。
 - 实例 `draft`、预览、确认启动和丢弃。当前内核已实现确认与丢弃，预览接口待接入。
 - 每个节点的唯一 Owner 解析与服务端授权。当前内核已拒绝非 Owner 提交，企业目录校验待接入。
-- 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则、持久化、常驻 Worker 与恢复扫描已落码，真实 executor adapter 待接入。
+- 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则、持久化、常驻 Worker、Agent adapter、真实开发链路与恢复扫描已落码，业务 Tool adapter 待完成。
 - 通用飞书命令入站、IM / Doc 投影、启动全量对账和缺失对象重建。Outbox Worker、Task 创建 / 完成与 Task 完成入站已实现。
 - 从 legacy 原型提炼 adapter、事件韧性和 Mock 测试资产。
 

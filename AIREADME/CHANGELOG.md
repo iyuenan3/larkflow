@@ -1,5 +1,27 @@
 # CHANGELOG · larkflow
 
+## v0.16.1-draft · 2026-08-01 · Target Agent 真实三节点闭环与内容边界收口
+
+- Fixed：飞书 Human 完成只向下游提交 `{confirmed: true}`；Task GUID、完成时间和事件元数据继续保存在 Projection、Inbox 与审计边界，不再混入 Agent 业务输入。
+- Fixed：文本 Agent adapter 会从常见 `content` / `text` JSON 包装与整段 JSON 代码块中提取纯正文；prompt 同时明确禁止 JSON、代码块和字段包装，也不再向模型暴露内部执行标识。
+- Verified：`alicloud-sh` 使用真实 PostgreSQL、真实飞书 Task 与真实 OpenAI 兼容模型完成 `Human -> Agent -> Human` 三节点实例。两个 Human Attempt、Agent Attempt 和 Instance 均为 `done`，最终 Task 精确包含 210 字 Agent 正文，未出现结构包装或内部字段。
+- Resilience：真实完成变化事件曾在 Task 详情仍为 `todo` 时进入 Inbox，并被凭据侧持续拒绝；后续服务端可验证的完成事件正常处理，旧失败记录保留且没有重复推进。这验证了事件只作触发信号、详情读回才是授权依据。
+- Deployment：Target Agent 已按明确授权启用，单线路 LLM timeout 为 240 秒，claim TTL 为 300 秒，安全余量为 30 秒；Runtime、Projection、入站校验和领域入站四个服务均回读 active。
+- Verified：完整离线套件 592 项通过，5 项显式集成测试跳过；wheel 构建、上传哈希读回与服务器安装成功。
+- Boundary：这是真实开发环境与测试组织验证，不是生产发布。有限 Agent 业务重试、人工接管、业务 Tool adapter 和生产迁移仍未实现。
+
+## v0.16.0-draft · 2026-08-01 · Target LLM Agent 执行与下游人工复核（ADR-060）
+
+- Added：只接受 `work.agent.kind=llm.generate` 的 `LLMAgentExecutor`，从已提交的 Instance 输入与直接依赖结果构建单节点 prompt，通过 OpenAI 兼容逻辑角色生成正文。
+- Added：Target Runtime 的显式 Agent 开关、prompt / result 大小上限，以及 LLM 主备路由总超时加安全余量必须小于 claim 租期的启动校验。
+- Changed：Human Task 描述会展示节点明确声明的 Instance 输入，以及直接依赖中已提交的 Agent 正文；任务侧设置长度上限，完整内容保留在 Instance Snapshot 与 Attempt。
+- Contract：增加 `work.agent.kind / model_role / instructions` 的 v0.2 数据契约与 `target_agent_review.yaml` Human-Agent-Human 示例。
+- Resilience：LLM 调用继续发生在数据库 claim 提交后和结果事务前；OpenAI SDK 内层重试保持关闭，故障切换只由显式角色路由负责。迟到结果仍需通过版本、Worker、token、Attempt 与租期校验。
+- Fixed：PostgreSQL draft 尚未物化 NodeInstance 时不再提前写 Dependency；确认事务会先写入全部节点，再写依赖。此前单节点真库测试未覆盖该顺序，首个真实三节点草稿创建时由外键约束揭示并整体回滚。
+- Verified：完整离线套件 587 项通过，4 项显式集成测试跳过；wheel 构建成功并包含 Agent executor 与混合流程模板。
+- Deployment：云端 wheel 已安装，四个 Target 服务回读 active，并保留完整虚拟环境回滚备份；Agent 配置未启用。复用旧服务 LLM key 会扩大凭证可读边界，需独立凭证或明确授权后才能完成真实 Human-Agent-Human 验证。
+- Boundary：模型调用为 at-least-once，稳定请求标识不等于供应商提供计费幂等；有限业务重试、Agent 人工接管和业务 Tool adapter 尚未实现。
+
 ## v0.15.0-draft · 2026-08-01 · Feishu Task 耐久入站与凭据隔离（ADR-059）
 
 - Added：PostgreSQL Inbox、以飞书 event ID 去重的 legacy 事件观察桥接、凭据侧 `TaskVerificationWorker` 与领域侧 `WorkflowInboundWorker`。

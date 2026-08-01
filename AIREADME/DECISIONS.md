@@ -456,3 +456,13 @@
 - Decision：legacy 事件观察桥接只把 Task 完成信号持久化到 PostgreSQL Inbox。持有测试 profile 的 `lf-dev` 校验 Worker 在事务外读取 Task 详情，把可验证字段写回 Inbox。不持有飞书凭据的 `lf_target_dev` 领域 Worker 再校验 Projection 当前轮次、Task 绑定、企业应用来源、`mode=1`、唯一 Owner assignee、Task 已完成与完成人严格等于 Owner，最后以 Owner actor 调用 Human 提交命令。Task Projection 因此固定使用原生 API、`mode=1`、唯一 assignee、稳定 client token 与绑定字段。
 - Alternatives(否决)：再启一个相同 EventKey 消费者；从事件信封推断 actor；给 `lf_target_dev` 授予 legacy 凭据目录读权；让 legacy 直接提交 Human 节点；在持久化事件前同步读取飞书；继续创建不能稳定得到完成人的 `mode=2` 任务。
 - Tradeoff：一个简单完成事件需要 Inbox 与两个独立服务，运维拓扑更多；换取事件耐久性、崩溃恢复、凭据隔离和服务端可验证授权。当前只表达「Owner 已在飞书确认完成」，不支持从 Task 携带任意结果内容。
+
+## ADR-060 · 2026-08-01 · 首个 Target Agent 采用窄 LLM 契约并让租期覆盖完整路由预算
+
+- **Status：Accepted · As-built foundation。**
+- Problem：Target 已能可靠认领 Agent 节点，但缺少真实 executor。直接复用 legacy prompt 字段会把旧模板语义带进新内核；只设置单线路 timeout 又无法约束主备故障切换的最坏总时长，正常慢调用可能在结果提交前失去 claim。Agent 结果若只留在 PostgreSQL，最终人工 Owner 也无法在飞书责任入口中复核。
+- Constraint：数据库事务不得跨越 LLM 调用；Agent 只能处理当前节点与已提交输入；模型供应商和凭证不能进入 Instance Snapshot；Runtime 只能认领 adapter 明确接受的 kind；迟到结果不得覆盖新 claim；测试不访问网络或真实凭证。
+- Decision：首个 adapter 只接受 `work.agent={kind: llm.generate, model_role, instructions}`。它把节点目标、输出、验收、冻结的 Instance 输入和直接依赖结果组成 prompt，返回正文、逻辑角色与 tenant-scoped Attempt 请求标识。下游 Human Task 优先展示直接依赖的正文，并只在投影描述中截断。Target 装配复用 OpenAI 兼容逻辑角色，但启动时计算每个角色主线路与全部备用线路的 timeout 总和，要求最长总和加安全余量严格小于 Node claim TTL；SDK 内层重试继续为零。
+- Security：Target Runtime 使用独立 OS 身份。复制其他服务已有的 `LLM_API_KEY` 会扩大凭证可读边界，机器管理授权不自动等于该复制授权；开发部署应使用专属 key，或在说明风险后取得明确复用授权。
+- Alternatives(否决)：继续让 Agent 节点保持 ready 但无 executor；复用 legacy `prompt / model_role` 顶层形状；在数据库事务内调用模型；静默截断持久化结果；只比较一个 timeout 而忽略备用链；默认把 legacy key 复制给 Target。
+- Tradeoff：模型调用仍是 at-least-once，Worker 崩溃后可能重复生成和计费，稳定请求标识只提供审计与可选 adapter 幂等，不代表供应商已保证幂等。当前只有单次生成，没有有限业务重试、质量闭环或复杂 LangGraph NodeRun；云端真链路在独立凭证装配前保持未验证。

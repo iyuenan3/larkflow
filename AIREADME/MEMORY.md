@@ -114,3 +114,39 @@
 - 现象（已确认）：`task.task.update_user_access_v2` 的完成事件只给 event ID、Task GUID 与 event types，没有可作为 Target actor 的完成人。普通 `mode=2` 任务的详情也不给出可稳定校验的单个 assignee 完成关系。
 - 根因（已确认）：事件信封表示「某任务发生了完成变化」，不是领域授权证明；`mode=2` 是任一人完成的任务语义，不匹配「唯一人类 Owner」不变量。
 - 结论：Target Human Task 固定创建为 `mode=1` 且只有唯一 Owner assignee。入站必须先按 GUID 在服务端读取 Task 详情，再同时校验 source、绑定、assignee 与 completed assignee。事件 payload 只是触发信号，不直接作为 actor。
+
+## 2026-08-01 · LLM 路由总预算必须小于节点 claim 租期
+
+- 现象（设计复核）：Node claim 默认 300 秒，LLM 单线路默认 timeout 也曾是 300 秒；若再配置备用线路，最坏等待时间是各线路 timeout 之和。即使生成正常结束，结果提交时也可能已经超过租期，被服务端按迟到结果拒绝。
+- 根因（已确认）：claim 约束的是完整外部执行窗口，不是某一条 HTTP 请求。主备线路由应用层顺序调用，SDK 内层重试若再开启还会继续放大预算。
+- 结论：Target Agent 启动时计算每个角色完整路由链的 timeout 总和，取最大值并加安全余量，必须严格小于 claim TTL。SDK 重试保持为零，业务重试只能在 Attempt 语义中单独设计。
+
+## 2026-08-01 · 服务器管理权限不自动包含跨服务复制 API key
+
+- 现象（已确认）：Target Runtime 与 legacy 服务使用不同 OS 身份。把 legacy 环境里的 `LLM_API_KEY` 复制到 Target env，会让 `lf_target_dev` 新增读取和使用该凭证的能力，即使两个服务在同一台完全受控服务器上也是权限扩大。
+- 根因（已确认）：对机器和部署的授权描述了可操作范围，不等于凭证 Owner 已针对新的服务身份授权复用具体 secret。
+- 结论：优先为 Target 创建专属 key。确需复用时，先说明新增可读身份、用途和回滚方式并取得明确授权；未授权前可以准备 wheel 与回滚备份，但不能复制 secret 或启用真实调用。
+
+## 2026-08-01 · Draft 中的依赖定义不能早于 NodeInstance 物化
+
+- 现象（已复现）：带依赖的多节点 Snapshot 在 `create_draft` 时触发 PostgreSQL Dependency 外键错误。单节点真实集成测试全部通过，直到第一条真实 Human-Agent-Human 草稿才暴露；事务完整回滚，没有半成品实例。
+- 根因（已确认）：Draft 只保存不可变 Snapshot，还没有 NodeInstance；仓储仍遍历 Snapshot 并尝试写 Dependency。Dependency 外键要求当前节点和依赖节点都已物化。
+- 结论：Draft 持久化阶段只写 Instance Snapshot。确认事务先物化全部 NodeInstance 与 Attempt，再写 Dependency；真实 PostgreSQL 集成测试必须至少包含一条有依赖的多节点草稿，不能只测单节点往返。
+
+## 2026-08-01 · Human 完成的业务结果不能复制外部任务元数据
+
+- 现象（真实链路）：首条 Human 完成后，Agent prompt 收到了 Task GUID 与完成时间。模型把这些技术字段当成业务依据写进摘要，下游任务因此泄露无关实现细节。
+- 根因（已确认）：入站 Worker 把用于验证和审计的外部任务元数据同时当成 Human 节点结果。Projection、Inbox 和关联记录本已保存这些事实，下游业务依赖不需要再携带一份。
+- 结论：当前 Task 完成语义只提交 `{confirmed: true}`。外部标识、时间与事件状态留在边界记录；以后新增有内容的 Human 提交时，应定义独立业务 schema，不能复用验证报文。
+
+## 2026-08-01 · 文本 Agent 边界必须归一化常见结构包装
+
+- 现象（真实模型）：节点要求纯正文，模型仍返回包含 `id / type / text` 的 JSON 数组。状态正确，但下游 Human Task 会直接显示 JSON 外壳。
+- 根因（已确认）：prompt 中的输出 schema 会诱导部分兼容模型结构化回答，仅靠自然语言要求不能形成稳定适配契约。
+- 结论：文本 Agent adapter 在结果边界提取常见对象、数组和整段 JSON 代码块中的 `content / text`，无法识别的 JSON 保留原文而不猜测；归一化后再执行非空与长度校验。
+
+## 2026-08-01 · Task 完成变化事件不能替代当前状态读回
+
+- 现象（真实链路）：一条 `task_completed_update` 进入 Inbox 后，Task 详情仍连续返回 `todo` 且没有已完成 assignee。凭据侧重试 9 次均拒绝；后续状态可验证的新事件被正常处理，实例只推进一次。
+- 根因（边界确认）：事件说明完成关系发生过变化，不证明读取时仍满足完成、唯一 Owner 与当前 Attempt 条件。
+- 结论：事件只负责唤醒，不能直接提交 Human 节点。失败事件保留并有界退避；只有服务端详情同时满足绑定、`mode=1`、唯一 assignee、完成状态和完成人时，才写入 verified payload。

@@ -113,6 +113,10 @@ Secret、token、真实人员 ID、设备 ID、本地路径和供应商运行时
     acceptance:
       - 两份意见均被引用
       - 冲突被明确标注
+    agent:
+      kind: llm.generate
+      model_role: default
+      instructions: 形成供项目 Owner 复核的合并意见，不能自行消除冲突
   retry:
     max_attempts: 2
 ```
@@ -128,9 +132,12 @@ Secret、token、真实人员 ID、设备 ID、本地路径和供应商运行时
 | `work.inputs` | 只能引用实例输入或祖先节点输出 |
 | `work.outputs` | 节点承诺产生的结构化结果或材料引用 |
 | `work.acceptance` | 非空验收条件 |
+| `work.agent.kind` | Agent 必填，当前实现只接受 `llm.generate` |
+| `work.agent.model_role` | 非空逻辑模型角色，默认 `default` |
+| `work.agent.instructions` | 非空节点指令，不得包含长期凭证 |
 | `retry.max_attempts` | Agent 可选，使用服务端允许范围内的有限正整数 |
 
-Tool 节点还应声明数据化的 `tool.kind` 和非敏感参数。Agent 节点可以声明逻辑 `model_role`，不得把模型供应商、长期凭证或 LangGraph checkpoint 固化为业务契约。
+Tool 节点还应声明数据化的 `tool.kind` 和非敏感参数。Agent 节点通过 `work.agent` 声明逻辑 kind、`model_role` 和节点指令，不得把模型供应商、base URL、长期凭证或 LangGraph checkpoint 固化为业务契约。
 
 ## 7. Owner 解析
 
@@ -224,7 +231,7 @@ quality:
 3. 所有输入只引用实例参数或传递祖先输出。
 4. 所有必需输出和验收条件存在。
 5. 每个节点有唯一有效 Owner。
-6. Tool kind 和 Agent retry 配置在服务端允许列表内。
+6. Tool kind、Agent kind、模型逻辑角色和 retry 配置在服务端允许列表内。
 7. 不包含 Secret、token、真实人员 ID 或供应商运行时 state。
 
 校验失败只能返回草稿级错误，不得部分启动。
