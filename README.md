@@ -4,14 +4,14 @@
 
 ## 当前状态
 
-larkflow 已开始按收敛后的产品设计重建中央工作流，目前完成领域内核、PostgreSQL 事务持久化、自动执行 Runtime Worker、飞书 Task Projection Worker 与 Target 常驻服务装配。
+larkflow 已开始按收敛后的产品设计重建中央工作流，目前完成领域内核、PostgreSQL 事务持久化、Runtime Worker、Task Projection Worker，以及飞书 Task 完成事件的耐久入站链路。
 
 - **目标产品**：单企业、单层 DAG 的最小闭环，支持模板可选、草稿确认、Human / Agent / Tool 节点、受控编辑、重启、审计和飞书投影。
-- **新内核**：`larkflow/workflow/` 已实现不可变 Instance Snapshot、草稿确认、DAG 校验、节点状态迁移、依赖解锁、Human / Agent / Tool Node Runner、Attempt、claim、过期认领恢复、常驻 Runtime Worker、常驻 Projection Worker、乐观并发、PostgreSQL 仓储、追加型审计与事务 outbox。
+- **新内核**：`larkflow/workflow/` 已实现不可变 Instance Snapshot、草稿确认、DAG 校验、节点状态迁移、依赖解锁、Human / Agent / Tool Node Runner、Attempt、claim、过期认领恢复、Runtime / Projection / Inbound Worker、乐观并发、PostgreSQL 仓储、追加型审计、事务 outbox 与耐久 Inbox。
 - **legacy 原型**：LangGraph + SQLite + lark-cli 路径继续保留，用于回归已验证的飞书投影、打回、幂等和恢复机制。
-- **尚未实现**：模板服务、飞书入站事件接线、IM / Doc 投影、真实 Agent / Tool executor adapter、受控编辑、重启和生产装配。
+- **尚未实现**：模板服务、通用飞书命令入站、IM / Doc 投影、真实 Agent / Tool executor adapter、受控编辑、重启和生产装配。
 - **证据边界**：本轮完成的是既有设计简化与一致性核验，不是访谈、市场或商业验证。
-- **重要边界**：`alicloud-sh` 已运行独立 `larkflow-target.service` 与 `larkflow-target-projection.service`。后者只对 Human 节点创建和完成飞书任务，已在测试组织完成一条真实闭环；当前仍不连接真实 Agent、业务 Tool、飞书入站事件、IM 或 Doc 投影。legacy 服务继续使用 SQLite，不能把 checkpointer 或全局 LangGraph state 扩展为新产品领域模型。
+- **重要边界**：`alicloud-sh` 已运行 Target Runtime、Projection、凭据侧入站校验和领域侧入站四个独立服务，legacy 服务仍是飞书 EventKey 的唯一消费者。凭据侧只读飞书 Task 详情并写入已验证 Inbox，领域侧不能读取 lark-cli profile，只在校验绑定、Owner、当前 Attempt 和完成人后提交 Human 节点。当前仍不连接真实 Agent、业务 Tool、IM 或 Doc 投影。legacy 服务继续使用 SQLite，不能把 checkpointer 或全局 LangGraph state 扩展为新产品领域模型。
 
 产品与架构真相源从 [AIREADME/INDEX.md](AIREADME/INDEX.md) 开始。判断“目标是什么”和“现在做到了什么”时，必须区分 Target 与 As-built。
 
@@ -68,7 +68,7 @@ AIREADME/                         产品、架构、契约、路线和决策真�
 research/design-simplification.md 既有设计简化与取舍记录
 research/phase-0/                Deferred 的访谈、对照实验协议与迁移清单
 larkflow/
-  workflow/                      Target 领域内核、CLI、Runtime / Projection Worker、PostgreSQL migration、事务仓储与 outbox
+  workflow/                      Target 领域内核、CLI、Runtime / Projection / Inbound Worker、PostgreSQL migration、事务仓储、outbox 与 Inbox
   engine/                        legacy LangGraph 编排、门禁、返工和活图机制
   model/                         legacy YAML 节点和模板校验
   io/                            lark-cli、飞书投影、事件和关联表适配
@@ -78,7 +78,7 @@ larkflow/
   serve.py                       legacy 常驻服务和启动对账
   store.py                       legacy SQLite、WAL 和跨进程锁
 tests/                           离线 pytest 套件
-deploy/                          legacy 单机服务、Target Runtime / Projection、PostgreSQL 备份资产
+deploy/                          legacy 单机服务、Target Runtime / Projection / Inbound、PostgreSQL 备份资产
 ```
 
 迁移资产的逐模块处理方式见 [research/phase-0/migration-inventory.md](research/phase-0/migration-inventory.md)。
@@ -94,12 +94,12 @@ Phase 0 的设计一致性核验已经完成，当前进入 Phase 1 中央工作
 - Runtime Worker 每次只认领一个已被 adapter 明确接受的自动节点，先提交 claim 再调用 executor；进程中断后，其他 Worker 可在租约到期时用新 token 接管同一 Attempt。
 - PostgreSQL 14 schema、migration runner、事务仓储、追加型 Audit 和带租约的 outbox 已落码；领域状态、审计和 outbox 在同一事务提交。
 - migration SQL 已进入 wheel，真实 PostgreSQL 集成测试使用一次性数据库，完成后删除测试数据库与角色。
-- `larkflow-target` CLI 已提供 migrate、create、confirm、show、submit-human、run-once、serve、project-once 与 project；环境配置由项目 dotenv 解析器读取，不使用 shell `source`。
-- `alicloud-sh` 上的长期 Target 开发库只接受本机 peer authentication，已应用两份 migration；Runtime 与 Projection 两个 systemd 服务分别常驻，完成普通执行、SIGTERM 干净停机、SIGKILL 自动拉起、同一 Attempt 租约恢复和 Human Task 创建 / 完成验证。
+- `larkflow-target` CLI 已提供 migrate、create、confirm、show、submit-human、run-once、serve、project-once、project、inbound-once、inbound、verify-inbound-once 与 verify-inbound；环境配置由项目 dotenv 解析器读取，不使用 shell `source`。
+- `alicloud-sh` 上的长期 Target 开发库只接受本机 peer authentication，已应用四份 migration；Runtime、Projection、入站校验与领域入站四个 systemd 服务常驻，与 legacy 单消费者同时 active。
 - Projection Worker 只认领明确的投影事件，在数据库 claim 提交后调用 lark-cli，以稳定幂等键创建任务，并把 Task GUID、URL、同步版本和完成状态写回 Projection 记录。测试组织中的真实 Human 节点已经从 `waiting_human` 走到实例、节点和飞书任务全部完成。
 - 每日 custom-format 备份保留约 7 天，并完成过一次新库恢复演练。
 - 自动执行采用 at-least-once 语义，executor 必须使用请求中的稳定幂等键消除重复副作用。
-- 当前仍缺真实 executor、飞书入站事件、IM / Doc 投影、完整对账和生产迁移，因此不能描述为目标产品已经上线。开发服务中的 `development.echo` 只用于持久化与恢复演练。
+- 当前只接入了 Task 完成事件，仍缺真实 executor、通用飞书命令入站、IM / Doc 投影、完整对账和生产迁移，因此不能描述为目标产品已经上线。开发服务中的 `development.echo` 只用于持久化与恢复演练。
 
 原有访谈和飞书基线协议保留在 [research/phase-0/README.md](research/phase-0/README.md)，当前状态为 Deferred，不阻塞本轮简化设计，也不能被描述为已完成。
 

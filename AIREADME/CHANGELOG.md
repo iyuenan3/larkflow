@@ -1,5 +1,17 @@
 # CHANGELOG · larkflow
 
+## v0.15.0-draft · 2026-08-01 · Feishu Task 耐久入站与凭据隔离（ADR-059）
+
+- Added：PostgreSQL Inbox、以飞书 event ID 去重的 legacy 事件观察桥接、凭据侧 `TaskVerificationWorker` 与领域侧 `WorkflowInboundWorker`。
+- Added：`larkflow-target verify-inbound-once / verify-inbound / inbound-once / inbound`，以及两个独立 systemd 服务与权限收紧的 env 模板。
+- Changed：Human Task 创建改用原生 Task API，固定 `mode=1`、唯一 Owner assignee、稳定 client token 与绑定字段，为完成人校验提供可验证语义。
+- Security：legacy 仍是 EventKey 单消费者，不写 Target 领域状态；凭据侧只能读 Task 并写 Inbox；领域侧不能读 lark-cli profile，只消费已验证 payload 并在服务端重算授权。
+- Resilience：校验与领域处理分别持久 claim、租约、尝试次数和失败阶段；进程崩溃后可恢复，重复事件不重复提交。
+- Verified：完整离线套件 580 项通过，4 项显式集成测试跳过；wheel 包含入站模块与四份 migration。
+- Verified：一次性真实 PostgreSQL 数据库已验证 migration 重入、去重、两阶段双 Worker 竞争、无效 token 拒绝与崩溃恢复；长期开发库已应用四份 migration。
+- Deployment：Runtime、Projection、入站校验、领域入站与 legacy 五个服务同时 enabled / active，`lf_target_dev` 已回读为无飞书凭据访问权。
+- Boundary：当前只把飞书 Task 完成解释为 Human 节点的结构化确认，不承载任意结果内容；IM、Doc、通用命令入站与生产身份拓扑仍未完成。
+
 ## v0.14.0-draft · 2026-08-01 · Feishu Task Projection Worker 真栈闭环（ADR-058）
 
 - Added：独立 `WorkflowProjectionWorker`、常驻 `ProjectionWorkerLoop`、Feishu Task adapter、Projection Store Port 与 PostgreSQL UPSERT。

@@ -17,7 +17,9 @@ larkflow 复用飞书的：
 
 MVP 只保留一种角色：中央 Feishu Adapter。它运行在服务端，以明确的企业应用身份收事件、写任务、消息和文档，并执行投影对账。
 
-当前 As-built 已接入其中一个窄切片：独立 Projection Worker 从 PostgreSQL outbox 认领 Human 节点事件，通过 lark-cli 创建或完成飞书任务，并把 Task GUID、URL、幂等键、同步版本和完成状态写回 Projection。外部调用不在数据库事务中，飞书任务不是流程真相。入站事件、IM、Doc 与启动全量对账尚未接入 Target。
+当前 As-built 已接入两个窄切片：独立 Projection Worker 从 PostgreSQL outbox 认领 Human 节点事件，通过 lark-cli 创建或完成飞书任务；Task 完成事件由 legacy 单消费者写入耐久 Inbox，再由凭据侧和领域侧两个独立 Worker 先后校验飞书当前状态与 Target 领域状态。外部调用不在数据库事务中，飞书任务不是流程真相。IM、Doc、通用命令入站与启动全量对账尚未接入 Target。
+
+服务器使用自己的 lark-cli 与飞书应用 profile，不连接开发者电脑上的 lark-cli。持有 profile 的 OS 身份只负责飞书读写与 Inbox 校验，领域服务身份不获得飞书凭据。
 
 员工电脑上的个人 Agent Edge、设备注册和任务领取均为 Later。现有 lark-cli 经验可以复用，但不能把中央进程描述成所有员工的个人 Agent。
 

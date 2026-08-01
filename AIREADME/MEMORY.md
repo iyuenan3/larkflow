@@ -108,3 +108,9 @@
 - 现象（已确认）：为新服务用户复制 `config.json`、加密 app secret 与 `master.key` 虽然能快速复用测试应用，但等于把可解密凭据完整复制给另一个身份，扩大访问边界。
 - 根因（已确认）：Linux 的 lark-cli keychain 实际是本地密文文件加同目录主密钥，不具备 OS 钥匙串的不可导出隔离。
 - 结论：当前开发 Projection 以已有凭据所有者 `lf-dev` 运行，只给该身份最小数据库权限，并通过单用户 ACL 复用 Target venv。生产部署应使用独立中央 adapter 身份和独立凭据生命周期，不能把该过渡拓扑当成目标形态。
+
+## 2026-08-01 · Task V2 事件不能直接证明完成人
+
+- 现象（已确认）：`task.task.update_user_access_v2` 的完成事件只给 event ID、Task GUID 与 event types，没有可作为 Target actor 的完成人。普通 `mode=2` 任务的详情也不给出可稳定校验的单个 assignee 完成关系。
+- 根因（已确认）：事件信封表示「某任务发生了完成变化」，不是领域授权证明；`mode=2` 是任一人完成的任务语义，不匹配「唯一人类 Owner」不变量。
+- 结论：Target Human Task 固定创建为 `mode=1` 且只有唯一 Owner assignee。入站必须先按 GUID 在服务端读取 Task 详情，再同时校验 source、绑定、assignee 与 completed assignee。事件 payload 只是触发信号，不直接作为 actor。

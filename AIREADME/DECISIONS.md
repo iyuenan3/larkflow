@@ -447,3 +447,12 @@
 - Deployment：开发机不复制飞书凭据。Projection systemd 服务以现有 `lf-dev` OS 身份运行，复用该身份下的测试 profile；同名 PostgreSQL peer 角色只有所需表的 SELECT、Outbox UPDATE 与 Projection INSERT / UPDATE。它通过单用户 ACL 穿越 Target venv，不能读取 Runtime env，也不能写领域状态。Projection 启动只读验证 migration，不获得 schema DDL 权限。
 - Alternatives(否决)：在领域事务中直接调用飞书；把 Projection 合进 Runtime loop；复制 lark-cli 的 config、密文和 master key；让 Projection 使用 `lf_target_dev` 的完整数据库权限；不按事件类型过滤共享 outbox。
 - Tradeoff：当前开发部署复用了 legacy OS 身份来持有测试飞书凭据，仍不是生产身份拓扑。Task 创建 / 完成已真栈验证，但入站事件、IM / Doc 投影、启动全量对账、缺失对象重建和最小飞书 scope 回归仍未完成。
+
+## ADR-059 · 2026-08-01 · Target Task 入站使用单消费者、耐久 Inbox 与凭据隔离双阶段
+
+- **Status：Accepted · Development deployment。**
+- Problem：Target Human 节点已能创建飞书 Task，但人在飞书完成任务后仍不能推进 Target 状态。同一 EventKey 只允许一个消费者，而且 V2 事件信封只给 event ID、Task GUID 与事件类型，不能证明是谁完成。直接让 Target 领域服务读取 legacy 的飞书 profile 会扩大凭据边界。
+- Constraint：legacy 长连接必须保持唯一消费者；事件必须以 event ID 去重；不信任客户端 actor；飞书读取不得跨越领域数据库事务；legacy 不得修改 Target 领域状态；Target 领域身份不得因入站而获得飞书凭据。
+- Decision：legacy 事件观察桥接只把 Task 完成信号持久化到 PostgreSQL Inbox。持有测试 profile 的 `lf-dev` 校验 Worker 在事务外读取 Task 详情，把可验证字段写回 Inbox。不持有飞书凭据的 `lf_target_dev` 领域 Worker 再校验 Projection 当前轮次、Task 绑定、企业应用来源、`mode=1`、唯一 Owner assignee、Task 已完成与完成人严格等于 Owner，最后以 Owner actor 调用 Human 提交命令。Task Projection 因此固定使用原生 API、`mode=1`、唯一 assignee、稳定 client token 与绑定字段。
+- Alternatives(否决)：再启一个相同 EventKey 消费者；从事件信封推断 actor；给 `lf_target_dev` 授予 legacy 凭据目录读权；让 legacy 直接提交 Human 节点；在持久化事件前同步读取飞书；继续创建不能稳定得到完成人的 `mode=2` 任务。
+- Tradeoff：一个简单完成事件需要 Inbox 与两个独立服务，运维拓扑更多；换取事件耐久性、崩溃恢复、凭据隔离和服务端可验证授权。当前只表达「Owner 已在飞书确认完成」，不支持从 Task 携带任意结果内容。

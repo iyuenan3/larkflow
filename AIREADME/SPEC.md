@@ -102,6 +102,20 @@
 退出码：`0` 成功 / `1` 运行期失败或被拒（含 `not_blocked`、实例不存在、对账仍有派单失败、拿不到实例锁）/ `2` 用法错。`--json` 输出机器可读结果。
 **CLI 没有身份层**：`unblock --by` 只进审计不鉴权，`pending --actor` 只是「以谁的视角看」的读接口。信任边界 = 谁有宿主 shell 谁就能调。
 
+### Target CLI 与 Task 入站 as-built
+
+Target 使用独立 `larkflow-target` CLI，不复用上述 legacy 驱动层。当前命令为 `migrate / create / confirm / show / submit-human / run-once / serve / project-once / project / verify-inbound-once / verify-inbound / inbound-once / inbound`。这些是本机运维入口，仍没有网络 API。
+
+Target Task 入站只接受 `task.task.update_user_access_v2` 中包含 `task_completed_update` 的事件。原始事件只提供 event ID、Task GUID 和事件类型，不作为 actor 证明。服务端必须重新读取 Task 详情，并校验以下条件：
+
+- Task GUID 对应当前 Human Attempt 的 Projection。
+- Task 绑定字段与 Projection 的稳定幂等键一致。
+- Task 由当前企业应用创建，为 `mode=1`，且只有节点 Owner 一个 assignee。
+- Task 状态已完成，完成人集合严格等于该 Owner。
+- Node 仍是 `waiting_human`，Attempt 仍是当前轮次。
+
+通过后以 Owner 作为经服务端核验的 actor 调用同一 Human 提交领域命令，event ID 同时作为 Inbox 幂等键与审计关联。旧的无绑定任务、`mode=2` 任务、非当前 Attempt 或非 Owner 完成均不能推进领域状态。
+
 ## 飞书事件订阅 EventKey（研究证实为静态常量，不需 dev app 上下文）
 - `card.action.trigger`（仅 bot）：卡片按钮点击。路由键塞按钮 `behaviors[].callback.value`，原样回传为 `action_value`（自描述 `{thread_id, interrupt_id, node_id, passed, reopen}`，与 gate 产出的 `passed`/`reopen` 逐字对齐）。⚠️ dev app 须在开发者后台开「事件与回调 → 回调配置」，否则静默零事件。
 - `task.task.update_user_access_v2`（user|bot）：任务事件。完成 = `.event.event_types[]` 含 `task_completed_update`（自行 filter）；`.event.task_guid` 经关联表回映射到 `(thread_id, interrupt_id)`。
