@@ -106,6 +106,8 @@
 
 Target 使用独立 `larkflow-target` CLI，不复用上述 legacy 驱动层。控制面增加 `template-create / template-add-version / template-enable / template-disable / template-delete / template-list / template-show / create-from-template / preview / reconcile-projections / reconcile-completions`，并保留 `migrate / create / confirm / show / submit-human` 和四类 Worker 的单步、常驻命令。这些是本机运维入口，不是公开网络 API。
 
+Target 自动节点按工作契约 kind 路由。Agent 当前只接受 `work.agent.kind=llm.generate`。Tool 由 `ToolExecutorRouter` 按 `work.tool.kind` 选择 adapter；`content.check` 读取直接依赖正文，接受 `min_chars`、`max_chars` 与 `required_terms`，返回 `verdict`、`evidence`、`suggestion`、`char_count`、`missing_terms`、`source` 和稳定 `request_id`。配置或输入错误使当前 Attempt 显式失败，未知 kind 在 claim 前保持未认领。
+
 `create-from-template` 只接受 enabled 模板，以最新不可变版本解析参数和 `owner_role -> person_id` 绑定，生成含 `template_version_id` 与 `locked` 的完整 Snapshot。`preview` 仅允许 Instance Owner 读取并重新校验 draft，不写审计、不改变状态；`confirm` 仍需显式调用。
 
 `project` 在进入 Outbox 循环前调用与 `reconcile-projections` 相同的全量对账路径。对账按 Instance ID 分页，默认每批 100，可用 `LARKFLOW_TARGET_PROJECTION_RECONCILE_BATCH_SIZE` 调整。它只对当前 `waiting_human` 节点补建缺失 Task；已有 Task 先只读查询，只有 Task v2 明确返回资源不存在码 `1470404` 才使用下一 repair generation 的稳定 client token 重建，并以旧 GUID 和旧幂等键为并发条件原子更换 Projection 绑定。任意其他读取失败只记入结构化错误并继续其他实例，不重建。终态 Human 节点不补发历史 Task；若已有 Projection 仍未完成，对账会收口其完成状态。

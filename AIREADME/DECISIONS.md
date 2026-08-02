@@ -522,3 +522,11 @@
 - Tradeoff：普通 `0600` 文件只能满足 Proof，不能替代 Keychain、硬件密钥或设备证明；只读沙箱只证明写入受限，目录级读取隔离尚未验证，恶意中央输入仍可能诱导 Agent 读取所选工作区之外的可读文件，工作内容也可能发送给模型供应商；心跳会增加写负载；手工 `run-once` 无法证明持续采用。离线、真实 PostgreSQL 与合成数据本机链路只证明当前协议可执行，不证明真实 HTTPS、企业政策或市场价值。
 - Update（2026-08-02）：不改原决策的 HTTPS 与产品化边界。长期开发库已应用 Edge migration，Gateway 已作为仅监听 loopback 的 systemd 服务部署；本机通过临时 SSH 隧道完成跨机 Codex 领取、续租、回传和撤销验收。公网 HTTPS 仍未部署。
 - Update（2026-08-02）：专用 DNS-only 子域名、Caddy 和受信任源站证书已经完成源站验证，Gateway 仍保持 loopback。中国内地 ECS 的公网入口必须先满足 ICP 接入备案，不接受“证书已签发等于公网 Edge 已可用”，也不通过 Cloudflare Tunnel 或非标准端口绕过备案。当前 Caddy 已停止并禁用开机启动，配置与证书保留；完成接入备案或迁移到合规的非中国内地环境后，必须重新执行配对、领取、续租、回传和撤销验收。现场证据见 MEMORY。
+
+## ADR-066 · 2026-08-02 · Tool executor 按 kind 路由并以确定性内容检查作为首个业务能力
+
+- **Status：Accepted。**
+- Problem：`executor=tool` 只说明执行方式，不能作为业务能力标识。单一开发 echo 无法证明真实 Human、Agent 与 Tool 的依赖结果能在同一中央 DAG 中闭环，也不能安全扩展到多个 Tool。
+- Decision：增加 `ToolExecutorRouter`，按 `work.tool.kind` 精确选择内部 adapter，未知 kind 在 claim 前拒绝。首个 `content.check` 只读取直接依赖正文，执行长度与必需词检查，返回稳定 `pass / fail + evidence + suggestion` 和请求标识，不调用模型、不写飞书。质量 verdict 同时进入 Attempt 的 `quality_result`，完整结果可被下游 Human Task 展示。
+- Alternatives(否决)：按 node id 注册 handler；让 Runtime 先 claim 再发现不支持；把检查 prompt 交给 LLM；为每个模板新增 Python executor 类型。
+- Tradeoff：当前检查只覆盖确定性文本契约，不证明事实正确、语义质量或业务合规；更多 Tool 必须逐个定义输入来源、副作用、幂等键和失败语义。开发真栈已闭环，不代表生产装配完成。

@@ -136,27 +136,27 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 - `inbound.py` 与 `inbound_daemon.py`：接受 Task 状态轮询或飞书事件产生的 PostgreSQL Inbox 信号，以及凭据侧校验与领域侧提交两阶段 Worker。两阶段分别 claim，失败后指数退避，过期 claim 可被其他 Worker 恢复。无论信号来源如何，凭据侧都重新读取 Task，默认最多验证 24 次；耗尽后写入带终止时间、阶段、结果和最后错误的 `exhausted` 终态，结构化日志暴露耗尽计数，且该信号不再被认领。
 - `feishu.py`：基于 lark-cli 的 Task adapter。创建使用原生 Task API、稳定 client token、`mode=1`、唯一 Owner assignee 和稳定绑定字段；入站校验只读 Task 详情。
 - `cli.py`：独立 `larkflow-target` 运维入口，提供模板全生命周期、从模板创建草稿、预览、确认、状态、Human 提交，以及 Runtime、Projection、入站校验和领域入站的单步 / 常驻服务。
-- `executors.py`：包含只接受 `work.agent.kind=llm.generate` 的 `LLMAgentExecutor`，以及只用于开发验证的 `development.echo` Tool adapter。Agent 使用提交时冻结的实例输入与依赖结果，返回正文、逻辑模型角色和稳定请求标识；Runtime 在 claim 前按 adapter 能力筛选具体节点，未接受的 kind 保持 ready，不会先认领后失败。
+- `executors.py`：包含只接受 `work.agent.kind=llm.generate` 的 `LLMAgentExecutor`、按 `work.tool.kind` 路由内部 adapter 的 `ToolExecutorRouter`、确定性的 `content.check`，以及只用于开发验证的 `development.echo`。`content.check` 从直接依赖提取正文，执行长度与必需词检查，并返回 `pass / fail + evidence + suggestion`；Runtime 在 claim 前按 adapter 能力筛选具体节点，未接受的 kind 保持 ready，不会先认领后失败。
 - `edge.py`、`edge_postgres.py` 与 migration `0007_edge_devices`：一次性配对、设备哈希凭据、撤销、追加型 Edge 审计和 `personal.readonly` 能力过滤。Edge 复用当前 Attempt 的 Worker、token、版本与租期校验，不创建第二套任务真相。
 - `edge_http.py` 与 `edge_gateway_cli.py`：提供私有 `/edge/v1` JSON 边界和运维入口。Gateway 默认且强制只监听 loopback；远程设备必须经独立 HTTPS 反向代理，仓库不把该接口描述为公网 API。
 - `edge_client.py` 与 `edge_cli.py`：用户设备只提供手工 `pair` 与 `run-once`。Codex adapter 固定显式工作区，使用只读、临时会话和忽略用户配置模式，清除 Edge、Target 与飞书凭据环境变量，并按进程组终止超时子进程。
 
 领域状态、审计与 outbox 在同一事务提交。事务提交后，Human 节点与所有节点状态变化通过 outbox 请求投影同步；Agent 和 Tool 激活直接返回 NodeActivation，由 Runtime Worker 在提交后交给 executor，避免数据库事务跨越外部调用。自动执行是 at-least-once，executor 必须使用 tenant-scoped Attempt 幂等键消除重复副作用。Agent 装配还会检查所有显式故障切换线路的超时总和，加上安全余量后必须小于 claim 租期，避免正常慢调用在结果提交前失去租约。Edge Proof 不发明独立 Capability Lease，它把可撤销设备身份与一个明确 kind 映射到同一 Node claim，并用心跳延长当前租期；设备失联或本机执行器异常后，租约到期才允许接管。
 
-PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration 重入、完整聚合往返、模板并发启用、不可变版本触发器、审计追加保护、outbox、Inbox、双 Worker 竞争、过期认领恢复、验证耗尽终态，以及投影分页对账、缺失补建、受控换绑和重入。Edge migration 与 store 也已在一次性 PostgreSQL 14 验证七份 migration 重入、同一配对码并发消费恰好一胜一拒、领取、续租、完成、撤销、原始 secret 不落库和 Edge 审计不可改写；测试库和上传件随后删除。`alicloud-sh` 已建立长期 Target 开发库、每日备份，以及 Runtime、Projection、入站校验、领域入站和 Edge Gateway 五个 Target 常驻服务。legacy 仍是事件长连接的唯一消费者，但事件只是可选的低延迟信号；Projection 对当前 Human Task 的周期读回是完成发现的可靠路径。两条路径都只写 Inbox，不直接改 Target 领域状态。凭据侧以 `lf-dev` 重新读取飞书 Task 并写验证结果，领域侧以 `lf_target_dev` 校验 Projection 绑定、当前 Attempt、唯一 Owner、任务来源与完成人后提交 Human 节点，后者不能读取 lark-cli profile。开发环境已启用 Agent，并用真实 Task 和模型完成 Human-Agent-Human 闭环；正式模板 CLI 创建的实例也已完成两个 Human 节点和一个 Agent 节点。通用飞书命令、业务 Tool、IM 或 Doc 投影仍未接入；同机本地备份不构成生产级高可用或灾难恢复。投影对账已部署到长期开发服务，并用专用实例完成真实 Task 删除后的换绑、重入及新 Task 完成入站验收。第七份 migration 已应用到长期开发库，Gateway 以 `lf_target_dev` 常驻且只监听 `127.0.0.1:8765`。临时本机 Edge 通过 SSH 隧道完成两条合成 Codex 跨机实例，第二条产生 10 次真实续租审计；设备撤销后旧凭据领取被拒绝。开发服务器另以 Caddy 将专用 DNS-only 子域名反向代理到 loopback Gateway，受信任证书、SAN、安全响应头和源站 401 均已验证；但公网客户端后续 TLS 握手在到达 ECS 前被阿里云中国内地 ICP 接入备案系统重置，因此公网配对、领取、续租和回传尚未验证。阻断确认后 Caddy 已停止并禁用开机启动，配置、证书和回滚备份保留，Gateway 与其他 Target 服务不受影响。
+PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration 重入、完整聚合往返、模板并发启用、不可变版本触发器、审计追加保护、outbox、Inbox、双 Worker 竞争、过期认领恢复、验证耗尽终态，以及投影分页对账、缺失补建、受控换绑和重入。Edge migration 与 store 也已在一次性 PostgreSQL 14 验证七份 migration 重入、同一配对码并发消费恰好一胜一拒、领取、续租、完成、撤销、原始 secret 不落库和 Edge 审计不可改写；测试库和上传件随后删除。`alicloud-sh` 已建立长期 Target 开发库、每日备份，以及 Runtime、Projection、入站校验、领域入站和 Edge Gateway 五个 Target 常驻服务。legacy 仍是事件长连接的唯一消费者，但事件只是可选的低延迟信号；Projection 对当前 Human Task 的周期读回是完成发现的可靠路径。两条路径都只写 Inbox，不直接改 Target 领域状态。凭据侧以 `lf-dev` 重新读取飞书 Task 并写验证结果，领域侧以 `lf_target_dev` 校验 Projection 绑定、当前 Attempt、唯一 Owner、任务来源与完成人后提交 Human 节点，后者不能读取 lark-cli profile。开发环境已启用 Agent 和 `content.check` Tool；正式模板实例 `mixed_tool_acceptance_20260802_200044` 已完成 Human-Agent-Tool-Human 闭环，最终 Task 同时展示 Agent 正文和 Tool 证据。通用飞书命令、更多业务 Tool、IM 或 Doc 投影仍未接入；同机本地备份不构成生产级高可用或灾难恢复。投影对账已部署到长期开发服务，并用专用实例完成真实 Task 删除后的换绑、重入及新 Task 完成入站验收。第七份 migration 已应用到长期开发库，Gateway 以 `lf_target_dev` 常驻且只监听 `127.0.0.1:8765`。临时本机 Edge 通过 SSH 隧道完成两条合成 Codex 跨机实例，第二条产生 10 次真实续租审计；设备撤销后旧凭据领取被拒绝。开发服务器另以 Caddy 将专用 DNS-only 子域名反向代理到 loopback Gateway，受信任证书、SAN、安全响应头和源站 401 均已验证；但公网客户端后续 TLS 握手在到达 ECS 前被阿里云中国内地 ICP 接入备案系统重置，因此公网配对、领取、续租和回传尚未验证。阻断确认后 Caddy 已停止并禁用开机启动，配置、证书和回滚备份保留，Gateway 与其他 Target 服务不受影响。
 
 ## 8. Intended vs implemented
 
 | Area | Target | 当前仓库 | 差距 |
 |---|---|---|---|
-| 业务真相 | PostgreSQL 领域模型 | Template 与 Instance aggregate、PostgreSQL adapter、独立 CLI、Runtime、Agent、Projection 与 Task 入站已落码；legacy 仍用 checkpointer | 需要通用飞书命令、业务 Tool 与生产装配 |
+| 业务真相 | PostgreSQL 领域模型 | Template 与 Instance aggregate、PostgreSQL adapter、独立 CLI、Runtime、Agent、首个 Tool、Projection 与 Task 入站已落码；legacy 仍用 checkpointer | 需要通用飞书命令、更多业务 Tool 与生产装配 |
 | 持久化 | Instance、Node、Attempt、Audit、Outbox、Inbox | PostgreSQL 14 schema、事务仓储、追加型 Audit、带租约 Outbox 和事件去重 Inbox 已实现并真库验证；长期开发库与本地每日备份已建立 | 需要异机备份、PITR、升级、容量告警和生产装配 |
 | 草稿与模板可选 | 草稿预览、确认、模板或无模板实例 | 新内核支持直接 Snapshot 草稿，以及模板参数和角色绑定生成的冻结草稿；Owner 可只读预览并独立确认 | 需要目录校验和面向用户的入口 |
 | 模板 | 简单生命周期、不可变版本、布尔锁 | Template Service、PostgreSQL 仓储、追加型审计、CLI 与 v0.2 示例已实现并真库验证 | 需要 importer 和模板管理界面 |
 | 责任 | 每节点唯一 Owner，执行器分离 | 新内核已强制 Owner 与 `human/agent/tool` 分离；企业人员有效性尚无 adapter | 需要目录校验与角色解析 |
 | 编辑与重启 | 预览确认、revision、下游 Attempt | 已有活图和选择性重算机制 | 需按新模型提炼 |
 | 飞书集成 | PostgreSQL outbox / Inbox、幂等、服务端授权、对账 | Human Task 创建 / 完成、Task 完成状态轮询、可选事件去重、服务端详情回读、两阶段授权、启动分页对账、缺失补建、受控 Task 重建及重建后完成入站已实现并完成开发环境真栈验收 | 需要通用命令入站与 IM / Doc 投影 |
-| 运行时 | 独立 Scheduler + Node Runner | 新内核已实现 Scheduler、Node Runner、持久化 runnable scan、`llm.generate` Agent adapter、Runtime / Projection / Inbound Worker、能力过滤、优雅停机、过期 claim 恢复和开发环境 Agent 真链路 | 需要业务 Tool executor 和有限重试 |
+| 运行时 | 独立 Scheduler + Node Runner | 新内核已实现 Scheduler、Node Runner、持久化 runnable scan、`llm.generate`、`content.check`、Runtime / Projection / Inbound Worker、能力过滤、优雅停机、过期 claim 恢复和开发环境混合真链路 | 需要更多业务 Tool 和有限重试 |
 | Personal Agent Edge | 默认关闭、本人设备、窄 capability、中央真相 | Proof v0 已实现配对、撤销、私有 HTTP、手工 run-once、只读 Codex adapter、续租与迟到结果拒绝；离线、真实 PostgreSQL、loopback 常驻部署、SSH 隧道跨机 Codex、Caddy 与源站证书已验证 | 需要完成 ICP 接入备案或迁移合规地域，再做公网设备 E2E；凭据系统存储与安全评审仍缺，产品化仍为 Later |
 
 [SPEC.md](SPEC.md) 和 [DEPLOYMENT.md](DEPLOYMENT.md) 继续描述 As-built 原型，不作为目标产品已实现证据。

@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.21.0-draft · 2026-08-02 · 确定性 Tool 与真实混合流程（ADR-066）
+
+- Added：`ToolExecutorRouter` 按 `work.tool.kind` 路由内部 adapter；首个 `content.check` 对直接依赖正文执行长度与必需词检查，返回稳定证据和 `pass / fail` verdict。
+- Added：`target_checked_agent_review.yaml` 四节点模板、显式 Tool 开关、输入长度上限和离线回归覆盖；wheel 已确认包含新模块与模板。
+- Verified：完整离线套件 `663 passed, 8 skipped`。开发实例 `mixed_tool_acceptance_20260802_200044` 以合成输入完成 Human-Agent-Tool-Human，最终 Task 同时展示 Agent 正文和 `content.check` 证据，Tool verdict 为 `pass`。
+- Deployment：wheel SHA-256 为 `0a51863069bf94f67a3fc2c9755d57b1442e8f2c7bdf6121734d60574836af15`，保存在 `releases/content-check-0a51863069bf/`；两个 Human Task、四个 Node 与 Attempt、Instance 均为 `done`，两条 Inbox 为 `processed`，10 条 Outbox 为 `published`。
+- Resilience：五个 Target 服务整体重启后保持 active、`NRestarts=0`，实例和 Projection 状态不变。Caddy 继续 disabled / inactive。
+- Boundary：`content.check` 只验证确定性文本契约，不验证事实、语义质量或业务正确性。通用飞书入口、企业目录、IM / Doc 投影、更多业务 Tool 和生产装配仍未完成。
+
 ## v0.20.0-draft · 2026-08-02 · Personal Agent Edge Proof v0（ADR-065）
 
 - Added：一次性配对、哈希设备凭据、设备列出与撤销、追加型 Edge 审计，以及 PostgreSQL migration `0007_edge_devices`。
