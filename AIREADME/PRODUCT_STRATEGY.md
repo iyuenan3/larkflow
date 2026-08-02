@@ -1,6 +1,6 @@
 # PRODUCT STRATEGY · larkflow
 
-> 状态：Target · Scope-constrained · 2026-08-01
+> 状态：Target + Bounded Experiment · Scope-constrained · 2026-08-02
 
 ## 1. 当前决策依据
 
@@ -45,7 +45,7 @@ larkflow 选择做飞书原生的企业协作 DAG，不复制完整办公平台�
 | 保留 | 简化 | 后置 |
 |---|---|---|
 | 模板可选、草稿确认、版本快照 | 独立 Project 合并为 Instance 元数据 | 子 DAG 与三级下钻 |
-| Human、Agent、Tool 节点 | 五维评分改为可解释的 `pass/fail` | 个人 Agent Edge 与 Lease |
+| Human、Agent、Tool 节点 | 五维评分改为可解释的 `pass/fail` | 个人 Agent Edge 的产品化、后台常驻与写能力 |
 | 未来区域编辑与二次确认 | 模板锁改为版本级布尔值 | RAG、能力注册表、模板市场 |
 | 节点重启、下游重置、Attempt | 模块化单体加 PostgreSQL outbox | Kafka、微服务、复杂 ACL |
 | 飞书投影、幂等、对账、审计 | 表单或 YAML 优先，不做专用画布 | 自动企业 Process Map |
@@ -62,3 +62,5 @@ larkflow 选择做飞书原生的企业协作 DAG，不复制完整办公平台�
 ## 7. 未来验证
 
 访谈与对照实验协议保留在 [`research/phase-0/`](../research/phase-0/README.md)，状态为 Deferred。具备条件后再验证首个场景、真实频率、增量价值和购买意愿，不用文档一致性代替市场证据。
+
+当前允许的 Edge Proof 只回答一个更窄的问题：本人设备能否在不依赖飞书 `lark-cli`、不接触中央应用凭据、不改变中央真相源的前提下，安全领取并完成一个只读 Agent 节点。它不能回答员工是否愿意使用、企业是否允许本机数据进入模型、管理成本是否可接受或是否值得产品化。任一后续能力扩张都必须重新评估设备失窃、工作区越界、提示注入、凭据存储、撤销延迟和审计完备性。

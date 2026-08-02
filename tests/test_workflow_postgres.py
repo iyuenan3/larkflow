@@ -17,6 +17,8 @@ from larkflow.workflow import (
     ExecutionRequest,
     ExecutionResult,
     ExecutorKind,
+    EdgeControlService,
+    DeviceRevokedError,
     ExternalTask,
     ExternalTaskState,
     InstanceSnapshot,
@@ -26,6 +28,8 @@ from larkflow.workflow import (
     NodeSpec,
     PostgresWorkflowInbox,
     PostgresWorkflowRepository,
+    PostgresEdgeStore,
+    PairingCodeUsedError,
     ProjectionRecord,
     TaskCompletionSignal,
     TemplateService,
@@ -785,3 +789,56 @@ def test_postgres_allows_only_one_worker_to_claim_the_same_node():
         ).fetchone()["count"]
     assert activation_count == 1
     PostgresWorkflowInbox,
+
+
+def test_postgres_edge_pairing_is_one_time_and_revocation_is_audited():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_edge_{suffix}"
+    repository = PostgresWorkflowRepository(connection_factory)
+    edge_store = PostgresEdgeStore(connection_factory)
+    ids = (f"edge_{suffix}_{index}" for index in range(20))
+    secrets = (f"secret_{suffix}_{index}" for index in range(20))
+    clock = Clock(datetime(2026, 8, 2, 9, 0, tzinfo=timezone.utc))
+    edge = EdgeControlService(
+        edge_store,
+        WorkflowService(repository, clock=clock),
+        repository,
+        clock=clock,
+        id_factory=lambda: next(ids),
+        secret_factory=lambda: next(secrets),
+    )
+
+    grant = edge.issue_pairing(
+        tenant_id=tenant_id,
+        person_id="person_owner",
+        actor_person_id="person_owner",
+    )
+    paired = edge.pair_device(
+        grant.code,
+        name="PostgreSQL Edge",
+        capabilities=("personal.readonly",),
+    )
+
+    assert edge.authenticate(paired.credential).id == paired.device.id
+    with pytest.raises(PairingCodeUsedError, match="already been used"):
+        edge.pair_device(
+            grant.code,
+            name="Replay",
+            capabilities=("personal.readonly",),
+        )
+    edge.revoke_device(
+        tenant_id=tenant_id,
+        device_id=paired.device.id,
+        actor_person_id="person_owner",
+        reason="integration test",
+    )
+    with pytest.raises(DeviceRevokedError, match="revoked"):
+        edge.authenticate(paired.credential)
+    assert [event.event_type for event in edge_store.audit_log(tenant_id)] == [
+        "edge.pairing_issued",
+        "edge.device_paired",
+        "edge.device_revoked",
+    ]

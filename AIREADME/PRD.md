@@ -1,6 +1,6 @@
 # PRD · larkflow（飞流）
 
-> 状态：Target · 既有设计简化版 · 2026-08-01
+> 状态：Target + Experimental Edge · 既有设计简化版 · 2026-08-02
 >
 > 证据边界：本 PRD 是既有设计的范围简化，不代表市场需求已经验证。
 
@@ -8,7 +8,7 @@
 
 larkflow 是基于飞书的企业协作 DAG。用户从启用模板或结构化定义创建草稿，确认后启动实例。系统为每个节点保留唯一人类 Owner，并按依赖调度 Human、Agent 或 Tool 执行器。中央服务保存版本、状态、Attempt、权限和审计；飞书承载责任入口、通知和材料。
 
-MVP 只实现单个顶层 DAG，不实现子 DAG、个人 Agent Edge 和完整项目平台。
+MVP 只实现单个顶层 DAG，不实现子 DAG 和完整项目平台。个人 Agent Edge 只保留一个默认关闭的只读 Proof，不进入 MVP 默认交付承诺。
 
 ## 2. 角色
 
@@ -83,6 +83,16 @@ MVP 只实现单个顶层 DAG，不实现子 DAG、个人 Agent Edge 和完整�
 - 服务重启后从 PostgreSQL 恢复实例并继续调度。
 - 所有关键动作记录 actor、时间、来源、前后状态、instance、node、attempt 和 revision。
 
+### 4.8 Personal Agent Edge Proof v0
+
+- Edge 不是飞书机器人，也不使用员工电脑上的 `lark-cli` 与中央节点通信；它只通过中央私有 HTTPS API 领取工作。
+- 管理员只能为指定 tenant 和 person 签发短时、一次性配对码；设备凭据可列出、撤销且服务端只保存哈希。
+- v0 唯一能力是 `personal.readonly`。设备只能领取 Owner 等于配对人员、执行器为 Agent 且显式声明该 kind 的节点。
+- 用户必须在本人电脑手工执行 `run-once` 并显式选择工作区。Codex 使用 `read-only + ephemeral + ignore-user-config` 启动，Edge 凭据、Target DSN 和飞书应用凭据不传给子进程。
+- 长任务通过当前 Attempt、节点版本、Worker、token 和过期时间续租；撤销设备后不能续租或回传，迟到结果不能改变状态。
+- 本机执行器异常不直接把业务流程判为失败，中央等待租约过期后允许其他合法设备接管。
+- v0 不提供后台常驻、任意 shell、文件写入、飞书操作、Human gate 代答、通用能力安装或公网直连 Gateway。
+
 ## 5. 体验原则
 
 - 参与人优先从飞书任务和卡片进入，不要求理解 DAG 实现细节。
@@ -103,7 +113,7 @@ MVP 只实现单个顶层 DAG，不实现子 DAG、个人 Agent Edge 和完整�
 ## 7. 明确后置
 
 - 模板子 DAG、临时子 DAG和三级父子契约。
-- 个人 Agent Edge、设备注册、离在线状态和 Capability Lease。
+- 个人 Agent Edge 的产品化、后台常驻、写能力、离在线状态和通用 Capability Lease。
 - Knowledge、Skill、MCP 注册表及 RAG 模板匹配。
 - 模板 Fork、行业市场、跨租户分发和复杂 ACL。
 - 五维评分、独立评分服务和可配置权重。
@@ -112,3 +122,5 @@ MVP 只实现单个顶层 DAG，不实现子 DAG、个人 Agent Edge 和完整�
 ## 8. 未验证事项
 
 首个行业与场景、真实使用频率、相对飞书原生方案的收益、模板维护意愿和付费意愿均未知。它们不会被本轮功能设计或 legacy 测试替代。
+
+Edge 另有四项未验证假设：员工是否愿意主动运行、企业是否允许选定工作区内容进入个人 Agent、管理员是否接受设备配对和撤销成本、只读结果是否足以产生增量价值。Proof 测试通过不等于这些假设成立。

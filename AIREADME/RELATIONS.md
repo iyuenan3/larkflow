@@ -1,6 +1,6 @@
 # RELATIONS · larkflow
 
-> 状态：Target System Boundary · 既有关系简化版 · 2026-08-01
+> 状态：Target System Boundary + Experimental Edge · 2026-08-02
 
 ## 飞书
 
@@ -21,7 +21,7 @@ MVP 只保留一种角色：中央 Feishu Adapter。它运行在服务端，以�
 
 服务器使用自己的 lark-cli 与飞书应用 profile，不连接开发者电脑上的 lark-cli。持有 profile 的 OS 身份只负责飞书读写与 Inbox 校验，领域服务身份不获得飞书凭据。
 
-员工电脑上的个人 Agent Edge、设备注册和任务领取均为 Later。现有 lark-cli 经验可以复用，但不能把中央进程描述成所有员工的个人 Agent。
+员工电脑上的 Personal Agent Edge Proof 与中央 `lark-cli` 完全分离。Edge 使用一次性配对码取得可撤销设备凭据，再通过中央私有 HTTPS API 长轮询领取 `personal.readonly` 节点；它不登录飞书、不持有企业应用 profile，也不复用开发者电脑上的 `lark-cli`。员工若要在本机 Agent 内另行使用飞书能力，那是个人可选能力，不是 Edge 传输层或中央授权依据。
 
 ## Agent 与 Tool
 
@@ -37,11 +37,11 @@ Agent 和 Tool 是中央 Node Runner 的可替换执行器。它们收到单节�
 
 ## 外部集成边界
 
-首个目标实现是模块化单体，不承诺 Kafka、公开事件总线或微服务接口。数据库事务通过 outbox 驱动飞书副作用，为未来拆分保留清晰边界。
+首个目标实现是模块化单体，不承诺 Kafka、公开事件总线或微服务接口。数据库事务通过 outbox 驱动飞书副作用，为未来拆分保留清晰边界。Edge v1 HTTP 面是私有、窄能力的设备控制边界，不是公开业务 API；Gateway 只允许监听 loopback，远程访问必须经独立 HTTPS 反向代理。
 
 ## 明确排除
 
 - 自建 IM、网盘、在线文档、搜索和完整通讯录。
 - 复制独立 Project、知识库、应用市场等完整平台边界。
 - 把妙搭、某个前端框架、某个模型或 LangGraph 固化为产品层。
-- 在 MVP 建设个人 Agent Edge、Knowledge/Skill/MCP 注册表或 Capability Lease。
+- 在 MVP 把个人 Agent Edge 产品化，或建设 Knowledge/Skill/MCP 注册表与通用 Capability Lease。

@@ -508,3 +508,15 @@
 - Tradeoff：每个等待中的 Human Task 会产生周期只读 API 调用，调用量随活跃责任入口线性增长。当前单企业开发阶段接受 30 秒延迟与轮询成本；进入更大规模前应增加分页游标、速率预算、抖动和失败告警，而不是重新把事件当成唯一可靠通道。
 - Evidence：完整离线套件 `622 passed, 7 skipped`。开发服务器首次扫描读取 3 个当前 Human Task，观察到 2 个完成、1 个待办，新增 2 条 Inbox 信号；凭据侧验证 2 条，领域侧提交 2 条，两个滞留实例、Node 与 Projection 随后全部完成。显式重跑只读取剩余待办 Task，新增信号为 0。五个服务均为 active、`NRestarts=0`。该验证使用已回归的最小业务 scope；临时应用版本管理 scope 尚未移除。
 - Evidence（权限收口，2026-08-02）：关闭 `application:application:patch` 与 `application:application:self_manage` 后，权限页只剩 `task:task:read` 和 `task:task:writeonly`，并显示当前修改均已发布；在线版本 `1.0.7` 保持已发布。收口后机器人成功创建并完成临时 Task，显式完成轮询读取 1 条当前 Human Task、结果为 1 条待办且失败为 0；五个服务保持 active、`NRestarts=0`。
+
+## ADR-065 · 2026-08-02 · Personal Agent Edge 作为可撤销的本人只读执行器直连中央节点
+
+- **Status：Accepted · Experimental Proof，未部署。**
+- Problem：真实产品设想不是让中央服务器代替每名员工运行同一种模型，而是员工在本人电脑上选择已有的 Codex、Claude 或同类工具完成本人负责的 Agent 节点。若把本机 Edge 建在飞书 `lark-cli` 上，设备身份、飞书用户登录、企业应用凭据与流程执行身份会混在一起，还会错误地让飞书连接承担任务传输和租约协议。
+- Constraint：中央 PostgreSQL 继续是唯一业务真相；每个节点仍有唯一人类 Owner；设备不能代答 Human gate；配对、领取、续租和结果必须由服务端重新授权；设备失窃后可撤销；迟到结果不得覆盖当前 Attempt；Proof 不能引入任意 shell、写文件、后台常驻、通用能力安装或中央飞书凭据下发。
+- Decision：Personal Agent Edge 是可选的 User-owned Agent Runtime，通过中央私有 HTTPS API 直连，不使用 `lark-cli`。管理员为指定 tenant 和 person 签发最多 1 小时、一次性配对码，设备换取可撤销凭据，中央只保存 purpose-separated hash。Proof 唯一 capability 固定为 `personal.readonly`；设备只可领取 Owner 等于该 person、executor 为 Agent 且 kind 精确匹配的节点。执行继续复用现有 NodeAttempt 的 Worker、token、版本和租期，长任务在原 claim 上续租，撤销或过期后续租与回传均拒绝。
+- Local boundary：用户每次手工执行 `run-once` 并选择一个明确工作区。Codex 以 `read-only + ephemeral + ignore-user-config` 启动，子进程不继承 Edge credential、Target DSN 或飞书应用凭据，超时终止整个进程组。本机执行器基础设施异常不调用领域失败命令，交由租约到期后恢复，避免一台电脑的安装问题直接把业务流程判失败。
+- Network boundary：Gateway 强制监听 loopback，仓库不直接开放公网端口；远程设备必须经独立 HTTPS 反向代理。客户端拒绝非 loopback 明文 HTTP、重定向、URL 内凭据和带路径地址，并默认不继承系统代理。`/edge/v1` 只提供 pair、claim、renew、complete 和 fail，不提供图编辑、Human 提交或飞书能力。
+- Alternatives(否决)：让每台电脑直接访问 PostgreSQL；复用员工或服务器的 `lark-cli` 作为传输层；给设备下发中央飞书应用 secret；把电脑本身当作组织责任人；按 `executor=agent` 粗粒度领取所有 Agent 节点；第一版直接运行任意命令或常驻监听。
+- Supersedes / refines：取代 ADR-046 中“通过本机 lark-cli 接入 Codex / Claude”的传输细节，保留其“待办只分配给人，个人 Agent 只是边缘执行方式”的责任原则。它把 ADR-052 的个人 Edge 后置结论收窄为“产品化仍后置，但允许窄 Proof”，不恢复 ADR-050 的通用 Capability Lease。
+- Tradeoff：普通 `0600` 文件只能满足 Proof，不能替代 Keychain、硬件密钥或设备证明；只读沙箱只证明写入受限，目录级读取隔离尚未验证，恶意中央输入仍可能诱导 Agent 读取所选工作区之外的可读文件，工作内容也可能发送给模型供应商；心跳会增加写负载；手工 `run-once` 无法证明持续采用。离线、真实 PostgreSQL 与合成数据本机链路只证明当前协议可执行，不证明真实 HTTPS、企业政策或市场价值。

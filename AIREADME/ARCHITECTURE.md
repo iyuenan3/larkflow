@@ -17,6 +17,7 @@
 ```mermaid
 flowchart LR
     F["飞书<br/>IM / Task / Doc / Drive / Directory"] <-->|"事件、命令、投影、对账"| C["larkflow 模块化单体"]
+    E["员工电脑<br/>Personal Agent Edge"] -->|"私有 HTTPS<br/>配对、领取、续租、回传"| C
     C --> D[("PostgreSQL<br/>Template / Instance / Attempt / Audit")]
     C --> S["DAG Scheduler"]
     C --> P["Feishu Projection"]
@@ -30,6 +31,7 @@ flowchart LR
 - Instance Service：草稿、确认、快照、状态、编辑、重启和进度。
 - Scheduler：依据依赖和状态解锁节点。
 - Node Runner：运行 Agent 与 Tool 节点，接收 Human 节点提交。
+- Edge Control：管理本人设备配对、撤销和窄 capability，把合法设备映射到现有 Node Runner 租约，不另建业务状态机。
 - Projection Service：创建和对账飞书任务、卡片、消息及文档。
 - Audit Service：追加 actor、来源、状态、revision 和相关对象。
 - Outbox Worker：在数据库事务提交后可靠执行飞书副作用。
@@ -45,6 +47,7 @@ flowchart LR
 | Attempt | PostgreSQL | 每次执行、提交、质量结果和交付物引用 |
 | Projection | PostgreSQL + 飞书对象 | 记录外部对象和同步版本，可重建 |
 | AuditEvent | Append-only 审计表 | 客户端不能改写 |
+| EdgeDevice / Pairing / EdgeEvent | PostgreSQL | 设备身份、一次性配对、撤销与追加型审计，不保存原始 secret |
 | NodeRun checkpoint | 节点执行运行时 | 只属于一个 Agent 节点的一次 Attempt |
 
 MVP 不建立独立 Project 聚合。`Instance` 只保存目标、项目 Owner、参与人和材料引用等最小元数据。首个部署按单企业实现，schema 保留 `tenant_id`，但不把完整多租户产品化作为首版交付条件。
@@ -134,10 +137,13 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 - `feishu.py`：基于 lark-cli 的 Task adapter。创建使用原生 Task API、稳定 client token、`mode=1`、唯一 Owner assignee 和稳定绑定字段；入站校验只读 Task 详情。
 - `cli.py`：独立 `larkflow-target` 运维入口，提供模板全生命周期、从模板创建草稿、预览、确认、状态、Human 提交，以及 Runtime、Projection、入站校验和领域入站的单步 / 常驻服务。
 - `executors.py`：包含只接受 `work.agent.kind=llm.generate` 的 `LLMAgentExecutor`，以及只用于开发验证的 `development.echo` Tool adapter。Agent 使用提交时冻结的实例输入与依赖结果，返回正文、逻辑模型角色和稳定请求标识；Runtime 在 claim 前按 adapter 能力筛选具体节点，未接受的 kind 保持 ready，不会先认领后失败。
+- `edge.py`、`edge_postgres.py` 与 migration `0007_edge_devices`：一次性配对、设备哈希凭据、撤销、追加型 Edge 审计和 `personal.readonly` 能力过滤。Edge 复用当前 Attempt 的 Worker、token、版本与租期校验，不创建第二套任务真相。
+- `edge_http.py` 与 `edge_gateway_cli.py`：提供私有 `/edge/v1` JSON 边界和运维入口。Gateway 默认且强制只监听 loopback；远程设备必须经独立 HTTPS 反向代理，仓库不把该接口描述为公网 API。
+- `edge_client.py` 与 `edge_cli.py`：用户设备只提供手工 `pair` 与 `run-once`。Codex adapter 固定显式工作区，使用只读、临时会话和忽略用户配置模式，清除 Edge、Target 与飞书凭据环境变量，并按进程组终止超时子进程。
 
-领域状态、审计与 outbox 在同一事务提交。事务提交后，Human 节点与所有节点状态变化通过 outbox 请求投影同步；Agent 和 Tool 激活直接返回 NodeActivation，由 Runtime Worker 在提交后交给 executor，避免数据库事务跨越外部调用。自动执行是 at-least-once，executor 必须使用 tenant-scoped Attempt 幂等键消除重复副作用。Agent 装配还会检查所有显式故障切换线路的超时总和，加上安全余量后必须小于 claim 租期，避免正常慢调用在结果提交前失去租约。当前 claim 只解决中央 Worker 的并发认领，不是已 Deferred 的设备能力租约。
+领域状态、审计与 outbox 在同一事务提交。事务提交后，Human 节点与所有节点状态变化通过 outbox 请求投影同步；Agent 和 Tool 激活直接返回 NodeActivation，由 Runtime Worker 在提交后交给 executor，避免数据库事务跨越外部调用。自动执行是 at-least-once，executor 必须使用 tenant-scoped Attempt 幂等键消除重复副作用。Agent 装配还会检查所有显式故障切换线路的超时总和，加上安全余量后必须小于 claim 租期，避免正常慢调用在结果提交前失去租约。Edge Proof 不发明独立 Capability Lease，它把可撤销设备身份与一个明确 kind 映射到同一 Node claim，并用心跳延长当前租期；设备失联或本机执行器异常后，租约到期才允许接管。
 
-PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration 重入、完整聚合往返、模板并发启用、不可变版本触发器、审计追加保护、outbox、Inbox、双 Worker 竞争、过期认领恢复、验证耗尽终态，以及投影分页对账、缺失补建、受控换绑和重入。`alicloud-sh` 已建立长期 Target 开发库、每日备份，以及 Runtime、Projection、入站校验和领域入站四个 Target 常驻服务。legacy 仍是事件长连接的唯一消费者，但事件只是可选的低延迟信号；Projection 对当前 Human Task 的周期读回是完成发现的可靠路径。两条路径都只写 Inbox，不直接改 Target 领域状态。凭据侧以 `lf-dev` 重新读取飞书 Task 并写验证结果，领域侧以 `lf_target_dev` 校验 Projection 绑定、当前 Attempt、唯一 Owner、任务来源与完成人后提交 Human 节点，后者不能读取 lark-cli profile。开发环境已启用 Agent，并用真实 Task 和模型完成 Human-Agent-Human 闭环；正式模板 CLI 创建的实例也已完成两个 Human 节点和一个 Agent 节点。通用飞书命令、业务 Tool、IM 或 Doc 投影仍未接入；同机本地备份不构成生产级高可用或灾难恢复。投影对账已部署到长期开发服务，并用专用实例完成真实 Task 删除后的换绑、重入及新 Task 完成入站验收。
+PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration 重入、完整聚合往返、模板并发启用、不可变版本触发器、审计追加保护、outbox、Inbox、双 Worker 竞争、过期认领恢复、验证耗尽终态，以及投影分页对账、缺失补建、受控换绑和重入。Edge migration 与 store 也已在一次性 PostgreSQL 14 验证七份 migration 重入、同一配对码并发消费恰好一胜一拒、领取、续租、完成、撤销、原始 secret 不落库和 Edge 审计不可改写；测试库和上传件随后删除。`alicloud-sh` 已建立长期 Target 开发库、每日备份，以及 Runtime、Projection、入站校验和领域入站四个 Target 常驻服务。legacy 仍是事件长连接的唯一消费者，但事件只是可选的低延迟信号；Projection 对当前 Human Task 的周期读回是完成发现的可靠路径。两条路径都只写 Inbox，不直接改 Target 领域状态。凭据侧以 `lf-dev` 重新读取飞书 Task 并写验证结果，领域侧以 `lf_target_dev` 校验 Projection 绑定、当前 Attempt、唯一 Owner、任务来源与完成人后提交 Human 节点，后者不能读取 lark-cli profile。开发环境已启用 Agent，并用真实 Task 和模型完成 Human-Agent-Human 闭环；正式模板 CLI 创建的实例也已完成两个 Human 节点和一个 Agent 节点。通用飞书命令、业务 Tool、IM 或 Doc 投影仍未接入；同机本地备份不构成生产级高可用或灾难恢复。投影对账已部署到长期开发服务，并用专用实例完成真实 Task 删除后的换绑、重入及新 Task 完成入站验收。Edge migration 未应用到长期开发库，Gateway 和本机 Edge 均未部署。
 
 ## 8. Intended vs implemented
 
@@ -151,6 +157,7 @@ PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration �
 | 编辑与重启 | 预览确认、revision、下游 Attempt | 已有活图和选择性重算机制 | 需按新模型提炼 |
 | 飞书集成 | PostgreSQL outbox / Inbox、幂等、服务端授权、对账 | Human Task 创建 / 完成、Task 完成状态轮询、可选事件去重、服务端详情回读、两阶段授权、启动分页对账、缺失补建、受控 Task 重建及重建后完成入站已实现并完成开发环境真栈验收 | 需要通用命令入站与 IM / Doc 投影 |
 | 运行时 | 独立 Scheduler + Node Runner | 新内核已实现 Scheduler、Node Runner、持久化 runnable scan、`llm.generate` Agent adapter、Runtime / Projection / Inbound Worker、能力过滤、优雅停机、过期 claim 恢复和开发环境 Agent 真链路 | 需要业务 Tool executor 和有限重试 |
+| Personal Agent Edge | 默认关闭、本人设备、窄 capability、中央真相 | Proof v0 已实现配对、撤销、私有 HTTP、手工 run-once、只读 Codex adapter、续租与迟到结果拒绝；离线、一次性 PostgreSQL 14 和合成数据本机 Codex 端到端已验证 | 需要真实 HTTPS、凭据系统存储与安全评审，产品化仍为 Later |
 
 [SPEC.md](SPEC.md) 和 [DEPLOYMENT.md](DEPLOYMENT.md) 继续描述 As-built 原型，不作为目标产品已实现证据。
 
@@ -161,3 +168,4 @@ PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration �
 - 人员、模板或实例失效必须有可审计的逻辑终态，不通过物理删除抹除历史。
 - 状态事务与飞书副作用通过 outbox 或等价机制解耦。
 - 测试继续使用 Mock Lark I/O、Stub LLM 和临时或内存数据库，不访问真实飞书。
+- Edge 子进程不得获得设备凭据、Target DSN 或飞书应用凭据；Human gate 永远不能由 Edge 代答。

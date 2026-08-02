@@ -2,9 +2,9 @@
 
 > **As-built / Legacy Prototype。** 本文只描述当前 Python 原型可以执行的契约，不是目标产品规范。目标产品以 [PRD.md](PRD.md)、[ARCHITECTURE.md](ARCHITECTURE.md) 和 [DAG_TEMPLATE_SPEC.md](DAG_TEMPLATE_SPEC.md) 为准。
 >
-> 当前契约部分定型：节点契约含投票 / 分支 / 打回权限，引擎契约和产出协议已跑通；没有多租户业务数据库、Template v0.1、三级父子实例、个人 Agent Edge 或 Capability Registry。
+> 当前 legacy 契约部分定型：节点契约含投票 / 分支 / 打回权限，引擎契约和产出协议已跑通。Target 已另行实现 PostgreSQL、Template v0.2 与窄 Personal Agent Edge Proof，但仍没有三级父子实例或 Capability Registry。
 >
-> 2026-07-25：**对外契约的 as-built 面从「驱动层 Python 方法」扩到「CLI 子命令」**（ADR-031），见〈引擎对外接口 as-built〉。仍**没有任何网络接口**。
+> 2026-07-25：**legacy 对外契约的 as-built 面从「驱动层 Python 方法」扩到「CLI 子命令」**（ADR-031），见〈引擎对外接口 as-built〉。legacy 仍没有网络接口；2026-08-02 新增的 `/edge/v1` 只服务 Target Edge Proof。
 >
 > DAG Template 的产品目标契约见 [DAG_TEMPLATE_SPEC.md](DAG_TEMPLATE_SPEC.md)。下文“模板节点契约”描述的是当前引擎可执行的 legacy compact form，不代表 v0.1 已落码。
 
@@ -78,7 +78,7 @@
 - human 节点纯挂起（`interrupt()` 只传数据）；飞书任务 / 卡由驱动层 `LarkFlowService` 在 `__interrupt__` 后建。`durability="sync"`。
 - **派单幂等键 = `{实例}:{节点}:{轮次}`**（`attempts`），**不用 interrupt id**：中断 id 每推进一拍就换，拿它当键会让同一个人、同一件事无上限地收到新卡 / 新待办（实测）。轮次只在真被打回 / 被解除重置时 +1。键记在**本地**幂等表（ADR-033），不押飞书那 1 小时窗口。
 
-## 引擎对外接口 as-built（驱动层方法 + CLI；**没有网络接口**）
+## legacy 引擎对外接口 as-built（驱动层方法 + CLI；**没有网络接口**）
 两个面消费同一套驱动层方法：进程内直调（demo / 脚本 / 将来的意图路由层）与 `larkflow` CLI（ADR-031）。前端要的网络 API 仍待定（见〈待填〉）。
 
 **读**：`status` 状态表 / `outputs` 产出与交付物 handle 权威登记表 / `dag_of` **这个实例自己的活图**（受控活图会让它与装配期模板不同，绝不拿 `self.dag` 当所有实例的图）/ `finished` 是否全跑完 / `blocked` 哪些门停下了 / `pending(instance, actor=None)` 卡在谁手上 / `unblock_log` 解除审计 / `escalations`（全量）与 `pending_escalations`（现在还等谁拍板）。
@@ -104,7 +104,7 @@
 
 ### Target CLI 与 Task 入站 as-built
 
-Target 使用独立 `larkflow-target` CLI，不复用上述 legacy 驱动层。控制面增加 `template-create / template-add-version / template-enable / template-disable / template-delete / template-list / template-show / create-from-template / preview / reconcile-projections / reconcile-completions`，并保留 `migrate / create / confirm / show / submit-human` 和四类 Worker 的单步、常驻命令。这些是本机运维入口，仍没有网络 API。
+Target 使用独立 `larkflow-target` CLI，不复用上述 legacy 驱动层。控制面增加 `template-create / template-add-version / template-enable / template-disable / template-delete / template-list / template-show / create-from-template / preview / reconcile-projections / reconcile-completions`，并保留 `migrate / create / confirm / show / submit-human` 和四类 Worker 的单步、常驻命令。这些是本机运维入口，不是公开网络 API。
 
 `create-from-template` 只接受 enabled 模板，以最新不可变版本解析参数和 `owner_role -> person_id` 绑定，生成含 `template_version_id` 与 `locked` 的完整 Snapshot。`preview` 仅允许 Instance Owner 读取并重新校验 draft，不写审计、不改变状态；`confirm` 仍需显式调用。
 
@@ -124,6 +124,22 @@ Target Task 完成发现以周期状态轮询为可靠路径。`project` 启动�
 
 凭据侧详情读取失败或完成状态暂不可见时，按 `LARKFLOW_TARGET_INBOUND_RETRY_BASE_SECONDS` 到 `LARKFLOW_TARGET_INBOUND_RETRY_MAX_SECONDS` 做指数退避。`LARKFLOW_TARGET_INBOUND_VERIFICATION_MAX_ATTEMPTS` 默认 24；达到预算仍无法验证时，Inbox 进入 `exhausted` 终态，写入 `processed_at`、`outcome=exhausted:verification_attempts`、`failure_stage=verification` 与最后错误，不生成 verified payload，也不允许领域 Worker 认领。验证日志包含 `exhausted` 计数，运维必须对非零值告警并人工调查，不能静默丢弃。
 
+### Target Personal Agent Edge Proof v0 的 `/edge/v1` HTTP
+
+该接口是设备控制边界，不是业务前端 API。`larkflow-edge-gateway serve` 强制监听 loopback，远程使用必须由外部 HTTPS 反向代理终止 TLS；客户端拒绝非 loopback 的明文 HTTP、重定向、URL 内凭据和带路径的 server URL，并默认 `trust_env=False`。
+
+| 方法与路径 | 认证 | 语义 |
+|---|---|---|
+| `POST /edge/v1/devices/pair` | 一次性配对码 | 绑定设备名和固定 `personal.readonly` capability，原始设备 secret 只返回一次 |
+| `POST /edge/v1/leases/claim` | Bearer 设备凭据 | 最多领取一个本人拥有且 kind 匹配的 Agent 节点，可有界长轮询，无工作返回 204 |
+| `POST /edge/v1/leases/renew` | Bearer 设备凭据 | 在当前租期内延长同一 Attempt，不改变 Worker、token 或节点版本 |
+| `POST /edge/v1/leases/complete` | Bearer 设备凭据 | 回传有大小上限的 JSON 结果，服务端重验 Owner、capability、Attempt、版本、Worker、token 与租期 |
+| `POST /edge/v1/leases/fail` | Bearer 设备凭据 | 显式报告已领取工作的领域失败；本机适配器基础设施异常不会调用它 |
+
+配对码有效期最多 1 小时且只能消费一次。服务端只保存 SHA-256 purpose-separated hash，不保存原始配对 secret 或设备 secret。设备撤销后认证、续租和结果回传均拒绝。凭据文件的 Proof 实现使用当前用户所有、权限 `0600` 的普通文件，禁止符号链接；操作系统 Keychain 或硬件密钥存储尚未实现。
+
+本机 `larkflow-edge` 只提供 `pair` 与 `run-once`，不提供常驻 daemon。`run-once` 显式选择工作区并启动 `codex exec --sandbox read-only --ephemeral --ignore-user-config --skip-git-repo-check`。子进程环境使用最小 allowlist，不继承任意 API key、代理、SSH agent、Edge、Target 或飞书变量。显式 `--inherit-loopback-proxy` 只传递无用户名和密码的 loopback HTTP / HTTPS / SOCKS URL，远程或带凭据代理仍丢弃。这限制文件写入、会话持久化和环境凭据暴露，但当前没有证据证明目录级读取被限制在所选工作区；恶意任务输入仍可能诱导读取其他可读文件，也不代表模型调用无数据外发风险。
+
 ## 飞书事件订阅 EventKey（研究证实为静态常量，不需 dev app 上下文）
 - `card.action.trigger`（仅 bot）：卡片按钮点击。路由键塞按钮 `behaviors[].callback.value`，原样回传为 `action_value`（自描述 `{thread_id, interrupt_id, node_id, passed, reopen}`，与 gate 产出的 `passed`/`reopen` 逐字对齐）。⚠️ dev app 须在开发者后台开「事件与回调 → 回调配置」，否则静默零事件。
 - `task.task.update_user_access_v2`（user|bot）：任务事件。完成 = `.event.event_types[]` 含 `task_completed_update`（自行 filter）；`.event.task_guid` 经关联表回映射到 `(thread_id, interrupt_id)`。
@@ -136,7 +152,7 @@ Target Task 完成发现以周期状态轮询为可靠路径。`project` 启动�
 - 共享协同拓扑的 docx block_id 跨 update 稳定性（v2）。
 - ~~**escalation 的 approve / reject 契约**~~ → 已定并落码（ADR-040 引擎侧 + ADR-043 审批卡）。审批卡封套 = `{"kind": "escalation", "thread_id", "node_id": <门>, "seq", "decision": "approve"|"reject"}`，**不带 `interrupt_id`**；`_route` 按 `kind` 分流；裁决后 settle 卡片（ADR-037）。身份仍只取事件顶层 `operator_id`。
 - 引擎读 / 命令 API（供前端，ADR-019；形态待原型后定）：
-  - **读 / 命令 as-built 已列在〈引擎对外接口 as-built〉**（驱动层方法 + CLI，**没有网络接口**）。前端要的是把它包成网络 API，或退「命令走飞书原生轨」（ADR-019 命门）。
+  - **读 / 命令 as-built 已列在〈legacy 引擎对外接口 as-built〉**（驱动层方法 + CLI，**没有业务网络接口**）。Edge HTTP 只允许设备领取窄 Agent 工作，不能作为前端读写 DAG 的替代。前端要的是把业务命令包成网络 API，或退「命令走飞书原生轨」（ADR-019 命门）。
   - **读**：画布要整张 `dag`（节点 + 边 + pending 子图 + 状态），多维表格行式投影可能不够；定「整图读接口 + 返回字段 + 刷新 / 实时模型（轮询 / 推送）」。`dag_of(instance_id)` 已给出整图，缺的是传输与实时模型。
   - **改图命令 as-built（引擎侧已实现，前端形态仍待定）**：`LarkFlowService.edit_graph(instance_id, ops, *, by, reason)`，ops = `[{op: add_node, node:{…}} | {op: remove_node, id} | {op: update_node, id, set:{…}}]`；**鉴权 = owner-only + 必署名**（ADR-042：`by` 空或 `reason` 空 → `missing_audit`；`by != meta.reporter` → `unauthorized_edit`，两者都是结构化 return 不是抛异常）；引擎权威侧串校验「只触 pending 子图（挂起 human 节点并入冻结线当 running）→ 仍过 validate_template → 不用 v1 未实现语义 → 新增 tool 节点有 handler」（这四条抛 `GraphEditError` / `TemplateError`）→ `update_state` 写 dag channel + 往追加型 channel `edits["log"]` 记一条 `{by, at, reason, ops, nodes_after}`（`edit_log()` 读，被拒 / 被校验拦下的**不留痕**）→ 立刻 `invoke(None)` 推一步。**副作用（实测，见 MEMORY 2026-07-24）**：update_state 必让挂起中断换 id，故驱动层按 node 记 `interrupt_remap` 迁移链、旧卡继续有效且不重复派单。CLI 出口 `larkflow edit <实例> --ops <字面 JSON|@文件|-> --by --reason`。尚缺：乐观并发（读取时 checkpoint 版本）。
   - **改图命令（前端侧待定）**：报文 schema（op + 目标节点 + deps）；**校验在引擎权威侧**（复用 ADR-013：只改 pending / 仍是 DAG / 不删在跑节点）；乐观并发（命令带读取时 checkpoint 版本，冻结线已推进则拒、令前端重取）；命令经 checkpointer `update_state` 改 dag channel 并触发下一 dispatch。

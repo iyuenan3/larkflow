@@ -1,5 +1,17 @@
 # CHANGELOG · larkflow
 
+## v0.20.0-draft · 2026-08-02 · Personal Agent Edge Proof v0（ADR-065）
+
+- Added：一次性配对、哈希设备凭据、设备列出与撤销、追加型 Edge 审计，以及 PostgreSQL migration `0007_edge_devices`。
+- Added：`/edge/v1` 私有 JSON 边界，覆盖 pair、claim、renew、complete 与 fail；Gateway 强制 loopback 监听，客户端对远程地址强制 HTTPS、拒绝重定向且默认不继承系统代理。
+- Added：`larkflow-edge-gateway` 运维入口、`larkflow-edge pair / run-once` 用户入口、`target_personal_edge_review.yaml`，以及 Codex `read-only + ephemeral + ignore-user-config + skip-git-repo-check` 本机适配器。
+- Security：设备只能领取本人拥有且 kind 为 `personal.readonly` 的 Agent 节点；Human gate、中央 `llm.generate` 和其他人员节点不可领取。Edge、Target 与飞书凭据从 Codex 子进程环境移除，超时按进程组终止，撤销设备与迟到结果均 fail closed。
+- Resilience：长执行在原 Attempt 上续租；Worker、token、版本与租期仍由中央校验。本机适配器异常不直接把业务流程判为失败，等待当前租约过期后由合法设备恢复。
+- Fixed：非 Git 工作区显式允许只读执行。本机需要 Clash 等环境代理时，默认最小环境仍不传代理；用户必须显式启用 loopback proxy 继承，且只接受无用户名和密码的 loopback HTTP / HTTPS / SOCKS URL，远程或带凭据代理丢弃。首次无代理合成测试在 120 秒超时，Edge 终止整个 Codex 进程组并保留中央节点等待租约恢复，没有把业务流程判失败。
+- Verified：完整离线套件 `653 passed, 8 skipped`。最终 wheel 共 79 个条目并包含全部 Edge 模块、migration 与模板，SHA-256 为 `39a363e03aded26ddf5ab326024a9515ba97acf44e11e7a115af224048c623dd`。同一 wheel 在一次性 PostgreSQL 14 数据库应用七份 migration，第二次应用为空；同一配对码两路竞争恰好一条成功、一条 `PairingCodeUsedError`。领取、续租、完成、撤销、原始 secret 不落库和 Edge 审计不可改写均通过。测试库、脚本与 wheel 随后删除，既有四个 Target 服务回读 active、`NRestarts=0`。
+- Verified：合成临时工作区通过真实 loopback HTTP 完成配对、领取、续租与结果提交，本机 Codex 在显式无凭据 loopback 代理下 20.6 秒返回 58 字摘要，命中 Project Aurora；中央 Instance 为 `done`，临时工作区随后删除。
+- Boundary：当前未部署，未完成真实 HTTPS 验收。长期开发库仍停在六份 migration。凭据仍是当前用户 `0600` 文件，不是系统 Keychain；目录级读取隔离、安全政策、持续采用和市场价值均未验证。
+
 ## v0.19.0-draft · 2026-08-02 · Target Task 完成状态轮询（ADR-064）
 
 - Added：Projection 服务周期扫描当前 `waiting_human` 节点绑定的 Task，观察到完成后以稳定信号 ID 写入 PostgreSQL Inbox；新增 `reconcile-completions` 运维命令、轮询周期与批量配置。

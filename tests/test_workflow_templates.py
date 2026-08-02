@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
+from importlib.resources import files
 from itertools import count
 
 import pytest
+import yaml
 
 from larkflow.workflow import (
     AuthorizationError,
@@ -287,3 +289,36 @@ def test_draft_preview_is_owner_only_and_read_only():
             "instance_1",
             actor_person_id="person_owner",
         )
+
+
+def test_packaged_personal_edge_template_is_a_human_agent_human_contract():
+    resource = files("larkflow.templates").joinpath(
+        "target_personal_edge_review.yaml"
+    )
+    value = yaml.safe_load(resource.read_text(encoding="utf-8"))
+    templates, _ = service()
+    templates.create_template(
+        tenant_id="tenant_1",
+        actor_person_id="person_owner",
+        document=value,
+    )
+    templates.enable(
+        "tenant_1",
+        "target_personal_edge_review",
+        actor_person_id="person_owner",
+    )
+    snapshot = templates.instantiate(
+        "tenant_1",
+        "target_personal_edge_review",
+        inputs={"brief": "Review the local workspace"},
+        owner_bindings={"project_owner": "person_owner"},
+    )
+
+    assert tuple(node.executor.value for node in snapshot.nodes) == (
+        "human",
+        "agent",
+        "human",
+    )
+    assert snapshot.node("local_draft").work["agent"]["kind"] == (
+        "personal.readonly"
+    )

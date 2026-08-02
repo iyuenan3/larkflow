@@ -8,6 +8,7 @@ import pytest
 from larkflow.workflow import (
     AttemptStatus,
     AutomatedExecutor,
+    ClaimExpiredError,
     ExecutionRequest,
     ExecutionResult,
     ExecutorKind,
@@ -351,6 +352,64 @@ def test_claim_token_cannot_be_used_under_a_different_worker_identity():
             claim_token=activation.claim_token or "",
             result={"value": "spoofed"},
             worker_id="worker_other",
+        )
+
+
+def test_live_claim_can_be_renewed_without_changing_its_identity():
+    clock = Clock()
+    service, repository = build_runtime(clock=clock)
+    activation = service.dispatch_due(
+        TENANT,
+        "instance_runtime",
+        worker_id="worker_1",
+        max_automated=1,
+    )[0]
+    original_expiry = activation.claim_expires_at
+    assert original_expiry is not None
+
+    clock.now += timedelta(minutes=2)
+    renewed_expiry = service.renew_automated_claim(
+        TENANT,
+        "instance_runtime",
+        "generate",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        claim_token=activation.claim_token or "",
+        worker_id="worker_1",
+    )
+
+    assert renewed_expiry == clock.now + timedelta(minutes=5)
+    assert renewed_expiry > original_expiry
+    current = repository.get(TENANT, "instance_runtime")
+    attempt = current.current_attempt("generate")
+    assert attempt.claim_token == activation.claim_token
+    assert attempt.claimed_by == "worker_1"
+    assert current.nodes["generate"].version == activation.expected_node_version
+    assert repository.audit_log(TENANT, "instance_runtime")[-1].event_type == (
+        "node.claim_renewed"
+    )
+
+
+def test_expired_claim_cannot_be_revived_by_renewal():
+    clock = Clock()
+    service, _ = build_runtime(clock=clock)
+    activation = service.dispatch_due(
+        TENANT,
+        "instance_runtime",
+        worker_id="worker_1",
+        max_automated=1,
+    )[0]
+    clock.now += timedelta(minutes=5)
+
+    with pytest.raises(ClaimExpiredError, match="claim expired"):
+        service.renew_automated_claim(
+            TENANT,
+            "instance_runtime",
+            "generate",
+            attempt_no=activation.attempt_no,
+            expected_node_version=activation.expected_node_version,
+            claim_token=activation.claim_token or "",
+            worker_id="worker_1",
         )
 
 

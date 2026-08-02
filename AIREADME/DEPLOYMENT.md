@@ -1,6 +1,6 @@
 # DEPLOYMENT · larkflow
 
-> **As-built / Legacy Prototype + Target Runtime 开发部署。** 本文保存 legacy LangGraph + SQLite 服务与 Target PostgreSQL Runtime 在单台 ECS 上的真实部署记录。它不是目标 SaaS 拓扑：目标架构是 PostgreSQL 中央控制面的模块化单体，个人 Agent Edge 已移出近期范围，见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+> **As-built / Legacy Prototype + Target Runtime 开发部署。** 本文保存 legacy LangGraph + SQLite 服务与 Target PostgreSQL Runtime 在单台 ECS 上的真实部署记录。它不是目标 SaaS 拓扑：目标架构是 PostgreSQL 中央控制面的模块化单体。Personal Agent Edge 目前只有未部署的只读 Proof，见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 >
 > 除修正事实错误外，不再给这套部署增加新的产品领域能力。个人端不得复用下文的企业 bot 全局凭证；中央端和个人端必须使用不同身份、权限与生命周期。
 
@@ -10,6 +10,7 @@
 - 一次性数据库与最小权限密码角色通过本机 SSH 隧道运行完整 `tests/test_workflow_postgres.py`，3 项全部通过：migration 重入、聚合与 outbox 往返、两个真实连接竞争同一节点、过期 claim 恢复。测试前先跑单 Worker 基线；完成后数据库与角色均已删除，并从系统目录回读为 0。
 - 长期开发库为 `larkflow_target_dev`，所有者是无密码角色 `lf_target_dev`。同名 Unix 系统用户通过本机 Unix socket 的 peer authentication 连接；角色不能超级管理、建库、建角色、复制或绕过 RLS，`PUBLIC` 没有数据库连接权。数据库默认 `timezone=UTC`、`statement_timeout=30s`、`lock_timeout=5s`、`idle_in_transaction_session_timeout=60s`。
 - 长期开发库已应用 `0001_workflow` 到 `0006_inbox_verification_exhaustion`。第六份 migration 允许 Inbox 进入不可再认领的 `exhausted` 终态；凭据侧默认验证上限为 24 次，结构化日志中的非零 `exhausted` 必须告警。
+- `0007_edge_devices` 只在一次性 PostgreSQL 14 数据库完成 migration 重入和 Edge store 验证，尚未应用到长期开发库；Edge Gateway 与本机客户端均未部署。
 - Runtime 使用 `/srv/larkflow/target/venv` 中的 wheel，以 `lf_target_dev` 运行并通过 Unix socket peer authentication 连接。`/etc/larkflow-target.env` 为 `0640 root:lf_target_dev`，systemd unit 为 `0644 root:root`。
 - 包含严格字段校验、Template Service、正式模板 CLI、`llm.generate` Agent adapter、有限入站验证重试、Projection 启动全量对账和 Human Task 完成状态轮询的 wheel 已安装到 Target 独立虚拟环境。内容提交为 `e81aedf`，SHA-256 为 `e725f5ba39eedf264c675998082d1a21689b6e01632aba6de31086b14b72f8d7`；四个 Target 服务已重启并回读 active，`NRestarts=0`。`/etc/larkflow-target.env` 已在明确授权下启用开发用 OpenAI 兼容主路由，不配置备用线路；`LLM_TIMEOUT=240`、claim TTL 为 300 秒、安全余量为 30 秒，且关闭环境代理继承。env 保持 `0640 root:lf_target_dev`，路由真值不进入仓库或日志。
 - 部署前备份已回读 `Result=success / ExecMainStatus=0`。当前候选件保存在 `releases/poll-e725f5ba39ee/`，上一正式发布件保存在 `releases/99af528/`，其他受限回滚件保留在各自目录。wheel 为 `0640 root:lf_target_dev`，可按相同停服、安装、启动步骤回滚。

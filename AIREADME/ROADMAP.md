@@ -2,7 +2,7 @@
 
 > 状态：Target Delivery Plan · 2026-08-02
 >
-> 原来的三级协作、个人 Agent Edge 和完整能力治理路线已移出近期范围。现有代码作为 legacy 机制原型保留。
+> 原来的三级协作、个人 Agent Edge 产品化和完整能力治理路线已移出近期范围。现有代码作为 legacy 机制原型保留；一个不改变中央主线的只读 Edge Proof 单独验证架构边界。
 
 ## Completed · Phase 0 既有设计简化与一致性核验
 
@@ -11,7 +11,7 @@
 - 核对既有 AIREADME 的范围、依赖和实现边界。
 - 固定单层 DAG、模板可选、草稿确认、未来区域编辑和节点重启范围。
 - 明确每节点唯一人类 Owner，Human、Agent、Tool 只表示执行器。
-- 从近期范围移除子 DAG、个人 Agent Edge、Capability Lease、RAG、Kafka 和复杂模板治理。
+- 从近期产品范围移除子 DAG、个人 Agent Edge 产品化、通用 Capability Lease、RAG、Kafka 和复杂模板治理。
 - 保留飞书 adapter、幂等、对账、权限纯函数和重算机制的迁移价值。
 - 统一 README、PRD、架构、契约、路线图和包描述。
 
@@ -36,6 +36,7 @@
 - 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则、持久化、常驻 Worker、Agent adapter、真实开发链路与恢复扫描已落码，业务 Tool adapter 待完成。
 - 已完成启动全量 Task 对账、缺失 Projection 补建和确认删除后的外部 Task 重建；一次性 PostgreSQL 与常驻开发服务均已验证补建、真实删除换绑、重入及修复后完成入站。通用飞书命令入站与 IM / Doc 投影仍待实现。
 - 从 legacy 原型提炼 adapter、事件韧性和 Mock 测试资产。
+- 已完成 Personal Agent Edge Proof v0：一次性配对、哈希凭据、设备撤销、Owner 与 capability 双重过滤、现有 Attempt claim 续租、迟到结果拒绝、loopback Gateway、手工 `run-once` 和 Codex 只读适配器。离线测试、一次性 PostgreSQL 14 与合成数据本机 Codex 端到端已通过；真实 HTTPS、安全评审和部署仍未完成。
 
 **Demo：** 从启用模板和无模板定义各创建一个草稿；确认后在飞书完成 Human、Agent、Tool 混合流程；服务重启后状态和投影一致。
 
@@ -57,7 +58,7 @@
 只有真实使用证明必要时，再评估：
 
 - 模板子 DAG、临时子 DAG和最多三级父子契约。
-- 个人 Agent Edge、设备注册、离在线状态和 Capability Lease。
+- 个人 Agent Edge 的产品化、后台常驻、写能力、离在线状态和通用 Capability Lease。
 - Knowledge、Skill、MCP 注册表及 RAG 模板匹配。
 - 字段级锁、复杂 ACL、模板 Fork、行业分发和图形化编辑器。
 - 数值评分、独立质量服务、Kafka、微服务和公开事件 API。

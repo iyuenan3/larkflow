@@ -213,6 +213,40 @@ class NodeRunner:
         attempt.claim_token = None
         attempt.claim_expires_at = None
 
+    def renew_automated_claim(
+        self,
+        instance: WorkflowInstance,
+        node_key: str,
+        *,
+        attempt_no: int,
+        expected_node_version: int,
+        claim_token: str,
+        worker_id: str,
+        now: datetime,
+    ) -> datetime:
+        """Extend a live automated claim without changing its identity."""
+
+        node = instance.nodes[node_key]
+        if node.executor == ExecutorKind.HUMAN:
+            raise TransitionError(f"human node has no automated claim: {node_key}")
+        attempt = self._current_attempt(instance, node_key, attempt_no)
+        self._expect_node(node_key, node.version, expected_node_version)
+        self._expect_claim(attempt.claim_token, claim_token)
+        self._expect_worker(attempt.claimed_by, worker_id)
+        if attempt.claim_expires_at is None or now >= attempt.claim_expires_at:
+            raise ClaimExpiredError(f"claim expired: {node_key}")
+        if (
+            node.status != NodeStatus.RUNNING
+            or attempt.status != AttemptStatus.RUNNING
+        ):
+            raise TransitionError(f"node is not running: {node_key}")
+
+        attempt.claim_expires_at = max(
+            attempt.claim_expires_at,
+            now + self.claim_ttl,
+        )
+        return attempt.claim_expires_at
+
     def fail_automated(
         self,
         instance: WorkflowInstance,

@@ -89,6 +89,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0004_inbox_verification",
         "0005_template_lifecycle",
         "0006_inbox_verification_exhaustion",
+        "0007_edge_devices",
     ]
     sql = migrations[0][1]
     for table in (
@@ -112,6 +113,10 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "CREATE TABLE workflow_template_events" in migrations[4][1]
     assert "workflow_template_events_append_only" in migrations[4][1]
     assert "'exhausted'" in migrations[5][1]
+    assert "CREATE TABLE workflow_edge_pairing_tickets" in migrations[6][1]
+    assert "CREATE TABLE workflow_edge_devices" in migrations[6][1]
+    assert "CREATE TABLE workflow_edge_events" in migrations[6][1]
+    assert "workflow_edge_events_append_only" in migrations[6][1]
 
 
 def test_in_memory_repository_is_tenant_scoped():

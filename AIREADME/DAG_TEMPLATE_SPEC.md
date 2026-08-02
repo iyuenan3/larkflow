@@ -243,4 +243,4 @@ Target 的 `target_agent_review.yaml` 已转换为本文 v0.2 形状，并通过
 
 ## 15. 后置能力
 
-子 DAG、三级父子契约、个人 Agent Edge、Capability Lease、Knowledge/Skill/MCP 注册表、RAG 模板匹配、字段级锁、复杂 ACL、模板 Fork、Kafka 和公开事件协议均不属于 v0.2。
+子 DAG、三级父子契约、个人 Agent Edge 的设备协议与产品化、通用 Capability Lease、Knowledge/Skill/MCP 注册表、RAG 模板匹配、字段级锁、复杂 ACL、模板 Fork、Kafka 和公开事件协议均不属于 v0.2。模板可以把 Agent kind 声明为 `personal.readonly`，设备身份、配对、撤销与领取仍是模板之外的运行时能力。

@@ -421,6 +421,53 @@ class WorkflowService:
         )
         return self.repository.get(tenant_id, instance_id)
 
+    def renew_automated_claim(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        node_key: str,
+        *,
+        attempt_no: int,
+        expected_node_version: int,
+        claim_token: str,
+        worker_id: str,
+        correlation_id: str | None = None,
+    ) -> datetime:
+        """Renew one current claim through the same optimistic boundary."""
+
+        if not worker_id.strip():
+            raise ValueError("worker_id is required")
+        instance = self.repository.get(tenant_id, instance_id)
+        expected_version = instance.version
+        self._require_running(instance)
+        now = self.clock()
+        expires_at = self.runner.renew_automated_claim(
+            instance,
+            node_key,
+            attempt_no=attempt_no,
+            expected_node_version=expected_node_version,
+            claim_token=claim_token,
+            worker_id=worker_id,
+            now=now,
+        )
+        audit = self._audit(
+            instance,
+            "node.claim_renewed",
+            actor_person_id=None,
+            correlation_id=correlation_id or self.id_factory(),
+            aggregate_version=expected_version + 1,
+            now=now,
+            node_key=node_key,
+            attempt_no=attempt_no,
+            payload={"worker_id": worker_id, "claim_expires_at": expires_at.isoformat()},
+        )
+        self.repository.save(
+            instance,
+            expected_version=expected_version,
+            audit_events=(audit,),
+        )
+        return expires_at
+
     def fail_automated(
         self,
         tenant_id: str,
