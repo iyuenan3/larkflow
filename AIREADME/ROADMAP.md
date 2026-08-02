@@ -36,7 +36,7 @@
 - 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则、持久化、常驻 Worker、Agent adapter、真实开发链路与恢复扫描已落码，业务 Tool adapter 待完成。
 - 已完成启动全量 Task 对账、缺失 Projection 补建和确认删除后的外部 Task 重建；一次性 PostgreSQL 与常驻开发服务均已验证补建、真实删除换绑、重入及修复后完成入站。通用飞书命令入站与 IM / Doc 投影仍待实现。
 - 从 legacy 原型提炼 adapter、事件韧性和 Mock 测试资产。
-- 已完成 Personal Agent Edge Proof v0：一次性配对、哈希凭据、设备撤销、Owner 与 capability 双重过滤、现有 Attempt claim 续租、迟到结果拒绝、loopback Gateway、手工 `run-once` 和 Codex 只读适配器。离线测试、一次性 PostgreSQL 14 与合成数据本机 Codex 端到端已通过；真实 HTTPS、安全评审和部署仍未完成。
+- 已完成 Personal Agent Edge Proof v0：一次性配对、哈希凭据、设备撤销、Owner 与 capability 双重过滤、现有 Attempt claim 续租、迟到结果拒绝、loopback Gateway、手工 `run-once` 和 Codex 只读适配器。离线测试、一次性 PostgreSQL 14、长期开发库 migration、loopback systemd 部署、SSH 隧道跨机 Codex、Caddy 与受信任源站证书已通过；公网设备链路受 ICP 接入备案阻断，Caddy 验证后已停止，凭据系统存储和安全评审仍未完成。
 
 **Demo：** 从启用模板和无模板定义各创建一个草稿；确认后在飞书完成 Human、Agent、Tool 混合流程；服务重启后状态和投影一致。
 

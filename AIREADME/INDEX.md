@@ -2,7 +2,7 @@
 
 > 飞书原生的企业协作 DAG：把多人流程拆成有依赖、有唯一责任人、可验收和可追溯的节点。
 >
-> 文档状态：2026-08-02 Phase 1 中央工作流基础实现，加一个未部署的 Personal Agent Edge Proof v0。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+> 文档状态：2026-08-02 Phase 1 中央工作流基础实现，Personal Agent Edge Proof v0 已完成 loopback 开发部署与 SSH 隧道跨机验收；专用域名、Caddy 和受信任证书完成源站验证，但公网设备链路受 ICP 接入备案阻断，Caddy 已停止。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
 > last-synced: b1d6165 · 2026-08-02
 
@@ -26,9 +26,9 @@
 | DAG_TEMPLATE_SPEC | ⚑ | v0.2 模板生命周期、实例化与草稿预览已实现，编辑和重启仍是 Target |
 | ARCHITECTURE | ✅ | Target 模块化单体、中央 Worker、Agent adapter、Edge Proof 和剩余差距 |
 | RELATIONS | ✅ | Target 飞书、中央 lark-cli、Edge HTTPS、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | Phase 1 中央链路已落主要基础，Edge Proof 已离线实现但未真链路验收 |
+| ROADMAP | ✅ | Phase 1 中央链路已落主要基础，Edge HTTPS 源站已验证后停止，公网设备链路受备案阻断 |
 | SPEC | ✅ | legacy 契约、Target CLI / Task 入站与私有 Edge v1 HTTP |
-| DEPLOYMENT | ✅ | Legacy ECS 与 Target Template / Runtime / Projection / Inbound、PostgreSQL、备份和恢复实录 |
+| DEPLOYMENT | ✅ | Legacy ECS 与 Target Runtime / Projection / Inbound / Edge、Caddy、PostgreSQL、备份和恢复实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
 | DECISIONS | ✅ | Append-only ADR 历史，新 ADR 显式 supersede 旧范围 |
 | CHANGELOG | ✅ | Append-only 已实现变更，最新为 Personal Agent Edge Proof v0 |

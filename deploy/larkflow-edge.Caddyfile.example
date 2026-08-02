@@ -1,0 +1,17 @@
+# Replace edge.example.com with the dedicated DNS-only development hostname.
+# Keep the Edge Gateway on loopback; Caddy is the only public listener.
+
+edge.example.com {
+	request_body {
+		max_size 256KB
+	}
+
+	reverse_proxy 127.0.0.1:8765
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}

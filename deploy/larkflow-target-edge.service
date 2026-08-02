@@ -1,0 +1,42 @@
+[Unit]
+Description=larkflow Target Personal Agent Edge gateway
+Documentation=https://github.com/iyuenan3/larkflow
+After=network-online.target postgresql.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=lf_target_dev
+Group=lf_target_dev
+WorkingDirectory=/
+Environment=HOME=/srv/larkflow/target
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/srv/larkflow/target/venv/bin/larkflow-edge-gateway --env-file /etc/larkflow-target-edge.env serve --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+KillMode=control-group
+UMask=0077
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressAllow=localhost
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target

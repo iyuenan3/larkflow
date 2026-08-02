@@ -21,7 +21,7 @@ MVP 只保留一种角色：中央 Feishu Adapter。它运行在服务端，以�
 
 服务器使用自己的 lark-cli 与飞书应用 profile，不连接开发者电脑上的 lark-cli。持有 profile 的 OS 身份只负责飞书读写与 Inbox 校验，领域服务身份不获得飞书凭据。
 
-员工电脑上的 Personal Agent Edge Proof 与中央 `lark-cli` 完全分离。Edge 使用一次性配对码取得可撤销设备凭据，再通过中央私有 HTTPS API 长轮询领取 `personal.readonly` 节点；它不登录飞书、不持有企业应用 profile，也不复用开发者电脑上的 `lark-cli`。员工若要在本机 Agent 内另行使用飞书能力，那是个人可选能力，不是 Edge 传输层或中央授权依据。
+员工电脑上的 Personal Agent Edge Proof 与中央 `lark-cli` 完全分离。Edge 使用一次性配对码取得可撤销设备凭据，再通过中央私有 HTTPS API 长轮询领取 `personal.readonly` 节点；它不登录飞书、不持有企业应用 profile，也不复用开发者电脑上的 `lark-cli`。SSH 隧道已经证明跨机协议与执行链路；专用子域名、Caddy 和受信任源站证书也已完成源站验证，但阿里云中国内地 ICP 接入备案阻断了公网设备链路，因此两类证据不能合并推断为公网 Edge 已可用。Caddy 当前已停止，完成备案或迁移后再恢复。员工若要在本机 Agent 内另行使用飞书能力，那是个人可选能力，不是 Edge 传输层或中央授权依据。
 
 ## Agent 与 Tool
 

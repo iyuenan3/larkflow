@@ -520,3 +520,5 @@
 - Alternatives(否决)：让每台电脑直接访问 PostgreSQL；复用员工或服务器的 `lark-cli` 作为传输层；给设备下发中央飞书应用 secret；把电脑本身当作组织责任人；按 `executor=agent` 粗粒度领取所有 Agent 节点；第一版直接运行任意命令或常驻监听。
 - Supersedes / refines：取代 ADR-046 中“通过本机 lark-cli 接入 Codex / Claude”的传输细节，保留其“待办只分配给人，个人 Agent 只是边缘执行方式”的责任原则。它把 ADR-052 的个人 Edge 后置结论收窄为“产品化仍后置，但允许窄 Proof”，不恢复 ADR-050 的通用 Capability Lease。
 - Tradeoff：普通 `0600` 文件只能满足 Proof，不能替代 Keychain、硬件密钥或设备证明；只读沙箱只证明写入受限，目录级读取隔离尚未验证，恶意中央输入仍可能诱导 Agent 读取所选工作区之外的可读文件，工作内容也可能发送给模型供应商；心跳会增加写负载；手工 `run-once` 无法证明持续采用。离线、真实 PostgreSQL 与合成数据本机链路只证明当前协议可执行，不证明真实 HTTPS、企业政策或市场价值。
+- Update（2026-08-02）：不改原决策的 HTTPS 与产品化边界。长期开发库已应用 Edge migration，Gateway 已作为仅监听 loopback 的 systemd 服务部署；本机通过临时 SSH 隧道完成跨机 Codex 领取、续租、回传和撤销验收。公网 HTTPS 仍未部署。
+- Update（2026-08-02）：专用 DNS-only 子域名、Caddy 和受信任源站证书已经完成源站验证，Gateway 仍保持 loopback。中国内地 ECS 的公网入口必须先满足 ICP 接入备案，不接受“证书已签发等于公网 Edge 已可用”，也不通过 Cloudflare Tunnel 或非标准端口绕过备案。当前 Caddy 已停止并禁用开机启动，配置与证书保留；完成接入备案或迁移到合规的非中国内地环境后，必须重新执行配对、领取、续租、回传和撤销验收。现场证据见 MEMORY。

@@ -1,6 +1,6 @@
 # DEPLOYMENT · larkflow
 
-> **As-built / Legacy Prototype + Target Runtime 开发部署。** 本文保存 legacy LangGraph + SQLite 服务与 Target PostgreSQL Runtime 在单台 ECS 上的真实部署记录。它不是目标 SaaS 拓扑：目标架构是 PostgreSQL 中央控制面的模块化单体。Personal Agent Edge 目前只有未部署的只读 Proof，见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+> **As-built / Legacy Prototype + Target Runtime 开发部署。** 本文保存 legacy LangGraph + SQLite 服务与 Target PostgreSQL Runtime 在单台 ECS 上的真实部署记录。它不是目标 SaaS 拓扑：目标架构是 PostgreSQL 中央控制面的模块化单体。Personal Agent Edge 已完成 loopback 部署、SSH 隧道验收和 HTTPS 源站配置，但公网设备链路受 ICP 接入备案阻断，见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 >
 > 除修正事实错误外，不再给这套部署增加新的产品领域能力。个人端不得复用下文的企业 bot 全局凭证；中央端和个人端必须使用不同身份、权限与生命周期。
 
@@ -9,11 +9,15 @@
 - `alicloud-sh` 的 PostgreSQL 14.23 保持 active，`listen_addresses=localhost`，5432 只监听 `127.0.0.1`。宿主系统盘约有 33 GB 可用，内存约有 993 MB available。该数据库是自建 Target 开发环境，不是生产数据库，也不具备托管数据库的高可用能力。
 - 一次性数据库与最小权限密码角色通过本机 SSH 隧道运行完整 `tests/test_workflow_postgres.py`，3 项全部通过：migration 重入、聚合与 outbox 往返、两个真实连接竞争同一节点、过期 claim 恢复。测试前先跑单 Worker 基线；完成后数据库与角色均已删除，并从系统目录回读为 0。
 - 长期开发库为 `larkflow_target_dev`，所有者是无密码角色 `lf_target_dev`。同名 Unix 系统用户通过本机 Unix socket 的 peer authentication 连接；角色不能超级管理、建库、建角色、复制或绕过 RLS，`PUBLIC` 没有数据库连接权。数据库默认 `timezone=UTC`、`statement_timeout=30s`、`lock_timeout=5s`、`idle_in_transaction_session_timeout=60s`。
-- 长期开发库已应用 `0001_workflow` 到 `0006_inbox_verification_exhaustion`。第六份 migration 允许 Inbox 进入不可再认领的 `exhausted` 终态；凭据侧默认验证上限为 24 次，结构化日志中的非零 `exhausted` 必须告警。
-- `0007_edge_devices` 只在一次性 PostgreSQL 14 数据库完成 migration 重入和 Edge store 验证，尚未应用到长期开发库；Edge Gateway 与本机客户端均未部署。
+- 长期开发库已应用 `0001_workflow` 到 `0007_edge_devices`。第六份 migration 允许 Inbox 进入不可再认领的 `exhausted` 终态；第七份增加一次性配对、可撤销设备和追加型 Edge 审计。凭据侧默认验证上限为 24 次，结构化日志中的非零 `exhausted` 必须告警。
+- `larkflow-target-edge.service` 以 `lf_target_dev` enabled / active，`NRestarts=0`，只监听 `127.0.0.1:8765`。运行态 `IPAddressAllow` 只有 loopback，`IPAddressDeny` 覆盖其他 IPv4 与 IPv6；无凭据 claim 返回 401。`/etc/larkflow-target-edge.env` 为 `0640 root:lf_target_dev`，只含本机 peer DSN、claim TTL 与结果大小限制，不含飞书或模型凭据。仓库 unit 与 env 模板为 `deploy/larkflow-target-edge.service` 和 `deploy/larkflow-target-edge.env.example`。
+- Caddy 2.11.4 使用官方 Ubuntu stable 包安装。验收时 `NRestarts=0`，公网监听 80/443，管理端口只监听 `127.0.0.1:2019`；专用 DNS-only 子域名反向代理到 `127.0.0.1:8765`，请求体限制为 256 KB，并设置 HSTS、`nosniff` 与 `no-referrer`。确认 ICP 阻断后服务已 `disabled / inactive`，80/443 与 2019 均不再监听；软件、配置、证书和回滚备份保留。仓库脱敏模板为 `deploy/larkflow-edge.Caddyfile.example`，服务器旧配置备份为 `/etc/caddy/Caddyfile.pre-larkflow-20260802`。
 - Runtime 使用 `/srv/larkflow/target/venv` 中的 wheel，以 `lf_target_dev` 运行并通过 Unix socket peer authentication 连接。`/etc/larkflow-target.env` 为 `0640 root:lf_target_dev`，systemd unit 为 `0644 root:root`。
-- 包含严格字段校验、Template Service、正式模板 CLI、`llm.generate` Agent adapter、有限入站验证重试、Projection 启动全量对账和 Human Task 完成状态轮询的 wheel 已安装到 Target 独立虚拟环境。内容提交为 `e81aedf`，SHA-256 为 `e725f5ba39eedf264c675998082d1a21689b6e01632aba6de31086b14b72f8d7`；四个 Target 服务已重启并回读 active，`NRestarts=0`。`/etc/larkflow-target.env` 已在明确授权下启用开发用 OpenAI 兼容主路由，不配置备用线路；`LLM_TIMEOUT=240`、claim TTL 为 300 秒、安全余量为 30 秒，且关闭环境代理继承。env 保持 `0640 root:lf_target_dev`，路由真值不进入仓库或日志。
-- 部署前备份已回读 `Result=success / ExecMainStatus=0`。当前候选件保存在 `releases/poll-e725f5ba39ee/`，上一正式发布件保存在 `releases/99af528/`，其他受限回滚件保留在各自目录。wheel 为 `0640 root:lf_target_dev`，可按相同停服、安装、启动步骤回滚。
+- 包含严格字段校验、Template Service、正式模板 CLI、`llm.generate` Agent adapter、有限入站验证重试、Projection 启动全量对账、Human Task 完成状态轮询和 Personal Edge 的 wheel 已安装到 Target 独立虚拟环境。Edge 内容提交为 `b1d6165`，SHA-256 为 `7728894b1338f89b465553a1064bd720e44302c2dafa238286e14d1f084e5c74`；五个 Target 服务已重启并回读 active，`NRestarts=0`。`/etc/larkflow-target.env` 已在明确授权下启用开发用 OpenAI 兼容主路由，不配置备用线路；`LLM_TIMEOUT=240`、claim TTL 为 300 秒、安全余量为 30 秒，且关闭环境代理继承。env 保持 `0640 root:lf_target_dev`，路由真值不进入仓库或日志。
+- Edge 升级前备份已回读 `Result=success / ExecMainStatus=0`。当前候选件保存在 `releases/edge-7728894b1338/`，上一轮轮询发布件保存在 `releases/poll-e725f5ba39ee/`，其他受限回滚件保留在各自目录。wheel 为 `0640 root:lf_target_dev`，可按相同停服、安装、启动步骤回滚。
+- 两个只含合成信息的单节点实例 `edge_remote_acceptance_20260802_180202` 与 `edge_remote_renewal_20260802_180554` 已通过临时 SSH 隧道由本机 Codex 只读执行。两者 Instance、Node 与 Attempt 均为 `done`；第二条 22.6 秒执行在同一 Attempt 上追加 10 条 `node.claim_renewed`。测试设备完成后进入 `revoked`，追加型 Edge 审计包含 issued、paired、revoked 各一条，旧凭据再次 claim 返回 `device has been revoked`。本机 `0600` 凭据、SSH 隧道和两端临时上传件随后删除。该验收不使用飞书或真实业务数据，也不证明公网 HTTPS。
+- Cloudflare 权威 DNS 返回专用子域名的 DNS-only A 记录，TTL 为 300 秒；Caddy 通过 TLS-ALPN-01 取得 Let’s Encrypt 证书。源站直连验证了正确 SAN、可信链、HTTP/2 401、`Cache-Control: no-store` 与安全响应头。随后本机公网 TLS ClientHello 被连接重置，服务器抓包确认该连接没有到达 ECS，而服务器 loopback 与公网 hairpin 始终返回 401，两个服务均无重启。该现象与阿里云中国内地域名未完成 ICP 接入备案时的 80/443 阻断一致，不能描述为公网 HTTPS 已可用。
+- 合成实例 `edge_https_acceptance_20260802_184636` 在公网验收前创建，因 TLS 阻断停留在 `running / ready / pending`，未被任何设备认领；本轮没有签发配对码、没有创建设备凭据，也没有启动 Codex。该实例作为失败前置条件证据保留，后续完成备案或迁移后可继续用于公网 E2E。
 - 升级前已累计 28 次验证失败的历史 Inbox 事件，在下一次真实认领后于北京时间 22:36:28 原子写入 `status=exhausted`、`attempt_count=29`、`outcome=exhausted:verification_attempts` 和 `failure_stage=verification`；结构化日志同步回读 `exhausted=1`。
 - 真实开发实例已在测试飞书组织完成 `Human -> Agent -> Human`：首个 Human Task 完成后只提交 `{confirmed: true}`，真实模型生成 210 字正文，最终 Human Task 精确展示该正文；第二次人工完成后 Instance 与三个 Node / Attempt 全部为 `done`。验证不代表生产上线。
 - 正式模板 CLI 已用合成输入依次完成模板创建、启用、从模板创建草稿、只读预览和确认。实例 `template_entry_20260801_213749` 保存 `target_agent_review:1` 完整快照，并已用真实飞书 Task 与真实模型完成 `Human -> Agent -> Human`：Instance 与三个 Attempt 均为 `done`，两条 Task Projection 均完成，该实例八条 Outbox 均为 `published`。该流程仍是开发验证，不含用户业务数据。
@@ -21,9 +25,9 @@
 - Projection 启动全量对账和 `reconcile-projections` 运维命令已部署。专用实例 `projection_repair_acceptance_20260801_235210` 创建初始 Task 后先完成未删除基线，对账为 3 条绑定全部不变；随后用 bot 身份删除且只删除该 GUID，服务端读取明确返回 `1470404`。下一次对账回读 `tasks_recreated=1`、`unchanged=2`、`failed=0`，Projection 换绑到不同 GUID、`repair_generation=1`，新 Task 为 `todo / mode=1 / source=6 / 1 member`；再次对账为 `tasks_recreated=0`、`unchanged=3`，稳定 repair key 与代码公式一致。人工完成新 Task 后，凭据侧日志为 `claimed=1 / verified=1 / failed=0`，领域侧为 `claimed=1 / submitted=1 / failed=0`；Inbox 为 `processed`、`attempt_count=2`、无失败阶段，Instance、Node、Attempt 均为 `done`，Projection 为已完成。数据库共有 9 条 Task Projection，均有 external ID，其中 8 条完成、1 条等待；五个服务保持 active、`NRestarts=0`，验收窗口无 warning 日志。
 - Projection 完成轮询默认每 30 秒执行，启动立即扫描；`reconcile-completions` 可显式触发。部署后首轮读取 3 个当前 Human Task，观察到 2 个完成、1 个待办，写入 2 条 `feishu_task_poll` Inbox 信号。凭据侧 `claimed=2 / verified=2 / failed=0`，领域侧 `claimed=2 / submitted=2 / failed=0`。此前外部 Task 已完成但仍等待事件的 `minimal_scope_20260802_010613` 与 `minimal_scope_event_20260802_011644`，其 Instance、Node 与 Projection 均进入完成态。显式重跑只读取剩余 1 个待办 Task，新增信号为 0；两条轮询 Inbox 均为 `processed / submitted:human_node`。
 - 凭据侧入站校验使用 `larkflow-target-inbound-adapter.service`，以 `lf-dev` 运行并只读飞书 Task 详情。它可以 SELECT / UPDATE Inbox，不能更新 Instance、Node 或 Attempt。领域入站使用 `larkflow-target-inbound.service`，以 `lf_target_dev` 运行，不能读取 legacy 飞书 profile 与应用凭据。
-- `larkflow-target.service`、`larkflow-target-projection.service`、`larkflow-target-inbound-adapter.service`、`larkflow-target-inbound.service` 与 legacy `larkflow@dev` 均 enabled / active。legacy 是 Task EventKey 的唯一消费者，只把原始信号写入 Inbox，不写 Target 领域表；Task 状态轮询是 Target 的可靠完成入口，事件只是可选低延迟信号。
+- `larkflow-target.service`、`larkflow-target-projection.service`、`larkflow-target-inbound-adapter.service`、`larkflow-target-inbound.service`、`larkflow-target-edge.service` 与 legacy `larkflow@dev` 均 enabled / active。legacy 是 Task EventKey 的唯一消费者，只把原始信号写入 Inbox，不写 Target 领域表；Task 状态轮询是 Target 的可靠完成入口，事件只是可选低延迟信号。
 - 常驻验证覆盖普通 Tool 完成、SIGTERM 干净退出、SIGKILL 后 5 秒自动拉起，以及租约到期后由不同 Worker 恢复同一 Attempt。有效故障注入最终记录 `recovered=1`、`completed=1`、`stale_results=0` 和 `node.claim_recovered` 审计。
-- `larkflow-target-backup.timer` 每天北京时间 03:20 后随机延迟不超过 15 分钟执行 custom-format `pg_dump`，本机保留约 7 天。备份目录权限为 `0700 lf_target_dev:lf_target_dev`，备份文件为 `0600`，backup service 使用 systemd 文件系统与权限沙箱。最近一次恢复演练在当时只有两份 migration 时完成，已回读表所有权和收紧的 schema 权限并删除恢复库。六份 migration 已进入备份范围，但新版恢复演练尚未重跑。
+- `larkflow-target-backup.timer` 每天北京时间 03:20 后随机延迟不超过 15 分钟执行 custom-format `pg_dump`，本机保留约 7 天。备份目录权限为 `0700 lf_target_dev:lf_target_dev`，备份文件为 `0600`，backup service 使用 systemd 文件系统与权限沙箱。最近一次恢复演练在当时只有两份 migration 时完成，已回读表所有权和收紧的 schema 权限并删除恢复库。七份 migration 已进入备份范围，但新版恢复演练尚未重跑。
 - 两阶段 Inbox 已在一次性真实 PostgreSQL 数据库中验证 migration 重入、event ID 去重、校验与领域两组双 Worker 竞争、无效 claim token 拒绝、阶段恢复和最终 `processed` 终态。一次性数据库已删除。
 - Template Service 已在一次性真实 PostgreSQL 14 数据库中验证五份 migration 重入、两路同时启用时一条成功一条并发冲突、版本更新触发器拒绝修改、模板审计追加和冻结实例外键。一次性数据库与远端验证脚本均已删除。
 - 备份目前只在同一块系统盘，能处理误操作和局部数据损坏，不能处理整机或云盘丢失，也没有 PITR。进入生产前必须增加异机或对象存储副本、恢复演练、容量告警和 PostgreSQL 升级流程。
@@ -38,8 +42,10 @@
 - Projection 服务：`systemctl status larkflow-target-projection.service`；日志看 `journalctl -u larkflow-target-projection.service`。仓库 unit 与 env 模板为 `deploy/larkflow-target-projection.service`、`deploy/larkflow-target-projection.env.example`。
 - 入站校验服务：`systemctl status larkflow-target-inbound-adapter.service`；日志看 `journalctl -u larkflow-target-inbound-adapter.service`。
 - 领域入站服务：`systemctl status larkflow-target-inbound.service`；日志看 `journalctl -u larkflow-target-inbound.service`。
+- Edge Gateway：`systemctl status larkflow-target-edge.service`；日志看 `journalctl -u larkflow-target-edge.service`。服务只允许 loopback。
+- Edge HTTPS：当前 Caddy 为 `disabled / inactive`。完成接入备案或迁移后，先验证配置和 DNS，再执行 `systemctl enable --now caddy`；证书与挑战日志看 `journalctl -u caddy`。公网可用性必须从员工设备实测，源站 loopback 成功不能替代 ICP 接入与外部链路验收。
 - 手工只读连接：`sudo -u lf_target_dev env --chdir=/ psql -X --dbname=larkflow_target_dev`。
-- migration：由目标应用启动入口调用 package-data migration runner。长期库的六份 migration 已落地，后续不得手工改 schema 后跳过 migration ledger。
+- migration：由目标应用启动入口调用 package-data migration runner。长期库的七份 migration 已落地，后续不得手工改 schema 后跳过 migration ledger。
 - 立即备份：`sudo systemctl start larkflow-target-backup.service`；结果看 `systemctl show larkflow-target-backup.service --property=Result,ExecMainStatus`。
 - 定时器：`systemctl show larkflow-target-backup.timer --property=ActiveState,UnitFileState,NextElapseUSecRealtime`。
 - 恢复：先由 postgres 管理员创建目标库，重建 UTC 与三项 timeout，撤销 `PUBLIC` 对 `public` schema 的 CREATE，并授予 `lf_target_dev` USAGE 与 CREATE；再以 `lf_target_dev` 执行 `pg_restore --exit-on-error --single-transaction --no-acl`。不能直接让应用角色恢复 ACL，`public` schema 不归它所有，pg_restore 只会 warning，目标库会保留默认 PUBLIC CREATE。最终验收同时回读 migration、表所有者、ACL、时区与 timeout。

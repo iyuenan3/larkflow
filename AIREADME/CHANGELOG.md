@@ -10,7 +10,13 @@
 - Fixed：非 Git 工作区显式允许只读执行。本机需要 Clash 等环境代理时，默认最小环境仍不传代理；用户必须显式启用 loopback proxy 继承，且只接受无用户名和密码的 loopback HTTP / HTTPS / SOCKS URL，远程或带凭据代理丢弃。首次无代理合成测试在 120 秒超时，Edge 终止整个 Codex 进程组并保留中央节点等待租约恢复，没有把业务流程判失败。
 - Verified：完整离线套件 `653 passed, 8 skipped`。最终 wheel 共 79 个条目并包含全部 Edge 模块、migration 与模板，SHA-256 为 `39a363e03aded26ddf5ab326024a9515ba97acf44e11e7a115af224048c623dd`。同一 wheel 在一次性 PostgreSQL 14 数据库应用七份 migration，第二次应用为空；同一配对码两路竞争恰好一条成功、一条 `PairingCodeUsedError`。领取、续租、完成、撤销、原始 secret 不落库和 Edge 审计不可改写均通过。测试库、脚本与 wheel 随后删除，既有四个 Target 服务回读 active、`NRestarts=0`。
 - Verified：合成临时工作区通过真实 loopback HTTP 完成配对、领取、续租与结果提交，本机 Codex 在显式无凭据 loopback 代理下 20.6 秒返回 58 字摘要，命中 Project Aurora；中央 Instance 为 `done`，临时工作区随后删除。
-- Boundary：当前未部署，未完成真实 HTTPS 验收。长期开发库仍停在六份 migration。凭据仍是当前用户 `0600` 文件，不是系统 Keychain；目录级读取隔离、安全政策、持续采用和市场价值均未验证。
+- Deployment：内容提交 `b1d6165` 构建的 wheel SHA-256 为 `7728894b1338f89b465553a1064bd720e44302c2dafa238286e14d1f084e5c74`。升级前备份成功，长期开发库已应用 `0007_edge_devices`；`larkflow-target-edge.service` 以 `lf_target_dev` 常驻，只监听 `127.0.0.1:8765`，运行态拒绝非 loopback 网络。Runtime、Projection、两类 Inbound、Edge Gateway 与 legacy 均为 active，`NRestarts=0`。
+- Verified：临时 SSH 隧道把本机 `127.0.0.1:18765` 映射到中央 loopback Gateway。两个合成单节点实例均由本机 Codex 只读执行并回传为 `done`；第二条 22.6 秒执行在同一 Attempt 上产生 10 条 `node.claim_renewed` 审计。测试设备随后撤销，旧凭据再次领取返回 `device has been revoked`；本机凭据、隧道和两端临时上传件均已删除。
+- Boundary：尚未部署公网 HTTPS。服务器没有反向代理，公网监听仍只有 SSH；凭据仍是当前用户 `0600` 文件，不是系统 Keychain。目录级读取隔离、安全政策、持续采用和市场价值均未验证。
+- Update：开发服务器已安装 Caddy 2.11.4，专用 DNS-only 子域名取得 Let’s Encrypt 证书，源站反向代理、可信链、正确 SAN、安全响应头与未认证 401 均已验证；仓库新增脱敏 Caddyfile 模板。
+- Blocked：公网设备验收未通过。员工电脑后续 TLS ClientHello 被连接重置，服务器抓包确认请求未到达 ECS，而源站 loopback 与公网 hairpin 始终正常。证据与阿里云中国内地 ICP 接入备案阻断一致；合成实例保持未认领，没有签发配对码、设备凭据或运行 Codex。
+- Boundary：必须先完成 ICP 接入备案，或迁移到合规的非中国内地环境，再重跑公网配对、领取、续租、回传和撤销。证书存在不代表公网 Edge 已可用，也不改变安全评审、系统凭据存储和产品化仍未完成的结论。
+- Safety：确认阻断后已停止并禁用 Caddy 开机启动，服务器公网监听恢复为只有 SSH；Caddy 配置、证书和回滚备份保留，loopback Gateway 与其他 Target 服务保持 active。
 
 ## v0.19.0-draft · 2026-08-02 · Target Task 完成状态轮询（ADR-064）
 
