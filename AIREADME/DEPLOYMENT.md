@@ -40,6 +40,7 @@
 - Target CLI：`/srv/larkflow/target/venv/bin/larkflow-target --env-file /etc/larkflow-target.env <command>`；模板控制面支持 template-create、template-add-version、template-enable、template-disable、template-delete、template-list、template-show、create-from-template 与 preview，并保留实例和四类 Worker 命令。Projection 身份使用 `/etc/larkflow-target-projection.env reconcile-projections` 显式执行启动对账，使用同一 env 的 `reconcile-completions` 立即扫描完成状态。
 - Agent 开关：`LARKFLOW_TARGET_ENABLE_AGENT_EXECUTOR=true`。路由使用 `LLM_BASE_URL / LLM_API_KEY / LLM_MODEL`，单线路可用 `LLM_TIMEOUT` 收紧。启动时会计算主线路与全部备用线路的超时总和，并要求该值加 `LARKFLOW_TARGET_AGENT_CLAIM_SAFETY_SECONDS` 后严格小于 `LARKFLOW_TARGET_CLAIM_TTL_SECONDS`；不满足时服务拒绝启动。
 - Tool 开关：`LARKFLOW_TARGET_ENABLE_CONTENT_CHECK_EXECUTOR=true`。`LARKFLOW_TARGET_CONTENT_CHECK_MAX_CHARS` 限制检查输入上界；Tool 不读取模型或飞书凭据。
+- 目录开关：`LARKFLOW_TARGET_VALIDATE_DIRECTORY=false`。内容提交 `c991bde` 的 wheel SHA-256 为 `537b6d8f4106c3f66f180309a58530b11c675d9e27f3edfa08c6439a7ccc161c`，保存在 `releases/directory-537b6d8f4106/`。升级前备份成功，五个服务重启后均为 active、`NRestarts=0`。当前机器人调用目录返回缺少通讯录只读 scope，因此未启用该开关，也没有扩大权限。
 - Runtime 服务：`systemctl status larkflow-target.service`；日志看 `journalctl -u larkflow-target.service`。
 - Projection 服务：`systemctl status larkflow-target-projection.service`；日志看 `journalctl -u larkflow-target-projection.service`。仓库 unit 与 env 模板为 `deploy/larkflow-target-projection.service`、`deploy/larkflow-target-projection.env.example`。
 - 入站校验服务：`systemctl status larkflow-target-inbound-adapter.service`；日志看 `journalctl -u larkflow-target-inbound-adapter.service`。

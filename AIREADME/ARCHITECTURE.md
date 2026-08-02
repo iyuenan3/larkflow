@@ -135,6 +135,7 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 - `projection.py`、`projection_daemon.py` 与 `completion_poll.py`：只认领投影事件的 Outbox Worker、Feishu Task Projection Port、稳定幂等键、Projection 记录和独立常驻循环。常驻循环在消费 Outbox 前，按 Instance ID 分页扫描 PostgreSQL 权威状态，为当前 `waiting_human` 节点补建缺失 Projection，只在飞书 Task v2 明确返回 `1470404` 时重建外部 Task 并用带 repair generation 的稳定幂等键原子换绑。权限、限流、网络或五百错误不得触发换绑；终态节点不补发历史 Task，但会收口已有 Projection 的完成状态。循环还会周期读取当前 Human Task，观察到完成后以稳定信号 ID 写入耐久 Inbox。Human Task 描述会带入节点明确声明的 Instance 输入和直接依赖中已提交的结果，Agent 正文优先展示并设置长度上限。
 - `inbound.py` 与 `inbound_daemon.py`：接受 Task 状态轮询或飞书事件产生的 PostgreSQL Inbox 信号，以及凭据侧校验与领域侧提交两阶段 Worker。两阶段分别 claim，失败后指数退避，过期 claim 可被其他 Worker 恢复。无论信号来源如何，凭据侧都重新读取 Task，默认最多验证 24 次；耗尽后写入带终止时间、阶段、结果和最后错误的 `exhausted` 终态，结构化日志暴露耗尽计数，且该信号不再被认领。
 - `feishu.py`：基于 lark-cli 的 Task adapter。创建使用原生 Task API、稳定 client token、`mode=1`、唯一 Owner assignee 和稳定绑定字段；入站校验只读 Task 详情。
+- `directory.py`：可选企业目录 Port 与 lark-cli bot adapter。草稿写入前去重校验 Instance Owner 和全部节点 Owner 的 open_id、激活状态与离职、冻结标志；缺字段、ID 不匹配或非活跃状态均 fail closed。
 - `cli.py`：独立 `larkflow-target` 运维入口，提供模板全生命周期、从模板创建草稿、预览、确认、状态、Human 提交，以及 Runtime、Projection、入站校验和领域入站的单步 / 常驻服务。
 - `executors.py`：包含只接受 `work.agent.kind=llm.generate` 的 `LLMAgentExecutor`、按 `work.tool.kind` 路由内部 adapter 的 `ToolExecutorRouter`、确定性的 `content.check`，以及只用于开发验证的 `development.echo`。`content.check` 从直接依赖提取正文，执行长度与必需词检查，并返回 `pass / fail + evidence + suggestion`；Runtime 在 claim 前按 adapter 能力筛选具体节点，未接受的 kind 保持 ready，不会先认领后失败。
 - `edge.py`、`edge_postgres.py` 与 migration `0007_edge_devices`：一次性配对、设备哈希凭据、撤销、追加型 Edge 审计和 `personal.readonly` 能力过滤。Edge 复用当前 Attempt 的 Worker、token、版本与租期校验，不创建第二套任务真相。
@@ -153,7 +154,7 @@ PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration �
 | 持久化 | Instance、Node、Attempt、Audit、Outbox、Inbox | PostgreSQL 14 schema、事务仓储、追加型 Audit、带租约 Outbox 和事件去重 Inbox 已实现并真库验证；长期开发库与本地每日备份已建立 | 需要异机备份、PITR、升级、容量告警和生产装配 |
 | 草稿与模板可选 | 草稿预览、确认、模板或无模板实例 | 新内核支持直接 Snapshot 草稿，以及模板参数和角色绑定生成的冻结草稿；Owner 可只读预览并独立确认 | 需要目录校验和面向用户的入口 |
 | 模板 | 简单生命周期、不可变版本、布尔锁 | Template Service、PostgreSQL 仓储、追加型审计、CLI 与 v0.2 示例已实现并真库验证 | 需要 importer 和模板管理界面 |
-| 责任 | 每节点唯一 Owner，执行器分离 | 新内核已强制 Owner 与 `human/agent/tool` 分离；企业人员有效性尚无 adapter | 需要目录校验与角色解析 |
+| 责任 | 每节点唯一 Owner，执行器分离 | 新内核已强制 Owner 与 `human/agent/tool` 分离；企业目录 adapter 已落码、默认关闭 | 需要最小 scope 真栈启用与角色解析 |
 | 编辑与重启 | 预览确认、revision、下游 Attempt | 已有活图和选择性重算机制 | 需按新模型提炼 |
 | 飞书集成 | PostgreSQL outbox / Inbox、幂等、服务端授权、对账 | Human Task 创建 / 完成、Task 完成状态轮询、可选事件去重、服务端详情回读、两阶段授权、启动分页对账、缺失补建、受控 Task 重建及重建后完成入站已实现并完成开发环境真栈验收 | 需要通用命令入站与 IM / Doc 投影 |
 | 运行时 | 独立 Scheduler + Node Runner | 新内核已实现 Scheduler、Node Runner、持久化 runnable scan、`llm.generate`、`content.check`、Runtime / Projection / Inbound Worker、能力过滤、优雅停机、过期 claim 恢复和开发环境混合真链路 | 需要更多业务 Tool 和有限重试 |

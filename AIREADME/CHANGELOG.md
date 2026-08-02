@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.22.0-draft · 2026-08-02 · 企业目录 Owner 校验（ADR-067）
+
+- Added：可选 `PersonDirectory` Port、lark-cli bot adapter 和草稿写入前的 Instance / Node Owner 去重校验。
+- Security：目录缺字段、返回 ID 不匹配、未激活、冻结、离职、退出或未入职均 fail closed；默认关闭，不静默扩大应用权限。
+- Verified：完整离线套件 `670 passed, 8 skipped`。wheel SHA-256 为 `537b6d8f4106c3f66f180309a58530b11c675d9e27f3edfa08c6439a7ccc161c`；升级前备份成功，五个服务重启后 active、`NRestarts=0`。
+- Blocked：当前开发应用调用目录明确返回缺少通讯录只读 scope。未获权限扩展确认前保持 `LARKFLOW_TARGET_VALIDATE_DIRECTORY=false`，因此尚无目录真栈通过证据。
+
 ## v0.21.0-draft · 2026-08-02 · 确定性 Tool 与真实混合流程（ADR-066）
 
 - Added：`ToolExecutorRouter` 按 `work.tool.kind` 路由内部 adapter；首个 `content.check` 对直接依赖正文执行长度与必需词检查，返回稳定证据和 `pass / fail` verdict。

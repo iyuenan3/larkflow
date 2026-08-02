@@ -530,3 +530,10 @@
 - Decision：增加 `ToolExecutorRouter`，按 `work.tool.kind` 精确选择内部 adapter，未知 kind 在 claim 前拒绝。首个 `content.check` 只读取直接依赖正文，执行长度与必需词检查，返回稳定 `pass / fail + evidence + suggestion` 和请求标识，不调用模型、不写飞书。质量 verdict 同时进入 Attempt 的 `quality_result`，完整结果可被下游 Human Task 展示。
 - Alternatives(否决)：按 node id 注册 handler；让 Runtime 先 claim 再发现不支持；把检查 prompt 交给 LLM；为每个模板新增 Python executor 类型。
 - Tradeoff：当前检查只覆盖确定性文本契约，不证明事实正确、语义质量或业务合规；更多 Tool 必须逐个定义输入来源、副作用、幂等键和失败语义。开发真栈已闭环，不代表生产装配完成。
+
+## ADR-067 · 2026-08-02 · Owner 目录校验在草稿写入前 fail closed 且默认关闭
+
+- **Status：Accepted，live validation blocked by scope。**
+- Problem：模板角色绑定和无模板 Snapshot 都接受外部 open_id。只做非空校验会把离职、冻结、跨租户或拼错的人固化为唯一 Owner，随后 Task 投影和授权链路无法可靠恢复。
+- Decision：Workflow Service 接受可选 `PersonDirectory` Port，在草稿写入前去重读取 Instance Owner 与所有节点 Owner。返回 ID 必须精确匹配，且目录明确证明已激活并非冻结、离职、退出或未入职；缺字段和读取失败都拒绝创建。功能由 `LARKFLOW_TARGET_VALIDATE_DIRECTORY` 显式启用，默认关闭。
+- Tradeoff：启用会让创建草稿依赖飞书目录可用性，并需要新增通讯录只读 scope。当前代码与 670 项离线测试已通过并部署，但应用仍保持原最小 Task scope，真栈验证待权限确认。

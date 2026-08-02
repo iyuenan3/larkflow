@@ -32,7 +32,7 @@
 - 已完成 Template Service：`draft / enabled / disabled / deleted`、不可变版本、布尔锁、角色与参数绑定、追加型模板审计和 aggregate version 乐观并发；真实 PostgreSQL 同时启用竞争验证已通过。
 - 已完成从启用模板生成冻结草稿、Owner 只读预览和正式 CLI 入口；开发环境已用合成输入创建、预览、确认模板实例，并完成正式模板的真实 `Human -> Agent -> Human` 闭环。
 - `alicloud-sh` 已建立长期 Target 开发库、本机 peer authentication、每日备份、新库恢复演练和 enabled Target 服务；仍缺异机备份、PITR 与生产运行手册。
-- 每个节点的唯一 Owner 解析与服务端授权。当前内核已拒绝非 Owner 提交，企业目录校验待接入。
+- 每个节点的唯一 Owner 解析与服务端授权。当前内核已拒绝非 Owner 提交，企业目录校验已落码并部署但默认关闭；当前应用缺少通讯录只读 scope，真栈启用待授权。
 - 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则、持久化、常驻 Worker、Agent adapter、首个 Tool adapter、真实开发链路与恢复扫描已落码，更多业务 Tool 按验证需求增加。
 - 已完成启动全量 Task 对账、缺失 Projection 补建和确认删除后的外部 Task 重建；一次性 PostgreSQL 与常驻开发服务均已验证补建、真实删除换绑、重入及修复后完成入站。通用飞书命令入站与 IM / Doc 投影仍待实现。
 - 从 legacy 原型提炼 adapter、事件韧性和 Mock 测试资产。

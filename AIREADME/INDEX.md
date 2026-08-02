@@ -4,7 +4,7 @@
 >
 > 文档状态：2026-08-02 Phase 1 中央工作流基础实现，真实 Human-Agent-Tool-Human 已在开发环境闭环；Personal Agent Edge Proof v0 已完成 loopback 开发部署与 SSH 隧道跨机验收，公网设备链路受 ICP 接入备案阻断，Caddy 已停止。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
-> last-synced: 4ca59bb · 2026-08-02
+> last-synced: fc9a6c9 · 2026-08-02
 
 ## 阅读顺序
 
