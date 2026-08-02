@@ -537,3 +537,13 @@
 - Problem：模板角色绑定和无模板 Snapshot 都接受外部 open_id。只做非空校验会把离职、冻结、跨租户或拼错的人固化为唯一 Owner，随后 Task 投影和授权链路无法可靠恢复。
 - Decision：Workflow Service 接受可选 `PersonDirectory` Port，在草稿写入前去重读取 Instance Owner 与所有节点 Owner。返回 ID 必须精确匹配，且目录明确证明已激活并非冻结、离职、退出或未入职；缺字段和读取失败都拒绝创建。功能由 `LARKFLOW_TARGET_VALIDATE_DIRECTORY` 显式启用，默认关闭。
 - Tradeoff：启用会让创建草稿依赖飞书目录可用性，并需要新增通讯录只读 scope。当前代码与 670 项离线测试已通过并部署，但应用仍保持原最小 Task scope，真栈验证待权限确认。
+
+## ADR-068 · 2026-08-03 · 飞书状态查询仅向 Instance Owner 暴露有界摘要
+
+- **Status：Accepted · Development deployment。**
+- Problem：Owner 在飞书中启动流程后缺少只读查询入口，只能依赖主动通知或外部保存 Instance ID；若直接暴露完整聚合，非 Owner 可枚举实例，节点结果正文和人员标识也可能泄露。
+- Constraint：发送者必须先通过当前企业活跃成员校验；中央 PostgreSQL 是状态权威；读取不能修改领域状态、审计或 aggregate version；错误响应不能暴露实例是否存在；飞书文本回复必须有界。
+- Decision：新增 `/larkflow status <instance_id>`，领域层通过 `get_for_owner` 原子读取并校验 Instance Owner。实例不存在与非 Owner 返回相同提示。回复只包含实例状态、进度、节点名称与 key、executor、节点状态和相对责任人，不包含结果正文或人员 ID；最多列出 20 个节点，每个可变字段最多 120 个字符，截断时明确提示省略数量。
+- Alternatives(否决)：允许任意节点 Owner 查看完整实例；只在 IM handler 内比较客户端身份；为不存在与无权限返回不同错误；直接输出完整结果或 open_id；复用 legacy SQLite 状态；无上限拼接所有节点。
+- Tradeoff：非 Instance Owner 即使负责某个节点也不能查看流程摘要；长流程只返回前 20 个节点，当前没有分页或文档链接。后续若开放协作者可见性，必须建立显式读取策略，不能放宽当前 Owner 检查。
+- Evidence：完整离线套件 `694 passed, 8 skipped`。开发服务器 wheel SHA-256 为 `b81103d0edd7a38922b3a0298c27f97b54dd9a11ae229b6da9676cbb068c6c2c`，六个 Python 服务均为 active、`NRestarts=0`。测试组织中的 Owner 查询已完成实例后，耐久命令记录、回复投影和飞书服务端消息回读一致，回复包含完成状态、`4/4` 与相对责任人，且不包含 open_id。

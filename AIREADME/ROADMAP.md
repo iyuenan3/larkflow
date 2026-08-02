@@ -35,7 +35,7 @@
 - 每个节点的唯一 Owner 解析与服务端授权。当前内核已拒绝非 Owner 提交，飞书 IM 命令发送者的活跃成员校验已在测试组织通过；草稿 Owner 全量企业目录校验已落码并部署但默认关闭。
 - 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则、持久化、常驻 Worker、Agent adapter、首个 Tool adapter、真实开发链路与恢复扫描已落码，更多业务 Tool 按验证需求增加。
 - 已完成启动全量 Task 对账、缺失 Projection 补建和确认删除后的外部 Task 重建；一次性 PostgreSQL 与常驻开发服务均已验证补建、真实删除换绑、重入及修复后完成入站。
-- 已完成飞书窄命令入口与完成投影：`/larkflow help / start / confirm`、耐久发送者校验与回复、Agent / Tool 结果消息、完成 Docx 和最终通知已完成真实开发链路。Task 事件在本轮仍未被 bot 长连接收到，周期状态轮询继续承担可靠完成发现。下一步是更多受控命令、业务 Tool、编辑 / 重启入口和生产装配。
+- 已完成飞书窄命令入口与完成投影：`/larkflow help / start / confirm / status`、耐久发送者校验与回复、Agent / Tool 结果消息、完成 Docx 和最终通知已完成真实开发链路。`status` 只允许 Instance Owner 查看有界摘要，并已完成命令记录、耐久回复和飞书服务端消息回读。Task 事件在本轮仍未被 bot 长连接收到，周期状态轮询继续承担可靠完成发现。下一步是 Owner 实例列表、更多业务 Tool、编辑 / 重启入口和生产装配。
 - 从 legacy 原型提炼 adapter、事件韧性和 Mock 测试资产。
 - 已完成 Personal Agent Edge Proof v0：一次性配对、哈希凭据、设备撤销、Owner 与 capability 双重过滤、现有 Attempt claim 续租、迟到结果拒绝、loopback Gateway、手工 `run-once` 和 Codex 只读适配器。离线测试、一次性 PostgreSQL 14、长期开发库 migration、loopback systemd 部署、SSH 隧道跨机 Codex、Caddy 与受信任源站证书已通过；公网设备链路受 ICP 接入备案阻断，Caddy 验证后已停止，凭据系统存储和安全评审仍未完成。
 

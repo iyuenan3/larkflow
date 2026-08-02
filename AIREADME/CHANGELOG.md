@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.24.0-draft · 2026-08-03 · Owner 专属状态查询闭环
+
+- Added：新增 `/larkflow status <instance_id>`，通过领域层 `get_for_owner` 返回流程状态、进度和节点摘要，命令保持只读。
+- Security：仅 Instance Owner 可查询；实例不存在与非 Owner 使用相同错误；回复不包含节点结果正文或人员 ID，最多列出 20 个节点，每个可变字段最多 120 个字符。
+- Verified：完整离线套件 `694 passed, 8 skipped`。wheel SHA-256 为 `b81103d0edd7a38922b3a0298c27f97b54dd9a11ae229b6da9676cbb068c6c2c`，六个 Python 服务统一重启后 active、`NRestarts=0`。
+- Acceptance：Owner 在测试组织查询一个已完成的四节点实例，耐久命令记录为 `processed / status_shown`，回复为 `sent`；飞书服务端按消息 ID 回读到唯一文本消息，包含完成状态、`4/4` 与相对责任人，不包含 open_id。
+- Boundary：仅完成开发环境和测试组织验收，不代表生产装配；非 Owner 查询和长流程截断已由离线测试覆盖，尚未在真实组织中逐项演练。
+
 ## v0.23.0-draft · 2026-08-03 · 飞书 IM 入口与完成投影闭环
 
 - Added：耐久 `im.message.receive_v1` 命令入口，支持 `/larkflow help / start / confirm`；发送者先经当前企业活跃成员校验，命令、验证、领域执行与回复分别去重和持久化。

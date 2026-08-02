@@ -10,8 +10,8 @@ larkflow 已开始按收敛后的产品设计重建中央工作流，目前完�
 - **新内核**：`larkflow/workflow/` 已实现模板生命周期和不可变版本、角色绑定和冻结 Instance Snapshot、草稿预览与确认、DAG 校验、节点状态迁移、依赖解锁、Human / Agent / Tool Node Runner、Attempt、claim、过期认领恢复、Runtime / Projection / Inbound Worker、乐观并发、PostgreSQL 仓储、追加型审计、事务 outbox 与耐久 Inbox。凭据侧 Task 验证默认最多尝试 24 次，超限进入不可再认领的 `exhausted` 终态并保留终止时间、失败阶段、结果和最后错误。
 - **Edge Proof v0**：已实现一次性配对、设备哈希凭据、撤销、Owner 与 `personal.readonly` 双重过滤、租约续期、迟到结果拒绝、loopback Gateway、手工 `run-once` 和 Codex 只读适配器。离线测试、一次性 PostgreSQL 14、合成数据本机 Codex 端到端、长期开发库部署和 SSH 隧道跨机链路已经通过。专用 DNS 记录、Caddy、Let’s Encrypt 证书、源站反向代理和未认证 401 已验证；公网 TLS 随后被 ICP 接入备案阻断，因此公网配对、领取、续租和回传仍未完成。
 - **legacy 原型**：LangGraph + SQLite + lark-cli 路径继续保留，用于回归已验证的飞书投影、打回、幂等和恢复机制。
-- **飞书入口 as-built**：已实现 `/larkflow help`、`/larkflow start`、`/larkflow confirm` 三个窄命令，以及命令回执、Agent / Tool 结果消息、完成文档和最终通知。命令先耐久落库，再校验发送者属于当前企业且状态活跃；`start` 只创建草稿，`confirm` 才启动实例。开发测试组织已完成真实 IM 到 Human-Agent-Tool-Human、完成文档和最终通知闭环。
-- **尚未实现**：上述三类命令之外的通用飞书控制面、更多业务 Tool adapter、受控编辑、重启和生产装配。企业目录草稿 Owner 全量校验已落码并部署但默认关闭，IM 命令发送者的活跃成员校验已完成真栈验证。Edge 还缺可持续使用的公网 HTTPS 入口、安全评审、系统凭据存储与任何产品化体验；当前入口必须先完成 ICP 接入备案，或迁移到合规的非中国内地环境。真实 Agent、确定性内容检查、模板入口和飞书 IM / Doc 投影只在开发环境和测试组织验证，不能据此描述为生产上线。
+- **飞书入口 as-built**：已实现 `/larkflow help`、`/larkflow start`、`/larkflow confirm`、`/larkflow status` 四个窄命令，以及命令回执、Agent / Tool 结果消息、完成文档和最终通知。命令先耐久落库，再校验发送者属于当前企业且状态活跃；`start` 只创建草稿，`confirm` 才启动实例，`status` 只向 Instance Owner 返回有界状态摘要。开发测试组织已完成真实 IM 到 Human-Agent-Tool-Human、完成文档、最终通知和状态查询闭环。
+- **尚未实现**：上述四类命令之外的通用飞书控制面、更多业务 Tool adapter、受控编辑、重启和生产装配。企业目录草稿 Owner 全量校验已落码并部署但默认关闭，IM 命令发送者的活跃成员校验已完成真栈验证。Edge 还缺可持续使用的公网 HTTPS 入口、安全评审、系统凭据存储与任何产品化体验；当前入口必须先完成 ICP 接入备案，或迁移到合规的非中国内地环境。真实 Agent、确定性内容检查、模板入口和飞书 IM / Doc 投影只在开发环境和测试组织验证，不能据此描述为生产上线。
 - **证据边界**：本轮完成的是既有设计简化与一致性核验，不是访谈、市场或商业验证。
 - **重要边界**：`alicloud-sh` 已运行 Target Runtime、Projection、凭据侧入站校验、领域侧入站和 loopback Edge Gateway 五个独立服务，并保留一个 legacy 事件消费者。Caddy 配置是唯一规划的 Edge 公网入口，只反向代理到 `127.0.0.1:8765`；当前因备案阻断处于 disabled / inactive，服务器已恢复为只有 SSH 对公网监听。Projection 周期读取当前 Human Task，观察到完成后只写耐久 Inbox；Task 事件可降低延迟，但不是可靠性前提。凭据侧仍会重新读取飞书资源并写入已验证 Inbox，领域侧不能读取 lark-cli profile，只在校验绑定、Owner、当前 Attempt 和操作人后提交领域命令。云端 Target 已在明确授权下启用开发用真实 Agent、`content.check` Tool、窄 IM 命令和完成文档 / 通知投影。legacy 服务继续使用 SQLite，并仅作为事件桥接时写入 Target Inbox，不能把 checkpointer 或全局 LangGraph state 扩展为新产品领域模型。
 
@@ -108,7 +108,7 @@ Phase 0 的设计一致性核验已经完成，当前进入 Phase 1 中央工作
 - Human Task 会展示节点明确声明的 Instance 输入；下游任务还会展示直接依赖中已提交的 Agent 正文。超长内容只在任务描述中截断，完整输入与结果仍保存在 PostgreSQL。
 - 每日 custom-format 备份保留约 7 天，并完成过一次新库恢复演练。
 - 自动执行采用 at-least-once 语义，executor 必须使用请求中的稳定幂等键消除重复副作用。
-- 飞书 IM 命令链路已接入：真实消息创建草稿、确认启动、Human Task、Agent、`content.check` Tool、最终 Human Task、完成文档和最终通知均在开发云服务器与测试组织闭环。完成文档已回读四个节点结果，最终通知也已按消息 ID 回读；对同一已完成实例再次执行修复命令为 no-op，没有重复创建文档或消息。Task 完成事件在本轮仍未被 bot 长连接收到，周期状态轮询是可靠入口。六个 Python 服务统一重启后保持 active 且 `NRestarts=0`。更多飞书命令、更多业务 Tool 和生产迁移仍缺，因此不能描述为目标产品已经上线。开发服务中的 `development.echo` 只用于持久化与恢复演练。
+- 飞书 IM 命令链路已接入：真实消息创建草稿、确认启动、Human Task、Agent、`content.check` Tool、最终 Human Task、完成文档和最终通知均在开发云服务器与测试组织闭环。完成文档已回读四个节点结果，最终通知也已按消息 ID 回读；对同一已完成实例再次执行修复命令为 no-op，没有重复创建文档或消息。Owner 对已完成实例执行 `/larkflow status` 后，命令记录、耐久回复和飞书服务端消息均已回读，摘要显示完成状态、`4/4` 进度和相对责任人，且不包含 open_id。Task 完成事件在本轮仍未被 bot 长连接收到，周期状态轮询是可靠入口。六个 Python 服务统一重启后保持 active 且 `NRestarts=0`。更多飞书命令、更多业务 Tool 和生产迁移仍缺，因此不能描述为目标产品已经上线。开发服务中的 `development.echo` 只用于持久化与恢复演练。
 - Personal Edge 不通过飞书 `lark-cli` 与中央节点交互。中央 Gateway 复用 PostgreSQL Node claim，员工电脑仅保存可撤销设备凭据，并在每次 `run-once` 时显式指定一个 Codex 只读工作区。两个合成单节点实例已通过 SSH 隧道完成真实跨机领取和回传，其中第二条在同一 Attempt 上写入 10 次续租审计；测试设备随后撤销，旧凭据再次领取被拒绝。专用开发子域名的权威 DNS、源站证书和反向代理也已验证，但员工电脑的公网 TLS 握手随后被阿里云备案系统重置，尚未产生公网配对设备。Human 节点和 gate 不会被 Edge 领取。
 
 原有访谈和飞书基线协议保留在 [research/phase-0/README.md](research/phase-0/README.md)，当前状态为 Deferred，不阻塞本轮简化设计，也不能被描述为已完成。

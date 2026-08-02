@@ -130,9 +130,10 @@ Target Task 完成发现以周期状态轮询为可靠路径。`project` 启动�
 
 Target 订阅 `im.message.receive_v1`，只处理以 `/larkflow` 开头的文本。桥接层同时接受飞书原始 V2 信封和 lark-cli 拍平输出：原始事件的 `content` 是 JSON 字符串，拍平输出的 `content` 是普通文本，两者必须归一为同一个命令信号。其他消息不进入 Target 命令 Inbox。
 
-- `/larkflow help`：返回当前三个命令的用法。
+- `/larkflow help`：返回当前四个命令的用法。
 - `/larkflow start <template_id> [JSON对象]`：以 tenant 和 message ID 派生稳定 Instance ID，验证发送者属于当前企业且状态活跃，再把发送者绑定为 Instance Owner 和模板角色来源。命令只创建草稿并返回确认命令，不自动启动。
 - `/larkflow confirm <instance_id>`：重新校验发送者与草稿 Owner，确认并启动实例。
+- `/larkflow status <instance_id>`：重新校验发送者后，仅允许 Instance Owner 读取流程状态。实例不存在与非 Owner 统一返回“实例不存在或你无权查看”，避免枚举。回复最多列出 20 个节点，每个可变字段最多 120 个字符；只包含状态、进度、节点、executor 和相对责任人，不包含结果正文或人员 ID。该命令只读，不追加领域审计，也不改变 aggregate version。
 
 原始 event ID 与 message ID 都参与去重；验证、领域执行和回复各自使用可认领的耐久状态，不依赖单个进程在线。客户端 payload 中的身份、Owner 或状态不作为授权事实。命令回复、Agent / Tool 节点结果、完成文档与最终通知都由服务端状态生成，并以稳定幂等键落为 Projection。Instance 进入 `done` 后，Projection Worker 汇总四类节点结果创建 Docx，再向 Owner 发送含文档链接的最终消息。
 
