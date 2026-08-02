@@ -43,6 +43,13 @@ from .executors import (
     LLMAgentExecutor,
     ToolExecutorRouter,
 )
+from .directory import (
+    CliFeishuDirectory,
+    DirectoryPerson,
+    DirectoryValidationError,
+    PersonDirectory,
+    validate_snapshot_owners,
+)
 from .edge import (
     DEFAULT_EDGE_CAPABILITIES,
     PERSONAL_READONLY_CAPABILITY,
@@ -173,9 +180,12 @@ __all__ = [
     "ConcurrentUpdateError",
     "CompletionPollReport",
     "ContentCheckToolExecutor",
+    "CliFeishuDirectory",
     "CliFeishuTaskProjection",
     "CliFeishuTaskReader",
     "DevelopmentToolExecutor",
+    "DirectoryPerson",
+    "DirectoryValidationError",
     "DEFAULT_EDGE_CAPABILITIES",
     "DeviceRevokedError",
     "DuplicateTemplateContentError",
@@ -233,6 +243,7 @@ __all__ = [
     "PERSONAL_READONLY_CAPABILITY",
     "PairingCodeExpiredError",
     "PairingCodeUsedError",
+    "PersonDirectory",
     "PostgresEdgeStore",
     "PostgresWorkflowInbox",
     "PostgresWorkflowRepository",
@@ -293,6 +304,7 @@ __all__ = [
     "topological_order",
     "template_document",
     "validate_snapshot",
+    "validate_snapshot_owners",
     "validate_template_definition",
     "verify_migrations",
 ]

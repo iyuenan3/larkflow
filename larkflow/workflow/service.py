@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from .directory import PersonDirectory, validate_snapshot_owners
 from .events import AuditEvent, OutboxEvent
 from .graph import validate_snapshot
 from .model import (
@@ -32,12 +33,14 @@ class WorkflowService:
         *,
         scheduler: Scheduler | None = None,
         runner: NodeRunner | None = None,
+        directory: PersonDirectory | None = None,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
     ) -> None:
         self.repository = repository
         self.scheduler = scheduler or Scheduler()
         self.runner = runner or NodeRunner()
+        self.directory = directory
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.id_factory = id_factory or (lambda: str(uuid4()))
 
@@ -60,6 +63,15 @@ class WorkflowService:
         if not actor_person_id.strip():
             raise ValueError("actor_person_id is required")
         validate_snapshot(snapshot)
+        if self.directory is not None:
+            validate_snapshot_owners(
+                self.directory,
+                tenant_id=tenant_id,
+                instance_owner_person_id=owner_person_id,
+                node_owner_person_ids=tuple(
+                    node.owner_person_id for node in snapshot.nodes
+                ),
+            )
         now = self.clock()
         instance = WorkflowInstance(
             id=instance_id,

@@ -25,6 +25,7 @@ from .config import (
     TargetRuntimeSettings,
 )
 from .daemon import WorkflowWorkerLoop
+from .directory import CliFeishuDirectory
 from .executors import (
     ContentCheckToolExecutor,
     DevelopmentToolExecutor,
@@ -96,6 +97,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--enable-content-check-executor",
         action="store_true",
         help="enable the deterministic content.check Tool adapter",
+    )
+    parser.add_argument(
+        "--validate-directory",
+        action="store_true",
+        default=_env_boolean("LARKFLOW_TARGET_VALIDATE_DIRECTORY"),
+        help="require every draft owner to be an active Feishu directory user",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -255,7 +262,16 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
     if applied:
         log("migrations_applied", {"versions": list(applied)})
     repository = PostgresWorkflowRepository(connection_factory)
-    service = WorkflowService(repository)
+    directory = None
+    if namespace.validate_directory:
+        directory = CliFeishuDirectory(
+            profile=_required(
+                namespace.lark_profile,
+                "--lark-profile or LARKFLOW_TARGET_LARK_PROFILE",
+            ),
+            identity=namespace.lark_identity,
+        )
+    service = WorkflowService(repository, directory=directory)
     templates = TemplateService(repository)
 
     if namespace.command == "template-create":
@@ -772,6 +788,15 @@ def _required(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} is required")
     return value.strip()
+
+
+def _env_boolean(name: str) -> bool:
+    value = os.environ.get(name, "false").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off", ""}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
 
 
 def _instance_payload(instance: Any) -> dict[str, Any]:
