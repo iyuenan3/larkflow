@@ -8,7 +8,14 @@ from typing import Any
 from larkflow.io.cli import LarkCliError, run_cli
 
 from .inbound import ExternalTaskState
-from .projection import ExternalTask, TaskProjectionRequest
+from .projection import (
+    DocumentProjectionRequest,
+    ExternalDocument,
+    ExternalMessage,
+    ExternalTask,
+    MessageProjectionRequest,
+    TaskProjectionRequest,
+)
 
 
 class CliFeishuTaskProjection:
@@ -184,6 +191,146 @@ class CliFeishuTaskReader:
             assignee_ids=tuple(assignees),
             completed_assignee_ids=tuple(completed),
         )
+
+
+class CliFeishuMessageProjection:
+    """Send direct and chat messages as the central Feishu application."""
+
+    def __init__(
+        self,
+        *,
+        profile: str,
+        identity: str = "bot",
+        executable: str = "lark-cli",
+        runner: Callable[..., dict[str, Any]] = run_cli,
+    ) -> None:
+        if not profile.strip():
+            raise ValueError("Feishu lark-cli profile is required")
+        if identity != "bot":
+            raise ValueError("Target IM projection requires bot identity")
+        self.profile = profile
+        self.identity = identity
+        self.executable = executable
+        self.runner = runner
+
+    def send_message(self, request: MessageProjectionRequest) -> ExternalMessage:
+        data = self._send(
+            recipient_flag="--user-id",
+            recipient=request.recipient_person_id,
+            text=request.text,
+            idempotency_key=request.idempotency_key,
+        )
+        return ExternalMessage(message_id=_message_id(data))
+
+    def send_chat_message(
+        self,
+        *,
+        chat_id: str,
+        text: str,
+        idempotency_key: str,
+    ) -> str:
+        data = self._send(
+            recipient_flag="--chat-id",
+            recipient=chat_id,
+            text=text,
+            idempotency_key=idempotency_key,
+        )
+        return _message_id(data)
+
+    def _send(
+        self,
+        *,
+        recipient_flag: str,
+        recipient: str,
+        text: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        if not recipient.strip() or not text.strip() or not idempotency_key.strip():
+            raise ValueError("Feishu message recipient, text, and key are required")
+        return self.runner(
+            [
+                self.executable,
+                "--profile",
+                self.profile,
+                "im",
+                "+messages-send",
+                recipient_flag,
+                recipient,
+                "--text",
+                text,
+                "--idempotency-key",
+                idempotency_key,
+                "--as",
+                self.identity,
+                "--json",
+            ]
+        )
+
+
+class CliFeishuDocumentProjection:
+    """Create a compact completion document as the central application."""
+
+    def __init__(
+        self,
+        *,
+        profile: str,
+        identity: str = "bot",
+        executable: str = "lark-cli",
+        runner: Callable[..., dict[str, Any]] = run_cli,
+    ) -> None:
+        if not profile.strip():
+            raise ValueError("Feishu lark-cli profile is required")
+        if identity != "bot":
+            raise ValueError("Target document projection requires bot identity")
+        self.profile = profile
+        self.identity = identity
+        self.executable = executable
+        self.runner = runner
+
+    def create_document(
+        self,
+        request: DocumentProjectionRequest,
+    ) -> ExternalDocument:
+        if not request.content_xml.strip():
+            raise ValueError("Feishu document content is required")
+        data = self.runner(
+            [
+                self.executable,
+                "--profile",
+                self.profile,
+                "docs",
+                "+create",
+                "--content",
+                request.content_xml,
+                "--as",
+                self.identity,
+                "--json",
+            ]
+        )
+        document = data.get("document")
+        if not isinstance(document, dict):
+            nested = data.get("data")
+            document = nested.get("document") if isinstance(nested, dict) else None
+        if not isinstance(document, dict):
+            raise ValueError("lark-cli docs create returned no document")
+        document_id = document.get("document_id")
+        if not isinstance(document_id, str) or not document_id.strip():
+            raise ValueError("lark-cli docs create returned no document_id")
+        url = document.get("url")
+        return ExternalDocument(
+            document_id=document_id,
+            url=url if isinstance(url, str) and url else None,
+        )
+
+
+def _message_id(data: dict[str, Any]) -> str:
+    message_id = data.get("message_id")
+    if not isinstance(message_id, str):
+        nested = data.get("data")
+        message_id = nested.get("message_id") if isinstance(nested, dict) else None
+    if not isinstance(message_id, str) or not message_id.strip():
+        raise ValueError("lark-cli message send returned no message_id")
+    return message_id
 
 
 def _optional_text(value: Any) -> str | None:

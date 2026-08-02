@@ -90,6 +90,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0005_template_lifecycle",
         "0006_inbox_verification_exhaustion",
         "0007_edge_devices",
+        "0008_im_commands",
     ]
     sql = migrations[0][1]
     for table in (
@@ -117,6 +118,9 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "CREATE TABLE workflow_edge_devices" in migrations[6][1]
     assert "CREATE TABLE workflow_edge_events" in migrations[6][1]
     assert "workflow_edge_events_append_only" in migrations[6][1]
+    assert "CREATE TABLE workflow_im_commands" in migrations[7][1]
+    assert "workflow_im_command_claimable_idx" in migrations[7][1]
+    assert "workflow_im_reply_claimable_idx" in migrations[7][1]
 
 
 def test_in_memory_repository_is_tenant_scoped():

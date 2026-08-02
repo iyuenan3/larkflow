@@ -44,6 +44,13 @@ class ProjectionLoopSummary:
     published: int = 0
     tasks_created: int = 0
     tasks_completed: int = 0
+    messages_sent: int = 0
+    documents_created: int = 0
+    im_verified: int = 0
+    im_verification_rejected: int = 0
+    im_verification_failed: int = 0
+    im_replies_sent: int = 0
+    im_replies_failed: int = 0
     noops: int = 0
     failed: int = 0
 
@@ -58,6 +65,8 @@ class ProjectionWorkerLoop:
         settings: WorkerLoopSettings | None = None,
         reconcile_batch_size: int = 100,
         completion_poller: TaskCompletionPoller | None = None,
+        im_verification_worker: Any | None = None,
+        im_reply_worker: Any | None = None,
         completion_poll_seconds: float = 30.0,
         monotonic: Callable[[], float] | None = None,
         log: LogEvent | None = None,
@@ -70,6 +79,8 @@ class ProjectionWorkerLoop:
         self.settings = settings or WorkerLoopSettings()
         self.reconcile_batch_size = reconcile_batch_size
         self.completion_poller = completion_poller
+        self.im_verification_worker = im_verification_worker
+        self.im_reply_worker = im_reply_worker
         self.completion_poll_seconds = completion_poll_seconds
         self.monotonic = monotonic or time.monotonic
         self.log = log or (lambda _event, _fields: None)
@@ -100,6 +111,13 @@ class ProjectionWorkerLoop:
             "published": 0,
             "tasks_created": 0,
             "tasks_completed": 0,
+            "messages_sent": 0,
+            "documents_created": 0,
+            "im_verified": 0,
+            "im_verification_rejected": 0,
+            "im_verification_failed": 0,
+            "im_replies_sent": 0,
+            "im_replies_failed": 0,
             "noops": 0,
             "failed": 0,
         }
@@ -129,6 +147,52 @@ class ProjectionWorkerLoop:
             )
         next_completion_poll = self.monotonic()
         while not stop_event.is_set():
+            if self.im_verification_worker is not None:
+                try:
+                    verification = self.im_verification_worker.run_once()
+                except Exception as exc:
+                    totals["im_verification_failed"] += 1
+                    self.log(
+                        "im_verification_tick_failed",
+                        {"error_type": type(exc).__name__, "error": str(exc)},
+                    )
+                else:
+                    totals["im_verified"] += verification.verified
+                    totals["im_verification_rejected"] += verification.rejected
+                    totals["im_verification_failed"] += verification.failed
+                    if verification.claimed or verification.errors:
+                        self.log(
+                            "im_verification_tick",
+                            {
+                                "claimed": verification.claimed,
+                                "verified": verification.verified,
+                                "rejected": verification.rejected,
+                                "failed": verification.failed,
+                                "errors": list(verification.errors),
+                            },
+                        )
+            if self.im_reply_worker is not None:
+                try:
+                    replies = self.im_reply_worker.run_once()
+                except Exception as exc:
+                    totals["im_replies_failed"] += 1
+                    self.log(
+                        "im_reply_tick_failed",
+                        {"error_type": type(exc).__name__, "error": str(exc)},
+                    )
+                else:
+                    totals["im_replies_sent"] += replies.sent
+                    totals["im_replies_failed"] += replies.failed
+                    if replies.claimed or replies.errors:
+                        self.log(
+                            "im_reply_tick",
+                            {
+                                "claimed": replies.claimed,
+                                "sent": replies.sent,
+                                "failed": replies.failed,
+                                "errors": list(replies.errors),
+                            },
+                        )
             poll_now = self.monotonic()
             if (
                 self.completion_poller is not None
@@ -197,6 +261,8 @@ class ProjectionWorkerLoop:
             "published",
             "tasks_created",
             "tasks_completed",
+            "messages_sent",
+            "documents_created",
             "noops",
             "failed",
         ):
@@ -229,6 +295,8 @@ class ProjectionWorkerLoop:
             "published": report.published,
             "tasks_created": report.tasks_created,
             "tasks_completed": report.tasks_completed,
+            "messages_sent": report.messages_sent,
+            "documents_created": report.documents_created,
             "noops": report.noops,
             "failed": report.failed,
             "errors": list(report.errors),

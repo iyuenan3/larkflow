@@ -7,7 +7,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from larkflow.workflow import (
+    ExternalDocument,
+    ExternalMessage,
     ExternalTask,
+    FEISHU_DOCUMENT_KIND,
+    FEISHU_INSTANCE_MESSAGE_KIND,
+    FEISHU_MESSAGE_KIND,
     FEISHU_TASK_KIND,
     InMemoryWorkflowRepository,
     InstanceSnapshot,
@@ -69,6 +74,27 @@ class RecordingTasks:
         self.tasks = {
             key: task for key, task in self.tasks.items() if task.guid != task_guid
         }
+
+
+class RecordingMessages:
+    def __init__(self) -> None:
+        self.requests = []
+
+    def send_message(self, request):
+        self.requests.append(request)
+        return ExternalMessage(message_id=f"message-{len(self.requests)}")
+
+
+class RecordingDocuments:
+    def __init__(self) -> None:
+        self.requests = []
+
+    def create_document(self, request):
+        self.requests.append(request)
+        return ExternalDocument(
+            document_id="document-1",
+            url="https://example.invalid/docs/document-1",
+        )
 
 
 def human_snapshot() -> InstanceSnapshot:
@@ -393,6 +419,90 @@ def test_non_human_projection_events_are_published_without_external_io():
     assert report.noops == 1
     assert tasks.create_requests == []
     assert repository.projection_records(TENANT) == ()
+
+
+def test_automated_result_and_completed_instance_project_to_im_and_doc():
+    clock = Clock()
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=clock)
+    service.create_draft(
+        instance_id="instance_outputs",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=InstanceSnapshot(
+            goal="Produce a reviewed summary",
+            nodes=(
+                NodeSpec(
+                    "draft",
+                    "Draft summary",
+                    "person_owner",
+                    "agent",
+                    work={
+                        "objective": "Draft the summary",
+                        "inputs": [],
+                        "outputs": [{"id": "content", "type": "document"}],
+                        "acceptance": ["A summary exists"],
+                        "agent": {
+                            "kind": "llm.generate",
+                            "model_role": "default",
+                            "instructions": "Write the summary",
+                        },
+                    },
+                ),
+            ),
+        ),
+    )
+    service.confirm_draft(TENANT, "instance_outputs", actor_person_id="person_owner")
+    messages = RecordingMessages()
+    documents = RecordingDocuments()
+    worker = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        RecordingTasks(),
+        message_adapter=messages,
+        document_adapter=documents,
+        tenant_id=TENANT,
+        worker_id="projection_1",
+        clock=clock,
+    )
+    assert worker.run_once().noops == 1
+    activation = service.dispatch_due(
+        TENANT,
+        "instance_outputs",
+        worker_id="runtime_1",
+    )[0]
+    service.complete_automated(
+        TENANT,
+        "instance_outputs",
+        "draft",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        claim_token=activation.claim_token or "",
+        worker_id="runtime_1",
+        result={"content": "A complete summary"},
+    )
+
+    report = worker.run_once()
+
+    assert report.messages_sent == 2
+    assert report.documents_created == 1
+    assert any("A complete summary" in request.text for request in messages.requests)
+    assert any("汇总文档" in request.text for request in messages.requests)
+    assert "<title>Produce a reviewed summary</title>" in documents.requests[0].content_xml
+    node = service.get(TENANT, "instance_outputs").nodes["draft"]
+    records = {
+        record.kind: record
+        for record in repository.projection_records(TENANT)
+        if record.node_instance_id == node.id
+    }
+    assert set(records) == {
+        FEISHU_MESSAGE_KIND,
+        FEISHU_DOCUMENT_KIND,
+        FEISHU_INSTANCE_MESSAGE_KIND,
+    }
+    assert worker.run_once().claimed == 0
 
 
 def test_projection_worker_does_not_claim_events_owned_by_other_consumers():

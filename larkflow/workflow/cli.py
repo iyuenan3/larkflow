@@ -32,12 +32,26 @@ from .executors import (
     LLMAgentExecutor,
     ToolExecutorRouter,
 )
-from .feishu import CliFeishuTaskProjection, CliFeishuTaskReader
+from .feishu import (
+    CliFeishuDocumentProjection,
+    CliFeishuMessageProjection,
+    CliFeishuTaskProjection,
+    CliFeishuTaskReader,
+)
+from .im_commands import (
+    IMCommandVerificationWorker,
+    IMCommandWorker,
+    IMReplyWorker,
+)
 from .inbound import TaskVerificationWorker, WorkflowInboundWorker
 from .inbound_daemon import InboundWorkerLoop, VerificationWorkerLoop
 from .migrate import apply_migrations, postgres_connection_factory, verify_migrations
 from .model import ExecutorKind, QualityResult, QualityVerdict
-from .postgres import PostgresWorkflowInbox, PostgresWorkflowRepository
+from .postgres import (
+    PostgresIMCommandStore,
+    PostgresWorkflowInbox,
+    PostgresWorkflowRepository,
+)
 from .projection import WorkflowProjectionWorker
 from .projection_daemon import ProjectionWorkerLoop
 from .runner import NodeRunner
@@ -557,6 +571,61 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             profile=lark_profile,
             identity=namespace.lark_identity,
         )
+        enable_im_commands = _env_boolean("LARKFLOW_TARGET_ENABLE_IM_COMMANDS")
+        enable_im_projection = _env_boolean(
+            "LARKFLOW_TARGET_ENABLE_IM_PROJECTION"
+        )
+        enable_doc_projection = _env_boolean(
+            "LARKFLOW_TARGET_ENABLE_DOC_PROJECTION"
+        )
+        message_adapter = (
+            CliFeishuMessageProjection(
+                profile=lark_profile,
+                identity=namespace.lark_identity,
+            )
+            if enable_im_commands or enable_im_projection
+            else None
+        )
+        document_adapter = (
+            CliFeishuDocumentProjection(
+                profile=lark_profile,
+                identity=namespace.lark_identity,
+            )
+            if enable_doc_projection
+            else None
+        )
+        im_store = PostgresIMCommandStore(connection_factory)
+        im_verification_worker = (
+            IMCommandVerificationWorker(
+                im_store,
+                CliFeishuDirectory(
+                    profile=lark_profile,
+                    identity=namespace.lark_identity,
+                ),
+                tenant_id=settings.tenant_id,
+                worker_id=f"{settings.worker_id}:im-verify",
+                claim_limit=settings.claim_limit,
+                claim_ttl=settings.claim_ttl,
+                retry_base=settings.retry_base,
+                retry_max=settings.retry_max,
+            )
+            if enable_im_commands
+            else None
+        )
+        im_reply_worker = (
+            IMReplyWorker(
+                im_store,
+                message_adapter,
+                tenant_id=settings.tenant_id,
+                worker_id=f"{settings.worker_id}:im-reply",
+                claim_limit=settings.claim_limit,
+                claim_ttl=settings.claim_ttl,
+                retry_base=settings.retry_base,
+                retry_max=settings.retry_max,
+            )
+            if enable_im_commands and message_adapter is not None
+            else None
+        )
         completion_poller = TaskCompletionPoller(
             repository,
             repository,
@@ -570,6 +639,8 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             repository,
             repository,
             task_adapter,
+            message_adapter=message_adapter if enable_im_projection else None,
+            document_adapter=document_adapter,
             tenant_id=settings.tenant_id,
             worker_id=settings.worker_id,
             claim_limit=settings.claim_limit,
@@ -578,8 +649,31 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             retry_max=settings.retry_max,
         )
         if namespace.command == "project-once":
+            if im_verification_worker is not None:
+                verification = im_verification_worker.run_once()
+                log(
+                    "im_verification_tick",
+                    {
+                        "claimed": verification.claimed,
+                        "verified": verification.verified,
+                        "rejected": verification.rejected,
+                        "failed": verification.failed,
+                        "errors": list(verification.errors),
+                    },
+                )
             report = worker.run_once()
             log("projection_tick", ProjectionWorkerLoop._report_fields(report))
+            if im_reply_worker is not None:
+                replies = im_reply_worker.run_once()
+                log(
+                    "im_reply_tick",
+                    {
+                        "claimed": replies.claimed,
+                        "sent": replies.sent,
+                        "failed": replies.failed,
+                        "errors": list(replies.errors),
+                    },
+                )
             return int(bool(report.errors))
         if namespace.command == "reconcile-projections":
             report = worker.reconcile_all(
@@ -618,6 +712,9 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 "idle_max_seconds": settings.loop.idle_max_seconds,
                 "lark_profile": namespace.lark_profile,
                 "lark_identity": namespace.lark_identity,
+                "im_commands_enabled": enable_im_commands,
+                "im_projection_enabled": enable_im_projection,
+                "doc_projection_enabled": enable_doc_projection,
             },
         )
         ProjectionWorkerLoop(
@@ -625,6 +722,8 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             settings=settings.loop,
             reconcile_batch_size=settings.reconcile_batch_size,
             completion_poller=completion_poller,
+            im_verification_worker=im_verification_worker,
+            im_reply_worker=im_reply_worker,
             completion_poll_seconds=settings.completion_poll_seconds,
             log=log,
         ).run(stop_event)
@@ -654,7 +753,31 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
         executors=executor_registry,
         candidate_limit=settings.candidate_limit,
     )
+    enable_im_commands = _env_boolean("LARKFLOW_TARGET_ENABLE_IM_COMMANDS")
+    im_command_worker = (
+        IMCommandWorker(
+            PostgresIMCommandStore(connection_factory),
+            service,
+            templates,
+            tenant_id=settings.tenant_id,
+            worker_id=f"{settings.worker_id}:im-command",
+        )
+        if enable_im_commands
+        else None
+    )
     if namespace.command == "run-once":
+        if im_command_worker is not None:
+            command_report = im_command_worker.run_once()
+            log(
+                "im_command_tick",
+                {
+                    "claimed": command_report.claimed,
+                    "processed": command_report.processed,
+                    "rejected": command_report.rejected,
+                    "failed": command_report.failed,
+                    "errors": list(command_report.errors),
+                },
+            )
         report = worker.run_once()
         log("worker_tick", WorkflowWorkerLoop._report_fields(report))
         return int(bool(report.errors))
@@ -671,9 +794,15 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             "idle_min_seconds": settings.loop.idle_min_seconds,
             "idle_max_seconds": settings.loop.idle_max_seconds,
             "executors": [kind.value for kind in executor_registry],
+            "im_commands_enabled": enable_im_commands,
         },
     )
-    WorkflowWorkerLoop(worker, settings=settings.loop, log=log).run(stop_event)
+    WorkflowWorkerLoop(
+        worker,
+        im_command_worker=im_command_worker,
+        settings=settings.loop,
+        log=log,
+    ).run(stop_event)
     return 0
 
 

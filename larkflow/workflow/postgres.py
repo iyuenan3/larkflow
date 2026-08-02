@@ -21,6 +21,13 @@ from .inbound import (
     task_state_from_dict,
     task_state_to_dict,
 )
+from .im_commands import (
+    IMCommandClaim,
+    IMCommandSignal,
+    IMReplyClaim,
+    InvalidIMCommandClaimError,
+    _reply_key,
+)
 from .model import (
     AttemptStatus,
     ExecutorKind,
@@ -1476,3 +1483,444 @@ class PostgresWorkflowInbox:
             source=row["source"],
             event_type=row["event_type"],
         )
+
+
+class PostgresIMCommandStore:
+    """Durable IM command and reply queue with split credential authority."""
+
+    def __init__(self, connection_factory: ConnectionFactory) -> None:
+        self.connection_factory = connection_factory
+
+    def append_im_command(self, event: IMCommandSignal) -> bool:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO workflow_im_commands (
+                    tenant_id, id, message_id, chat_id, sender_person_id,
+                    text, available_at, occurred_at, received_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                RETURNING id
+                """,
+                (
+                    event.tenant_id,
+                    event.id,
+                    event.message_id,
+                    event.chat_id,
+                    event.sender_person_id,
+                    event.text,
+                    event.received_at,
+                    event.occurred_at,
+                    event.received_at,
+                ),
+            ).fetchone()
+        return row is not None
+
+    def claim_im_verification(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[IMCommandClaim, ...]:
+        return self._claim_commands(
+            tenant_id,
+            worker_id=worker_id,
+            now=now,
+            limit=limit,
+            claim_ttl=claim_ttl,
+            stage="verification",
+        )
+
+    def claim_im_commands(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[IMCommandClaim, ...]:
+        return self._claim_commands(
+            tenant_id,
+            worker_id=worker_id,
+            now=now,
+            limit=limit,
+            claim_ttl=claim_ttl,
+            stage="processing",
+        )
+
+    def _claim_commands(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+        stage: str,
+    ) -> tuple[IMCommandClaim, ...]:
+        self._validate_claim(worker_id, limit, claim_ttl)
+        if stage == "verification":
+            active = "verifying"
+            predicate = """
+                (status = 'pending' AND available_at <= %s)
+                OR (
+                    status = 'failed' AND failure_stage = 'verification'
+                    AND available_at <= %s
+                )
+                OR (status = 'verifying' AND claim_expires_at <= %s)
+            """
+        else:
+            active = "processing"
+            predicate = """
+                (status = 'verified' AND available_at <= %s)
+                OR (
+                    status = 'failed' AND failure_stage = 'processing'
+                    AND available_at <= %s
+                )
+                OR (status = 'processing' AND claim_expires_at <= %s)
+            """
+        token = secrets.token_urlsafe(24)
+        expires_at = now + claim_ttl
+        sql = f"""
+            WITH selected AS (
+                SELECT tenant_id, id
+                FROM workflow_im_commands
+                WHERE tenant_id = %s AND ({predicate})
+                ORDER BY available_at, received_at, id
+                FOR UPDATE SKIP LOCKED
+                LIMIT %s
+            )
+            UPDATE workflow_im_commands AS command
+            SET status = %s,
+                attempt_count = command.attempt_count + 1,
+                claimed_by = %s,
+                claim_token = %s,
+                claim_expires_at = %s
+            FROM selected
+            WHERE command.tenant_id = selected.tenant_id
+              AND command.id = selected.id
+            RETURNING command.*
+        """
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                rows = connection.execute(
+                    sql,
+                    (
+                        tenant_id,
+                        now,
+                        now,
+                        now,
+                        limit,
+                        active,
+                        worker_id,
+                        token,
+                        expires_at,
+                    ),
+                ).fetchall()
+        return tuple(
+            IMCommandClaim(
+                event=self._command_from_row(row),
+                claim_token=token,
+                attempt_count=int(row["attempt_count"]),
+            )
+            for row in rows
+        )
+
+    def mark_im_verified(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        now: datetime,
+    ) -> None:
+        self._settle_command(
+            """
+            UPDATE workflow_im_commands
+            SET status = 'verified', verified_at = %s, available_at = %s,
+                failure_stage = NULL, last_error = NULL,
+                claimed_by = NULL, claim_token = NULL,
+                claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND status = 'verifying' AND claim_token = %s
+            RETURNING id
+            """,
+            (now, now, tenant_id, event_id, claim_token),
+            event_id,
+        )
+
+    def mark_im_verification_failed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        self._settle_command(
+            """
+            UPDATE workflow_im_commands
+            SET status = 'failed', available_at = %s,
+                failure_stage = 'verification', last_error = %s,
+                claimed_by = NULL, claim_token = NULL,
+                claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND status = 'verifying' AND claim_token = %s
+            RETURNING id
+            """,
+            (retry_at, error, tenant_id, event_id, claim_token),
+            event_id,
+        )
+
+    def mark_im_verification_rejected(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        outcome: str,
+        reply_text: str,
+        now: datetime,
+    ) -> None:
+        status = "exhausted" if outcome.startswith("exhausted:") else "processed"
+        self._settle_command(
+            """
+            UPDATE workflow_im_commands
+            SET status = %s, processed_at = %s, outcome = %s,
+                failure_stage = 'verification', reply_text = %s,
+                reply_status = 'pending', reply_available_at = %s,
+                claimed_by = NULL, claim_token = NULL,
+                claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND status = 'verifying' AND claim_token = %s
+            RETURNING id
+            """,
+            (
+                status,
+                now,
+                outcome,
+                reply_text,
+                now,
+                tenant_id,
+                event_id,
+                claim_token,
+            ),
+            event_id,
+        )
+
+    def mark_im_processed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        outcome: str,
+        instance_id: str | None,
+        reply_text: str,
+        now: datetime,
+    ) -> None:
+        self._settle_command(
+            """
+            UPDATE workflow_im_commands
+            SET status = 'processed', processed_at = %s, outcome = %s,
+                instance_id = %s, failure_stage = NULL, last_error = NULL,
+                reply_text = %s, reply_status = 'pending',
+                reply_available_at = %s,
+                claimed_by = NULL, claim_token = NULL,
+                claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND status = 'processing' AND claim_token = %s
+            RETURNING id
+            """,
+            (
+                now,
+                outcome,
+                instance_id,
+                reply_text,
+                now,
+                tenant_id,
+                event_id,
+                claim_token,
+            ),
+            event_id,
+        )
+
+    def mark_im_failed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        self._settle_command(
+            """
+            UPDATE workflow_im_commands
+            SET status = 'failed', available_at = %s,
+                failure_stage = 'processing', last_error = %s,
+                claimed_by = NULL, claim_token = NULL,
+                claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND status = 'processing' AND claim_token = %s
+            RETURNING id
+            """,
+            (retry_at, error, tenant_id, event_id, claim_token),
+            event_id,
+        )
+
+    def claim_im_replies(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[IMReplyClaim, ...]:
+        self._validate_claim(worker_id, limit, claim_ttl)
+        token = secrets.token_urlsafe(24)
+        expires_at = now + claim_ttl
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                rows = connection.execute(
+                    """
+                    WITH selected AS (
+                        SELECT tenant_id, id
+                        FROM workflow_im_commands
+                        WHERE tenant_id = %s
+                          AND (
+                            (reply_status IN ('pending', 'failed')
+                                AND reply_available_at <= %s)
+                            OR (
+                                reply_status = 'sending'
+                                AND reply_claim_expires_at <= %s
+                            )
+                          )
+                        ORDER BY reply_available_at, processed_at, id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT %s
+                    )
+                    UPDATE workflow_im_commands AS command
+                    SET reply_status = 'sending',
+                        reply_attempt_count = command.reply_attempt_count + 1,
+                        reply_claimed_by = %s,
+                        reply_claim_token = %s,
+                        reply_claim_expires_at = %s
+                    FROM selected
+                    WHERE command.tenant_id = selected.tenant_id
+                      AND command.id = selected.id
+                    RETURNING command.*
+                    """,
+                    (
+                        tenant_id,
+                        now,
+                        now,
+                        limit,
+                        worker_id,
+                        token,
+                        expires_at,
+                    ),
+                ).fetchall()
+        return tuple(
+            IMReplyClaim(
+                event_id=row["id"],
+                tenant_id=row["tenant_id"],
+                chat_id=row["chat_id"],
+                text=row["reply_text"],
+                idempotency_key=_reply_key(row["id"]),
+                claim_token=token,
+                attempt_count=int(row["reply_attempt_count"]),
+            )
+            for row in rows
+        )
+
+    def mark_im_reply_sent(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        external_id: str,
+        now: datetime,
+    ) -> None:
+        self._settle_command(
+            """
+            UPDATE workflow_im_commands
+            SET reply_status = 'sent', reply_external_id = %s,
+                reply_sent_at = %s, reply_last_error = NULL,
+                reply_claimed_by = NULL, reply_claim_token = NULL,
+                reply_claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND reply_status = 'sending' AND reply_claim_token = %s
+            RETURNING id
+            """,
+            (external_id, now, tenant_id, event_id, claim_token),
+            event_id,
+        )
+
+    def mark_im_reply_failed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        self._settle_command(
+            """
+            UPDATE workflow_im_commands
+            SET reply_status = 'failed', reply_available_at = %s,
+                reply_last_error = %s,
+                reply_claimed_by = NULL, reply_claim_token = NULL,
+                reply_claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND reply_status = 'sending' AND reply_claim_token = %s
+            RETURNING id
+            """,
+            (retry_at, error, tenant_id, event_id, claim_token),
+            event_id,
+        )
+
+    def _settle_command(
+        self,
+        sql: str,
+        parameters: tuple[Any, ...],
+        event_id: str,
+    ) -> None:
+        with self.connection_factory() as connection:
+            row = connection.execute(sql, parameters).fetchone()
+        if row is None:
+            raise InvalidIMCommandClaimError(event_id)
+
+    @staticmethod
+    def _command_from_row(row: dict[str, Any]) -> IMCommandSignal:
+        return IMCommandSignal(
+            id=row["id"],
+            tenant_id=row["tenant_id"],
+            message_id=row["message_id"],
+            chat_id=row["chat_id"],
+            sender_person_id=row["sender_person_id"],
+            text=row["text"],
+            occurred_at=row["occurred_at"],
+            received_at=row["received_at"],
+        )
+
+    @staticmethod
+    def _validate_claim(
+        worker_id: str,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> None:
+        if not worker_id.strip():
+            raise ValueError("IM worker_id is required")
+        if limit < 1:
+            raise ValueError("IM claim_limit must be positive")
+        if claim_ttl <= timedelta(0):
+            raise ValueError("IM claim_ttl must be positive")

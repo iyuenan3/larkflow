@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
+import html
 import json
 from typing import Any, Protocol
 from uuid import uuid4
@@ -15,11 +16,17 @@ from .serde import to_json_value
 
 
 FEISHU_TASK_KIND = "feishu_task"
+FEISHU_MESSAGE_KIND = "feishu_message"
+FEISHU_DOCUMENT_KIND = "feishu_document"
+FEISHU_INSTANCE_MESSAGE_KIND = "feishu_instance_message"
 PROJECTION_EVENTS = {
     "node.projection_create_requested",
     "node.projection_sync_requested",
+    "instance.projection_completed_requested",
 }
 MAX_DEPENDENCY_CONTEXT_CHARS = 6_000
+MAX_MESSAGE_RESULT_CHARS = 2_000
+MAX_DOCUMENT_RESULT_CHARS = 12_000
 
 
 @dataclass(frozen=True)
@@ -49,6 +56,17 @@ class ExternalTask:
 
 
 @dataclass(frozen=True)
+class ExternalMessage:
+    message_id: str
+
+
+@dataclass(frozen=True)
+class ExternalDocument:
+    document_id: str
+    url: str | None = None
+
+
+@dataclass(frozen=True)
 class TaskProjectionRequest:
     tenant_id: str
     instance_id: str
@@ -73,11 +91,39 @@ class TaskProjectionAdapter(Protocol):
 
 
 @dataclass(frozen=True)
+class MessageProjectionRequest:
+    recipient_person_id: str
+    text: str
+    idempotency_key: str
+
+
+class MessageProjectionAdapter(Protocol):
+    def send_message(self, request: MessageProjectionRequest) -> ExternalMessage:
+        ...
+
+
+@dataclass(frozen=True)
+class DocumentProjectionRequest:
+    title: str
+    content_xml: str
+
+
+class DocumentProjectionAdapter(Protocol):
+    def create_document(
+        self,
+        request: DocumentProjectionRequest,
+    ) -> ExternalDocument:
+        ...
+
+
+@dataclass(frozen=True)
 class ProjectionWorkerReport:
     claimed: int = 0
     published: int = 0
     tasks_created: int = 0
     tasks_completed: int = 0
+    messages_sent: int = 0
+    documents_created: int = 0
     noops: int = 0
     failed: int = 0
     errors: tuple[str, ...] = field(default_factory=tuple)
@@ -105,6 +151,8 @@ class WorkflowProjectionWorker:
         outbox: OutboxStore,
         projections: ProjectionStore,
         task_adapter: TaskProjectionAdapter,
+        message_adapter: MessageProjectionAdapter | None = None,
+        document_adapter: DocumentProjectionAdapter | None = None,
         *,
         tenant_id: str,
         worker_id: str,
@@ -129,6 +177,8 @@ class WorkflowProjectionWorker:
         self.outbox = outbox
         self.projections = projections
         self.task_adapter = task_adapter
+        self.message_adapter = message_adapter
+        self.document_adapter = document_adapter
         self.tenant_id = tenant_id
         self.worker_id = worker_id
         self.clock = clock or (lambda: datetime.now(timezone.utc))
@@ -151,6 +201,8 @@ class WorkflowProjectionWorker:
         published = 0
         tasks_created = 0
         tasks_completed = 0
+        messages_sent = 0
+        documents_created = 0
         noops = 0
         failed = 0
         errors = []
@@ -178,12 +230,16 @@ class WorkflowProjectionWorker:
             published += 1
             tasks_created += int(outcome.created)
             tasks_completed += int(outcome.completed)
+            messages_sent += int(outcome.message_sent)
+            documents_created += int(outcome.document_created)
             noops += int(outcome.noop)
         return ProjectionWorkerReport(
             claimed=len(claims),
             published=published,
             tasks_created=tasks_created,
             tasks_completed=tasks_completed,
+            messages_sent=messages_sent,
+            documents_created=documents_created,
             noops=noops,
             failed=failed,
             errors=tuple(errors),
@@ -277,12 +333,21 @@ class WorkflowProjectionWorker:
         )
 
     def _project(self, event: Any, *, now: datetime) -> _ProjectionOutcome:
-        if event.aggregate_type != "node_instance" or event.event_type not in PROJECTION_EVENTS:
+        if event.event_type not in PROJECTION_EVENTS:
             raise ValueError(f"unsupported projection event: {event.event_type}")
         instance_id = _text(event.payload.get("instance_id"), "instance_id")
+        instance = self.repository.get(self.tenant_id, instance_id)
+        if event.event_type == "instance.projection_completed_requested":
+            if (
+                event.aggregate_type != "workflow_instance"
+                or event.aggregate_id != instance.id
+            ):
+                raise ValueError("instance projection aggregate does not match")
+            return self._project_instance_completion(instance, now=now)
+        if event.aggregate_type != "node_instance":
+            raise ValueError("node projection requires node_instance aggregate")
         node_key = _text(event.payload.get("node_key"), "node_key")
         attempt_no = _positive_int(event.payload.get("attempt_no"), "attempt_no")
-        instance = self.repository.get(self.tenant_id, instance_id)
         node = instance.nodes[node_key]
         if node.id != event.aggregate_id:
             raise ValueError("projection event aggregate does not match the current node")
@@ -298,8 +363,45 @@ class WorkflowProjectionWorker:
         verify_external: bool = False,
     ) -> _ProjectionOutcome:
         node = instance.nodes[node_key]
-        if node.executor != ExecutorKind.HUMAN:
+        outcome = _ProjectionOutcome()
+        if node.executor == ExecutorKind.HUMAN:
+            outcome = self._project_task(
+                instance,
+                node_key,
+                attempt_no,
+                now=now,
+                verify_external=verify_external,
+            )
+        if (
+            not verify_external
+            and node.executor != ExecutorKind.HUMAN
+            and node.status in {
+                NodeStatus.DONE,
+                NodeStatus.FAILED,
+                NodeStatus.CANCELED,
+            }
+        ):
+            message_sent = self._project_node_message(
+                instance,
+                node_key,
+                attempt_no,
+                now=now,
+            )
+            outcome = outcome.merged(message_sent=message_sent)
+        if outcome == _ProjectionOutcome():
             return _ProjectionOutcome(noop=True)
+        return outcome
+
+    def _project_task(
+        self,
+        instance: WorkflowInstance,
+        node_key: str,
+        attempt_no: int,
+        *,
+        now: datetime,
+        verify_external: bool,
+    ) -> _ProjectionOutcome:
+        node = instance.nodes[node_key]
         if node.status in {NodeStatus.PENDING, NodeStatus.READY}:
             return _ProjectionOutcome(noop=True)
         instance.attempts[(node_key, attempt_no)]
@@ -396,6 +498,147 @@ class WorkflowProjectionWorker:
             completed=completed,
         )
 
+    def _project_node_message(
+        self,
+        instance: WorkflowInstance,
+        node_key: str,
+        attempt_no: int,
+        *,
+        now: datetime,
+    ) -> bool:
+        if self.message_adapter is None:
+            return False
+        node = instance.nodes[node_key]
+        existing = self.projections.get_projection(
+            self.tenant_id,
+            node.id,
+            attempt_no,
+            FEISHU_MESSAGE_KIND,
+        )
+        if existing is not None:
+            return False
+        request = self._node_message_request(instance, node_key, attempt_no)
+        external = self.message_adapter.send_message(request)
+        if not external.message_id.strip():
+            raise ValueError("Feishu message projection returned no message_id")
+        self.projections.save_projection(
+            ProjectionRecord(
+                id=self.id_factory(),
+                tenant_id=self.tenant_id,
+                instance_id=instance.id,
+                node_instance_id=node.id,
+                attempt_no=attempt_no,
+                kind=FEISHU_MESSAGE_KIND,
+                external_id=external.message_id,
+                idempotency_key=request.idempotency_key,
+                sync_version=node.version,
+                state={"node_status": node.status.value},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        return True
+
+    def _project_instance_completion(
+        self,
+        instance: WorkflowInstance,
+        *,
+        now: datetime,
+    ) -> _ProjectionOutcome:
+        if instance.status.value != "done":
+            return _ProjectionOutcome(noop=True)
+        node_key = _canonical_terminal_node(instance)
+        node = instance.nodes[node_key]
+        attempt_no = node.current_attempt_no
+        document = self.projections.get_projection(
+            self.tenant_id,
+            node.id,
+            attempt_no,
+            FEISHU_DOCUMENT_KIND,
+        )
+        document_created = False
+        if document is None and self.document_adapter is not None:
+            request = self._document_request(instance)
+            external = self.document_adapter.create_document(request)
+            if not external.document_id.strip():
+                raise ValueError("Feishu document projection returned no document_id")
+            document = ProjectionRecord(
+                id=self.id_factory(),
+                tenant_id=self.tenant_id,
+                instance_id=instance.id,
+                node_instance_id=node.id,
+                attempt_no=attempt_no,
+                kind=FEISHU_DOCUMENT_KIND,
+                external_id=external.document_id,
+                external_url=external.url,
+                idempotency_key=_projection_key(
+                    self.tenant_id,
+                    instance.id,
+                    FEISHU_DOCUMENT_KIND,
+                ),
+                sync_version=instance.version,
+                state={"instance_status": instance.status.value},
+                created_at=now,
+                updated_at=now,
+            )
+            self.projections.save_projection(document)
+            document_created = True
+
+        message_sent = False
+        if self.message_adapter is not None:
+            message = self.projections.get_projection(
+                self.tenant_id,
+                node.id,
+                attempt_no,
+                FEISHU_INSTANCE_MESSAGE_KIND,
+            )
+            if message is None:
+                url_line = (
+                    f"\n汇总文档：{document.external_url}"
+                    if document is not None and document.external_url
+                    else ""
+                )
+                request = MessageProjectionRequest(
+                    recipient_person_id=instance.owner_person_id,
+                    text=(
+                        f"流程已完成。\n实例：{instance.id}\n"
+                        f"目标：{instance.snapshot.goal}{url_line}"
+                    ),
+                    idempotency_key=_projection_key(
+                        self.tenant_id,
+                        instance.id,
+                        FEISHU_INSTANCE_MESSAGE_KIND,
+                    ),
+                )
+                external = self.message_adapter.send_message(request)
+                if not external.message_id.strip():
+                    raise ValueError(
+                        "Feishu instance message returned no message_id"
+                    )
+                self.projections.save_projection(
+                    ProjectionRecord(
+                        id=self.id_factory(),
+                        tenant_id=self.tenant_id,
+                        instance_id=instance.id,
+                        node_instance_id=node.id,
+                        attempt_no=attempt_no,
+                        kind=FEISHU_INSTANCE_MESSAGE_KIND,
+                        external_id=external.message_id,
+                        idempotency_key=request.idempotency_key,
+                        sync_version=instance.version,
+                        state={"instance_status": instance.status.value},
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+                message_sent = True
+        if not document_created and not message_sent:
+            return _ProjectionOutcome(noop=True)
+        return _ProjectionOutcome(
+            document_created=document_created,
+            message_sent=message_sent,
+        )
+
     def _recreate_task(
         self,
         instance: WorkflowInstance,
@@ -487,6 +730,94 @@ class WorkflowProjectionWorker:
             idempotency_key=f"lf-{digest}",
         )
 
+    def _node_message_request(
+        self,
+        instance: WorkflowInstance,
+        node_key: str,
+        attempt_no: int,
+    ) -> MessageProjectionRequest:
+        node = instance.nodes[node_key]
+        spec = instance.snapshot.node(node_key)
+        attempt = instance.attempts[(node_key, attempt_no)]
+        result = ""
+        if attempt.result is not None:
+            content = attempt.result.get("content")
+            if isinstance(content, str) and content.strip():
+                result = content.strip()
+            else:
+                result = json.dumps(
+                    to_json_value(attempt.result),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+        if len(result) > MAX_MESSAGE_RESULT_CHARS:
+            result = result[:MAX_MESSAGE_RESULT_CHARS].rstrip() + "\n[结果已截断]"
+        text = (
+            f"自动节点已{_node_status_label(node.status)}。\n"
+            f"流程：{instance.id}\n节点：{spec.title} ({node_key})"
+        )
+        if result:
+            text += f"\n\n结果：\n{result}"
+        return MessageProjectionRequest(
+            recipient_person_id=node.owner_person_id,
+            text=text,
+            idempotency_key=_projection_key(
+                self.tenant_id,
+                node.id,
+                str(attempt_no),
+                FEISHU_MESSAGE_KIND,
+            ),
+        )
+
+    def _document_request(
+        self,
+        instance: WorkflowInstance,
+    ) -> DocumentProjectionRequest:
+        sections = [
+            f"<title>{html.escape(instance.snapshot.goal or instance.id)}</title>",
+            '<callout emoji="✅" background-color="light-green" '
+            'border-color="green"><p>流程已完成，以下内容来自中央工作流记录。</p></callout>',
+            "<h1>流程信息</h1>",
+            f"<p><b>实例：</b>{html.escape(instance.id)}</p>",
+            f"<p><b>目标：</b>{html.escape(instance.snapshot.goal)}</p>",
+            "<h1>节点结果</h1>",
+        ]
+        for spec in instance.snapshot.nodes:
+            node = instance.nodes[spec.key]
+            attempt = instance.current_attempt(spec.key)
+            sections.append(
+                f"<h2>{html.escape(spec.title)} ({html.escape(spec.key)})</h2>"
+            )
+            sections.append(
+                f"<p><b>状态：</b>{html.escape(node.status.value)} "
+                f"<b>执行器：</b>{html.escape(node.executor.value)} "
+                f"<b>Owner：</b><cite type=\"user\" "
+                f"user-id=\"{html.escape(node.owner_person_id, quote=True)}\"></cite></p>"
+            )
+            if attempt.result is None:
+                continue
+            content = attempt.result.get("content")
+            rendered = (
+                content.strip()
+                if isinstance(content, str) and content.strip()
+                else json.dumps(
+                    to_json_value(attempt.result),
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            if len(rendered) > MAX_DOCUMENT_RESULT_CHARS:
+                rendered = (
+                    rendered[:MAX_DOCUMENT_RESULT_CHARS].rstrip()
+                    + "\n[结果已截断，完整值保存在流程记录中]"
+                )
+            sections.append(f"<p>{html.escape(rendered).replace(chr(10), '<br/>')}</p>")
+        return DocumentProjectionRequest(
+            title=instance.snapshot.goal or instance.id,
+            content_xml="".join(sections),
+        )
+
     def _retry_delay(self, attempt_count: int) -> timedelta:
         multiplier = 2 ** min(max(attempt_count - 1, 0), 10)
         return min(self.retry_max, self.retry_base * multiplier)
@@ -497,7 +828,48 @@ class _ProjectionOutcome:
     created: bool = False
     recreated: bool = False
     completed: bool = False
+    message_sent: bool = False
+    document_created: bool = False
     noop: bool = False
+
+    def merged(self, **changes: bool) -> _ProjectionOutcome:
+        values = {
+            "created": self.created,
+            "recreated": self.recreated,
+            "completed": self.completed,
+            "message_sent": self.message_sent,
+            "document_created": self.document_created,
+            "noop": self.noop,
+        }
+        values.update(changes)
+        if any(values[key] for key in values if key != "noop"):
+            values["noop"] = False
+        return _ProjectionOutcome(**values)
+
+
+def _projection_key(*parts: str) -> str:
+    digest = hashlib.sha256(":".join(parts).encode("utf-8")).hexdigest()[:44]
+    return f"lf-{digest}"
+
+
+def _canonical_terminal_node(instance: WorkflowInstance) -> str:
+    depended_on = {
+        dependency
+        for spec in instance.snapshot.nodes
+        for dependency in spec.deps
+    }
+    sinks = sorted(spec.key for spec in instance.snapshot.nodes if spec.key not in depended_on)
+    if not sinks:
+        raise ValueError("completed instance has no terminal node")
+    return sinks[0]
+
+
+def _node_status_label(status: NodeStatus) -> str:
+    return {
+        NodeStatus.DONE: "完成",
+        NodeStatus.FAILED: "失败",
+        NodeStatus.CANCELED: "取消",
+    }.get(status, status.value)
 
 
 def _repair_generation(state: Mapping[str, Any]) -> int:

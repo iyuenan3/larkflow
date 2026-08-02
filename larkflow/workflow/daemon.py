@@ -35,6 +35,10 @@ class WorkerLoopSummary:
     failed: int = 0
     conflicts: int = 0
     stale_results: int = 0
+    im_commands_claimed: int = 0
+    im_commands_processed: int = 0
+    im_commands_rejected: int = 0
+    im_commands_failed: int = 0
 
 
 class WorkflowWorkerLoop:
@@ -44,10 +48,12 @@ class WorkflowWorkerLoop:
         self,
         worker: WorkflowWorker,
         *,
+        im_command_worker: Any | None = None,
         settings: WorkerLoopSettings | None = None,
         log: LogEvent | None = None,
     ) -> None:
         self.worker = worker
+        self.im_command_worker = im_command_worker
         self.settings = settings or WorkerLoopSettings()
         self.log = log or (lambda _event, _fields: None)
 
@@ -63,8 +69,37 @@ class WorkflowWorkerLoop:
             "failed": 0,
             "conflicts": 0,
             "stale_results": 0,
+            "im_commands_claimed": 0,
+            "im_commands_processed": 0,
+            "im_commands_rejected": 0,
+            "im_commands_failed": 0,
         }
         while not stop_event.is_set():
+            if self.im_command_worker is not None:
+                try:
+                    command_report = self.im_command_worker.run_once()
+                except Exception as exc:
+                    totals["im_commands_failed"] += 1
+                    self.log(
+                        "im_command_tick_failed",
+                        {"error_type": type(exc).__name__, "error": str(exc)},
+                    )
+                else:
+                    totals["im_commands_claimed"] += command_report.claimed
+                    totals["im_commands_processed"] += command_report.processed
+                    totals["im_commands_rejected"] += command_report.rejected
+                    totals["im_commands_failed"] += command_report.failed
+                    if command_report.claimed or command_report.errors:
+                        self.log(
+                            "im_command_tick",
+                            {
+                                "claimed": command_report.claimed,
+                                "processed": command_report.processed,
+                                "rejected": command_report.rejected,
+                                "failed": command_report.failed,
+                                "errors": list(command_report.errors),
+                            },
+                        )
             try:
                 report = self.worker.run_once()
             except Exception as exc:

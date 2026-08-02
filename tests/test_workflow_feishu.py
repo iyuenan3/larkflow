@@ -5,8 +5,12 @@ import pytest
 
 from larkflow.io.cli import LarkCliError
 from larkflow.workflow import (
+    CliFeishuDocumentProjection,
+    CliFeishuMessageProjection,
     CliFeishuTaskProjection,
     CliFeishuTaskReader,
+    DocumentProjectionRequest,
+    MessageProjectionRequest,
     TaskProjectionRequest,
 )
 
@@ -163,3 +167,64 @@ def test_cli_task_reader_extracts_only_authorization_fields():
         "bot",
         "--json",
     ]
+
+
+def test_cli_message_projection_sends_as_bot_with_stable_key():
+    calls = []
+    adapter = CliFeishuMessageProjection(
+        profile="dev",
+        runner=lambda argv: calls.append(argv) or {"message_id": "message_1"},
+    )
+
+    message = adapter.send_message(
+        MessageProjectionRequest(
+            recipient_person_id="person_1",
+            text="Node completed",
+            idempotency_key="lf-message-key",
+        )
+    )
+
+    assert message.message_id == "message_1"
+    assert calls[0] == [
+        "lark-cli",
+        "--profile",
+        "dev",
+        "im",
+        "+messages-send",
+        "--user-id",
+        "person_1",
+        "--text",
+        "Node completed",
+        "--idempotency-key",
+        "lf-message-key",
+        "--as",
+        "bot",
+        "--json",
+    ]
+
+
+def test_cli_document_projection_extracts_nested_document_response():
+    calls = []
+    adapter = CliFeishuDocumentProjection(
+        profile="dev",
+        runner=lambda argv: calls.append(argv) or {
+            "data": {
+                "document": {
+                    "document_id": "document_1",
+                    "url": "https://example.invalid/docx/document_1",
+                }
+            }
+        },
+    )
+
+    document = adapter.create_document(
+        DocumentProjectionRequest(
+            title="Workflow result",
+            content_xml="<title>Workflow result</title><p>Done</p>",
+        )
+    )
+
+    assert document.document_id == "document_1"
+    assert document.url == "https://example.invalid/docx/document_1"
+    assert calls[0][-3:] == ["--as", "bot", "--json"]
+    assert calls[0][calls[0].index("--content") + 1].startswith("<title>")

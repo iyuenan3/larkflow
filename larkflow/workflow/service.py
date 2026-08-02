@@ -372,12 +372,12 @@ class WorkflowService:
             aggregate_version=expected_version + 1,
             now=now,
         )
-        outbox = self._completion_outbox(instance, node_key, now=now)
+        outbox = self._completion_outboxes(instance, node_key, now=now)
         self.repository.save(
             instance,
             expected_version=expected_version,
             audit_events=audit_events,
-            outbox_events=(outbox,),
+            outbox_events=outbox,
         )
         return self.repository.get(tenant_id, instance_id)
 
@@ -424,12 +424,12 @@ class WorkflowService:
             now=now,
             payload={"worker_id": worker_id},
         )
-        outbox = self._completion_outbox(instance, node_key, now=now)
+        outbox = self._completion_outboxes(instance, node_key, now=now)
         self.repository.save(
             instance,
             expected_version=expected_version,
             audit_events=audit_events,
-            outbox_events=(outbox,),
+            outbox_events=outbox,
         )
         return self.repository.get(tenant_id, instance_id)
 
@@ -523,12 +523,12 @@ class WorkflowService:
             attempt_no=attempt_no,
             payload={"worker_id": worker_id, "error_code": error_code},
         )
-        outbox = self._completion_outbox(instance, node_key, now=now)
+        outbox = self._completion_outboxes(instance, node_key, now=now)
         self.repository.save(
             instance,
             expected_version=expected_version,
             audit_events=(audit,),
-            outbox_events=(outbox,),
+            outbox_events=outbox,
         )
         return self.repository.get(tenant_id, instance_id)
 
@@ -609,15 +609,15 @@ class WorkflowService:
             now=now,
         )
 
-    def _completion_outbox(
+    def _completion_outboxes(
         self,
         instance: WorkflowInstance,
         node_key: str,
         *,
         now: datetime,
-    ) -> OutboxEvent:
+    ) -> tuple[OutboxEvent, ...]:
         node = instance.nodes[node_key]
-        return self._outbox(
+        events = [self._outbox(
             instance,
             event_type="node.projection_sync_requested",
             aggregate_type="node_instance",
@@ -630,7 +630,20 @@ class WorkflowService:
                 "status": node.status.value,
             },
             now=now,
-        )
+        )]
+        if instance.status == InstanceStatus.DONE:
+            events.append(
+                self._outbox(
+                    instance,
+                    event_type="instance.projection_completed_requested",
+                    aggregate_type="workflow_instance",
+                    aggregate_id=instance.id,
+                    aggregate_version=instance.version + 1,
+                    payload={"instance_id": instance.id},
+                    now=now,
+                )
+            )
+        return tuple(events)
 
     def _completion_audits(
         self,
