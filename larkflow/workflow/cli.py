@@ -25,7 +25,12 @@ from .config import (
     TargetRuntimeSettings,
 )
 from .daemon import WorkflowWorkerLoop
-from .executors import DevelopmentToolExecutor, LLMAgentExecutor
+from .executors import (
+    ContentCheckToolExecutor,
+    DevelopmentToolExecutor,
+    LLMAgentExecutor,
+    ToolExecutorRouter,
+)
 from .feishu import CliFeishuTaskProjection, CliFeishuTaskReader
 from .inbound import TaskVerificationWorker, WorkflowInboundWorker
 from .inbound_daemon import InboundWorkerLoop, VerificationWorkerLoop
@@ -86,6 +91,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--enable-development-executor",
         action="store_true",
         help="enable the deterministic development.echo Tool adapter",
+    )
+    parser.add_argument(
+        "--enable-content-check-executor",
+        action="store_true",
+        help="enable the deterministic content.check Tool adapter",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -613,6 +623,8 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
         settings = replace(settings, enable_development_executor=True)
     if namespace.enable_agent_executor:
         settings = replace(settings, enable_agent_executor=True)
+    if namespace.enable_content_check_executor:
+        settings = replace(settings, enable_content_check_executor=True)
     service = WorkflowService(
         repository,
         runner=NodeRunner(claim_ttl=settings.claim_ttl),
@@ -656,6 +668,7 @@ def _executors(
     log: JsonLogger | None = None,
 ) -> dict[ExecutorKind, AutomatedExecutor]:
     registry: dict[ExecutorKind, AutomatedExecutor] = {}
+    tool_adapters: list[object] = []
     if settings.enable_agent_executor:
         values = os.environ if environ is None else environ
         roles = load_llm_roles(dict(values))
@@ -693,7 +706,15 @@ def _executors(
             max_result_chars=settings.agent_max_result_chars,
         )
     if settings.enable_development_executor:
-        registry[ExecutorKind.TOOL] = DevelopmentToolExecutor()
+        tool_adapters.append(DevelopmentToolExecutor())
+    if settings.enable_content_check_executor:
+        tool_adapters.append(
+            ContentCheckToolExecutor(
+                max_source_chars=settings.content_check_max_chars,
+            )
+        )
+    if tool_adapters:
+        registry[ExecutorKind.TOOL] = ToolExecutorRouter(tool_adapters)
     return registry
 
 

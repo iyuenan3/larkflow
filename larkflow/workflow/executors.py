@@ -1,12 +1,12 @@
 """Explicitly scoped executor adapters for the Target runtime."""
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 import json
 import time
 from typing import Protocol
 
-from .model import ExecutorKind
+from .model import ExecutorKind, QualityResult, QualityVerdict
 from .runtime import ExecutionRequest, ExecutionResult
 from .serde import to_json_value
 
@@ -151,6 +151,186 @@ class LLMAgentExecutor:
             if parts:
                 return "\n\n".join(parts)
         return content.strip()
+
+
+class ToolExecutorRouter:
+    """Route a Tool request to exactly one explicitly accepting adapter."""
+
+    def __init__(self, adapters: Sequence[object]) -> None:
+        if not adapters:
+            raise ValueError("at least one Tool adapter is required")
+        for adapter in adapters:
+            if not callable(getattr(adapter, "accepts", None)):
+                raise TypeError("every Tool adapter must define accepts()")
+            if not callable(getattr(adapter, "execute", None)):
+                raise TypeError("every Tool adapter must define execute()")
+        self.adapters = tuple(adapters)
+
+    def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        matches = self._matches(executor=request.executor, work=request.work)
+        if not matches:
+            tool = request.work.get("tool")
+            raise ValueError(f"unsupported Tool contract: {tool!r}")
+        if len(matches) > 1:
+            tool = request.work.get("tool")
+            raise ValueError(f"ambiguous Tool contract: {tool!r}")
+        return matches[0].execute(request)
+
+    def accepts(self, *, executor: ExecutorKind, work: Mapping[str, object]) -> bool:
+        return bool(self._matches(executor=executor, work=work))
+
+    def _matches(
+        self,
+        *,
+        executor: ExecutorKind,
+        work: Mapping[str, object],
+    ) -> tuple[object, ...]:
+        return tuple(
+            adapter
+            for adapter in self.adapters
+            if adapter.accepts(executor=executor, work=work)
+        )
+
+
+class ContentCheckToolExecutor:
+    """Evaluate a bounded text contract without external side effects."""
+
+    KIND = "content.check"
+
+    def __init__(self, *, max_source_chars: int = 50_000) -> None:
+        if max_source_chars < 1:
+            raise ValueError("max_source_chars must be positive")
+        self.max_source_chars = max_source_chars
+
+    def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        tool = request.work.get("tool")
+        if not self.accepts(executor=request.executor, work=request.work):
+            raise ValueError(f"unsupported content check contract: {tool!r}")
+        assert isinstance(tool, Mapping)
+        args = tool.get("args") or {}
+        if not isinstance(args, Mapping):
+            raise ValueError("content.check args must be an object")
+
+        source = args.get("source")
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("content.check source is required")
+        source = source.strip()
+        found, content = self._lookup(request.input_snapshot, source)
+        if not found:
+            raise ValueError(f"content.check source was not found: {source}")
+        if not isinstance(content, str):
+            raise ValueError("content.check source must resolve to text")
+        if len(content) > self.max_source_chars:
+            raise ValueError(
+                f"content.check source exceeds {self.max_source_chars} characters"
+            )
+
+        required_terms = self._required_terms(args.get("required_terms", ()))
+        minimum = self._bounded_int(
+            args.get("min_chars", 1),
+            "min_chars",
+            minimum=0,
+            maximum=self.max_source_chars,
+        )
+        maximum = self._bounded_int(
+            args.get("max_chars", self.max_source_chars),
+            "max_chars",
+            minimum=1,
+            maximum=self.max_source_chars,
+        )
+        if minimum > maximum:
+            raise ValueError("content.check min_chars cannot exceed max_chars")
+        case_sensitive = args.get("case_sensitive", True)
+        if not isinstance(case_sensitive, bool):
+            raise ValueError("content.check case_sensitive must be a boolean")
+
+        candidate = content if case_sensitive else content.casefold()
+        missing = tuple(
+            term
+            for term in required_terms
+            if (term if case_sensitive else term.casefold()) not in candidate
+        )
+        length_ok = minimum <= len(content) <= maximum
+        passed = length_ok and not missing
+        evidence_parts = []
+        if missing:
+            evidence_parts.append("缺少必需内容：" + "、".join(missing))
+        if not length_ok:
+            evidence_parts.append(
+                f"正文长度 {len(content)}，要求 {minimum} 到 {maximum} 个字符"
+            )
+        if not evidence_parts:
+            evidence_parts.append(
+                f"正文长度 {len(content)}，且包含全部 {len(required_terms)} 项必需内容"
+            )
+        evidence = "；".join(evidence_parts)
+        suggestion = "" if passed else "补齐缺失内容或调整正文长度后交由节点 Owner 复核。"
+        verdict = QualityVerdict.PASS if passed else QualityVerdict.FAIL
+        return ExecutionResult(
+            result={
+                "verdict": verdict.value,
+                "evidence": evidence,
+                "suggestion": suggestion,
+                "source": source,
+                "char_count": len(content),
+                "missing_terms": list(missing),
+                "request_id": request.idempotency_key,
+            },
+            quality_result=QualityResult(
+                verdict=verdict,
+                evidence=evidence,
+                suggestion=suggestion,
+            ),
+        )
+
+    def accepts(self, *, executor: ExecutorKind, work: Mapping[str, object]) -> bool:
+        tool = work.get("tool")
+        return (
+            executor == ExecutorKind.TOOL
+            and isinstance(tool, Mapping)
+            and tool.get("kind") == self.KIND
+        )
+
+    @staticmethod
+    def _lookup(root: Mapping[str, object], path: str) -> tuple[bool, object]:
+        current: object = root
+        for part in path.split("."):
+            if not part or not isinstance(current, Mapping) or part not in current:
+                return False, None
+            current = current[part]
+        return True, current
+
+    @staticmethod
+    def _required_terms(value: object) -> tuple[str, ...]:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            raise ValueError("content.check required_terms must be a sequence")
+        if len(value) > 20:
+            raise ValueError("content.check accepts at most 20 required_terms")
+        terms = []
+        for term in value:
+            if not isinstance(term, str) or not term.strip():
+                raise ValueError("content.check required_terms must contain text")
+            normalized = term.strip()
+            if len(normalized) > 100:
+                raise ValueError("content.check required term exceeds 100 characters")
+            terms.append(normalized)
+        return tuple(terms)
+
+    @staticmethod
+    def _bounded_int(
+        value: object,
+        field_name: str,
+        *,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"content.check {field_name} must be an integer")
+        if value < minimum or value > maximum:
+            raise ValueError(
+                f"content.check {field_name} must be between {minimum} and {maximum}"
+            )
+        return value
 
 
 class DevelopmentToolExecutor:

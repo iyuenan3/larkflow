@@ -1,0 +1,98 @@
+schema_version: "0.2"
+template:
+  id: target_checked_agent_review
+  version: 1
+  name: Human-Agent-Tool-Human 摘要复核
+  status: draft
+  locked: false
+goal: 人工确认输入，Agent 生成草稿，确定性 Tool 检查，人类完成复核
+parameters:
+  brief:
+    type: text
+    required: true
+nodes:
+  - id: confirm_brief
+    title: 确认生成要求
+    owner_role: project_owner
+    executor: human
+    deps: []
+    work:
+      objective: 确认流程输入中的生成要求可以交给 Agent 处理
+      inputs:
+        - instance_inputs.brief
+      outputs:
+        - id: confirmation
+          type: data
+      acceptance:
+        - 已确认生成要求
+
+  - id: draft_summary
+    title: 生成执行摘要
+    owner_role: project_owner
+    executor: agent
+    deps:
+      - confirm_brief
+    work:
+      objective: 根据已确认的输入生成执行摘要
+      inputs:
+        - instance_inputs.brief
+        - dependencies.confirm_brief
+      outputs:
+        - id: content
+          type: text
+      acceptance:
+        - 正文包含结论和下一步
+        - 正文不虚构未提供的事实
+      agent:
+        kind: llm.generate
+        model_role: default
+        instructions: 用中文生成不超过 300 字的执行摘要，明确写出“结论”和“下一步”两个部分。
+
+  - id: check_summary
+    title: 检查摘要契约
+    owner_role: project_owner
+    executor: tool
+    deps:
+      - draft_summary
+    work:
+      objective: 在人工复核前确定性检查摘要的长度和必需内容
+      inputs:
+        - dependencies.draft_summary
+      outputs:
+        - id: verdict
+          type: data
+        - id: evidence
+          type: text
+        - id: suggestion
+          type: text
+      acceptance:
+        - 返回 pass 或 fail
+        - 返回可供节点 Owner 判断的证据和建议
+      tool:
+        kind: content.check
+        args:
+          source: dependencies.draft_summary.content
+          required_terms:
+            - 结论
+            - 下一步
+          min_chars: 20
+          max_chars: 1200
+
+  - id: review_summary
+    title: 复核摘要与检查结果
+    owner_role: project_owner
+    executor: human
+    deps:
+      - draft_summary
+      - check_summary
+    work:
+      objective: 阅读 Agent 摘要和确定性检查结果，决定是否接受
+      inputs:
+        - dependencies.draft_summary
+        - dependencies.check_summary
+      outputs:
+        - id: review
+          type: data
+      acceptance:
+        - 已阅读 Agent 正文和 Tool 检查证据
+        - 已由节点 Owner 完成最终判断

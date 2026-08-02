@@ -20,9 +20,11 @@ class TargetRuntimeSettings:
     loop: WorkerLoopSettings = WorkerLoopSettings()
     enable_agent_executor: bool = False
     enable_development_executor: bool = False
+    enable_content_check_executor: bool = False
     agent_claim_safety: timedelta = timedelta(seconds=30)
     agent_max_prompt_chars: int = 20_000
     agent_max_result_chars: int = 50_000
+    content_check_max_chars: int = 50_000
 
     def __post_init__(self) -> None:
         if not self.dsn.strip():
@@ -41,6 +43,8 @@ class TargetRuntimeSettings:
             raise ValueError("agent_max_prompt_chars must be positive")
         if self.agent_max_result_chars < 1:
             raise ValueError("agent_max_result_chars must be positive")
+        if self.content_check_max_chars < 1:
+            raise ValueError("content_check_max_chars must be positive")
 
     @classmethod
     def from_environ(
@@ -90,6 +94,9 @@ class TargetRuntimeSettings:
             enable_development_executor=_boolean(
                 values.get("LARKFLOW_TARGET_ENABLE_DEVELOPMENT_EXECUTOR", "false")
             ),
+            enable_content_check_executor=_boolean(
+                values.get("LARKFLOW_TARGET_ENABLE_CONTENT_CHECK_EXECUTOR", "false")
+            ),
             agent_claim_safety=timedelta(
                 seconds=_positive_float(
                     values,
@@ -105,6 +112,11 @@ class TargetRuntimeSettings:
             agent_max_result_chars=_positive_int(
                 values,
                 "LARKFLOW_TARGET_AGENT_MAX_RESULT_CHARS",
+                50_000,
+            ),
+            content_check_max_chars=_positive_int(
+                values,
+                "LARKFLOW_TARGET_CONTENT_CHECK_MAX_CHARS",
                 50_000,
             ),
         )
