@@ -17,6 +17,7 @@ from .model import (
     NodeStatus,
     QualityResult,
     WorkflowInstance,
+    WorkflowInstanceSummary,
 )
 from .repository import WorkflowRepository
 from .runner import AuthorizationError, NodeRunner
@@ -546,6 +547,26 @@ class WorkflowService:
         instance = self.repository.get(tenant_id, instance_id)
         self._require_instance_owner(instance, actor_person_id)
         return instance
+
+    def list_for_owner(
+        self,
+        tenant_id: str,
+        *,
+        actor_person_id: str,
+        limit: int = 10,
+    ) -> tuple[WorkflowInstanceSummary, ...]:
+        """Return only recent instances owned by the current actor."""
+        if not tenant_id.strip():
+            raise ValueError("tenant_id is required")
+        if not actor_person_id.strip():
+            raise ValueError("actor_person_id is required")
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        return self.repository.list_for_owner(
+            tenant_id,
+            owner_person_id=actor_person_id,
+            limit=limit,
+        )
 
     def _audit(
         self,

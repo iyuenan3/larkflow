@@ -204,6 +204,67 @@ def test_postgres_persists_template_lifecycle_and_frozen_instance_snapshot():
                 )
 
 
+def test_postgres_owner_instance_list_is_isolated_ordered_and_bounded():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_owner_list_{suffix}"
+    owner_person_id = f"person_owner_{suffix}"
+    repository = PostgresWorkflowRepository(connection_factory)
+    clock = Clock(datetime(2026, 8, 3, 2, 0, tzinfo=timezone.utc))
+    service = WorkflowService(repository, clock=clock)
+    work = {
+        "objective": "Review the brief",
+        "inputs": [],
+        "outputs": [{"id": "decision", "type": "data"}],
+        "acceptance": ["A decision exists"],
+    }
+    snapshot = InstanceSnapshot(
+        goal="Owner list isolation",
+        nodes=(NodeSpec("review", "Review", owner_person_id, "human", work=work),),
+    )
+    expected_ids = []
+    for index in range(12):
+        clock.now = datetime(2026, 8, 3, 2, index, tzinfo=timezone.utc)
+        instance_id = f"owner_{index:02d}_{suffix}"
+        expected_ids.append(instance_id)
+        service.create_draft(
+            instance_id=instance_id,
+            tenant_id=tenant_id,
+            owner_person_id=owner_person_id,
+            actor_person_id=owner_person_id,
+            snapshot=snapshot,
+        )
+    clock.now = datetime(2026, 8, 3, 3, 0, tzinfo=timezone.utc)
+    service.create_draft(
+        instance_id=f"foreign_owner_{suffix}",
+        tenant_id=tenant_id,
+        owner_person_id=f"person_other_{suffix}",
+        actor_person_id=f"person_other_{suffix}",
+        snapshot=snapshot,
+    )
+
+    summaries = service.list_for_owner(
+        tenant_id,
+        actor_person_id=owner_person_id,
+        limit=10,
+    )
+
+    assert [summary.id for summary in summaries] == list(reversed(expected_ids[2:]))
+    assert all(summary.completed_nodes == 0 for summary in summaries)
+    assert all(summary.total_nodes == 1 for summary in summaries)
+    with connection_factory() as connection:
+        index_row = connection.execute(
+            """
+            SELECT indexname FROM pg_indexes
+            WHERE schemaname = 'public'
+              AND indexname = 'workflow_instances_owner_recent_idx'
+            """
+        ).fetchone()
+    assert index_row is not None
+
+
 def test_postgres_persists_a_dependent_draft_before_nodes_are_materialized():
     assert POSTGRES_DSN is not None
     connection_factory = postgres_connection_factory(POSTGRES_DSN)

@@ -243,6 +243,18 @@ class WorkflowInstance:
 
 
 @dataclass(frozen=True)
+class WorkflowInstanceSummary:
+    """Bounded read model for an owner's recent workflow list."""
+
+    id: str
+    goal: str
+    status: InstanceStatus
+    completed_nodes: int
+    total_nodes: int
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class NodeActivation:
     instance_id: str
     node_key: str

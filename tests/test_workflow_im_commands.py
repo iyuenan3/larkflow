@@ -387,6 +387,121 @@ def test_status_hides_instance_existence_from_non_owner():
     assert replies[0] == "命令未执行：实例不存在或你无权查看"
 
 
+def test_list_returns_only_recent_instance_owner_summaries_without_writes():
+    repository = InMemoryWorkflowRepository()
+    templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
+    document = template_document()
+    document["goal"] = "Review\n" + "x" * 200
+    templates.create_template(
+        tenant_id=TENANT,
+        actor_person_id="person_admin",
+        document=document,
+    )
+    templates.enable(TENANT, "quick_review", actor_person_id="person_admin")
+    snapshot = templates.instantiate(
+        TENANT,
+        "quick_review",
+        inputs={"brief": "ready"},
+        owner_bindings={"reviewer": "person_owner"},
+    )
+    times = [NOW + timedelta(minutes=index) for index in range(14)]
+    service = WorkflowService(repository, clock=lambda: times.pop(0))
+    for index in range(12):
+        service.create_draft(
+            instance_id=f"owner_{index:02d}",
+            tenant_id=TENANT,
+            owner_person_id="person_owner",
+            actor_person_id="person_owner",
+            snapshot=snapshot,
+        )
+    service.create_draft(
+        instance_id="node_owner_but_not_instance_owner",
+        tenant_id=TENANT,
+        owner_person_id="person_other",
+        actor_person_id="person_other",
+        snapshot=snapshot,
+    )
+    service.create_draft(
+        instance_id="other_tenant",
+        tenant_id="tenant_other",
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=snapshot,
+    )
+    versions_before = {
+        f"owner_{index:02d}": service.get(TENANT, f"owner_{index:02d}").version
+        for index in range(12)
+    }
+    audit_count_before = sum(
+        len(repository.audit_log(TENANT, instance_id))
+        for instance_id in versions_before
+    )
+    store = MemoryStore()
+    store.command_claims = [
+        IMCommandClaim(signal("/larkflow list", event_id="event_list"), "list-token", 1)
+    ]
+
+    report = IMCommandWorker(
+        store,
+        service,
+        templates,
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.processed == 1
+    processed = store.processed[-1][2]
+    assert processed["outcome"] == "instances_listed"
+    assert processed["instance_id"] is None
+    reply = processed["reply_text"]
+    assert "node_owner_but_not_instance_owner" not in reply
+    assert "other_tenant" not in reply
+    assert reply.index("owner_11") < reply.index("owner_02")
+    assert "owner_01" not in reply
+    assert "owner_00" not in reply
+    assert "仅显示最近 10 个流程" in reply
+    assert "person_owner" not in reply
+    assert "person_other" not in reply
+    assert "x" * 121 not in reply
+    assert "…" in reply
+    assert {
+        instance_id: service.get(TENANT, instance_id).version
+        for instance_id in versions_before
+    } == versions_before
+    assert sum(
+        len(repository.audit_log(TENANT, instance_id))
+        for instance_id in versions_before
+    ) == audit_count_before
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        service.list_for_owner(
+            TENANT,
+            actor_person_id="person_owner",
+            limit=101,
+        )
+
+
+def test_list_reports_empty_owner_history_without_disclosing_other_instances():
+    repository = InMemoryWorkflowRepository()
+    templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
+    store = MemoryStore()
+    store.command_claims = [
+        IMCommandClaim(signal("/larkflow list", event_id="event_empty_list"), "list-token", 1)
+    ]
+
+    report = IMCommandWorker(
+        store,
+        WorkflowService(repository, clock=lambda: NOW),
+        templates,
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.processed == 1
+    assert "暂无由你发起的流程" in store.processed[-1][2]["reply_text"]
+
+
 def test_help_lists_status_command():
     store = MemoryStore()
     store.command_claims = [
@@ -403,6 +518,7 @@ def test_help_lists_status_command():
 
     assert report.processed == 1
     assert "/larkflow status <instance_id>" in store.processed[-1][2]["reply_text"]
+    assert "/larkflow list" in store.processed[-1][2]["reply_text"]
 
 
 def test_unknown_template_is_rejected_without_retrying_forever():
@@ -491,6 +607,7 @@ def test_non_owner_confirm_is_rejected_without_retrying_forever():
         "/larkflow confirm",
         "/larkflow status",
         "/larkflow status instance extra",
+        "/larkflow list extra",
         "/larkflow start quick_review []",
         "/larkflow unsupported",
     ),
@@ -506,6 +623,10 @@ def test_command_parser_accepts_status():
         "instance_1",
         {},
     )
+
+
+def test_command_parser_accepts_list():
+    assert parse_im_command("/larkflow list") == ("list", None, {})
 
 
 def test_reply_worker_uses_stable_key_and_records_external_message():

@@ -23,6 +23,7 @@ from .model import (
     TemplateAuditEvent,
     TemplateStatus,
     WorkflowInstance,
+    WorkflowInstanceSummary,
     WorkflowTemplate,
     WorkflowTemplateVersion,
 )
@@ -72,6 +73,15 @@ class WorkflowRepository(Protocol):
         ...
 
     def get(self, tenant_id: str, instance_id: str) -> WorkflowInstance:
+        ...
+
+    def list_for_owner(
+        self,
+        tenant_id: str,
+        *,
+        owner_person_id: str,
+        limit: int = 10,
+    ) -> tuple[WorkflowInstanceSummary, ...]:
         ...
 
     def projection_instance_ids(
@@ -268,6 +278,44 @@ class InMemoryWorkflowRepository:
             return deepcopy(self._instances[(tenant_id, instance_id)])
         except KeyError as exc:
             raise InstanceNotFoundError((tenant_id, instance_id)) from exc
+
+    def list_for_owner(
+        self,
+        tenant_id: str,
+        *,
+        owner_person_id: str,
+        limit: int = 10,
+    ) -> tuple[WorkflowInstanceSummary, ...]:
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        candidates = [
+            instance
+            for (instance_tenant, _), instance in self._instances.items()
+            if instance_tenant == tenant_id
+            and instance.owner_person_id == owner_person_id
+            and instance.created_at is not None
+        ]
+        candidates.sort(
+            key=lambda instance: (
+                instance.created_at is not None,
+                instance.created_at,
+                instance.id,
+            ),
+            reverse=True,
+        )
+        return tuple(
+            WorkflowInstanceSummary(
+                id=instance.id,
+                goal=instance.snapshot.goal,
+                status=instance.status,
+                completed_nodes=sum(
+                    1 for node in instance.nodes.values() if node.status.value == "done"
+                ),
+                total_nodes=len(instance.snapshot.nodes),
+                created_at=instance.created_at,
+            )
+            for instance in candidates[:limit]
+        )
 
     def projection_instance_ids(
         self,

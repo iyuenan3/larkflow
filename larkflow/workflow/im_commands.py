@@ -10,7 +10,7 @@ import json
 from typing import Any, Protocol
 
 from .directory import PersonDirectory
-from .model import InstanceStatus, WorkflowInstance
+from .model import InstanceStatus, WorkflowInstance, WorkflowInstanceSummary
 from .repository import (
     InstanceAlreadyExistsError,
     InstanceNotFoundError,
@@ -30,6 +30,7 @@ IM_MESSAGE_EVENT = "im.message.receive_v1"
 COMMAND_PREFIX = "/larkflow"
 MAX_STATUS_NODES = 20
 MAX_STATUS_FIELD_CHARS = 120
+MAX_LIST_INSTANCES = 10
 
 
 class IMCommandStatus(str, Enum):
@@ -498,7 +499,8 @@ class IMCommandWorker:
                 "可用命令：\n"
                 "/larkflow start <template_id> [JSON输入]\n"
                 "/larkflow confirm <instance_id>\n"
-                "/larkflow status <instance_id>",
+                "/larkflow status <instance_id>\n"
+                "/larkflow list",
             )
         if command == "start":
             template_id = argument or ""
@@ -589,6 +591,17 @@ class IMCommandWorker:
                 "status_shown",
                 instance.id,
                 _status_reply(instance, viewer_person_id=event.sender_person_id),
+            )
+        if command == "list":
+            summaries = self.service.list_for_owner(
+                self.tenant_id,
+                actor_person_id=event.sender_person_id,
+                limit=MAX_LIST_INSTANCES + 1,
+            )
+            return (
+                "instances_listed",
+                None,
+                _list_reply(summaries),
             )
         raise IMCommandRejected("不支持的命令")
 
@@ -694,6 +707,10 @@ def parse_im_command(text: str) -> tuple[str, str | None, dict[str, Any]]:
         if len(parts) > 2:
             raise IMCommandRejected("help 命令不接受其他参数")
         return "help", None, {}
+    if parts[1] == "list":
+        if len(parts) != 2:
+            raise IMCommandRejected("list 命令不接受其他参数")
+        return "list", None, {}
     if parts[1] in {"confirm", "status"}:
         if len(parts) != 3:
             raise IMCommandRejected(
@@ -701,7 +718,7 @@ def parse_im_command(text: str) -> tuple[str, str | None, dict[str, Any]]:
             )
         return parts[1], parts[2], {}
     if parts[1] != "start" or len(parts) < 3:
-        raise IMCommandRejected("仅支持 start、confirm、status 和 help")
+        raise IMCommandRejected("仅支持 start、confirm、status、list 和 help")
     inputs: dict[str, Any] = {}
     if len(parts) == 4:
         try:
@@ -760,6 +777,29 @@ def _status_reply(instance: WorkflowInstance, *, viewer_person_id: str) -> str:
     omitted = len(specs) - MAX_STATUS_NODES
     if omitted > 0:
         lines.append(f"其余 {omitted} 个节点已省略。")
+    return "\n".join(lines)
+
+
+def _list_reply(summaries: tuple[WorkflowInstanceSummary, ...]) -> str:
+    if not summaries:
+        return (
+            "我的最近流程\n"
+            "暂无由你发起的流程。\n"
+            "使用 /larkflow start <template_id> [JSON输入] 创建流程。"
+        )
+    lines = ["我的最近流程"]
+    for index, summary in enumerate(summaries[:MAX_LIST_INSTANCES], start=1):
+        lines.extend(
+            (
+                f"{index}. {_instance_status_label(summary.status.value)}｜"
+                f"{summary.completed_nodes}/{summary.total_nodes}｜"
+                f"{_status_field(summary.goal or '未填写')}",
+                f"   实例：{_status_field(summary.id)}",
+            )
+        )
+    if len(summaries) > MAX_LIST_INSTANCES:
+        lines.append(f"仅显示最近 {MAX_LIST_INSTANCES} 个流程。")
+    lines.append("使用 /larkflow status <instance_id> 查看节点详情。")
     return "\n".join(lines)
 
 

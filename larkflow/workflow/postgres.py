@@ -39,6 +39,7 @@ from .model import (
     TemplateAuditEvent,
     TemplateStatus,
     WorkflowInstance,
+    WorkflowInstanceSummary,
     WorkflowTemplate,
     WorkflowTemplateVersion,
 )
@@ -129,6 +130,51 @@ class PostgresWorkflowRepository:
                 (tenant_id, instance_id),
             ).fetchall()
         return self._load_instance(row, nodes, attempts)
+
+    def list_for_owner(
+        self,
+        tenant_id: str,
+        *,
+        owner_person_id: str,
+        limit: int = 10,
+    ) -> tuple[WorkflowInstanceSummary, ...]:
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        with self.connection_factory() as connection:
+            rows = connection.execute(
+                """
+                SELECT instance.id,
+                       instance.goal,
+                       instance.status,
+                       instance.created_at,
+                       jsonb_array_length(instance.snapshot -> 'nodes')::integer
+                           AS total_nodes,
+                       (
+                           SELECT COUNT(*)::integer
+                           FROM workflow_node_instances AS node
+                           WHERE node.tenant_id = instance.tenant_id
+                             AND node.instance_id = instance.id
+                             AND node.status = 'done'
+                       ) AS completed_nodes
+                FROM workflow_instances AS instance
+                WHERE instance.tenant_id = %s
+                  AND instance.owner_person_id = %s
+                ORDER BY instance.created_at DESC, instance.id DESC
+                LIMIT %s
+                """,
+                (tenant_id, owner_person_id, limit),
+            ).fetchall()
+        return tuple(
+            WorkflowInstanceSummary(
+                id=row["id"],
+                goal=row["goal"],
+                status=InstanceStatus(row["status"]),
+                completed_nodes=int(row["completed_nodes"]),
+                total_nodes=int(row["total_nodes"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        )
 
     def add_template(
         self,

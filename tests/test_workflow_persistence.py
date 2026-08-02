@@ -91,6 +91,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0006_inbox_verification_exhaustion",
         "0007_edge_devices",
         "0008_im_commands",
+        "0009_owner_instance_list",
     ]
     sql = migrations[0][1]
     for table in (

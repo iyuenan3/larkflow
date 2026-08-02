@@ -131,6 +131,7 @@ from .model import (
     TemplateAuditEvent,
     TemplateStatus,
     WorkflowInstance,
+    WorkflowInstanceSummary,
     WorkflowTemplate,
     WorkflowTemplateVersion,
 )
@@ -332,6 +333,7 @@ __all__ = [
     "TransitionError",
     "UnsupportedEdgeCapabilityError",
     "WorkflowInstance",
+    "WorkflowInstanceSummary",
     "WorkflowInboundWorker",
     "WorkflowInboxStore",
     "WorkflowRepository",
