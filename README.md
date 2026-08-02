@@ -10,7 +10,7 @@ larkflow 已开始按收敛后的产品设计重建中央工作流，目前完�
 - **新内核**：`larkflow/workflow/` 已实现模板生命周期和不可变版本、角色绑定和冻结 Instance Snapshot、草稿预览与确认、DAG 校验、节点状态迁移、依赖解锁、Human / Agent / Tool Node Runner、Attempt、claim、过期认领恢复、Runtime / Projection / Inbound Worker、乐观并发、PostgreSQL 仓储、追加型审计、事务 outbox 与耐久 Inbox。凭据侧 Task 验证默认最多尝试 24 次，超限进入不可再认领的 `exhausted` 终态并保留终止时间、失败阶段、结果和最后错误。
 - **Edge Proof v0**：已实现一次性配对、设备哈希凭据、撤销、Owner 与 `personal.readonly` 双重过滤、租约续期、迟到结果拒绝、loopback Gateway、手工 `run-once` 和 Codex 只读适配器。离线测试、一次性 PostgreSQL 14、合成数据本机 Codex 端到端、长期开发库部署和 SSH 隧道跨机链路已经通过。专用 DNS 记录、Caddy、Let’s Encrypt 证书、源站反向代理和未认证 401 已验证；公网 TLS 随后被 ICP 接入备案阻断，因此公网配对、领取、续租和回传仍未完成。
 - **legacy 原型**：LangGraph + SQLite + lark-cli 路径继续保留，用于回归已验证的飞书投影、打回、幂等和恢复机制。
-- **尚未实现**：通用飞书命令入站、IM / Doc 投影、更多业务 Tool adapter、受控编辑、重启、企业目录校验和生产装配。Edge 还缺可持续使用的公网 HTTPS 入口、安全评审、系统凭据存储与任何产品化体验；当前入口必须先完成 ICP 接入备案，或迁移到合规的非中国内地环境。真实 Agent、确定性内容检查和模板入口只在开发环境和测试组织验证，不能据此描述为生产上线。
+- **尚未实现**：通用飞书命令入站、IM / Doc 投影、更多业务 Tool adapter、受控编辑、重启和生产装配。企业目录 Owner 校验已落码并部署但默认关闭，当前开发应用缺少通讯录只读 scope，尚未完成真栈启用。Edge 还缺可持续使用的公网 HTTPS 入口、安全评审、系统凭据存储与任何产品化体验；当前入口必须先完成 ICP 接入备案，或迁移到合规的非中国内地环境。真实 Agent、确定性内容检查和模板入口只在开发环境和测试组织验证，不能据此描述为生产上线。
 - **证据边界**：本轮完成的是既有设计简化与一致性核验，不是访谈、市场或商业验证。
 - **重要边界**：`alicloud-sh` 已运行 Target Runtime、Projection、凭据侧入站校验、领域侧入站和 loopback Edge Gateway 五个独立服务。Caddy 配置是唯一规划的 Edge 公网入口，只反向代理到 `127.0.0.1:8765`；当前因备案阻断处于 disabled / inactive，服务器已恢复为只有 SSH 对公网监听。Projection 周期读取当前 Human Task，观察到完成后只写耐久 Inbox；事件可降低延迟，但不是可靠性前提。凭据侧仍会重新读取 Task 并写入已验证 Inbox，领域侧不能读取 lark-cli profile，只在校验绑定、Owner、当前 Attempt 和完成人后提交 Human 节点。云端 Target 已在明确授权下启用开发用真实 Agent 与 `content.check` Tool，但尚未接入通用 IM 或 Doc 投影。legacy 服务继续使用 SQLite，不能把 checkpointer 或全局 LangGraph state 扩展为新产品领域模型。
 
@@ -98,6 +98,7 @@ Phase 0 的设计一致性核验已经完成，当前进入 Phase 1 中央工作
 - Runtime Worker 每次只认领一个已被 adapter 明确接受的自动节点，先提交 claim 再调用 executor；进程中断后，其他 Worker 可在租约到期时用新 token 接管同一 Attempt。
 - `LLMAgentExecutor` 只接受 `work.agent.kind=llm.generate`，使用已提交的实例输入和直接依赖结果生成正文；启动装配会强制最长 LLM 路由预算加安全余量小于节点 claim 租期。
 - `ToolExecutorRouter` 按 `work.tool.kind` 选择内部 adapter；首个 `content.check` 对直接依赖正文执行长度和必需词检查，返回稳定证据与 `pass / fail` verdict。未知 kind 在 claim 前被过滤，不会被错误 Worker 认领。
+- 可选企业目录边界会在草稿入库前校验 Instance Owner 与全部节点 Owner。无法证明 open_id 属于当前租户活跃成员时 fail closed；开发环境默认关闭，启用需额外的通讯录只读 scope。
 - PostgreSQL 14 schema、migration runner、事务仓储、追加型 Audit 和带租约的 outbox 已落码；领域状态、审计和 outbox 在同一事务提交。
 - migration SQL 已进入 wheel；仓库当前包含七份 migration，最新一份增加 Edge 配对、设备和追加型事件表。一次性 PostgreSQL 14 已验证七份 migration 重入、Edge 配对竞争、续租、完成、撤销、原始 secret 不落库和审计不可改写，测试库与上传件随后删除。
 - `larkflow-target` CLI 已提供模板创建、追加版本、启用、停用、逻辑删除、查询，从模板创建草稿和预览，以及实例确认、状态、Human 提交和四类 Worker 命令；环境配置由项目 dotenv 解析器读取，不使用 shell `source`。
