@@ -1,6 +1,6 @@
 # ROADMAP · larkflow
 
-> 状态：Target Delivery Plan · 2026-08-02
+> 状态：Target Delivery Plan · 2026-08-03
 >
 > 原来的三级协作、个人 Agent Edge 产品化和完整能力治理路线已移出近期范围。现有代码作为 legacy 机制原型保留；一个不改变中央主线的只读 Edge Proof 单独验证架构边界。
 
@@ -32,13 +32,14 @@
 - 已完成 Template Service：`draft / enabled / disabled / deleted`、不可变版本、布尔锁、角色与参数绑定、追加型模板审计和 aggregate version 乐观并发；真实 PostgreSQL 同时启用竞争验证已通过。
 - 已完成从启用模板生成冻结草稿、Owner 只读预览和正式 CLI 入口；开发环境已用合成输入创建、预览、确认模板实例，并完成正式模板的真实 `Human -> Agent -> Human` 闭环。
 - `alicloud-sh` 已建立长期 Target 开发库、本机 peer authentication、每日备份、新库恢复演练和 enabled Target 服务；仍缺异机备份、PITR 与生产运行手册。
-- 每个节点的唯一 Owner 解析与服务端授权。当前内核已拒绝非 Owner 提交，企业目录校验已落码并部署但默认关闭；当前应用缺少通讯录只读 scope，真栈启用待授权。
+- 每个节点的唯一 Owner 解析与服务端授权。当前内核已拒绝非 Owner 提交，飞书 IM 命令发送者的活跃成员校验已在测试组织通过；草稿 Owner 全量企业目录校验已落码并部署但默认关闭。
 - 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则、持久化、常驻 Worker、Agent adapter、首个 Tool adapter、真实开发链路与恢复扫描已落码，更多业务 Tool 按验证需求增加。
-- 已完成启动全量 Task 对账、缺失 Projection 补建和确认删除后的外部 Task 重建；一次性 PostgreSQL 与常驻开发服务均已验证补建、真实删除换绑、重入及修复后完成入站。通用飞书命令入站与 IM / Doc 投影仍待实现。
+- 已完成启动全量 Task 对账、缺失 Projection 补建和确认删除后的外部 Task 重建；一次性 PostgreSQL 与常驻开发服务均已验证补建、真实删除换绑、重入及修复后完成入站。
+- 已完成飞书窄命令入口与完成投影：`/larkflow help / start / confirm`、耐久发送者校验与回复、Agent / Tool 结果消息、完成 Docx 和最终通知已完成真实开发链路。Task 事件在本轮仍未被 bot 长连接收到，周期状态轮询继续承担可靠完成发现。下一步是更多受控命令、业务 Tool、编辑 / 重启入口和生产装配。
 - 从 legacy 原型提炼 adapter、事件韧性和 Mock 测试资产。
 - 已完成 Personal Agent Edge Proof v0：一次性配对、哈希凭据、设备撤销、Owner 与 capability 双重过滤、现有 Attempt claim 续租、迟到结果拒绝、loopback Gateway、手工 `run-once` 和 Codex 只读适配器。离线测试、一次性 PostgreSQL 14、长期开发库 migration、loopback systemd 部署、SSH 隧道跨机 Codex、Caddy 与受信任源站证书已通过；公网设备链路受 ICP 接入备案阻断，Caddy 验证后已停止，凭据系统存储和安全评审仍未完成。
 
-**Demo：** 已从启用模板创建并确认 `mixed_tool_acceptance_20260802_200044`，在飞书完成 Human、Agent、Tool 混合流程；服务重启后状态和投影一致。无模板定义的同等真栈入口仍待补充。
+**Demo：** 已从真实飞书消息创建并确认模板草稿，在测试组织完成 Human-Agent-Tool-Human，最终 Docx 包含四个节点结果，Owner 收到带链接的完成通知；重复修复为 no-op。该证据仅覆盖开发环境，无模板定义的同等真栈入口仍待补充。
 
 ## Next · Phase 2 受控变化与恢复
 

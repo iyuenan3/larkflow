@@ -104,7 +104,7 @@
 
 ### Target CLI 与 Task 入站 as-built
 
-Target 使用独立 `larkflow-target` CLI，不复用上述 legacy 驱动层。控制面增加 `template-create / template-add-version / template-enable / template-disable / template-delete / template-list / template-show / create-from-template / preview / reconcile-projections / reconcile-completions`，并保留 `migrate / create / confirm / show / submit-human` 和四类 Worker 的单步、常驻命令。这些是本机运维入口，不是公开网络 API。
+Target 使用独立 `larkflow-target` CLI，不复用上述 legacy 驱动层。控制面增加 `template-create / template-add-version / template-enable / template-disable / template-delete / template-list / template-show / create-from-template / preview / reconcile-projections / reconcile-completions / reconcile-instance-completion`，并保留 `migrate / create / confirm / show / submit-human` 和四类 Worker 的单步、常驻命令。这些是本机运维入口，不是公开网络 API。
 
 Target 自动节点按工作契约 kind 路由。Agent 当前只接受 `work.agent.kind=llm.generate`。Tool 由 `ToolExecutorRouter` 按 `work.tool.kind` 选择 adapter；`content.check` 读取直接依赖正文，接受 `min_chars`、`max_chars` 与 `required_terms`，返回 `verdict`、`evidence`、`suggestion`、`char_count`、`missing_terms`、`source` 和稳定 `request_id`。配置或输入错误使当前 Attempt 显式失败，未知 kind 在 claim 前保持未认领。
 
@@ -126,6 +126,18 @@ Target Task 完成发现以周期状态轮询为可靠路径。`project` 启动�
 
 凭据侧详情读取失败或完成状态暂不可见时，按 `LARKFLOW_TARGET_INBOUND_RETRY_BASE_SECONDS` 到 `LARKFLOW_TARGET_INBOUND_RETRY_MAX_SECONDS` 做指数退避。`LARKFLOW_TARGET_INBOUND_VERIFICATION_MAX_ATTEMPTS` 默认 24；达到预算仍无法验证时，Inbox 进入 `exhausted` 终态，写入 `processed_at`、`outcome=exhausted:verification_attempts`、`failure_stage=verification` 与最后错误，不生成 verified payload，也不允许领域 Worker 认领。验证日志包含 `exhausted` 计数，运维必须对非零值告警并人工调查，不能静默丢弃。
 
+### Target 飞书 IM 命令与完成投影 as-built
+
+Target 订阅 `im.message.receive_v1`，只处理以 `/larkflow` 开头的文本。桥接层同时接受飞书原始 V2 信封和 lark-cli 拍平输出：原始事件的 `content` 是 JSON 字符串，拍平输出的 `content` 是普通文本，两者必须归一为同一个命令信号。其他消息不进入 Target 命令 Inbox。
+
+- `/larkflow help`：返回当前三个命令的用法。
+- `/larkflow start <template_id> [JSON对象]`：以 tenant 和 message ID 派生稳定 Instance ID，验证发送者属于当前企业且状态活跃，再把发送者绑定为 Instance Owner 和模板角色来源。命令只创建草稿并返回确认命令，不自动启动。
+- `/larkflow confirm <instance_id>`：重新校验发送者与草稿 Owner，确认并启动实例。
+
+原始 event ID 与 message ID 都参与去重；验证、领域执行和回复各自使用可认领的耐久状态，不依赖单个进程在线。客户端 payload 中的身份、Owner 或状态不作为授权事实。命令回复、Agent / Tool 节点结果、完成文档与最终通知都由服务端状态生成，并以稳定幂等键落为 Projection。Instance 进入 `done` 后，Projection Worker 汇总四类节点结果创建 Docx，再向 Owner 发送含文档链接的最终消息。
+
+`reconcile-instance-completion <instance_id>` 是显式的单实例恢复命令。它只接受已完成实例，只补齐缺失的完成文档或最终通知；重复执行返回 no-op，不批量扫描历史实例，也不复制已存在的外部资源。
+
 ### Target Personal Agent Edge Proof v0 的 `/edge/v1` HTTP
 
 该接口是设备控制边界，不是业务前端 API。`larkflow-edge-gateway serve` 强制监听 loopback，远程使用必须由外部 HTTPS 反向代理终止 TLS；客户端拒绝非 loopback 的明文 HTTP、重定向、URL 内凭据和带路径的 server URL，并默认 `trust_env=False`。
@@ -145,7 +157,7 @@ Target Task 完成发现以周期状态轮询为可靠路径。`project` 启动�
 ## 飞书事件订阅 EventKey（研究证实为静态常量，不需 dev app 上下文）
 - `card.action.trigger`（仅 bot）：卡片按钮点击。路由键塞按钮 `behaviors[].callback.value`，原样回传为 `action_value`（自描述 `{thread_id, interrupt_id, node_id, passed, reopen}`，与 gate 产出的 `passed`/`reopen` 逐字对齐）。⚠️ dev app 须在开发者后台开「事件与回调 → 回调配置」，否则静默零事件。
 - `task.task.update_user_access_v2`（user|bot）：任务事件。完成 = `.event.event_types[]` 含 `task_completed_update`（自行 filter）；`.event.task_guid` 经关联表回映射到 `(thread_id, interrupt_id)`。
-- human-produce 定稿信号：优先用 `task_complete` / `card_action` 结构化信号（ADR-021，无歧义）；发消息（message）变体走 IM 消息事件、推迟（待 dev app 定确切 EventKey，且消息无自描述封套、到中断的关联需另设计）。
+- human-produce 定稿信号：优先用 `task_complete` / `card_action` 结构化信号（ADR-021，无歧义）。Target 的 `im.message.receive_v1` 已用于自描述 `/larkflow` 控制命令；把任意普通消息关联到某个 Human 中断并当作业务结果仍未实现。
 - **入站归一化 as-built（`serve.normalize_event`，依据 lark-cli 内嵌 skill 字段表，真栈未验证）**：`card.action.trigger` 被 lark-cli 拍平（`operator_id` 在顶层，正是取身份的口径），但 `action_value` 是**开发者自定义值序列化成的 JSON 字符串**，必须先解开，否则每次点击都在 `_route` 里 AttributeError、整条入站通道对按钮永久失聪（而进程还活着，守护看不出问题）。`task.task.update_user_access_v2` 是 V2 信封、根在 `.event`，原样透传。**路由键一律用我们订阅的那个 EventKey**，绝不让 payload 里的同名字段改写它（payload 是外部输入）。任务通道按 `task_guid` 查关联表时**必须核对 `kind == "task"`**：关联表按 external_id 索引、不分种类，不核对就能拿一张卡的 message_id 冒充 task_guid，绕过卡片通道的身份判定（实测复现）。
 
 ## 待填（dev app 建好后验）

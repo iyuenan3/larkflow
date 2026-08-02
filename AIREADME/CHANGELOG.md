@@ -1,5 +1,15 @@
 # CHANGELOG · larkflow
 
+## v0.23.0-draft · 2026-08-03 · 飞书 IM 入口与完成投影闭环
+
+- Added：耐久 `im.message.receive_v1` 命令入口，支持 `/larkflow help / start / confirm`；发送者先经当前企业活跃成员校验，命令、验证、领域执行与回复分别去重和持久化。
+- Compatibility：桥接层同时接受飞书原始 V2 信封和 lark-cli 拍平事件，分别处理 JSON 字符串与普通文本形态的 `content`。
+- Added：Agent / Tool 结果消息、Instance 完成 Docx、最终 Owner 通知，以及只修复一个已完成实例的幂等 `reconcile-instance-completion`。
+- Operations：新增 `deploy/restart-development-services`，统一覆盖五个 Target 服务与 legacy，避免部分部署后旧进程继续运行旧代码。
+- Verified：完整离线套件 `688 passed, 8 skipped`。wheel SHA-256 为 `2925e23856ea9107cdce16e0af1387f971c9357d52bc121d756b3f05a47c4162`，六个 Python 服务统一重启后 active、`NRestarts=0`。
+- Acceptance：测试组织中的真实飞书消息完成草稿创建、确认、Human-Agent-Tool-Human、完成文档和最终通知；文档与消息都通过服务端回读，重复修复为 no-op。
+- Boundary：仅完成开发环境和测试组织验收。Task 事件路径本轮仍为零事件，周期状态轮询是可靠完成入口；更多命令、更多业务 Tool、编辑 / 重启产品入口和生产装配仍未完成。
+
 ## v0.22.0-draft · 2026-08-02 · 企业目录 Owner 校验（ADR-067）
 
 - Added：可选 `PersonDirectory` Port、lark-cli bot adapter 和草稿写入前的 Instance / Node Owner 去重校验。
