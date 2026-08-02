@@ -535,6 +535,18 @@ class WorkflowService:
     def get(self, tenant_id: str, instance_id: str) -> WorkflowInstance:
         return self.repository.get(tenant_id, instance_id)
 
+    def get_for_owner(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        *,
+        actor_person_id: str,
+    ) -> WorkflowInstance:
+        """Return an instance only when the current actor owns it."""
+        instance = self.repository.get(tenant_id, instance_id)
+        self._require_instance_owner(instance, actor_person_id)
+        return instance
+
     def _audit(
         self,
         instance: WorkflowInstance,

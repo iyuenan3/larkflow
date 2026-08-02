@@ -10,7 +10,7 @@ import json
 from typing import Any, Protocol
 
 from .directory import PersonDirectory
-from .model import InstanceStatus
+from .model import InstanceStatus, WorkflowInstance
 from .repository import (
     InstanceAlreadyExistsError,
     InstanceNotFoundError,
@@ -28,6 +28,8 @@ from .transitions import TransitionError
 
 IM_MESSAGE_EVENT = "im.message.receive_v1"
 COMMAND_PREFIX = "/larkflow"
+MAX_STATUS_NODES = 20
+MAX_STATUS_FIELD_CHARS = 120
 
 
 class IMCommandStatus(str, Enum):
@@ -401,7 +403,7 @@ class IMCommandReport:
 
 
 class IMCommandWorker:
-    """Apply verified start and confirm commands through domain services."""
+    """Apply verified workflow commands through domain services."""
 
     def __init__(
         self,
@@ -495,7 +497,8 @@ class IMCommandWorker:
                 None,
                 "可用命令：\n"
                 "/larkflow start <template_id> [JSON输入]\n"
-                "/larkflow confirm <instance_id>",
+                "/larkflow confirm <instance_id>\n"
+                "/larkflow status <instance_id>",
             )
         if command == "start":
             template_id = argument or ""
@@ -571,6 +574,21 @@ class IMCommandWorker:
                 "draft_confirmed",
                 instance.id,
                 f"流程已确认启动。\n实例：{instance.id}\n状态：{instance.status.value}",
+            )
+        if command == "status":
+            instance_id = argument or ""
+            try:
+                instance = self.service.get_for_owner(
+                    self.tenant_id,
+                    instance_id,
+                    actor_person_id=event.sender_person_id,
+                )
+            except (AuthorizationError, InstanceNotFoundError):
+                raise IMCommandRejected("实例不存在或你无权查看") from None
+            return (
+                "status_shown",
+                instance.id,
+                _status_reply(instance, viewer_person_id=event.sender_person_id),
             )
         raise IMCommandRejected("不支持的命令")
 
@@ -676,12 +694,14 @@ def parse_im_command(text: str) -> tuple[str, str | None, dict[str, Any]]:
         if len(parts) > 2:
             raise IMCommandRejected("help 命令不接受其他参数")
         return "help", None, {}
-    if parts[1] == "confirm":
+    if parts[1] in {"confirm", "status"}:
         if len(parts) != 3:
-            raise IMCommandRejected("用法：/larkflow confirm <instance_id>")
-        return "confirm", parts[2], {}
+            raise IMCommandRejected(
+                f"用法：/larkflow {parts[1]} <instance_id>"
+            )
+        return parts[1], parts[2], {}
     if parts[1] != "start" or len(parts) < 3:
-        raise IMCommandRejected("仅支持 start、confirm 和 help")
+        raise IMCommandRejected("仅支持 start、confirm、status 和 help")
     inputs: dict[str, Any] = {}
     if len(parts) == 4:
         try:
@@ -703,6 +723,75 @@ def _instance_id(tenant_id: str, message_id: str) -> str:
 
 def _reply_key(event_id: str) -> str:
     return "lf-im-" + hashlib.sha256(event_id.encode("utf-8")).hexdigest()[:40]
+
+
+def _status_reply(instance: WorkflowInstance, *, viewer_person_id: str) -> str:
+    specs = instance.snapshot.nodes
+    completed = sum(
+        1
+        for node in instance.nodes.values()
+        if node.status.value == "done"
+    )
+    lines = [
+        "流程状态",
+        f"实例：{instance.id}",
+        f"目标：{_status_field(instance.snapshot.goal or '未填写')}",
+        f"状态：{_instance_status_label(instance.status.value)}",
+        f"进度：{completed}/{len(specs)}",
+        "节点：",
+    ]
+    for spec in specs[:MAX_STATUS_NODES]:
+        runtime_node = instance.nodes.get(spec.key)
+        status = (
+            _node_status_label(runtime_node.status.value)
+            if runtime_node is not None
+            else "未启动"
+        )
+        owner_person_id = (
+            runtime_node.owner_person_id
+            if runtime_node is not None
+            else spec.owner_person_id
+        )
+        owner = "你" if owner_person_id == viewer_person_id else "其他负责人"
+        lines.append(
+            f"- {_status_field(spec.title)} ({spec.key})｜"
+            f"{spec.executor.value}｜{status}｜责任人：{owner}"
+        )
+    omitted = len(specs) - MAX_STATUS_NODES
+    if omitted > 0:
+        lines.append(f"其余 {omitted} 个节点已省略。")
+    return "\n".join(lines)
+
+
+def _status_field(value: str) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= MAX_STATUS_FIELD_CHARS:
+        return normalized
+    return normalized[:MAX_STATUS_FIELD_CHARS].rstrip() + "…"
+
+
+def _instance_status_label(value: str) -> str:
+    return {
+        "draft": "草稿",
+        "running": "进行中",
+        "paused": "已暂停",
+        "done": "已完成",
+        "failed": "失败",
+        "canceled": "已取消",
+        "discarded": "已丢弃",
+    }.get(value, value)
+
+
+def _node_status_label(value: str) -> str:
+    return {
+        "pending": "等待依赖",
+        "ready": "待调度",
+        "running": "执行中",
+        "waiting_human": "等待人工",
+        "done": "已完成",
+        "failed": "失败",
+        "canceled": "已取消",
+    }.get(value, value)
 
 
 def _required_text(value: Any, field_name: str) -> str:

@@ -273,6 +273,138 @@ def test_start_then_confirm_uses_sender_as_every_owner_and_keeps_preview_gate():
     assert service.get(TENANT, instance_id).status == InstanceStatus.RUNNING
 
 
+def test_status_is_owner_only_read_and_reports_current_dag_state():
+    repository = InMemoryWorkflowRepository()
+    templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
+    templates.create_template(
+        tenant_id=TENANT,
+        actor_person_id="person_admin",
+        document=template_document(),
+    )
+    templates.enable(TENANT, "quick_review", actor_person_id="person_admin")
+    service = WorkflowService(repository, clock=lambda: NOW)
+    store = MemoryStore()
+    worker = IMCommandWorker(
+        store,
+        service,
+        templates,
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    )
+    store.command_claims = [
+        IMCommandClaim(
+            signal('/larkflow start quick_review {"brief":"ready"}'),
+            "start-token",
+            1,
+        )
+    ]
+    worker.run_once()
+    instance_id = store.processed[-1][2]["instance_id"]
+    store.command_claims = [
+        IMCommandClaim(
+            signal(f"/larkflow confirm {instance_id}", event_id="event_confirm"),
+            "confirm-token",
+            1,
+        )
+    ]
+    worker.run_once()
+    service.dispatch_ready(TENANT, instance_id)
+    version_before = service.get(TENANT, instance_id).version
+    store.command_claims = [
+        IMCommandClaim(
+            signal(f"/larkflow status {instance_id}", event_id="event_status"),
+            "status-token",
+            1,
+        )
+    ]
+
+    report = worker.run_once()
+
+    assert report.processed == 1
+    reply = store.processed[-1][2]["reply_text"]
+    assert store.processed[-1][2]["outcome"] == "status_shown"
+    assert "状态：进行中" in reply
+    assert "进度：0/1" in reply
+    assert "Review brief (review)｜human｜等待人工｜责任人：你" in reply
+    assert "person_owner" not in reply
+    assert service.get(TENANT, instance_id).version == version_before
+
+
+def test_status_hides_instance_existence_from_non_owner():
+    repository = InMemoryWorkflowRepository()
+    templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
+    templates.create_template(
+        tenant_id=TENANT,
+        actor_person_id="person_admin",
+        document=template_document(),
+    )
+    templates.enable(TENANT, "quick_review", actor_person_id="person_admin")
+    service = WorkflowService(repository, clock=lambda: NOW)
+    owner_store = MemoryStore()
+    owner_store.command_claims = [
+        IMCommandClaim(
+            signal('/larkflow start quick_review {"brief":"ready"}'),
+            "start-token",
+            1,
+        )
+    ]
+    IMCommandWorker(
+        owner_store,
+        service,
+        templates,
+        tenant_id=TENANT,
+        worker_id="command_owner",
+        clock=lambda: NOW,
+    ).run_once()
+    instance_id = owner_store.processed[-1][2]["instance_id"]
+    replies = []
+    for target in (instance_id, "missing_instance"):
+        event = IMCommandSignal(
+            **{
+                **signal(
+                    f"/larkflow status {target}",
+                    event_id=f"event_{target}",
+                ).__dict__,
+                "sender_person_id": "person_intruder",
+            }
+        )
+        store = MemoryStore()
+        store.command_claims = [IMCommandClaim(event, "status-token", 1)]
+        report = IMCommandWorker(
+            store,
+            service,
+            templates,
+            tenant_id=TENANT,
+            worker_id="command_intruder",
+            clock=lambda: NOW,
+        ).run_once()
+        assert report.rejected == 1
+        assert report.failed == 0
+        replies.append(store.processed[-1][2]["reply_text"])
+
+    assert replies[0] == replies[1]
+    assert replies[0] == "命令未执行：实例不存在或你无权查看"
+
+
+def test_help_lists_status_command():
+    store = MemoryStore()
+    store.command_claims = [
+        IMCommandClaim(signal("/larkflow help"), "help-token", 1)
+    ]
+    report = IMCommandWorker(
+        store,
+        WorkflowService(InMemoryWorkflowRepository(), clock=lambda: NOW),
+        TemplateService(InMemoryTemplateStore(), clock=lambda: NOW),
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.processed == 1
+    assert "/larkflow status <instance_id>" in store.processed[-1][2]["reply_text"]
+
+
 def test_unknown_template_is_rejected_without_retrying_forever():
     store = MemoryStore()
     store.command_claims = [
@@ -357,6 +489,8 @@ def test_non_owner_confirm_is_rejected_without_retrying_forever():
     (
         "/other help",
         "/larkflow confirm",
+        "/larkflow status",
+        "/larkflow status instance extra",
         "/larkflow start quick_review []",
         "/larkflow unsupported",
     ),
@@ -364,6 +498,14 @@ def test_non_owner_confirm_is_rejected_without_retrying_forever():
 def test_command_parser_rejects_ambiguous_or_broad_grammar(text):
     with pytest.raises(IMCommandRejected):
         parse_im_command(text)
+
+
+def test_command_parser_accepts_status():
+    assert parse_im_command("/larkflow status instance_1") == (
+        "status",
+        "instance_1",
+        {},
+    )
 
 
 def test_reply_worker_uses_stable_key_and_records_external_message():
