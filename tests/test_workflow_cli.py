@@ -80,6 +80,15 @@ def test_cli_exposes_completion_reconciliation_as_an_explicit_command():
     assert parsed.command == "reconcile-completions"
 
 
+def test_cli_exposes_one_instance_completion_repair():
+    parsed = build_parser().parse_args(
+        ["reconcile-instance-completion", "instance_1"]
+    )
+
+    assert parsed.command == "reconcile-instance-completion"
+    assert parsed.instance_id == "instance_1"
+
+
 def test_status_projection_never_exposes_claim_token():
     repository = InMemoryWorkflowRepository()
     service = WorkflowService(

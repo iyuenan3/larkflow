@@ -203,6 +203,11 @@ def build_parser() -> argparse.ArgumentParser:
         "reconcile-projections",
         help="rebuild missing current Human Task projections",
     )
+    reconcile_instance_completion = commands.add_parser(
+        "reconcile-instance-completion",
+        help="repair the final document and message for one completed instance",
+    )
+    reconcile_instance_completion.add_argument("instance_id")
     commands.add_parser(
         "reconcile-completions",
         help="poll current Human Tasks and enqueue observed completions",
@@ -260,6 +265,7 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
     projection_command = namespace.command in {
         "project-once",
         "reconcile-projections",
+        "reconcile-instance-completion",
         "reconcile-completions",
         "project",
     }
@@ -684,6 +690,13 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 ProjectionWorkerLoop._reconciliation_fields(report),
             )
             return int(bool(report.errors) or report.interrupted)
+        if namespace.command == "reconcile-instance-completion":
+            report = worker.reconcile_instance_completion(namespace.instance_id)
+            log(
+                "instance_completion_reconciled",
+                ProjectionWorkerLoop._report_fields(report),
+            )
+            return 0
         if namespace.command == "reconcile-completions":
             report = completion_poller.run_once()
             log(

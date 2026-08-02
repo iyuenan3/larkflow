@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+services=(
+  larkflow-target.service
+  larkflow-target-projection.service
+  larkflow-target-inbound-adapter.service
+  larkflow-target-inbound.service
+  larkflow-target-edge.service
+  larkflow@dev.service
+)
+
+if [[ ${EUID} -eq 0 ]]; then
+  systemctl_command=(systemctl)
+else
+  systemctl_command=(sudo systemctl)
+fi
+
+for service in "${services[@]}"; do
+  "${systemctl_command[@]}" restart "${service}"
+done
+
+for service in "${services[@]}"; do
+  "${systemctl_command[@]}" is-active --quiet "${service}"
+  "${systemctl_command[@]}" show "${service}" \
+    --property=Id,ActiveState,NRestarts,ExecMainStartTimestamp \
+    --no-pager
+done

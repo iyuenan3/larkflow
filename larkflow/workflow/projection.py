@@ -245,6 +245,21 @@ class WorkflowProjectionWorker:
             errors=tuple(errors),
         )
 
+    def reconcile_instance_completion(
+        self,
+        instance_id: str,
+    ) -> ProjectionWorkerReport:
+        """Repair one completed instance when its completion outbox was missed."""
+        if not instance_id.strip():
+            raise ValueError("instance_id is required")
+        instance = self.repository.get(self.tenant_id, instance_id)
+        outcome = self._project_instance_completion(instance, now=self.clock())
+        return ProjectionWorkerReport(
+            messages_sent=int(outcome.message_sent),
+            documents_created=int(outcome.document_created),
+            noops=int(outcome.noop),
+        )
+
     def reconcile_all(
         self,
         *,

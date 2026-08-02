@@ -505,6 +505,58 @@ def test_automated_result_and_completed_instance_project_to_im_and_doc():
     assert worker.run_once().claimed == 0
 
 
+def test_explicit_reconciliation_repairs_a_missing_instance_completion_outbox():
+    clock = Clock()
+    service, source, _, _ = setup_human(clock)
+    activation = service.dispatch_due(
+        TENANT,
+        "instance_projection",
+        worker_id="runtime_1",
+    )[0]
+    service.submit_human(
+        TENANT,
+        "instance_projection",
+        "approve",
+        actor_person_id="person_reviewer",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        result={"decision": "approved"},
+    )
+
+    repository = InMemoryWorkflowRepository()
+    repository.add(source.get(TENANT, "instance_projection"))
+    messages = RecordingMessages()
+    documents = RecordingDocuments()
+    worker = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        RecordingTasks(),
+        message_adapter=messages,
+        document_adapter=documents,
+        tenant_id=TENANT,
+        worker_id="projection_repair",
+        clock=clock,
+    )
+
+    repaired = worker.reconcile_instance_completion("instance_projection")
+
+    assert repaired.documents_created == 1
+    assert repaired.messages_sent == 1
+    assert repaired.noops == 0
+    assert len(documents.requests) == 1
+    assert len(messages.requests) == 1
+    assert "流程已完成" in messages.requests[0].text
+
+    unchanged = worker.reconcile_instance_completion("instance_projection")
+
+    assert unchanged.documents_created == 0
+    assert unchanged.messages_sent == 0
+    assert unchanged.noops == 1
+    assert len(documents.requests) == 1
+    assert len(messages.requests) == 1
+
+
 def test_projection_worker_does_not_claim_events_owned_by_other_consumers():
     clock = Clock()
     repository = InMemoryWorkflowRepository()
