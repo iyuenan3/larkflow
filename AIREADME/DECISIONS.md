@@ -507,3 +507,4 @@
 - Alternatives(否决)：要求服务器登录用户 profile；继续扩大应用 scope 等待 bot 事件；让 legacy 定时扫描 Target 状态；轮询发现完成后直接提交 Human 节点；新增第五个 Target daemon 和另一套凭据。
 - Tradeoff：每个等待中的 Human Task 会产生周期只读 API 调用，调用量随活跃责任入口线性增长。当前单企业开发阶段接受 30 秒延迟与轮询成本；进入更大规模前应增加分页游标、速率预算、抖动和失败告警，而不是重新把事件当成唯一可靠通道。
 - Evidence：完整离线套件 `622 passed, 7 skipped`。开发服务器首次扫描读取 3 个当前 Human Task，观察到 2 个完成、1 个待办，新增 2 条 Inbox 信号；凭据侧验证 2 条，领域侧提交 2 条，两个滞留实例、Node 与 Projection 随后全部完成。显式重跑只读取剩余待办 Task，新增信号为 0。五个服务均为 active、`NRestarts=0`。该验证使用已回归的最小业务 scope；临时应用版本管理 scope 尚未移除。
+- Evidence（权限收口，2026-08-02）：关闭 `application:application:patch` 与 `application:application:self_manage` 后，权限页只剩 `task:task:read` 和 `task:task:writeonly`，并显示当前修改均已发布；在线版本 `1.0.7` 保持已发布。收口后机器人成功创建并完成临时 Task，显式完成轮询读取 1 条当前 Human Task、结果为 1 条待办且失败为 0；五个服务保持 active、`NRestarts=0`。

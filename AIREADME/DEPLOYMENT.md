@@ -99,7 +99,7 @@ larkflow unblock / start / status / …  ← 另一个进程，写同一个 SQLi
 | 覆盖交付物 | `markdown +overwrite --file-token --content -` | 同上 | ⚠️ 推断 |
 | 读交付物正文 | `markdown +fetch --file-token` | Drive 文件读取 | ⚠️ 推断 |
 
-**已在真栈实测通过（测试组织）**：2026-07-26 的 `im +messages-send --msg-type interactive` 与 `event consume card.action.trigger --as bot`；2026-08-02 的 Target Human Task 原生创建、完成与详情读取在业务 scope 仅保留 `task:task:read + task:task:writeonly` 时通过。`task:task:write` 与 Task 租户事件已移除。应用仍临时保留版本自管理与发布所需管理 scope，待本轮代码提交并确认不再修改在线版本后收口；这些管理 scope 不是 Target 运行时业务权限。Task 完成状态轮询已接线并完成真实滞留实例验收，其他入站命令仍未实现。
+**已在真栈实测通过（测试组织）**：2026-07-26 的 `im +messages-send --msg-type interactive` 与 `event consume card.action.trigger --as bot`；2026-08-02 的 Target Human Task 原生创建、完成与详情读取在业务 scope 仅保留 `task:task:read + task:task:writeonly` 时通过。`task:task:write`、Task 租户事件、`application:application:patch` 与 `application:application:self_manage` 均已移除。权限页回读只剩两个 Task 业务 scope，并显示当前修改均已发布；在线版本仍为 `1.0.7` 已发布。收口后再次创建并完成临时 Task、读取当前 Human Task，五个服务均保持 active 且 `NRestarts=0`。Task 完成状态轮询已接线并完成真实滞留实例验收，其他入站命令仍未实现。
 
 **「事件」与「回调」是两个东西，别在同一个页签里找**（2026-07-26 实测踩过）：开发者后台「事件与回调」下分**事件配置 / 回调配置**两栏，各自有**各自的订阅方式**。`task.task.update_user_access_v2` 在**事件**里，`card.action.trigger`（卡片回传交互）在**回调**里。只订了事件时，`lark-cli event consume card.action.trigger` 以 `failed_precondition` 直接拒绝（文案用词是 callbacks 不是 events）；在飞书里点按钮则弹「该应用尚未配置卡片回调」。
 

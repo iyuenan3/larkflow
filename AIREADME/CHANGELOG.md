@@ -7,6 +7,7 @@
 - Resilience：飞书 Task 事件降为低延迟优化，不再是可靠性前提；完成信号可重复生成且由 Inbox 去重，单节点读取失败不会阻塞其他实例，常驻循环暴露每轮结构化计数。
 - Verified：完整离线套件 `622 passed, 7 skipped`，wheel 已确认包含新模块。开发服务器首次扫描读取 3 个当前 Human Task，新增 2 条完成信号；凭据侧验证和领域侧提交各 2 条，两个滞留实例、Node 与 Projection 全部完成。显式重跑只看到 1 个待办 Task 且新增信号为 0。五个服务均为 active、`NRestarts=0`。
 - Deployment：开发 wheel SHA-256 为 `e725f5ba39eedf264c675998082d1a21689b6e01632aba6de31086b14b72f8d7`，保存在 `releases/poll-e725f5ba39ee/`，对应内容提交 `e81aedf`。
+- Permissions：开发应用已移除临时管理 scope `application:application:patch` 与 `application:application:self_manage`，权限页回读只剩 `task:task:read + task:task:writeonly`，在线版本仍为已发布的 `1.0.7`。收口后真实 Task 创建、完成和轮询读取均通过，五个服务保持 active、`NRestarts=0`。
 - Boundary：当前按活跃 Human Task 线性产生只读 API 调用，只适用于单企业开发阶段。规模扩大前需要速率预算、抖动、游标和告警，不代表生产装配完成。
 
 ## v0.18.0-draft · 2026-08-01 · Target Task 启动对账与缺失重建（ADR-063）
