@@ -4,7 +4,7 @@
 >
 > 文档状态：2026-08-02 Phase 1 中央工作流基础实现，加一个未部署的 Personal Agent Edge Proof v0。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
-> last-synced: e81aedf · 2026-08-02
+> last-synced: b1d6165 · 2026-08-02
 
 ## 阅读顺序
 
