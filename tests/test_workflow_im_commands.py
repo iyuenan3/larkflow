@@ -142,6 +142,20 @@ def event_payload(text: str):
     }
 
 
+def flattened_event_payload(text: str):
+    return {
+        "event_id": "event_flat_1",
+        "message_id": "message_flat_1",
+        "chat_id": "chat_flat_1",
+        "message_type": "text",
+        "content": text,
+        "create_time": "1785656400000",
+        "sender_id": "person_flat_owner",
+        "sender_type": "user",
+        "type": "im.message.receive_v1",
+    }
+
+
 def test_bridge_persists_only_native_larkflow_text_commands():
     store = MemoryStore()
     bridge = IMEventInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
@@ -157,6 +171,22 @@ def test_bridge_persists_only_native_larkflow_text_commands():
     ) is False
     assert store.appended[0].sender_person_id == "person_owner"
     assert store.appended[0].chat_id == "chat_1"
+
+
+def test_bridge_accepts_flattened_lark_cli_event_payload():
+    store = MemoryStore()
+    bridge = IMEventInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+
+    assert bridge(
+        "im.message.receive_v1",
+        flattened_event_payload('/larkflow start quick_review {"brief":"ready"}'),
+    ) is True
+    event = store.appended[0]
+    assert event.id == "event_flat_1"
+    assert event.message_id == "message_flat_1"
+    assert event.chat_id == "chat_flat_1"
+    assert event.sender_person_id == "person_flat_owner"
+    assert event.text == '/larkflow start quick_review {"brief":"ready"}'
 
 
 def test_verification_requires_matching_active_directory_person():

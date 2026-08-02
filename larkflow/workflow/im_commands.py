@@ -227,41 +227,51 @@ class IMEventInboxBridge:
             return False
         header = payload.get("header")
         body = payload.get("event")
-        if not isinstance(header, Mapping) or not isinstance(body, Mapping):
-            raise ValueError("IM event requires V2 header and event objects")
-        sender = body.get("sender")
-        message = body.get("message")
-        if not isinstance(sender, Mapping) or not isinstance(message, Mapping):
-            raise ValueError("IM event requires sender and message objects")
-        if message.get("message_type") != "text":
+        if isinstance(header, Mapping) and isinstance(body, Mapping):
+            sender = body.get("sender")
+            message = body.get("message")
+            if not isinstance(sender, Mapping) or not isinstance(message, Mapping):
+                raise ValueError("IM event requires sender and message objects")
+            sender_id = sender.get("sender_id")
+            if not isinstance(sender_id, Mapping):
+                raise ValueError("IM event requires sender_id")
+            event_id = header.get("event_id")
+            message_id = message.get("message_id")
+            chat_id = message.get("chat_id")
+            message_type = message.get("message_type")
+            occurred_at = header.get("create_time")
+            sender_person_id = sender_id.get("open_id")
+            content = message.get("content")
+            try:
+                parsed_content = json.loads(content) if isinstance(content, str) else None
+            except json.JSONDecodeError as exc:
+                raise ValueError("IM text content is not valid JSON") from exc
+            text = (
+                parsed_content.get("text")
+                if isinstance(parsed_content, Mapping)
+                else None
+            )
+        else:
+            event_id = payload.get("event_id")
+            message_id = payload.get("message_id") or payload.get("id")
+            chat_id = payload.get("chat_id")
+            message_type = payload.get("message_type")
+            occurred_at = payload.get("create_time") or payload.get("timestamp")
+            sender_person_id = payload.get("sender_id")
+            text = payload.get("content")
+        if message_type != "text":
             return False
-        content = message.get("content")
-        try:
-            parsed_content = json.loads(content) if isinstance(content, str) else None
-        except json.JSONDecodeError as exc:
-            raise ValueError("IM text content is not valid JSON") from exc
-        text = (
-            parsed_content.get("text")
-            if isinstance(parsed_content, Mapping)
-            else None
-        )
         if not isinstance(text, str) or not text.strip().startswith(COMMAND_PREFIX):
             return False
-        sender_id = sender.get("sender_id")
-        if not isinstance(sender_id, Mapping):
-            raise ValueError("IM event requires sender_id")
         now = self.clock()
         event = IMCommandSignal(
-            id=_required_text(header.get("event_id"), "event_id"),
+            id=_required_text(event_id, "event_id"),
             tenant_id=self.tenant_id,
-            message_id=_required_text(message.get("message_id"), "message_id"),
-            chat_id=_required_text(message.get("chat_id"), "chat_id"),
-            sender_person_id=_required_text(
-                sender_id.get("open_id"),
-                "sender.open_id",
-            ),
+            message_id=_required_text(message_id, "message_id"),
+            chat_id=_required_text(chat_id, "chat_id"),
+            sender_person_id=_required_text(sender_person_id, "sender.open_id"),
             text=text.strip(),
-            occurred_at=_event_time(header.get("create_time"), fallback=now),
+            occurred_at=_event_time(occurred_at, fallback=now),
             received_at=now,
         )
         return self.store.append_im_command(event)
