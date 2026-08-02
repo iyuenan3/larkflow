@@ -547,3 +547,13 @@
 - Alternatives(否决)：允许任意节点 Owner 查看完整实例；只在 IM handler 内比较客户端身份；为不存在与无权限返回不同错误；直接输出完整结果或 open_id；复用 legacy SQLite 状态；无上限拼接所有节点。
 - Tradeoff：非 Instance Owner 即使负责某个节点也不能查看流程摘要；长流程只返回前 20 个节点，当前没有分页或文档链接。后续若开放协作者可见性，必须建立显式读取策略，不能放宽当前 Owner 检查。
 - Evidence：完整离线套件 `694 passed, 8 skipped`。开发服务器 wheel SHA-256 为 `b81103d0edd7a38922b3a0298c27f97b54dd9a11ae229b6da9676cbb068c6c2c`，六个 Python 服务均为 active、`NRestarts=0`。测试组织中的 Owner 查询已完成实例后，耐久命令记录、回复投影和飞书服务端消息回读一致，回复包含完成状态、`4/4` 与相对责任人，且不包含 open_id。
+
+## ADR-069 · 2026-08-03 · Owner 实例历史使用有界摘要读模型
+
+- **Status：Accepted · Development deployment。**
+- Problem：单实例状态查询要求用户先保存 Instance ID，无法回答“我最近有哪些流程”。若列表逐条加载完整聚合，会把节点、结果与人员标识带入不必要的读取面，也会随实例数量放大数据库开销。
+- Constraint：发送者必须先通过当前企业活跃成员校验；tenant 与 Instance Owner 都必须在仓储查询中强制限定；PostgreSQL 是状态权威；列表只读且有界；排序必须稳定；不能依赖客户端过滤；不能修改领域状态、审计或 aggregate version。
+- Decision：新增 `/larkflow list` 与 `InstanceSummary` 读模型。仓储在 SQL 中同时限定 tenant 和 `owner_person_id`，按 `created_at DESC, id DESC` 排序，只投影 Instance ID、目标、状态和节点完成计数。命令展示十条并查询第十一条判断是否提示更多；目标文本最多 120 个字符，不返回节点结果或任何人员 ID。
+- Alternatives(否决)：扫描后在 IM handler 过滤 Owner；逐条 `get` 完整聚合；允许节点 Owner 看到实例历史；无上限返回所有实例；仅按时间排序而没有稳定并列键；复用 legacy SQLite 搜索。
+- Tradeoff：当前没有分页、时间筛选或协作者视图；同一 Owner 超过十条时只能看到最近一页。后续若增加分页，游标必须同时包含创建时间和 Instance ID，并继续保持 tenant 与 Owner 的服务端过滤。
+- Evidence：完整离线套件 `698 passed, 9 skipped`，删除 Owner 或 tenant 过滤均被定向变异测试捕获。一次性 PostgreSQL 14 验证返回十条、Owner 隔离、稳定排序、草稿进度和索引存在性。开发服务器应用九份 migration 后，测试组织命令记录为 `processed / instances_listed`、回复为 `sent`；飞书服务端回读到十条本人实例，包含完成与进行中进度及详情提示，不包含人员 ID。六个 Python 服务均为 active、`NRestarts=0`。

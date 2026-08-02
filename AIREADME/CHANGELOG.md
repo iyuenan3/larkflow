@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.25.0-draft · 2026-08-03 · Owner 最近实例列表闭环
+
+- Added：新增 `/larkflow list`，通过领域层 `list_for_owner` 和独立摘要 DTO 返回当前发送者拥有的最近实例；帮助文本同步扩展为五个窄命令。
+- Security：查询同时限定 tenant 与 Instance Owner，只返回 Instance ID、目标摘要、状态和完成进度，不读取节点结果正文或人员 ID；最多展示十条，并以第十一条只判断是否需要截断提示。
+- Database：新增 migration `0009_owner_instance_list`，为 `(tenant_id, owner_person_id, created_at DESC, id DESC)` 增加复合索引。一次性 PostgreSQL 14 已验证 migration 重入、Owner 与 tenant 隔离、稳定倒序、进度汇总和索引存在性。
+- Verified：完整离线套件 `698 passed, 9 skipped`，删除 Owner 或 tenant 过滤的定向变异均使对应隔离测试失败。wheel SHA-256 为 `ced55f224cce312aec779fd1dd246403bffa757901d19968c36c355d06b152da`，六个 Python 服务统一重启后 active、`NRestarts=0`。
+- Acceptance：Owner 在测试组织发送 `/larkflow list`，耐久命令记录为 `processed / instances_listed`，回复为 `sent`；飞书服务端按消息 ID 回读到十条本人实例，包含完成与进行中进度及详情提示，不包含人员 ID。
+- Boundary：仅完成开发环境和测试组织验收，不代表生产装配；真实非 Owner 和跨 tenant 尝试未在测试组织逐项演练，隔离由离线变异测试与一次性 PostgreSQL 验证覆盖。
+
 ## v0.24.0-draft · 2026-08-03 · Owner 专属状态查询闭环
 
 - Added：新增 `/larkflow status <instance_id>`，通过领域层 `get_for_owner` 返回流程状态、进度和节点摘要，命令保持只读。
