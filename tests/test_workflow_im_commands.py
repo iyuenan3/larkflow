@@ -127,6 +127,27 @@ def template_document():
     }
 
 
+def editable_template_document():
+    document = template_document()
+    document["template"]["locked"] = False
+    document["nodes"].append(
+        {
+            "id": "publish",
+            "title": "Publish decision",
+            "owner_role": "reviewer",
+            "executor": "human",
+            "deps": ["review"],
+            "work": {
+                "objective": "Publish the reviewed decision",
+                "inputs": ["dependencies.review"],
+                "outputs": [{"id": "receipt", "type": "data"}],
+                "acceptance": ["A receipt is recorded"],
+            },
+        }
+    )
+    return document
+
+
 def event_payload(text: str):
     return {
         "header": {"event_id": "event_1", "create_time": "1785656400000"},
@@ -709,6 +730,110 @@ def test_full_instance_restart_command_previews_all_nodes_before_confirmation():
     assert restarted.nodes["review"].status.value == "ready"
 
 
+def test_graph_edit_command_previews_confirms_and_replays_safely():
+    repository = InMemoryWorkflowRepository()
+    templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
+    templates.create_template(
+        tenant_id=TENANT,
+        actor_person_id="person_admin",
+        document=editable_template_document(),
+    )
+    templates.enable(TENANT, "quick_review", actor_person_id="person_admin")
+    snapshot = templates.instantiate(
+        TENANT,
+        "quick_review",
+        inputs={"brief": "ready"},
+        owner_bindings={"reviewer": "person_owner"},
+    )
+    service = WorkflowService(repository, clock=lambda: NOW)
+    service.create_draft(
+        instance_id="edit_from_im",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=snapshot,
+    )
+    service.confirm_draft(
+        TENANT,
+        "edit_from_im",
+        actor_person_id="person_owner",
+    )
+    operations = json.dumps(
+        [
+            {
+                "op": "update_node",
+                "node_key": "publish",
+                "set": {"title": "Archive decision"},
+            }
+        ],
+        separators=(",", ":"),
+    )
+    store = MemoryStore()
+    worker = IMCommandWorker(
+        store,
+        service,
+        templates,
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    )
+    version_before = service.get(TENANT, "edit_from_im").version
+    store.command_claims = [
+        IMCommandClaim(
+            signal(
+                f"/larkflow edit edit_from_im {operations}",
+                event_id="event_edit_preview",
+            ),
+            "edit-preview-token",
+            1,
+        )
+    ]
+
+    preview_report = worker.run_once()
+
+    assert preview_report.processed == 1
+    preview_reply = store.processed[-1][2]["reply_text"]
+    assert store.processed[-1][2]["outcome"] == "graph_edit_previewed"
+    assert "运行中编辑预览" in preview_reply
+    assert "图版本：1 -> 2" in preview_reply
+    assert "修改：publish" in preview_reply
+    assert service.get(TENANT, "edit_from_im").version == version_before
+    assert service.get(TENANT, "edit_from_im").snapshot.node("publish").title == (
+        "Publish decision"
+    )
+    confirm_command = preview_reply.splitlines()[-1]
+
+    store.command_claims = [
+        IMCommandClaim(
+            signal(confirm_command, event_id="event_edit_confirm"),
+            "edit-confirm-token",
+            1,
+        )
+    ]
+    confirm_report = worker.run_once()
+
+    assert confirm_report.processed == 1
+    assert store.processed[-1][2]["outcome"] == "graph_edit_confirmed"
+    assert "运行中编辑已应用" in store.processed[-1][2]["reply_text"]
+    edited = service.get(TENANT, "edit_from_im")
+    assert edited.graph_revision == 2
+    assert edited.snapshot.node("publish").title == "Archive decision"
+    version_after = edited.version
+
+    store.command_claims = [
+        IMCommandClaim(
+            signal(confirm_command, event_id="event_edit_replay"),
+            "edit-replay-token",
+            1,
+        )
+    ]
+    replay_report = worker.run_once()
+
+    assert replay_report.processed == 1
+    assert "无需重复操作" in store.processed[-1][2]["reply_text"]
+    assert service.get(TENANT, "edit_from_im").version == version_after
+
+
 def test_help_lists_status_command():
     store = MemoryStore()
     store.command_claims = [
@@ -736,6 +861,14 @@ def test_help_lists_status_command():
     )
     assert (
         "/larkflow restart-all <instance_id>"
+        in store.processed[-1][2]["reply_text"]
+    )
+    assert (
+        "/larkflow edit <instance_id> <JSON操作数组>"
+        in store.processed[-1][2]["reply_text"]
+    )
+    assert (
+        "/larkflow edit-confirm <preview_id>"
         in store.processed[-1][2]["reply_text"]
     )
 
@@ -832,6 +965,10 @@ def test_non_owner_confirm_is_rejected_without_retrying_forever():
         "/larkflow restart-all instance extra",
         "/larkflow restart-confirm",
         "/larkflow restart-confirm preview extra",
+        "/larkflow edit instance_only",
+        "/larkflow edit instance_1 {}",
+        "/larkflow edit-confirm",
+        "/larkflow edit-confirm preview extra",
         "/larkflow start quick_review []",
         "/larkflow unsupported",
     ),
@@ -867,6 +1004,24 @@ def test_command_parser_accepts_restart_preview_and_confirmation():
     assert parse_im_command("/larkflow restart-all instance_1") == (
         "restart-all",
         "instance_1",
+        {},
+    )
+
+
+def test_command_parser_accepts_graph_edit_preview_and_confirmation():
+    operations = '[{"op":"remove_node","node_key":"review"}]'
+    assert parse_im_command(f"/larkflow edit instance_1 {operations}") == (
+        "edit",
+        "instance_1",
+        {
+            "operations": [
+                {"op": "remove_node", "node_key": "review"}
+            ]
+        },
+    )
+    assert parse_im_command("/larkflow edit-confirm preview_1") == (
+        "edit-confirm",
+        "preview_1",
         {},
     )
 

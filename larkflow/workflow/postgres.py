@@ -14,6 +14,11 @@ from .events import (
     OutboxClaim,
     OutboxEvent,
 )
+from .editing import (
+    GraphEditPreview,
+    GraphEditPreviewExpiredError,
+    GraphEditPreviewNotFoundError,
+)
 from .inbound import (
     InboxClaim,
     InvalidInboxClaimError,
@@ -214,6 +219,169 @@ class PostgresWorkflowRepository:
             ).fetchone()
         if inserted is None:
             raise ValueError(f"restart preview already exists: {preview.id}")
+
+    def add_graph_edit_preview(self, preview: GraphEditPreview) -> None:
+        with self.connection_factory() as connection:
+            inserted = connection.execute(
+                """
+                INSERT INTO workflow_graph_edit_previews (
+                    tenant_id, id, instance_id, actor_person_id, operations,
+                    added_node_keys, updated_node_keys, removed_node_keys,
+                    candidate_snapshot_hash, expected_instance_version,
+                    graph_revision, proposed_graph_revision,
+                    created_at, expires_at, consumed_at,
+                    applied_instance_version
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (tenant_id, id) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    preview.tenant_id,
+                    preview.id,
+                    preview.instance_id,
+                    preview.actor_person_id,
+                    Jsonb(to_json_value(preview.operations)),
+                    Jsonb(list(preview.added_node_keys)),
+                    Jsonb(list(preview.updated_node_keys)),
+                    Jsonb(list(preview.removed_node_keys)),
+                    preview.candidate_snapshot_hash,
+                    preview.expected_instance_version,
+                    preview.graph_revision,
+                    preview.proposed_graph_revision,
+                    preview.created_at,
+                    preview.expires_at,
+                    preview.consumed_at,
+                    preview.applied_instance_version,
+                ),
+            ).fetchone()
+        if inserted is None:
+            raise ValueError(f"graph edit preview already exists: {preview.id}")
+
+    def get_graph_edit_preview(
+        self,
+        tenant_id: str,
+        preview_id: str,
+    ) -> GraphEditPreview:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM workflow_graph_edit_previews
+                WHERE tenant_id = %s AND id = %s
+                """,
+                (tenant_id, preview_id),
+            ).fetchone()
+        if row is None:
+            raise GraphEditPreviewNotFoundError((tenant_id, preview_id))
+        return self._graph_edit_preview_from_row(row)
+
+    def save_graph_edit(
+        self,
+        instance: WorkflowInstance,
+        *,
+        preview: GraphEditPreview,
+        expected_version: int,
+        consumed_at: datetime,
+        audit_events: tuple[AuditEvent, ...] = (),
+        outbox_events: tuple[OutboxEvent, ...] = (),
+    ) -> bool:
+        self._require_created_at(instance)
+        self._validate_events(instance, audit_events, outbox_events)
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                row = connection.execute(
+                    """
+                    SELECT * FROM workflow_graph_edit_previews
+                    WHERE tenant_id = %s AND id = %s
+                    FOR UPDATE
+                    """,
+                    (preview.tenant_id, preview.id),
+                ).fetchone()
+                if row is None:
+                    raise GraphEditPreviewNotFoundError(
+                        (preview.tenant_id, preview.id)
+                    )
+                stored = self._graph_edit_preview_from_row(row)
+                if stored.consumed_at is not None:
+                    return False
+                if stored != preview:
+                    raise ValueError("graph edit preview changed before confirmation")
+                if consumed_at >= stored.expires_at:
+                    raise GraphEditPreviewExpiredError(preview.id)
+
+                updated = connection.execute(
+                    """
+                    UPDATE workflow_instances
+                    SET owner_person_id = %s,
+                        template_version_id = %s,
+                        status = %s,
+                        graph_revision = %s,
+                        version = version + 1,
+                        schema_version = %s,
+                        goal = %s,
+                        inputs = %s,
+                        snapshot = %s,
+                        confirmed_at = %s,
+                        completed_at = %s
+                    WHERE tenant_id = %s AND id = %s AND version = %s
+                    RETURNING version
+                    """,
+                    (
+                        instance.owner_person_id,
+                        instance.snapshot.template_version_id,
+                        instance.status.value,
+                        instance.graph_revision,
+                        instance.snapshot.schema_version,
+                        instance.snapshot.goal,
+                        Jsonb(to_json_value(instance.snapshot.inputs)),
+                        Jsonb(snapshot_to_dict(instance.snapshot)),
+                        instance.confirmed_at,
+                        instance.completed_at,
+                        instance.tenant_id,
+                        instance.id,
+                        expected_version,
+                    ),
+                ).fetchone()
+                if updated is None:
+                    current = connection.execute(
+                        """
+                        SELECT version FROM workflow_instances
+                        WHERE tenant_id = %s AND id = %s
+                        """,
+                        (instance.tenant_id, instance.id),
+                    ).fetchone()
+                    if current is None:
+                        raise InstanceNotFoundError(
+                            (instance.tenant_id, instance.id)
+                        )
+                    raise ConcurrentUpdateError(
+                        f"instance {instance.id} expected version "
+                        f"{expected_version}, found {current['version']}"
+                    )
+                instance.version = int(updated["version"])
+                self._write_children(connection, instance)
+                self._write_audit(connection, audit_events)
+                self._write_outbox(connection, outbox_events)
+                consumed = connection.execute(
+                    """
+                    UPDATE workflow_graph_edit_previews
+                    SET consumed_at = %s, applied_instance_version = %s
+                    WHERE tenant_id = %s AND id = %s
+                      AND consumed_at IS NULL
+                    RETURNING id
+                    """,
+                    (
+                        consumed_at,
+                        instance.version,
+                        preview.tenant_id,
+                        preview.id,
+                    ),
+                ).fetchone()
+                if consumed is None:
+                    raise RuntimeError("graph edit preview was consumed concurrently")
+        return True
 
     def get_restart_preview(
         self,
@@ -1006,6 +1174,30 @@ class PostgresWorkflowRepository:
         )
 
     def _write_children(self, connection: Any, instance: WorkflowInstance) -> None:
+        node_keys = list(instance.nodes)
+        connection.execute(
+            """
+            DELETE FROM workflow_node_dependencies
+            WHERE tenant_id = %s AND instance_id = %s
+            """,
+            (instance.tenant_id, instance.id),
+        )
+        connection.execute(
+            """
+            DELETE FROM workflow_node_attempts
+            WHERE tenant_id = %s AND instance_id = %s
+              AND NOT (node_key = ANY(%s))
+            """,
+            (instance.tenant_id, instance.id, node_keys),
+        )
+        connection.execute(
+            """
+            DELETE FROM workflow_node_instances
+            WHERE tenant_id = %s AND instance_id = %s
+              AND NOT (node_key = ANY(%s))
+            """,
+            (instance.tenant_id, instance.id, node_keys),
+        )
         for node_key, node in instance.nodes.items():
             connection.execute(
                 """
@@ -1296,6 +1488,48 @@ class PostgresWorkflowRepository:
             created_at=row["created_at"],
             expires_at=row["expires_at"],
             scope=row["scope"],
+            consumed_at=row["consumed_at"],
+            applied_instance_version=(
+                int(row["applied_instance_version"])
+                if row["applied_instance_version"] is not None
+                else None
+            ),
+        )
+
+    @staticmethod
+    def _graph_edit_preview_from_row(row: dict[str, Any]) -> GraphEditPreview:
+        operations = row["operations"]
+        added = row["added_node_keys"]
+        updated = row["updated_node_keys"]
+        removed = row["removed_node_keys"]
+        if not isinstance(operations, list) or not all(
+            isinstance(item, dict) for item in operations
+        ):
+            raise ValueError("graph edit preview operations are invalid")
+        for name, values in (
+            ("added_node_keys", added),
+            ("updated_node_keys", updated),
+            ("removed_node_keys", removed),
+        ):
+            if not isinstance(values, list) or not all(
+                isinstance(item, str) for item in values
+            ):
+                raise ValueError(f"graph edit preview {name} is invalid")
+        return GraphEditPreview(
+            id=row["id"],
+            tenant_id=row["tenant_id"],
+            instance_id=row["instance_id"],
+            actor_person_id=row["actor_person_id"],
+            operations=tuple(operations),
+            added_node_keys=tuple(added),
+            updated_node_keys=tuple(updated),
+            removed_node_keys=tuple(removed),
+            candidate_snapshot_hash=row["candidate_snapshot_hash"],
+            expected_instance_version=int(row["expected_instance_version"]),
+            graph_revision=int(row["graph_revision"]),
+            proposed_graph_revision=int(row["proposed_graph_revision"]),
+            created_at=row["created_at"],
+            expires_at=row["expires_at"],
             consumed_at=row["consumed_at"],
             applied_instance_version=(
                 int(row["applied_instance_version"])

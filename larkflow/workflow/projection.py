@@ -363,6 +363,8 @@ class WorkflowProjectionWorker:
             raise ValueError("node projection requires node_instance aggregate")
         node_key = _text(event.payload.get("node_key"), "node_key")
         attempt_no = _positive_int(event.payload.get("attempt_no"), "attempt_no")
+        if node_key not in instance.nodes:
+            return _ProjectionOutcome(noop=True)
         node = instance.nodes[node_key]
         if node.id != event.aggregate_id:
             raise ValueError("projection event aggregate does not match the current node")

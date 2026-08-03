@@ -422,6 +422,54 @@ def test_non_human_projection_events_are_published_without_external_io():
     assert repository.projection_records(TENANT) == ()
 
 
+def test_projection_ignores_stale_event_for_future_node_removed_by_graph_edit():
+    clock = Clock()
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=clock)
+    service.create_draft(
+        instance_id="instance_edit_projection",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=mixed_snapshot(),
+    )
+    service.confirm_draft(
+        TENANT,
+        "instance_edit_projection",
+        actor_person_id="person_owner",
+    )
+    preview = service.preview_graph_edit(
+        TENANT,
+        "instance_edit_projection",
+        ({"op": "remove_node", "node_key": "review"},),
+        actor_person_id="person_owner",
+    )
+    service.confirm_graph_edit(
+        TENANT,
+        preview.id,
+        actor_person_id="person_owner",
+    )
+    worker = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        RecordingTasks(),
+        tenant_id=TENANT,
+        worker_id="projection_edit",
+        clock=clock,
+    )
+
+    report = worker.run_once()
+
+    assert report.failed == 0
+    assert report.noops == 3
+    assert worker.run_once().claimed == 0
+    assert "review" not in service.get(
+        TENANT,
+        "instance_edit_projection",
+    ).nodes
+
+
 def test_automated_result_and_completed_instance_project_to_im_and_doc():
     clock = Clock()
     repository = InMemoryWorkflowRepository()

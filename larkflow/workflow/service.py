@@ -1,12 +1,19 @@
 """Application service for the first central workflow implementation slice."""
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
 from .directory import PersonDirectory, validate_snapshot_owners
+from .editing import (
+    GraphEditConfirmation,
+    GraphEditPreview,
+    GraphEditPreviewExpiredError,
+    StaleGraphEditPreviewError,
+    apply_future_graph_edit,
+)
 from .events import AuditEvent, OutboxEvent
 from .graph import validate_snapshot
 from .model import (
@@ -48,9 +55,12 @@ class WorkflowService:
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
         restart_preview_ttl: timedelta = timedelta(minutes=15),
+        graph_edit_preview_ttl: timedelta = timedelta(minutes=15),
     ) -> None:
         if restart_preview_ttl <= timedelta(0):
             raise ValueError("restart_preview_ttl must be positive")
+        if graph_edit_preview_ttl <= timedelta(0):
+            raise ValueError("graph_edit_preview_ttl must be positive")
         self.repository = repository
         self.scheduler = scheduler or Scheduler()
         self.runner = runner or NodeRunner()
@@ -58,6 +68,7 @@ class WorkflowService:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.id_factory = id_factory or (lambda: str(uuid4()))
         self.restart_preview_ttl = restart_preview_ttl
+        self.graph_edit_preview_ttl = graph_edit_preview_ttl
 
     def create_draft(
         self,
@@ -580,6 +591,163 @@ class WorkflowService:
             tenant_id,
             owner_person_id=actor_person_id,
             limit=limit,
+        )
+
+    def preview_graph_edit(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        operations: Sequence[Mapping[str, Any]],
+        *,
+        actor_person_id: str,
+    ) -> GraphEditPreview:
+        """Persist a future-region edit preview without changing the aggregate."""
+
+        instance = self.repository.get(tenant_id, instance_id)
+        self._require_instance_owner(instance, actor_person_id)
+        expected_version = instance.version
+        graph_revision = instance.graph_revision
+        now = self.clock()
+        plan = apply_future_graph_edit(instance, operations, now=now)
+        self._validate_edited_snapshot_owners(instance)
+        preview = GraphEditPreview(
+            id=self.id_factory(),
+            tenant_id=instance.tenant_id,
+            instance_id=instance.id,
+            actor_person_id=actor_person_id,
+            operations=plan.operations,
+            added_node_keys=plan.added_node_keys,
+            updated_node_keys=plan.updated_node_keys,
+            removed_node_keys=plan.removed_node_keys,
+            candidate_snapshot_hash=plan.candidate_snapshot_hash,
+            expected_instance_version=expected_version,
+            graph_revision=graph_revision,
+            proposed_graph_revision=plan.proposed_graph_revision,
+            created_at=now,
+            expires_at=now + self.graph_edit_preview_ttl,
+        )
+        self.repository.add_graph_edit_preview(preview)
+        return preview
+
+    def confirm_graph_edit(
+        self,
+        tenant_id: str,
+        preview_id: str,
+        *,
+        actor_person_id: str,
+    ) -> GraphEditConfirmation:
+        """Consume one future-region edit preview atomically."""
+
+        preview = self.repository.get_graph_edit_preview(tenant_id, preview_id)
+        if preview.actor_person_id != actor_person_id:
+            raise AuthorizationError("only the preview actor may confirm graph edit")
+        instance = self.repository.get(tenant_id, preview.instance_id)
+        self._require_instance_owner(instance, actor_person_id)
+        if preview.consumed_at is not None:
+            return GraphEditConfirmation(
+                instance=instance,
+                preview=preview,
+                already_applied=True,
+            )
+        now = self.clock()
+        if now >= preview.expires_at:
+            raise GraphEditPreviewExpiredError(preview.id)
+        if (
+            instance.version != preview.expected_instance_version
+            or instance.graph_revision != preview.graph_revision
+        ):
+            raise StaleGraphEditPreviewError(
+                "instance changed after graph edit preview"
+            )
+
+        expected_version = instance.version
+        plan = apply_future_graph_edit(instance, preview.operations, now=now)
+        if (
+            plan.operations != preview.operations
+            or plan.added_node_keys != preview.added_node_keys
+            or plan.updated_node_keys != preview.updated_node_keys
+            or plan.removed_node_keys != preview.removed_node_keys
+            or plan.candidate_snapshot_hash != preview.candidate_snapshot_hash
+            or plan.proposed_graph_revision != preview.proposed_graph_revision
+        ):
+            raise StaleGraphEditPreviewError(
+                "graph edit semantics changed after preview"
+            )
+        self._validate_edited_snapshot_owners(instance)
+        audit = self._audit(
+            instance,
+            "instance.graph_edited",
+            actor_person_id=actor_person_id,
+            correlation_id=preview.id,
+            aggregate_version=expected_version + 1,
+            now=now,
+            payload={
+                "operations": preview.operations,
+                "added_node_keys": preview.added_node_keys,
+                "updated_node_keys": preview.updated_node_keys,
+                "removed_node_keys": preview.removed_node_keys,
+                "previous_graph_revision": preview.graph_revision,
+                "graph_revision": preview.proposed_graph_revision,
+                "candidate_snapshot_hash": preview.candidate_snapshot_hash,
+            },
+        )
+        outbox_events: tuple[OutboxEvent, ...] = ()
+        if instance.status == InstanceStatus.DONE:
+            outbox_events = (
+                self._outbox(
+                    instance,
+                    event_type="instance.projection_completed_requested",
+                    aggregate_type="workflow_instance",
+                    aggregate_id=instance.id,
+                    aggregate_version=expected_version + 1,
+                    payload={
+                        "instance_id": instance.id,
+                        "status": instance.status.value,
+                    },
+                    now=now,
+                ),
+            )
+        try:
+            saved = self.repository.save_graph_edit(
+                instance,
+                preview=preview,
+                expected_version=expected_version,
+                consumed_at=now,
+                audit_events=(audit,),
+                outbox_events=outbox_events,
+            )
+        except ConcurrentUpdateError as exc:
+            raise StaleGraphEditPreviewError(
+                "instance changed while confirming graph edit"
+            ) from exc
+        if not saved:
+            current_preview = self.repository.get_graph_edit_preview(
+                tenant_id,
+                preview_id,
+            )
+            return GraphEditConfirmation(
+                instance=self.repository.get(tenant_id, preview.instance_id),
+                preview=current_preview,
+                already_applied=True,
+            )
+        return GraphEditConfirmation(
+            instance=self.repository.get(tenant_id, instance.id),
+            preview=self.repository.get_graph_edit_preview(tenant_id, preview_id),
+        )
+
+    def _validate_edited_snapshot_owners(
+        self,
+        instance: WorkflowInstance,
+    ) -> None:
+        if self.directory is None:
+            return
+        validate_snapshot_owners(
+            self.directory,
+            tenant_id=instance.tenant_id,
+            instance_owner_person_id=instance.owner_person_id,
+            node_owner_person_ids=tuple(
+                node.owner_person_id for node in instance.snapshot.nodes
+            ),
         )
 
     def preview_node_restart(

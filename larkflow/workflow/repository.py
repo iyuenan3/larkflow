@@ -19,6 +19,11 @@ from .events import (
     OutboxRecord,
     OutboxStatus,
 )
+from .editing import (
+    GraphEditPreview,
+    GraphEditPreviewExpiredError,
+    GraphEditPreviewNotFoundError,
+)
 from .model import (
     TemplateAuditEvent,
     TemplateStatus,
@@ -90,6 +95,29 @@ class WorkflowRepository(Protocol):
         ...
 
     def add_restart_preview(self, preview: RestartPreview) -> None:
+        ...
+
+    def add_graph_edit_preview(self, preview: GraphEditPreview) -> None:
+        ...
+
+    def get_graph_edit_preview(
+        self,
+        tenant_id: str,
+        preview_id: str,
+    ) -> GraphEditPreview:
+        ...
+
+    def save_graph_edit(
+        self,
+        instance: WorkflowInstance,
+        *,
+        preview: GraphEditPreview,
+        expected_version: int,
+        consumed_at: datetime,
+        audit_events: tuple[AuditEvent, ...] = (),
+        outbox_events: tuple[OutboxEvent, ...] = (),
+    ) -> bool:
+        """Persist a graph edit and consume its preview atomically."""
         ...
 
     def get_restart_preview(
@@ -258,6 +286,7 @@ class InMemoryWorkflowRepository:
         self._outbox_dedupe: set[tuple[str, tuple[str, str, str, int]]] = set()
         self._projections: dict[tuple[str, str, int, str], ProjectionRecord] = {}
         self._restart_previews: dict[tuple[str, str], RestartPreview] = {}
+        self._graph_edit_previews: dict[tuple[str, str], GraphEditPreview] = {}
 
     def add(
         self,
@@ -356,6 +385,63 @@ class InMemoryWorkflowRepository:
         if (preview.tenant_id, preview.instance_id) not in self._instances:
             raise InstanceNotFoundError((preview.tenant_id, preview.instance_id))
         self._restart_previews[key] = deepcopy(preview)
+
+    def add_graph_edit_preview(self, preview: GraphEditPreview) -> None:
+        key = (preview.tenant_id, preview.id)
+        if key in self._graph_edit_previews:
+            raise ValueError(f"graph edit preview already exists: {preview.id}")
+        if (preview.tenant_id, preview.instance_id) not in self._instances:
+            raise InstanceNotFoundError((preview.tenant_id, preview.instance_id))
+        self._graph_edit_previews[key] = deepcopy(preview)
+
+    def get_graph_edit_preview(
+        self,
+        tenant_id: str,
+        preview_id: str,
+    ) -> GraphEditPreview:
+        try:
+            return deepcopy(self._graph_edit_previews[(tenant_id, preview_id)])
+        except KeyError as exc:
+            raise GraphEditPreviewNotFoundError((tenant_id, preview_id)) from exc
+
+    def save_graph_edit(
+        self,
+        instance: WorkflowInstance,
+        *,
+        preview: GraphEditPreview,
+        expected_version: int,
+        consumed_at: datetime,
+        audit_events: tuple[AuditEvent, ...] = (),
+        outbox_events: tuple[OutboxEvent, ...] = (),
+    ) -> bool:
+        key = (instance.tenant_id, instance.id)
+        current = self._instances.get(key)
+        if current is None:
+            raise InstanceNotFoundError(key)
+        stored = self._graph_edit_previews.get((preview.tenant_id, preview.id))
+        if stored is None:
+            raise GraphEditPreviewNotFoundError((preview.tenant_id, preview.id))
+        if stored.consumed_at is not None:
+            return False
+        if stored != preview:
+            raise ValueError("graph edit preview changed before confirmation")
+        if consumed_at >= stored.expires_at:
+            raise GraphEditPreviewExpiredError(preview.id)
+        if current.version != expected_version:
+            raise ConcurrentUpdateError(
+                f"instance {instance.id} expected version {expected_version}, "
+                f"found {current.version}"
+            )
+        self._validate_events(instance, audit_events, outbox_events)
+        instance.version = expected_version + 1
+        self._instances[key] = deepcopy(instance)
+        self._graph_edit_previews[(preview.tenant_id, preview.id)] = replace(
+            preview,
+            consumed_at=consumed_at,
+            applied_instance_version=instance.version,
+        )
+        self._append_events(audit_events, outbox_events)
+        return True
 
     def get_restart_preview(
         self,

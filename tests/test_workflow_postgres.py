@@ -118,6 +118,18 @@ class BarrierRestartRepository(PostgresWorkflowRepository):
         return super().save_restart(*args, **kwargs)
 
 
+class BarrierGraphEditRepository(PostgresWorkflowRepository):
+    """Make two graph edit confirmations reach the atomic save together."""
+
+    def __init__(self, connection_factory, barrier: Barrier) -> None:
+        super().__init__(connection_factory)
+        self.barrier = barrier
+
+    def save_graph_edit(self, *args, **kwargs):
+        self.barrier.wait(timeout=5)
+        return super().save_graph_edit(*args, **kwargs)
+
+
 def template_document() -> dict:
     return {
         "schema_version": "0.2",
@@ -396,6 +408,164 @@ def test_postgres_restart_preview_is_durable_and_consumed_exactly_once(
     assert audit_count == 1
     assert index_row is not None
     assert stored.scope == restart_scope
+
+
+def test_postgres_graph_edit_is_durable_and_consumed_exactly_once():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_graph_edit_{suffix}"
+    instance_id = f"instance_graph_edit_{suffix}"
+    owner = f"person_owner_{suffix}"
+    repository = PostgresWorkflowRepository(connection_factory)
+    clock = Clock(datetime(2026, 8, 3, 5, 0, tzinfo=timezone.utc))
+    service = WorkflowService(repository, clock=clock)
+    work = {
+        "objective": "Complete the step",
+        "inputs": [],
+        "outputs": [{"id": "result", "type": "data"}],
+        "acceptance": ["A result exists"],
+    }
+    service.create_draft(
+        instance_id=instance_id,
+        tenant_id=tenant_id,
+        owner_person_id=owner,
+        actor_person_id=owner,
+        snapshot=InstanceSnapshot(
+            goal="Edit a future graph",
+            nodes=(
+                NodeSpec("brief", "Confirm brief", owner, "human", work=work),
+                NodeSpec(
+                    "draft",
+                    "Draft summary",
+                    owner,
+                    "agent",
+                    deps=("brief",),
+                    work=work,
+                ),
+                NodeSpec(
+                    "review",
+                    "Review summary",
+                    owner,
+                    "human",
+                    deps=("draft",),
+                    work=work,
+                ),
+            ),
+        ),
+    )
+    service.confirm_draft(tenant_id, instance_id, actor_person_id=owner)
+    activation = service.dispatch_ready(tenant_id, instance_id)[0]
+    service.submit_human(
+        tenant_id,
+        instance_id,
+        "brief",
+        actor_person_id=owner,
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        result={"result": "confirmed"},
+    )
+    version_before = repository.get(tenant_id, instance_id).version
+    preview = service.preview_graph_edit(
+        tenant_id,
+        instance_id,
+        (
+            {
+                "op": "update_node",
+                "node_key": "draft",
+                "set": {"title": "Draft revised summary"},
+            },
+            {"op": "remove_node", "node_key": "review"},
+            {
+                "op": "add_node",
+                "node": {
+                    "key": "archive",
+                    "title": "Archive summary",
+                    "owner_person_id": owner,
+                    "executor": "human",
+                    "deps": ["draft"],
+                    "work": work,
+                },
+            },
+        ),
+        actor_person_id=owner,
+    )
+    assert repository.get_graph_edit_preview(tenant_id, preview.id) == preview
+
+    barrier = Barrier(2)
+
+    def confirm(_index):
+        concurrent = WorkflowService(
+            BarrierGraphEditRepository(connection_factory, barrier),
+            clock=clock,
+        )
+        return concurrent.confirm_graph_edit(
+            tenant_id,
+            preview.id,
+            actor_person_id=owner,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        confirmations = list(pool.map(confirm, (1, 2)))
+
+    assert sorted(item.already_applied for item in confirmations) == [False, True]
+    edited = repository.get(tenant_id, instance_id)
+    assert edited.version == version_before + 1
+    assert edited.graph_revision == 2
+    assert tuple(spec.key for spec in edited.snapshot.nodes) == (
+        "brief",
+        "draft",
+        "archive",
+    )
+    assert edited.snapshot.node("draft").title == "Draft revised summary"
+    assert edited.nodes["draft"].status.value == "ready"
+    assert edited.nodes["archive"].status.value == "pending"
+    assert edited.current_attempt("brief").result == {"result": "confirmed"}
+    assert "review" not in edited.nodes
+    assert ("review", 1) not in edited.attempts
+    stored = repository.get_graph_edit_preview(tenant_id, preview.id)
+    assert stored.consumed_at == clock.now
+    assert stored.applied_instance_version == edited.version
+    with connection_factory() as connection:
+        audit_count = connection.execute(
+            """
+            SELECT count(*) AS count FROM workflow_audit_events
+            WHERE tenant_id = %s AND instance_id = %s
+              AND event_type = 'instance.graph_edited'
+            """,
+            (tenant_id, instance_id),
+        ).fetchone()["count"]
+        dependency_rows = connection.execute(
+            """
+            SELECT node_key, dependency_key
+            FROM workflow_node_dependencies
+            WHERE tenant_id = %s AND instance_id = %s
+            ORDER BY node_key, dependency_key
+            """,
+            (tenant_id, instance_id),
+        ).fetchall()
+        removed_rows = connection.execute(
+            """
+            SELECT count(*) AS count FROM workflow_node_instances
+            WHERE tenant_id = %s AND instance_id = %s AND node_key = 'review'
+            """,
+            (tenant_id, instance_id),
+        ).fetchone()["count"]
+        index_row = connection.execute(
+            """
+            SELECT indexname FROM pg_indexes
+            WHERE schemaname = 'public'
+              AND indexname = 'workflow_graph_edit_previews_open_idx'
+            """
+        ).fetchone()
+    assert audit_count == 1
+    assert dependency_rows == [
+        {"node_key": "archive", "dependency_key": "draft"},
+        {"node_key": "draft", "dependency_key": "brief"},
+    ]
+    assert removed_rows == 0
+    assert index_row is not None
 
 
 def test_postgres_persists_a_dependent_draft_before_nodes_are_materialized():

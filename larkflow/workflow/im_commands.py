@@ -10,6 +10,14 @@ import json
 from typing import Any, Protocol
 
 from .directory import PersonDirectory
+from .editing import (
+    GraphEditConfirmation,
+    GraphEditNotAllowedError,
+    GraphEditPreview,
+    GraphEditPreviewExpiredError,
+    GraphEditPreviewNotFoundError,
+    StaleGraphEditPreviewError,
+)
 from .model import InstanceStatus, WorkflowInstance, WorkflowInstanceSummary
 from .repository import (
     InstanceAlreadyExistsError,
@@ -510,6 +518,8 @@ class IMCommandWorker:
                 "/larkflow confirm <instance_id>\n"
                 "/larkflow status <instance_id>\n"
                 "/larkflow list\n"
+                "/larkflow edit <instance_id> <JSON操作数组>\n"
+                "/larkflow edit-confirm <preview_id>\n"
                 "/larkflow restart <instance_id> <node_key>\n"
                 "/larkflow restart-all <instance_id>\n"
                 "/larkflow restart-confirm <preview_id>",
@@ -614,6 +624,68 @@ class IMCommandWorker:
                 "instances_listed",
                 None,
                 _list_reply(summaries),
+            )
+        if command == "edit":
+            instance_id = argument or ""
+            operations = inputs.get("operations")
+            if not isinstance(operations, list):
+                raise IMCommandRejected("编辑操作必须是 JSON 数组")
+            try:
+                preview = self.service.preview_graph_edit(
+                    self.tenant_id,
+                    instance_id,
+                    operations,
+                    actor_person_id=event.sender_person_id,
+                )
+                instance = self.service.get_for_owner(
+                    self.tenant_id,
+                    instance_id,
+                    actor_person_id=event.sender_person_id,
+                )
+                if instance.version != preview.expected_instance_version:
+                    raise StaleGraphEditPreviewError(
+                        "instance changed while rendering graph edit preview"
+                    )
+            except (
+                AuthorizationError,
+                GraphEditNotAllowedError,
+                InstanceNotFoundError,
+            ):
+                raise IMCommandRejected(
+                    "实例不存在、无权操作，编辑触及已开始区域，或变更后的图无效"
+                ) from None
+            except StaleGraphEditPreviewError:
+                raise IMCommandRejected("流程状态已变化，请重新预览") from None
+            return (
+                "graph_edit_previewed",
+                instance.id,
+                _graph_edit_preview_reply(preview, instance),
+            )
+        if command == "edit-confirm":
+            preview_id = argument or ""
+            try:
+                confirmation = self.service.confirm_graph_edit(
+                    self.tenant_id,
+                    preview_id,
+                    actor_person_id=event.sender_person_id,
+                )
+            except GraphEditPreviewExpiredError:
+                raise IMCommandRejected("编辑预览已过期，请重新预览") from None
+            except StaleGraphEditPreviewError:
+                raise IMCommandRejected("流程状态已变化，请重新预览") from None
+            except (
+                AuthorizationError,
+                GraphEditNotAllowedError,
+                GraphEditPreviewNotFoundError,
+                InstanceNotFoundError,
+            ):
+                raise IMCommandRejected(
+                    "编辑预览不存在、已失效或你无权确认"
+                ) from None
+            return (
+                "graph_edit_confirmed",
+                confirmation.instance.id,
+                _graph_edit_confirmation_reply(confirmation),
             )
         if command == "restart":
             instance_id = argument or ""
@@ -815,6 +887,26 @@ def parse_im_command(text: str) -> tuple[str, str | None, dict[str, Any]]:
         if len(parts) != 2:
             raise IMCommandRejected("list 命令不接受其他参数")
         return "list", None, {}
+    if parts[1] == "edit":
+        if len(parts) != 4:
+            raise IMCommandRejected(
+                "用法：/larkflow edit <instance_id> <JSON操作数组>"
+            )
+        try:
+            parsed = json.loads(parts[3])
+        except json.JSONDecodeError as exc:
+            raise IMCommandRejected("编辑操作必须是 JSON 数组") from exc
+        if not isinstance(parsed, list) or not all(
+            isinstance(item, Mapping) for item in parsed
+        ):
+            raise IMCommandRejected("编辑操作必须是 JSON 对象数组")
+        return "edit", parts[2], {"operations": parsed}
+    if parts[1] == "edit-confirm":
+        if len(parts) != 3:
+            raise IMCommandRejected(
+                "用法：/larkflow edit-confirm <preview_id>"
+            )
+        return "edit-confirm", parts[2], {}
     if parts[1] == "restart":
         if len(parts) != 4:
             raise IMCommandRejected(
@@ -841,8 +933,8 @@ def parse_im_command(text: str) -> tuple[str, str | None, dict[str, Any]]:
         return parts[1], parts[2], {}
     if parts[1] != "start" or len(parts) < 3:
         raise IMCommandRejected(
-            "仅支持 start、confirm、status、list、restart、restart-all、"
-            "restart-confirm 和 help"
+            "仅支持 start、confirm、status、list、edit、edit-confirm、restart、"
+            "restart-all、restart-confirm 和 help"
         )
     inputs: dict[str, Any] = {}
     if len(parts) == 4:
@@ -925,6 +1017,60 @@ def _list_reply(summaries: tuple[WorkflowInstanceSummary, ...]) -> str:
     if len(summaries) > MAX_LIST_INSTANCES:
         lines.append(f"仅显示最近 {MAX_LIST_INSTANCES} 个流程。")
     lines.append("使用 /larkflow status <instance_id> 查看节点详情。")
+    return "\n".join(lines)
+
+
+def _graph_edit_preview_reply(
+    preview: GraphEditPreview,
+    instance: WorkflowInstance,
+) -> str:
+    lines = [
+        "运行中编辑预览",
+        f"实例：{_status_field(instance.id)}",
+        f"图版本：{preview.graph_revision} -> {preview.proposed_graph_revision}",
+        f"操作数：{len(preview.operations)}",
+    ]
+    for label, keys in (
+        ("新增", preview.added_node_keys),
+        ("修改", preview.updated_node_keys),
+        ("删除", preview.removed_node_keys),
+    ):
+        if keys:
+            lines.append(f"{label}：{', '.join(keys)}")
+    lines.extend(
+        (
+            "确认后只修改尚未开始的节点与边；Template 和已执行历史不变。",
+            "若流程状态或图版本发生变化，该预览会自动失效。",
+            "请确认：",
+            f"/larkflow edit-confirm {preview.id}",
+        )
+    )
+    return "\n".join(lines)
+
+
+def _graph_edit_confirmation_reply(
+    confirmation: GraphEditConfirmation,
+) -> str:
+    preview = confirmation.preview
+    instance = confirmation.instance
+    prefix = (
+        "该编辑已执行，无需重复操作。"
+        if confirmation.already_applied
+        else "运行中编辑已应用。"
+    )
+    lines = [
+        prefix,
+        f"实例：{_status_field(instance.id)}",
+        f"图版本：{instance.graph_revision}",
+        f"状态：{_instance_status_label(instance.status.value)}",
+    ]
+    for label, keys in (
+        ("新增", preview.added_node_keys),
+        ("修改", preview.updated_node_keys),
+        ("删除", preview.removed_node_keys),
+    ):
+        if keys:
+            lines.append(f"{label}：{', '.join(keys)}")
     return "\n".join(lines)
 
 
