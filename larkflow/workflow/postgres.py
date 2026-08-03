@@ -770,7 +770,6 @@ class PostgresWorkflowRepository:
                  AND projection.kind = 'feishu_task'
                 WHERE instance.tenant_id = %s
                   AND (%s::text IS NULL OR instance.id > %s)
-                  AND node.executor = 'human'
                   AND (
                     node.status = 'waiting_human'
                     OR (
@@ -1976,8 +1975,9 @@ class PostgresIMCommandStore:
                 """
                 INSERT INTO workflow_im_commands (
                     tenant_id, id, message_id, chat_id, sender_person_id,
-                    text, mentions, available_at, occurred_at, received_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    text, mentions, card_update_token, available_at,
+                    occurred_at, received_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT DO NOTHING
                 RETURNING id
                 """,
@@ -1989,6 +1989,7 @@ class PostgresIMCommandStore:
                     event.sender_person_id,
                     event.text,
                     Jsonb([_mention_to_dict(item) for item in event.mentions]),
+                    event.card_update_token,
                     event.received_at,
                     event.occurred_at,
                     event.received_at,
@@ -2357,6 +2358,7 @@ class PostgresIMCommandStore:
                 idempotency_key=_reply_key(row["id"]),
                 claim_token=token,
                 attempt_count=int(row["reply_attempt_count"]),
+                card_update_token=row["card_update_token"],
             )
             for row in rows
         )
@@ -3025,6 +3027,7 @@ class PostgresIMCommandStore:
             occurred_at=row["occurred_at"],
             received_at=row["received_at"],
             mentions=tuple(_mention_from_dict(item) for item in raw_mentions),
+            card_update_token=row.get("card_update_token"),
         )
 
     @staticmethod

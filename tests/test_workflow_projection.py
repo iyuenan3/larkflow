@@ -20,6 +20,7 @@ from larkflow.workflow import (
     NodeStatus,
     OutboxEvent,
     OutboxStatus,
+    RecoveryAction,
     WorkflowInstance,
     WorkflowProjectionWorker,
     WorkflowService,
@@ -420,6 +421,98 @@ def test_non_human_projection_events_are_published_without_external_io():
     assert report.noops == 1
     assert tasks.create_requests == []
     assert repository.projection_records(TENANT) == ()
+
+
+def test_failed_agent_projects_a_recovery_card_and_takeover_task():
+    clock = Clock()
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=clock)
+    service.create_draft(
+        instance_id="instance_failure_card",
+        tenant_id=TENANT,
+        owner_person_id="person_initiator",
+        actor_person_id="person_initiator",
+        snapshot=InstanceSnapshot(
+            nodes=(
+                NodeSpec(
+                    "draft",
+                    "Draft summary",
+                    "person_agent_owner",
+                    "agent",
+                    work={
+                        "objective": "Draft the summary",
+                        "outputs": [{"id": "summary", "type": "data"}],
+                        "acceptance": ["A summary exists"],
+                    },
+                ),
+            )
+        ),
+    )
+    service.confirm_draft(
+        TENANT,
+        "instance_failure_card",
+        actor_person_id="person_initiator",
+    )
+    tasks = RecordingTasks()
+    messages = RecordingMessages()
+    worker = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        tasks,
+        messages,
+        tenant_id=TENANT,
+        worker_id="projection_1",
+        clock=clock,
+    )
+    assert worker.run_once().noops == 1
+    activation = service.dispatch_due(
+        TENANT,
+        "instance_failure_card",
+        worker_id="edge_1",
+    )[0]
+    failed = service.fail_automated(
+        TENANT,
+        "instance_failure_card",
+        "draft",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        claim_token=activation.claim_token or "",
+        worker_id="edge_1",
+        error_code="provider_timeout",
+        error_message="secret provider response",
+    )
+
+    assert worker.run_once().messages_sent == 1
+    request = messages.requests[0]
+    assert request.recipient_person_id == "person_agent_owner"
+    assert request.card is not None
+    rendered = str(request.card)
+    assert "provider_timeout" in rendered
+    assert "secret provider response" not in rendered
+    buttons = request.card["body"]["elements"][1]["columns"]
+    actions = {
+        column["elements"][0]["behaviors"][0]["value"]["action"]
+        for column in buttons
+    }
+    assert actions == {"retry", "human_takeover"}
+
+    node = failed.nodes["draft"]
+    service.recover_failed_node(
+        TENANT,
+        failed.id,
+        "draft",
+        RecoveryAction.HUMAN_TAKEOVER,
+        actor_person_id="person_agent_owner",
+        expected_instance_version=failed.version,
+        expected_node_version=node.version,
+        expected_attempt_no=node.current_attempt_no,
+    )
+    projected = worker.run_once()
+
+    assert projected.tasks_created == 1
+    assert tasks.create_requests[0].owner_person_id == "person_agent_owner"
+    assert "Agent 失败后的人工接管" in tasks.create_requests[0].description
 
 
 def test_projection_ignores_stale_event_for_future_node_removed_by_graph_edit():

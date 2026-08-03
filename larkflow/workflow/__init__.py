@@ -107,6 +107,7 @@ from .im_commands import (
     IMReplyWorker,
     IMVerificationReport,
     InvalidIMCommandClaimError,
+    RecoveryActionInboxBridge,
     parse_im_command,
 )
 from .inbound import (
@@ -163,6 +164,13 @@ from .repository import (
     TemplateNotFoundError,
     TemplateStore,
     WorkflowRepository,
+)
+from .recovery import (
+    RECOVERY_ACTION_NAME,
+    RecoveryAction,
+    RecoveryNotAllowedError,
+    StaleRecoveryError,
+    apply_failed_node_recovery,
 )
 from .restart import (
     RestartConfirmation,
@@ -329,6 +337,10 @@ __all__ = [
     "IMReplyWorker",
     "IMVerificationReport",
     "InvalidRoleBindingClaimError",
+    "RECOVERY_ACTION_NAME",
+    "RecoveryAction",
+    "RecoveryActionInboxBridge",
+    "RecoveryNotAllowedError",
     "InMemoryTemplateStore",
     "InMemoryEdgeStore",
     "InMemoryWorkflowInbox",
@@ -395,6 +407,7 @@ __all__ = [
     "Scheduler",
     "StaleAttemptError",
     "StaleGraphEditPreviewError",
+    "StaleRecoveryError",
     "TargetInboundSettings",
     "TargetProjectionSettings",
     "TargetRuntimeSettings",
@@ -434,6 +447,7 @@ __all__ = [
     "WorkerLoopSettings",
     "WorkerLoopSummary",
     "apply_migrations",
+    "apply_failed_node_recovery",
     "apply_future_graph_edit",
     "available_migrations",
     "instantiate_template_version",

@@ -27,6 +27,7 @@ from .model import (
     WorkflowInstanceSummary,
 )
 from .repository import ConcurrentUpdateError, WorkflowRepository
+from .recovery import RecoveryAction, apply_failed_node_recovery
 from .restart import (
     RestartConfirmation,
     RestartPreview,
@@ -558,6 +559,83 @@ class WorkflowService:
         )
         return self.repository.get(tenant_id, instance_id)
 
+    def recover_failed_node(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        node_key: str,
+        action: RecoveryAction,
+        *,
+        actor_person_id: str,
+        expected_instance_version: int,
+        expected_node_version: int,
+        expected_attempt_no: int,
+        correlation_id: str | None = None,
+    ) -> WorkflowInstance:
+        """Retry or hand a failed automated node to its accountable owner."""
+
+        action = RecoveryAction(action)
+        instance = self.repository.get(tenant_id, instance_id)
+        expected_version = instance.version
+        now = self.clock()
+        affected = apply_failed_node_recovery(
+            instance,
+            node_key,
+            action,
+            actor_person_id=actor_person_id,
+            expected_instance_version=expected_instance_version,
+            expected_node_version=expected_node_version,
+            expected_attempt_no=expected_attempt_no,
+            now=now,
+        )
+        node = instance.nodes[node_key]
+        event_type = (
+            "node.automated_retry_started"
+            if action == RecoveryAction.RETRY
+            else "node.human_takeover_started"
+        )
+        audit = self._audit(
+            instance,
+            event_type,
+            actor_person_id=actor_person_id,
+            correlation_id=correlation_id or self.id_factory(),
+            aggregate_version=expected_version + 1,
+            now=now,
+            node_key=node_key,
+            attempt_no=node.current_attempt_no,
+            payload={
+                "failed_attempt_no": expected_attempt_no,
+                "recovery_action": action.value,
+                "affected_node_keys": affected,
+            },
+        )
+        outbox_events: tuple[OutboxEvent, ...] = ()
+        if action == RecoveryAction.HUMAN_TAKEOVER:
+            outbox_events = (
+                self._outbox(
+                    instance,
+                    event_type="node.projection_create_requested",
+                    aggregate_type="node_instance",
+                    aggregate_id=node.id,
+                    aggregate_version=node.version,
+                    payload={
+                        "instance_id": instance.id,
+                        "node_key": node_key,
+                        "attempt_no": node.current_attempt_no,
+                        "status": node.status.value,
+                        "recovery_action": action.value,
+                    },
+                    now=now,
+                ),
+            )
+        self.repository.save(
+            instance,
+            expected_version=expected_version,
+            audit_events=(audit,),
+            outbox_events=outbox_events,
+        )
+        return self.repository.get(tenant_id, instance_id)
+
     def get(self, tenant_id: str, instance_id: str) -> WorkflowInstance:
         return self.repository.get(tenant_id, instance_id)
 
@@ -879,6 +957,15 @@ class WorkflowService:
             node_key: instance.nodes[node_key].current_attempt_no
             for node_key in preview.affected_node_keys
         }
+        old_human_work = {
+            node_key: (
+                instance.nodes[node_key].executor == ExecutorKind.HUMAN
+                or instance.current_attempt(node_key).status.value
+                == NodeStatus.WAITING_HUMAN.value
+                or instance.current_attempt(node_key).submitted_by_person_id is not None
+            )
+            for node_key in preview.affected_node_keys
+        }
         apply_restart(instance, preview, now=now)
         audit_event_type = (
             "instance.node_restarted"
@@ -922,7 +1009,7 @@ class WorkflowService:
                 now=now,
             )
             for node_key in preview.affected_node_keys
-            if instance.nodes[node_key].executor == ExecutorKind.HUMAN
+            if old_human_work[node_key]
         )
         try:
             saved = self.repository.save_restart(

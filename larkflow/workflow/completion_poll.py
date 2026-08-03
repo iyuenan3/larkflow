@@ -12,7 +12,7 @@ from .inbound import (
     TaskStateReader,
     WorkflowInboxStore,
 )
-from .model import ExecutorKind, NodeStatus
+from .model import NodeStatus
 from .projection import FEISHU_TASK_KIND
 from .repository import ProjectionStore, WorkflowRepository
 
@@ -109,10 +109,7 @@ class TaskCompletionPoller:
                     continue
                 for node_key in sorted(instance.nodes):
                     node = instance.nodes[node_key]
-                    if (
-                        node.executor != ExecutorKind.HUMAN
-                        or node.status != NodeStatus.WAITING_HUMAN
-                    ):
+                    if node.status != NodeStatus.WAITING_HUMAN:
                         continue
                     if should_stop():
                         interrupted = True

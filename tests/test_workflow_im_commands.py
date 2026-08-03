@@ -20,7 +20,11 @@ from larkflow.workflow import (
     IMReplyWorker,
     InMemoryTemplateStore,
     InMemoryWorkflowRepository,
+    InstanceSnapshot,
     InstanceStatus,
+    NodeSpec,
+    NodeStatus,
+    RecoveryActionInboxBridge,
     TemplateService,
     WorkflowService,
     parse_im_command,
@@ -246,6 +250,79 @@ def test_bridge_accepts_flattened_lark_cli_event_payload():
     assert event.chat_id == "chat_flat_1"
     assert event.sender_person_id == "person_flat_owner"
     assert event.text == '/larkflow start quick_review {"brief":"ready"}'
+
+
+def test_recovery_card_bridge_persists_a_verified_version_bound_command():
+    store = MemoryStore()
+    bridge = RecoveryActionInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+    payload = {
+        "event_id": "event_recovery_1",
+        "message_id": "message_failure_card_1",
+        "chat_id": "chat_owner",
+        "operator_id": "person_node_owner",
+        "action_tag": "button",
+        "action_name": "workflow_recovery",
+        "action_value": {
+            "kind": "workflow_recovery",
+            "action": "human_takeover",
+            "instance_id": "instance_1",
+            "node_key": "draft",
+            "attempt_no": 1,
+            "node_version": 2,
+            "instance_version": 4,
+        },
+        "token": "card-update-token",
+        "timestamp": "1785830400000",
+    }
+
+    assert bridge("card.action.trigger", payload) is True
+    assert bridge("card.action.trigger", payload) is False
+    event = store.appended[0]
+    assert event.sender_person_id == "person_node_owner"
+    assert event.card_update_token == "card-update-token"
+    assert event.text.startswith("/larkflow recover ")
+    assert parse_im_command(event.text) == (
+        "recover",
+        "instance_1",
+        {
+            "kind": "workflow_recovery",
+            "action": "human_takeover",
+            "node_key": "draft",
+            "attempt_no": 1,
+            "node_version": 2,
+            "instance_version": 4,
+        },
+    )
+
+
+def test_recovery_card_bridge_never_trusts_identity_inside_action_value():
+    store = MemoryStore()
+    bridge = RecoveryActionInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+    value = {
+        "kind": "workflow_recovery",
+        "action": "retry",
+        "instance_id": "instance_1",
+        "node_key": "draft",
+        "attempt_no": 1,
+        "node_version": 2,
+        "instance_version": 4,
+        "operator_id": "forged-owner",
+    }
+
+    with pytest.raises(IMCommandRejected, match="参数不完整"):
+        bridge(
+            "card.action.trigger",
+            {
+                "event_id": "event_recovery_forged",
+                "message_id": "message_failure_card_forged",
+                "chat_id": "chat_owner",
+                "operator_id": "actual-clicker",
+                "action_tag": "button",
+                "action_name": "workflow_recovery",
+                "action_value": value,
+                "token": "card-update-token",
+            },
+        )
 
 
 def test_bridge_accepts_group_command_with_authenticated_mentions():
@@ -565,6 +642,89 @@ def test_start_then_confirm_uses_sender_as_every_owner_and_keeps_preview_gate():
 
     assert confirm_report.processed == 1
     assert service.get(TENANT, instance_id).status == InstanceStatus.RUNNING
+
+
+def test_recovery_command_applies_the_version_bound_human_takeover():
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=lambda: NOW)
+    service.create_draft(
+        instance_id="instance_recovery_command",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=InstanceSnapshot(
+            nodes=(
+                NodeSpec(
+                    "draft",
+                    "Draft summary",
+                    "person_owner",
+                    "agent",
+                    work={
+                        "objective": "Draft",
+                        "outputs": [{"id": "draft", "type": "data"}],
+                        "acceptance": ["A draft exists"],
+                    },
+                ),
+            )
+        ),
+    )
+    service.confirm_draft(
+        TENANT,
+        "instance_recovery_command",
+        actor_person_id="person_owner",
+    )
+    activation = service.dispatch_ready(
+        TENANT,
+        "instance_recovery_command",
+        worker_id="edge_1",
+    )[0]
+    failed = service.fail_automated(
+        TENANT,
+        "instance_recovery_command",
+        "draft",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        claim_token=activation.claim_token or "",
+        error_code="provider_timeout",
+        error_message="provider unavailable",
+        worker_id="edge_1",
+    )
+    node = failed.nodes["draft"]
+    payload = {
+        "kind": "workflow_recovery",
+        "action": "human_takeover",
+        "instance_id": failed.id,
+        "node_key": "draft",
+        "attempt_no": node.current_attempt_no,
+        "node_version": node.version,
+        "instance_version": failed.version,
+    }
+    store = MemoryStore()
+    store.command_claims = [
+        IMCommandClaim(
+            signal(
+                "/larkflow recover "
+                + json.dumps(payload, separators=(",", ":"))
+            ),
+            "command-token",
+            1,
+        )
+    ]
+
+    report = IMCommandWorker(
+        store,
+        service,
+        TemplateService(InMemoryTemplateStore(), clock=lambda: NOW),
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.processed == 1
+    recovered = service.get(TENANT, failed.id)
+    assert recovered.nodes["draft"].status == NodeStatus.WAITING_HUMAN
+    assert recovered.nodes["draft"].current_attempt_no == 2
+    assert store.processed[0][2]["outcome"] == "human_takeover_started"
 
 
 def test_start_binds_mentioned_reviewer_and_keeps_sender_as_requester():
@@ -1467,3 +1627,44 @@ def test_reply_worker_uses_stable_key_and_records_external_message():
     assert report.sent == 1
     assert sender.calls[0]["idempotency_key"] == "lf-im-stable"
     assert store.reply_sent[0][2]["external_id"] == "message_external"
+
+
+def test_recovery_reply_settles_the_clicked_card_before_sending_text():
+    store = MemoryStore()
+    store.reply_claims = [
+        IMReplyClaim(
+            event_id="event_recovery_1",
+            tenant_id=TENANT,
+            chat_id="chat_1",
+            text="已转为人工接管。",
+            idempotency_key="lf-im-recovery",
+            claim_token="reply-token",
+            attempt_count=1,
+            card_update_token="card-update-token",
+        )
+    ]
+
+    class Sender:
+        def __init__(self):
+            self.calls = []
+
+        def update_chat_card(self, **kwargs):
+            self.calls.append(("update", kwargs))
+
+        def send_chat_message(self, **kwargs):
+            self.calls.append(("send", kwargs))
+            return "message_external"
+
+    sender = Sender()
+    report = IMReplyWorker(
+        store,
+        sender,
+        tenant_id=TENANT,
+        worker_id="reply_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.sent == 1
+    assert [kind for kind, _ in sender.calls] == ["update", "send"]
+    assert sender.calls[0][1]["token"] == "card-update-token"
+    assert sender.calls[0][1]["card"]["schema"] == "2.0"

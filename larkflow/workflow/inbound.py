@@ -742,7 +742,12 @@ class WorkflowInboundWorker:
             return "noops:stale_attempt"
         if node.status in {NodeStatus.DONE, NodeStatus.FAILED, NodeStatus.CANCELED}:
             return "noops:already_terminal"
-        if node.executor != ExecutorKind.HUMAN or node.status != NodeStatus.WAITING_HUMAN:
+        attempt = instance.current_attempt(node.node_key)
+        human_work = (
+            node.executor == ExecutorKind.HUMAN
+            or attempt.status.value == NodeStatus.WAITING_HUMAN.value
+        )
+        if not human_work or node.status != NodeStatus.WAITING_HUMAN:
             return "rejected:node_not_waiting_human"
 
         rejected = self._validate_task(task, projection, node.owner_person_id)

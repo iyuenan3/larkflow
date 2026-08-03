@@ -434,7 +434,7 @@ def _target_event_observers():
         raise RuntimeError(
             "LARKFLOW_TARGET_INBOX_DSN and LARKFLOW_TARGET_TENANT must be set together"
         )
-    from .workflow.im_commands import IMEventInboxBridge
+    from .workflow.im_commands import IMEventInboxBridge, RecoveryActionInboxBridge
     from .workflow.inbound import TaskEventInboxBridge
     from .workflow.migrate import postgres_connection_factory
     from .workflow.postgres import PostgresIMCommandStore, PostgresWorkflowInbox
@@ -457,6 +457,12 @@ def _target_event_observers():
         )
         observers.append(
             RoleBindingActionInboxBridge(
+                im_store,
+                tenant_id=tenant_id,
+            )
+        )
+        observers.append(
+            RecoveryActionInboxBridge(
                 im_store,
                 tenant_id=tenant_id,
             )

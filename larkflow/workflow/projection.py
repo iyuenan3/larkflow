@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from .model import ExecutorKind, FrozenDict, NodeStatus, WorkflowInstance
+from .recovery import RECOVERY_ACTION_NAME, RecoveryAction
 from .repository import OutboxStore, ProjectionStore, WorkflowRepository
 from .serde import to_json_value
 
@@ -95,6 +96,7 @@ class MessageProjectionRequest:
     recipient_person_id: str
     text: str
     idempotency_key: str
+    card: Mapping[str, Any] | None = None
 
 
 class MessageProjectionAdapter(Protocol):
@@ -309,9 +311,14 @@ class WorkflowProjectionWorker:
                     continue
                 for node_key in sorted(instance.nodes):
                     node = instance.nodes[node_key]
+                    if node.status in {NodeStatus.PENDING, NodeStatus.READY}:
+                        continue
+                    attempt = instance.current_attempt(node_key)
                     if (
                         node.executor != ExecutorKind.HUMAN
-                        or node.status in {NodeStatus.PENDING, NodeStatus.READY}
+                        and attempt.status.value
+                        != NodeStatus.WAITING_HUMAN.value
+                        and attempt.submitted_by_person_id is None
                     ):
                         continue
                     if should_stop():
@@ -380,8 +387,14 @@ class WorkflowProjectionWorker:
         verify_external: bool = False,
     ) -> _ProjectionOutcome:
         node = instance.nodes[node_key]
+        attempt = instance.attempts[(node_key, attempt_no)]
         outcome = _ProjectionOutcome()
-        if node.executor == ExecutorKind.HUMAN:
+        human_work = (
+            node.executor == ExecutorKind.HUMAN
+            or attempt.status.value == NodeStatus.WAITING_HUMAN.value
+            or attempt.submitted_by_person_id is not None
+        )
+        if human_work:
             outcome = self._project_task(
                 instance,
                 node_key,
@@ -735,6 +748,8 @@ class WorkflowProjectionWorker:
             f"目标：{spec.work.get('objective', '')}",
             f"验收条件：\n{acceptance}",
         ]
+        if node.executor != ExecutorKind.HUMAN:
+            sections.insert(0, "处理方式：Agent 失败后的人工接管")
         instance_input_context = _instance_input_context(instance, node_key)
         if instance_input_context:
             sections.append(f"流程输入：\n{instance_input_context}")
@@ -779,12 +794,27 @@ class WorkflowProjectionWorker:
                 )
         if len(result) > MAX_MESSAGE_RESULT_CHARS:
             result = result[:MAX_MESSAGE_RESULT_CHARS].rstrip() + "\n[结果已截断]"
+        human_takeover = attempt.submitted_by_person_id is not None
+        subject = "人工接管节点" if human_takeover else "自动节点"
         text = (
-            f"自动节点已{_node_status_label(node.status)}。\n"
+            f"{subject}已{_node_status_label(node.status)}。\n"
             f"流程：{instance.id}\n节点：{spec.title} ({node_key})"
         )
         if result:
             text += f"\n\n结果：\n{result}"
+        card = None
+        if node.status == NodeStatus.FAILED and not human_takeover:
+            error_code = _safe_error_code(attempt.error_code)
+            text += (
+                f"\nAttempt：{attempt_no}\n错误码：{error_code}\n"
+                "失败 Attempt 与错误详情已保留，请选择重新执行或人工接管。"
+            )
+            card = _recovery_card(
+                instance,
+                node_key,
+                attempt_no,
+                error_code=error_code,
+            )
         return MessageProjectionRequest(
             recipient_person_id=node.owner_person_id,
             text=text,
@@ -794,6 +824,7 @@ class WorkflowProjectionWorker:
                 str(attempt_no),
                 FEISHU_MESSAGE_KIND,
             ),
+            card=card,
         )
 
     def _document_request(
@@ -910,6 +941,119 @@ def _node_status_label(status: NodeStatus) -> str:
         NodeStatus.FAILED: "失败",
         NodeStatus.CANCELED: "取消",
     }.get(status, status.value)
+
+
+def _safe_error_code(value: str | None) -> str:
+    if not value:
+        return "execution_failed"
+    normalized = "".join(
+        character
+        for character in value[:64]
+        if character.isascii()
+        and (character.isalnum() or character in {"_", "-", ".", ":"})
+    )
+    return normalized or "execution_failed"
+
+
+def _recovery_card(
+    instance: WorkflowInstance,
+    node_key: str,
+    attempt_no: int,
+    *,
+    error_code: str,
+) -> dict[str, Any]:
+    node = instance.nodes[node_key]
+    spec = instance.snapshot.node(node_key)
+
+    def button(label: str, action: RecoveryAction, style: str) -> dict[str, Any]:
+        return {
+            "tag": "button",
+            "name": RECOVERY_ACTION_NAME,
+            "text": {"tag": "plain_text", "content": label},
+            "type": style,
+            "behaviors": [
+                {
+                    "type": "callback",
+                    "value": {
+                        "kind": RECOVERY_ACTION_NAME,
+                        "action": action.value,
+                        "instance_id": instance.id,
+                        "node_key": node_key,
+                        "attempt_no": attempt_no,
+                        "node_version": node.version,
+                        "instance_version": instance.version,
+                    },
+                }
+            ],
+        }
+
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "default", "update_multi": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": "Agent 执行失败"},
+            "subtitle": {"tag": "plain_text", "content": spec.title},
+            "template": "red",
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": (
+                        f"**流程**：`{instance.id}`\n"
+                        f"**节点**：{spec.title} (`{node_key}`)\n"
+                        f"**Attempt**：{attempt_no}\n"
+                        f"**错误码**：`{error_code}`\n\n"
+                        "失败 Attempt 与内部错误详情已保留。重新执行会创建新的 "
+                        "Attempt，人工接管会向节点负责人创建飞书待办。"
+                    ),
+                },
+                {
+                    "tag": "column_set",
+                    "columns": [
+                        {
+                            "tag": "column",
+                            "elements": [
+                                button(
+                                    "重新执行",
+                                    RecoveryAction.RETRY,
+                                    "primary_filled",
+                                )
+                            ],
+                        },
+                        {
+                            "tag": "column",
+                            "elements": [
+                                button(
+                                    "人工接管",
+                                    RecoveryAction.HUMAN_TAKEOVER,
+                                    "default",
+                                )
+                            ],
+                        },
+                    ],
+                },
+            ]
+        },
+    }
+
+
+def recovery_result_card(text: str) -> dict[str, Any]:
+    """Render a settled recovery callback without leaving live buttons behind."""
+
+    rejected = text.startswith("命令未执行") or "未执行" in text[:40]
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "default", "update_multi": True},
+        "header": {
+            "title": {
+                "tag": "plain_text",
+                "content": "恢复操作未执行" if rejected else "恢复操作已处理",
+            },
+            "template": "orange" if rejected else "green",
+        },
+        "body": {"elements": [{"tag": "markdown", "content": text}]},
+    }
 
 
 def _repair_generation(state: Mapping[str, Any]) -> int:

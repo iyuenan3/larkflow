@@ -25,6 +25,12 @@ from .repository import (
     InstanceNotFoundError,
     TemplateNotFoundError,
 )
+from .recovery import (
+    RECOVERY_ACTION_NAME,
+    RecoveryAction,
+    RecoveryNotAllowedError,
+    StaleRecoveryError,
+)
 from .runner import AuthorizationError
 from .role_bindings import RoleBindingRequest
 from .restart import (
@@ -96,6 +102,7 @@ class IMCommandSignal:
     occurred_at: datetime
     received_at: datetime
     mentions: tuple[IMMention, ...] = field(default_factory=tuple)
+    card_update_token: str | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +129,7 @@ class IMReplyClaim:
     idempotency_key: str
     claim_token: str
     attempt_count: int
+    card_update_token: str | None = None
 
 
 class IMCommandStore(Protocol):
@@ -262,6 +270,14 @@ class IMReplySender(Protocol):
     ) -> str:
         ...
 
+    def update_chat_card(
+        self,
+        *,
+        token: str,
+        card: Mapping[str, Any],
+    ) -> None:
+        ...
+
 
 class IMEventInboxBridge:
     """Persist authenticated bot message envelopes without domain writes."""
@@ -337,6 +353,54 @@ class IMEventInboxBridge:
             occurred_at=_event_time(occurred_at, fallback=now),
             received_at=now,
             mentions=mentions,
+        )
+        return self.store.append_im_command(event)
+
+
+class RecoveryActionInboxBridge:
+    """Turn trusted recovery-card callbacks into durable commands."""
+
+    def __init__(
+        self,
+        store: IMCommandStore,
+        *,
+        tenant_id: str,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        if not tenant_id.strip():
+            raise ValueError("Target tenant_id is required")
+        self.store = store
+        self.tenant_id = tenant_id
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
+
+    def __call__(self, event_type: str, payload: Mapping[str, Any]) -> bool:
+        if event_type != "card.action.trigger":
+            return False
+        if payload.get("action_name") != RECOVERY_ACTION_NAME:
+            return False
+        if payload.get("action_tag") != "button":
+            raise ValueError("recovery action must come from a button")
+        value = payload.get("action_value")
+        if not isinstance(value, Mapping):
+            raise ValueError("recovery action_value must be an object")
+        command_payload = _validated_recovery_payload(value)
+        now = self.clock()
+        event = IMCommandSignal(
+            id=_required_text(payload.get("event_id"), "event_id"),
+            tenant_id=self.tenant_id,
+            message_id=_required_text(payload.get("message_id"), "message_id"),
+            chat_id=_required_text(payload.get("chat_id"), "chat_id"),
+            sender_person_id=_required_text(
+                payload.get("operator_id"),
+                "operator_id",
+            ),
+            text=(
+                f"{COMMAND_PREFIX} recover "
+                + json.dumps(command_payload, separators=(",", ":"))
+            ),
+            occurred_at=_event_time(payload.get("timestamp"), fallback=now),
+            received_at=now,
+            card_update_token=_required_text(payload.get("token"), "token"),
         )
         return self.store.append_im_command(event)
 
@@ -612,8 +676,52 @@ class IMCommandWorker:
                 "/larkflow edit-confirm <preview_id>\n"
                 "/larkflow restart <instance_id> <node_key>\n"
                 "/larkflow restart-all <instance_id>\n"
-                "/larkflow restart-confirm <preview_id>",
+                "/larkflow restart-confirm <preview_id>\n"
+                "Agent 失败时，节点负责人可在失败卡片中选择重新执行或人工接管。",
             )
+        if command == "recover":
+            action = RecoveryAction(str(inputs["action"]))
+            node_key = str(inputs["node_key"])
+            try:
+                instance = self.service.recover_failed_node(
+                    self.tenant_id,
+                    argument or "",
+                    node_key,
+                    action,
+                    actor_person_id=event.sender_person_id,
+                    expected_instance_version=int(inputs["instance_version"]),
+                    expected_node_version=int(inputs["node_version"]),
+                    expected_attempt_no=int(inputs["attempt_no"]),
+                    correlation_id=event.message_id,
+                )
+            except StaleRecoveryError:
+                raise IMCommandRejected(
+                    "失败卡片已失效，流程或节点已有新的状态"
+                ) from None
+            except (
+                AuthorizationError,
+                InstanceNotFoundError,
+                RecoveryNotAllowedError,
+            ):
+                raise IMCommandRejected(
+                    "实例或节点不存在、你不是节点负责人，或该失败已不可恢复"
+                ) from None
+            node = instance.nodes[node_key]
+            if action == RecoveryAction.RETRY:
+                reply = (
+                    "已创建新的自动执行 Attempt。\n"
+                    f"实例：{instance.id}\n节点：{node_key}\n"
+                    f"Attempt：{node.current_attempt_no}\n状态：待调度"
+                )
+                outcome = "automated_retry_started"
+            else:
+                reply = (
+                    "已转为人工接管，并向节点负责人创建飞书待办。\n"
+                    f"实例：{instance.id}\n节点：{node_key}\n"
+                    f"Attempt：{node.current_attempt_no}\n状态：等待人工"
+                )
+                outcome = "human_takeover_started"
+            return outcome, instance.id, reply
         if command == "start":
             template_id = argument or ""
             try:
@@ -956,6 +1064,13 @@ class IMReplyWorker:
         errors = []
         for claim in claims:
             try:
+                if claim.card_update_token is not None:
+                    from .projection import recovery_result_card
+
+                    self.sender.update_chat_card(
+                        token=claim.card_update_token,
+                        card=recovery_result_card(claim.text),
+                    )
                 external_id = self.sender.send_chat_message(
                     chat_id=claim.chat_id,
                     text=claim.text,
@@ -1012,6 +1127,21 @@ def _parse_im_command(text: str) -> _ParsedIMCommand:
         if len(parts) != 2:
             raise IMCommandRejected("list 命令不接受其他参数")
         return _ParsedIMCommand("list", None)
+    if parts[1] == "recover":
+        if len(parts) < 3:
+            raise IMCommandRejected("恢复命令缺少服务端卡片参数")
+        try:
+            payload = json.loads(" ".join(parts[2:]))
+        except json.JSONDecodeError as exc:
+            raise IMCommandRejected("恢复命令参数无效") from exc
+        if not isinstance(payload, Mapping):
+            raise IMCommandRejected("恢复命令参数必须是对象")
+        normalized = _validated_recovery_payload(payload)
+        return _ParsedIMCommand(
+            "recover",
+            str(normalized.pop("instance_id")),
+            inputs=normalized,
+        )
     if parts[1] == "edit":
         if len(parts) != 4:
             raise IMCommandRejected(
@@ -1110,6 +1240,38 @@ def _parse_start_tail(tail: str) -> tuple[dict[str, Any], dict[str, str]]:
     if len(owner_mentions) > MAX_OWNER_BINDINGS:
         raise IMCommandRejected("角色绑定数量超过上限")
     return inputs, owner_mentions
+
+
+def _validated_recovery_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    expected_keys = {
+        "kind",
+        "action",
+        "instance_id",
+        "node_key",
+        "attempt_no",
+        "node_version",
+        "instance_version",
+    }
+    if set(value) != expected_keys or value.get("kind") != RECOVERY_ACTION_NAME:
+        raise IMCommandRejected("恢复卡片参数不完整")
+    try:
+        action = RecoveryAction(str(value["action"]))
+    except ValueError as exc:
+        raise IMCommandRejected("恢复动作无效") from exc
+    normalized: dict[str, Any] = {
+        "kind": RECOVERY_ACTION_NAME,
+        "action": action.value,
+        "instance_id": _required_text(value.get("instance_id"), "instance_id"),
+        "node_key": _required_text(value.get("node_key"), "node_key"),
+    }
+    for field_name in ("attempt_no", "node_version", "instance_version"):
+        raw = value.get(field_name)
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+            raise IMCommandRejected(f"恢复卡片 {field_name} 无效")
+        if field_name == "attempt_no" and raw < 1:
+            raise IMCommandRejected("恢复卡片 attempt_no 无效")
+        normalized[field_name] = raw
+    return normalized
 
 
 def _normalize_mentions(raw_mentions: Any) -> tuple[IMMention, ...]:
@@ -1523,5 +1685,6 @@ __all__ = [
     "IMReplyWorker",
     "IMVerificationReport",
     "InvalidIMCommandClaimError",
+    "RecoveryActionInboxBridge",
     "parse_im_command",
 ]

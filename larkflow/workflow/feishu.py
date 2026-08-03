@@ -214,12 +214,20 @@ class CliFeishuMessageProjection:
         self.runner = runner
 
     def send_message(self, request: MessageProjectionRequest) -> ExternalMessage:
-        data = self._send(
-            recipient_flag="--user-id",
-            recipient=request.recipient_person_id,
-            text=request.text,
-            idempotency_key=request.idempotency_key,
-        )
+        if request.card is None:
+            data = self._send(
+                recipient_flag="--user-id",
+                recipient=request.recipient_person_id,
+                text=request.text,
+                idempotency_key=request.idempotency_key,
+            )
+        else:
+            data = self._send_card(
+                recipient_flag="--user-id",
+                recipient=request.recipient_person_id,
+                card=request.card,
+                idempotency_key=request.idempotency_key,
+            )
         return ExternalMessage(message_id=_message_id(data))
 
     def send_chat_message(
@@ -244,29 +252,11 @@ class CliFeishuMessageProjection:
         card: Mapping[str, Any],
         idempotency_key: str,
     ) -> str:
-        if not chat_id.strip() or not idempotency_key.strip():
-            raise ValueError("Feishu card chat and key are required")
-        if card.get("schema") != "2.0":
-            raise ValueError("Target person-selection card must use Card 2.0")
-        data = self.runner(
-            [
-                self.executable,
-                "--profile",
-                self.profile,
-                "im",
-                "+messages-send",
-                "--chat-id",
-                chat_id,
-                "--msg-type",
-                "interactive",
-                "--content",
-                json.dumps(card, ensure_ascii=False, separators=(",", ":")),
-                "--idempotency-key",
-                idempotency_key,
-                "--as",
-                self.identity,
-                "--json",
-            ]
+        data = self._send_card(
+            recipient_flag="--chat-id",
+            recipient=chat_id,
+            card=card,
+            idempotency_key=idempotency_key,
         )
         return _message_id(data)
 
@@ -319,6 +309,39 @@ class CliFeishuMessageProjection:
                 recipient,
                 "--text",
                 text,
+                "--idempotency-key",
+                idempotency_key,
+                "--as",
+                self.identity,
+                "--json",
+            ]
+        )
+
+    def _send_card(
+        self,
+        *,
+        recipient_flag: str,
+        recipient: str,
+        card: Mapping[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        if not recipient.strip() or not idempotency_key.strip():
+            raise ValueError("Feishu card recipient and key are required")
+        if card.get("schema") != "2.0":
+            raise ValueError("Target interactive message must use Card 2.0")
+        return self.runner(
+            [
+                self.executable,
+                "--profile",
+                self.profile,
+                "im",
+                "+messages-send",
+                recipient_flag,
+                recipient,
+                "--msg-type",
+                "interactive",
+                "--content",
+                json.dumps(card, ensure_ascii=False, separators=(",", ":")),
                 "--idempotency-key",
                 idempotency_key,
                 "--as",

@@ -14,6 +14,7 @@ from larkflow.workflow import (
     NodeSpec,
     NodeStatus,
     ProjectionRecord,
+    RecoveryAction,
     TASK_POLL_EVENT,
     TASK_POLL_SOURCE,
     TaskCompletionPoller,
@@ -230,6 +231,104 @@ def test_completion_poll_enqueues_a_durable_deduped_signal_and_reuses_intake():
     assert (
         service.get(TENANT, "instance_inbound").nodes["approve"].status
         == NodeStatus.DONE
+    )
+
+
+def test_completion_poll_submits_an_agent_failure_human_takeover_attempt():
+    clock = Clock()
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=clock)
+    service.create_draft(
+        instance_id="instance_takeover",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=InstanceSnapshot(
+            nodes=(
+                NodeSpec(
+                    "draft",
+                    "Draft summary",
+                    "person_agent_owner",
+                    "agent",
+                    work={
+                        "objective": "Draft the summary",
+                        "outputs": [{"id": "summary", "type": "data"}],
+                        "acceptance": ["A summary exists"],
+                    },
+                ),
+            )
+        ),
+    )
+    service.confirm_draft(TENANT, "instance_takeover", actor_person_id="person_owner")
+    activation = service.dispatch_due(
+        TENANT,
+        "instance_takeover",
+        worker_id="edge_1",
+    )[0]
+    failed = service.fail_automated(
+        TENANT,
+        "instance_takeover",
+        "draft",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        claim_token=activation.claim_token or "",
+        error_code="provider_timeout",
+        error_message="provider unavailable",
+        worker_id="edge_1",
+    )
+    failed_node = failed.nodes["draft"]
+    takeover = service.recover_failed_node(
+        TENANT,
+        failed.id,
+        "draft",
+        RecoveryAction.HUMAN_TAKEOVER,
+        actor_person_id="person_agent_owner",
+        expected_instance_version=failed.version,
+        expected_node_version=failed_node.version,
+        expected_attempt_no=failed_node.current_attempt_no,
+    )
+    node = takeover.nodes["draft"]
+    repository.save_projection(
+        ProjectionRecord(
+            id="projection-takeover",
+            tenant_id=TENANT,
+            instance_id=takeover.id,
+            node_instance_id=node.id,
+            attempt_no=node.current_attempt_no,
+            kind=FEISHU_TASK_KIND,
+            external_id="task-1",
+            external_url="https://example.invalid/task-1",
+            idempotency_key="lf-binding",
+            sync_version=node.version,
+            state={"node_status": "waiting_human", "completed": False},
+            created_at=clock.now,
+            updated_at=clock.now,
+        )
+    )
+    inbox = InMemoryWorkflowInbox()
+    reader = TaskReader(
+        task_state(
+            assignee_ids=("person_agent_owner",),
+            completed_assignee_ids=("person_agent_owner",),
+        )
+    )
+
+    poll = TaskCompletionPoller(
+        repository,
+        repository,
+        inbox,
+        reader,
+        tenant_id=TENANT,
+        clock=clock,
+    ).run_once()
+    assert poll.signals_appended == 1
+    assert verify(inbox, reader, clock).run_once().verified == 1
+    assert worker(service, repository, inbox, clock).run_once().submitted == 1
+
+    completed = service.get(TENANT, takeover.id)
+    assert completed.nodes["draft"].status == NodeStatus.DONE
+    assert completed.current_attempt("draft").submitted_by_person_id == (
+        "person_agent_owner"
     )
 
 

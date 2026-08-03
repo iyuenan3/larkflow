@@ -507,8 +507,7 @@ class InMemoryWorkflowRepository:
             if instance_tenant == tenant_id
             and (after_id is None or instance_id > after_id)
             and any(
-                node.executor.value == "human"
-                and (
+                (
                     node.status.value == "waiting_human"
                     or (
                         node.status.value in {"done", "failed", "canceled"}

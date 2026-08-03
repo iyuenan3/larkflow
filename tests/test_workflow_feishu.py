@@ -203,6 +203,42 @@ def test_cli_message_projection_sends_as_bot_with_stable_key():
     ]
 
 
+def test_cli_message_projection_sends_direct_card_as_bot():
+    calls = []
+    adapter = CliFeishuMessageProjection(
+        profile="dev",
+        runner=lambda argv: calls.append(argv) or {"message_id": "failure_card_1"},
+    )
+    card = {
+        "schema": "2.0",
+        "body": {"elements": [{"tag": "markdown", "content": "failed"}]},
+    }
+
+    message = adapter.send_message(
+        MessageProjectionRequest(
+            recipient_person_id="person_1",
+            text="Agent failed",
+            idempotency_key="lf-failure-card",
+            card=card,
+        )
+    )
+
+    assert message.message_id == "failure_card_1"
+    assert calls[0][5:9] == [
+        "--user-id",
+        "person_1",
+        "--msg-type",
+        "interactive",
+    ]
+    assert calls[0][-5:] == [
+        "--idempotency-key",
+        "lf-failure-card",
+        "--as",
+        "bot",
+        "--json",
+    ]
+
+
 def test_cli_message_projection_sends_and_updates_card_2_as_bot():
     calls = []
     adapter = CliFeishuMessageProjection(
