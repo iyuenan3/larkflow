@@ -23,10 +23,13 @@ from larkflow.workflow import (
     ExternalTaskState,
     InstanceSnapshot,
     InstanceStatus,
+    IMCommandSignal,
+    IMMention,
     InvalidInboxClaimError,
     NodeRunner,
     NodeSpec,
     PostgresWorkflowInbox,
+    PostgresIMCommandStore,
     PostgresWorkflowRepository,
     PostgresEdgeStore,
     PairingCodeUsedError,
@@ -158,6 +161,39 @@ def template_document() -> dict:
             }
         ],
     }
+
+
+def test_postgres_im_command_round_trips_authenticated_mentions():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_im_{suffix}"
+    now = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
+    store = PostgresIMCommandStore(connection_factory)
+    event = IMCommandSignal(
+        id=f"event_{suffix}",
+        tenant_id=tenant_id,
+        message_id=f"message_{suffix}",
+        chat_id=f"chat_{suffix}",
+        sender_person_id="person_owner",
+        text="/larkflow start review reviewer=@_user_1",
+        occurred_at=now,
+        received_at=now,
+        mentions=(IMMention("@_user_1", "person_reviewer"),),
+    )
+
+    assert store.append_im_command(event) is True
+    claims = store.claim_im_verification(
+        tenant_id,
+        worker_id="verify_mentions",
+        now=now,
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    )
+
+    assert len(claims) == 1
+    assert claims[0].event == event
 
 
 def test_postgres_persists_template_lifecycle_and_frozen_instance_snapshot():

@@ -1,0 +1,66 @@
+schema_version: "0.2"
+template:
+  id: collaborative_agent_review
+  version: 1
+  name: 跨人员 Human-Agent-Human 摘要复核
+  status: draft
+  locked: false
+goal: 发起人确认输入，Agent 生成草稿，指定复核人完成判断
+parameters:
+  brief:
+    type: text
+    required: true
+nodes:
+  - id: confirm_brief
+    title: 确认生成要求
+    owner_role: requester
+    executor: human
+    deps: []
+    work:
+      objective: 确认流程输入中的生成要求可以交给 Agent 处理
+      inputs:
+        - instance_inputs.brief
+      outputs:
+        - id: confirmation
+          type: data
+      acceptance:
+        - 已确认生成要求
+
+  - id: draft_summary
+    title: 生成执行摘要
+    owner_role: requester
+    executor: agent
+    deps:
+      - confirm_brief
+    work:
+      objective: 根据已确认的输入生成执行摘要
+      inputs:
+        - instance_inputs.brief
+        - dependencies.confirm_brief
+      outputs:
+        - id: content
+          type: text
+      acceptance:
+        - 正文包含明确结论和后续行动
+        - 正文不虚构未提供的事实
+      agent:
+        kind: llm.generate
+        model_role: default
+        instructions: 用中文生成不超过 300 字的执行摘要，包含结论、依据和下一步。
+
+  - id: review_summary
+    title: 复核 Agent 执行摘要
+    owner_role: reviewer
+    executor: human
+    deps:
+      - draft_summary
+    work:
+      objective: 复核 Agent 生成的执行摘要并决定是否接受
+      inputs:
+        - dependencies.draft_summary
+      outputs:
+        - id: review
+          type: data
+      acceptance:
+        - 已阅读任务描述中的上游结果
+        - 已完成接受或退回判断

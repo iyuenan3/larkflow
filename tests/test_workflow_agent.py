@@ -214,3 +214,45 @@ def test_packaged_human_agent_human_template_matches_the_target_contract():
         "human",
     )
     assert snapshot.node("draft_summary").work["agent"]["kind"] == "llm.generate"
+
+
+def test_packaged_collaborative_template_splits_requester_and_reviewer():
+    path = (
+        Path(__file__).parents[1]
+        / "larkflow"
+        / "templates"
+        / "collaborative_agent_review.yaml"
+    )
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
+    templates.create_template(
+        tenant_id="tenant_agent",
+        actor_person_id="person_owner",
+        document=document,
+    )
+    templates.enable(
+        "tenant_agent",
+        "collaborative_agent_review",
+        actor_person_id="person_owner",
+    )
+    snapshot = templates.instantiate(
+        "tenant_agent",
+        "collaborative_agent_review",
+        inputs={"brief": "验证跨人员模板入口"},
+        owner_bindings={
+            "requester": "person_owner",
+            "reviewer": "person_reviewer",
+        },
+    )
+    validate_snapshot(snapshot)
+
+    assert tuple(node.owner_person_id for node in snapshot.nodes) == (
+        "person_owner",
+        "person_owner",
+        "person_reviewer",
+    )
+    assert tuple(node.executor.value for node in snapshot.nodes) == (
+        "human",
+        "agent",
+        "human",
+    )

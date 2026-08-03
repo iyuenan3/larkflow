@@ -15,6 +15,7 @@ from larkflow.workflow import (
     IMCommandVerificationWorker,
     IMCommandWorker,
     IMEventInboxBridge,
+    IMMention,
     IMReplyClaim,
     IMReplyWorker,
     InMemoryTemplateStore,
@@ -30,7 +31,12 @@ NOW = datetime(2026, 8, 2, 13, 0, tzinfo=timezone.utc)
 TENANT = "tenant_im"
 
 
-def signal(text: str, *, event_id: str = "event_1") -> IMCommandSignal:
+def signal(
+    text: str,
+    *,
+    event_id: str = "event_1",
+    mentions: tuple[IMMention, ...] = (),
+) -> IMCommandSignal:
     return IMCommandSignal(
         id=event_id,
         tenant_id=TENANT,
@@ -40,6 +46,7 @@ def signal(text: str, *, event_id: str = "event_1") -> IMCommandSignal:
         text=text,
         occurred_at=NOW,
         received_at=NOW,
+        mentions=mentions,
     )
 
 
@@ -148,7 +155,32 @@ def editable_template_document():
     return document
 
 
-def event_payload(text: str):
+def collaborative_template_document():
+    document = template_document()
+    document["template"]["id"] = "collaborative_review"
+    document["nodes"] = [
+        {
+            **document["nodes"][0],
+            "id": "confirm",
+            "title": "Confirm brief",
+            "owner_role": "requester",
+        },
+        {
+            **document["nodes"][0],
+            "id": "review",
+            "title": "Review result",
+            "owner_role": "reviewer",
+            "deps": ["confirm"],
+            "work": {
+                **document["nodes"][0]["work"],
+                "inputs": ["dependencies.confirm"],
+            },
+        },
+    ]
+    return document
+
+
+def event_payload(text: str, *, mentions=None):
     return {
         "header": {"event_id": "event_1", "create_time": "1785656400000"},
         "event": {
@@ -158,12 +190,13 @@ def event_payload(text: str):
                 "chat_id": "chat_1",
                 "message_type": "text",
                 "content": json.dumps({"text": text}),
+                "mentions": mentions or [],
             },
         },
     }
 
 
-def flattened_event_payload(text: str):
+def flattened_event_payload(text: str, *, mentions=None):
     return {
         "event_id": "event_flat_1",
         "message_id": "message_flat_1",
@@ -174,6 +207,7 @@ def flattened_event_payload(text: str):
         "sender_id": "person_flat_owner",
         "sender_type": "user",
         "type": "im.message.receive_v1",
+        "mentions": mentions or [],
     }
 
 
@@ -208,6 +242,79 @@ def test_bridge_accepts_flattened_lark_cli_event_payload():
     assert event.chat_id == "chat_flat_1"
     assert event.sender_person_id == "person_flat_owner"
     assert event.text == '/larkflow start quick_review {"brief":"ready"}'
+
+
+def test_bridge_accepts_group_command_with_authenticated_mentions():
+    store = MemoryStore()
+    bridge = IMEventInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+    text = (
+        '@_user_1 /larkflow start collaborative_review {"brief":"ready"} '
+        "reviewer=@_user_2"
+    )
+
+    assert bridge(
+        "im.message.receive_v1",
+        event_payload(
+            text,
+            mentions=[
+                {
+                    "key": "@_user_1",
+                    "id": {"open_id": "bot_open_id"},
+                    "name": "Larkflow",
+                },
+                {
+                    "key": "@_user_2",
+                    "id": {"open_id": "person_reviewer"},
+                    "name": "Reviewer",
+                },
+            ],
+        ),
+    ) is True
+    event = store.appended[0]
+    assert event.text.startswith("/larkflow start collaborative_review")
+    assert event.mentions == (
+        IMMention(key="@_user_1", person_id="bot_open_id"),
+        IMMention(key="@_user_2", person_id="person_reviewer"),
+    )
+    assert all(not hasattr(mention, "name") for mention in event.mentions)
+
+
+def test_bridge_accepts_flattened_string_open_id_mentions():
+    store = MemoryStore()
+    bridge = IMEventInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+
+    assert bridge(
+        "im.message.receive_v1",
+        flattened_event_payload(
+            "/larkflow start quick_review reviewer=@_user_1",
+            mentions=[
+                {
+                    "key": "@_user_1",
+                    "id": "person_reviewer",
+                    "id_type": "open_id",
+                }
+            ],
+        ),
+    ) is True
+    assert store.appended[0].mentions == (
+        IMMention(key="@_user_1", person_id="person_reviewer"),
+    )
+
+
+def test_bridge_rejects_non_mention_text_before_command():
+    store = MemoryStore()
+    bridge = IMEventInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+
+    assert bridge(
+        "im.message.receive_v1",
+        event_payload(
+            "please /larkflow help",
+            mentions=[
+                {"key": "@_user_1", "id": {"open_id": "person_1"}}
+            ],
+        ),
+    ) is False
+    assert store.appended == []
 
 
 def test_verification_requires_matching_active_directory_person():
@@ -251,6 +358,111 @@ def test_inactive_sender_is_rejected_before_domain_processing():
     assert store.verification_rejected[0][2]["outcome"] == "rejected:inactive_sender"
 
 
+def test_verification_checks_every_referenced_role_owner():
+    store = MemoryStore()
+    event = signal(
+        "/larkflow start collaborative_review reviewer=@_user_1",
+        mentions=(IMMention("@_user_1", "person_reviewer"),),
+    )
+    store.verification_claims = [IMCommandClaim(event, "token", 1)]
+    calls = []
+
+    class Directory:
+        def get_person(self, tenant_id, person_id):
+            calls.append((tenant_id, person_id))
+            return DirectoryPerson(person_id=person_id, active=True)
+
+    report = IMCommandVerificationWorker(
+        store,
+        Directory(),
+        tenant_id=TENANT,
+        worker_id="verify_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.verified == 1
+    assert calls == [
+        (TENANT, "person_owner"),
+        (TENANT, "person_reviewer"),
+    ]
+
+
+def test_verification_rejects_role_binding_without_matching_mention_metadata():
+    store = MemoryStore()
+    event = signal(
+        "/larkflow start collaborative_review reviewer=@_user_1"
+    )
+    store.verification_claims = [IMCommandClaim(event, "token", 1)]
+
+    class Directory:
+        def get_person(self, _tenant_id, person_id):
+            return DirectoryPerson(person_id=person_id, active=True)
+
+    report = IMCommandVerificationWorker(
+        store,
+        Directory(),
+        tenant_id=TENANT,
+        worker_id="verify_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.rejected == 1
+    assert store.verification_rejected[0][2]["outcome"] == (
+        "rejected:invalid_owner_mention"
+    )
+
+
+def test_verification_rejects_inactive_role_owner():
+    store = MemoryStore()
+    event = signal(
+        "/larkflow start collaborative_review reviewer=@_user_1",
+        mentions=(IMMention("@_user_1", "person_reviewer"),),
+    )
+    store.verification_claims = [IMCommandClaim(event, "token", 1)]
+
+    class Directory:
+        def get_person(self, _tenant_id, person_id):
+            return DirectoryPerson(
+                person_id=person_id,
+                active=person_id != "person_reviewer",
+            )
+
+    report = IMCommandVerificationWorker(
+        store,
+        Directory(),
+        tenant_id=TENANT,
+        worker_id="verify_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.rejected == 1
+    assert store.verification_rejected[0][2]["outcome"] == (
+        "rejected:inactive_owner"
+    )
+
+
+def test_verification_leaves_non_binding_grammar_errors_to_command_worker():
+    store = MemoryStore()
+    store.verification_claims = [
+        IMCommandClaim(signal("/larkflow unsupported"), "token", 1)
+    ]
+
+    class Directory:
+        def get_person(self, _tenant_id, person_id):
+            return DirectoryPerson(person_id=person_id, active=True)
+
+    report = IMCommandVerificationWorker(
+        store,
+        Directory(),
+        tenant_id=TENANT,
+        worker_id="verify_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.verified == 1
+    assert not store.verification_rejected
+
+
 def test_start_then_confirm_uses_sender_as_every_owner_and_keeps_preview_gate():
     repository = InMemoryWorkflowRepository()
     templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
@@ -292,6 +504,92 @@ def test_start_then_confirm_uses_sender_as_every_owner_and_keeps_preview_gate():
 
     assert confirm_report.processed == 1
     assert service.get(TENANT, instance_id).status == InstanceStatus.RUNNING
+
+
+def test_start_binds_mentioned_reviewer_and_keeps_sender_as_requester():
+    repository = InMemoryWorkflowRepository()
+    templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
+    templates.create_template(
+        tenant_id=TENANT,
+        actor_person_id="person_admin",
+        document=collaborative_template_document(),
+    )
+    templates.enable(
+        TENANT,
+        "collaborative_review",
+        actor_person_id="person_admin",
+    )
+    service = WorkflowService(repository, clock=lambda: NOW)
+    store = MemoryStore()
+    event = signal(
+        '/larkflow start collaborative_review {"brief":"ready"} '
+        "reviewer=@_user_1",
+        mentions=(IMMention("@_user_1", "person_reviewer"),),
+    )
+    store.command_claims = [IMCommandClaim(event, "start-token", 1)]
+
+    report = IMCommandWorker(
+        store,
+        service,
+        templates,
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.processed == 1
+    instance_id = store.processed[0][2]["instance_id"]
+    draft = service.get(TENANT, instance_id)
+    assert draft.status == InstanceStatus.DRAFT
+    assert draft.owner_person_id == "person_owner"
+    assert draft.snapshot.node("confirm").owner_person_id == "person_owner"
+    assert draft.snapshot.node("review").owner_person_id == "person_reviewer"
+    reply = store.processed[0][2]["reply_text"]
+    assert "绑定给其他成员的角色：1" in reply
+    assert "/larkflow confirm" in reply
+
+
+@pytest.mark.parametrize(
+    "text, mentions",
+    (
+        (
+            "/larkflow start collaborative_review reviewer=@_user_1",
+            (),
+        ),
+        (
+            "/larkflow start collaborative_review unknown=@_user_1",
+            (IMMention("@_user_1", "person_reviewer"),),
+        ),
+    ),
+)
+def test_start_rejects_untrusted_or_unknown_role_binding(text, mentions):
+    templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
+    templates.create_template(
+        tenant_id=TENANT,
+        actor_person_id="person_admin",
+        document=collaborative_template_document(),
+    )
+    templates.enable(
+        TENANT,
+        "collaborative_review",
+        actor_person_id="person_admin",
+    )
+    store = MemoryStore()
+    store.command_claims = [
+        IMCommandClaim(signal(text, mentions=mentions), "start-token", 1)
+    ]
+
+    report = IMCommandWorker(
+        store,
+        WorkflowService(InMemoryWorkflowRepository(), clock=lambda: NOW),
+        templates,
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.rejected == 1
+    assert report.failed == 0
 
 
 def test_status_is_owner_only_read_and_reports_current_dag_state():
@@ -849,6 +1147,10 @@ def test_help_lists_status_command():
     ).run_once()
 
     assert report.processed == 1
+    assert (
+        "/larkflow start <template_id> [JSON输入] [role=@成员 ...]"
+        in store.processed[-1][2]["reply_text"]
+    )
     assert "/larkflow status <instance_id>" in store.processed[-1][2]["reply_text"]
     assert "/larkflow list" in store.processed[-1][2]["reply_text"]
     assert (
@@ -970,6 +1272,9 @@ def test_non_owner_confirm_is_rejected_without_retrying_forever():
         "/larkflow edit-confirm",
         "/larkflow edit-confirm preview extra",
         "/larkflow start quick_review []",
+        "/larkflow start quick_review reviewer=@_user_1 reviewer=@_user_2",
+        "/larkflow start quick_review Reviewer=@_user_1",
+        "/larkflow start quick_review reviewer=person_open_id",
         "/larkflow unsupported",
     ),
 )

@@ -1,7 +1,7 @@
 """PostgreSQL persistence adapter for the target workflow aggregate."""
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from datetime import datetime, timedelta
 import secrets
 from typing import Any
@@ -31,6 +31,8 @@ from .im_commands import (
     IMCommandSignal,
     IMReplyClaim,
     InvalidIMCommandClaimError,
+    _mention_from_dict,
+    _mention_to_dict,
     _reply_key,
 )
 from .model import (
@@ -1966,8 +1968,8 @@ class PostgresIMCommandStore:
                 """
                 INSERT INTO workflow_im_commands (
                     tenant_id, id, message_id, chat_id, sender_person_id,
-                    text, available_at, occurred_at, received_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    text, mentions, available_at, occurred_at, received_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT DO NOTHING
                 RETURNING id
                 """,
@@ -1978,6 +1980,7 @@ class PostgresIMCommandStore:
                     event.chat_id,
                     event.sender_person_id,
                     event.text,
+                    Jsonb([_mention_to_dict(item) for item in event.mentions]),
                     event.received_at,
                     event.occurred_at,
                     event.received_at,
@@ -2370,6 +2373,11 @@ class PostgresIMCommandStore:
 
     @staticmethod
     def _command_from_row(row: dict[str, Any]) -> IMCommandSignal:
+        raw_mentions = row.get("mentions") or []
+        if not isinstance(raw_mentions, list) or not all(
+            isinstance(item, Mapping) for item in raw_mentions
+        ):
+            raise ValueError("persisted IM mentions must be an object array")
         return IMCommandSignal(
             id=row["id"],
             tenant_id=row["tenant_id"],
@@ -2379,6 +2387,7 @@ class PostgresIMCommandStore:
             text=row["text"],
             occurred_at=row["occurred_at"],
             received_at=row["received_at"],
+            mentions=tuple(_mention_from_dict(item) for item in raw_mentions),
         )
 
     @staticmethod

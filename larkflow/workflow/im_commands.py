@@ -1,12 +1,13 @@
 """Durable Feishu IM commands for the Target workflow boundary."""
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 import hashlib
 import json
+import re
 from typing import Any, Protocol
 
 from .directory import PersonDirectory
@@ -48,6 +49,9 @@ COMMAND_PREFIX = "/larkflow"
 MAX_STATUS_NODES = 20
 MAX_STATUS_FIELD_CHARS = 120
 MAX_LIST_INSTANCES = 10
+MAX_OWNER_BINDINGS = 100
+ROLE_BINDING_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+MENTION_KEY_RE = re.compile(r"^@_user_[1-9][0-9]*$")
 
 
 class IMCommandStatus(str, Enum):
@@ -69,6 +73,12 @@ class IMCommandRejected(ValueError):
 
 
 @dataclass(frozen=True)
+class IMMention:
+    key: str
+    person_id: str
+
+
+@dataclass(frozen=True)
 class IMCommandSignal:
     id: str
     tenant_id: str
@@ -78,6 +88,15 @@ class IMCommandSignal:
     text: str
     occurred_at: datetime
     received_at: datetime
+    mentions: tuple[IMMention, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class _ParsedIMCommand:
+    command: str
+    argument: str | None
+    inputs: dict[str, Any] = field(default_factory=dict)
+    owner_mentions: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -261,6 +280,7 @@ class IMEventInboxBridge:
             message_type = message.get("message_type")
             occurred_at = header.get("create_time")
             sender_person_id = sender_id.get("open_id")
+            raw_mentions = message.get("mentions")
             content = message.get("content")
             try:
                 parsed_content = json.loads(content) if isinstance(content, str) else None
@@ -278,10 +298,13 @@ class IMEventInboxBridge:
             message_type = payload.get("message_type")
             occurred_at = payload.get("create_time") or payload.get("timestamp")
             sender_person_id = payload.get("sender_id")
+            raw_mentions = payload.get("mentions")
             text = payload.get("content")
         if message_type != "text":
             return False
-        if not isinstance(text, str) or not text.strip().startswith(COMMAND_PREFIX):
+        mentions = _normalize_mentions(raw_mentions)
+        command_text = _extract_command_text(text, mentions)
+        if command_text is None:
             return False
         now = self.clock()
         event = IMCommandSignal(
@@ -290,9 +313,10 @@ class IMEventInboxBridge:
             message_id=_required_text(message_id, "message_id"),
             chat_id=_required_text(chat_id, "chat_id"),
             sender_person_id=_required_text(sender_person_id, "sender.open_id"),
-            text=text.strip(),
+            text=command_text,
             occurred_at=_event_time(occurred_at, fallback=now),
             received_at=now,
+            mentions=mentions,
         )
         return self.store.append_im_command(event)
 
@@ -307,7 +331,7 @@ class IMVerificationReport:
 
 
 class IMCommandVerificationWorker:
-    """Prove the sender is an active directory member before domain intake."""
+    """Prove the sender and referenced owners are active before domain intake."""
 
     def __init__(
         self,
@@ -366,6 +390,38 @@ class IMCommandVerificationWorker:
                         claim_token=claim.claim_token,
                         outcome="rejected:inactive_sender",
                         reply_text="无法确认你的在职状态，流程命令未执行。",
+                        now=now,
+                    )
+                    rejected += 1
+                    continue
+                try:
+                    owner_person_ids = _owner_person_ids_from_mentions(claim.event)
+                except IMCommandRejected:
+                    self.store.mark_im_verification_rejected(
+                        self.tenant_id,
+                        claim.event.id,
+                        claim_token=claim.claim_token,
+                        outcome="rejected:invalid_owner_mention",
+                        reply_text="无法确认角色绑定中的飞书成员，流程命令未执行。",
+                        now=now,
+                    )
+                    rejected += 1
+                    continue
+                inactive_owner = False
+                for person_id in sorted(
+                    set(owner_person_ids) - {claim.event.sender_person_id}
+                ):
+                    owner = self.directory.get_person(self.tenant_id, person_id)
+                    if owner.person_id != person_id or not owner.active:
+                        inactive_owner = True
+                        break
+                if inactive_owner:
+                    self.store.mark_im_verification_rejected(
+                        self.tenant_id,
+                        claim.event.id,
+                        claim_token=claim.claim_token,
+                        outcome="rejected:inactive_owner",
+                        reply_text="无法确认角色负责人仍在当前企业，流程命令未执行。",
                         now=now,
                     )
                     rejected += 1
@@ -508,13 +564,16 @@ class IMCommandWorker:
         )
 
     def _apply(self, event: IMCommandSignal) -> tuple[str, str | None, str]:
-        command, argument, inputs = parse_im_command(event.text)
+        parsed = _parse_im_command(event.text)
+        command = parsed.command
+        argument = parsed.argument
+        inputs = parsed.inputs
         if command == "help":
             return (
                 "helped",
                 None,
                 "可用命令：\n"
-                "/larkflow start <template_id> [JSON输入]\n"
+                "/larkflow start <template_id> [JSON输入] [role=@成员 ...]\n"
                 "/larkflow confirm <instance_id>\n"
                 "/larkflow status <instance_id>\n"
                 "/larkflow list\n"
@@ -532,11 +591,24 @@ class IMCommandWorker:
                     str(node["owner_role"])
                     for node in version.definition.get("nodes", ())
                 }
+                owner_bindings = {
+                    role: event.sender_person_id for role in roles
+                }
+                mentions_by_key = {
+                    mention.key: mention.person_id for mention in event.mentions
+                }
+                for role, mention_key in parsed.owner_mentions.items():
+                    person_id = mentions_by_key.get(mention_key)
+                    if person_id is None:
+                        raise IMCommandRejected(
+                            "角色绑定必须引用本条消息中的真实 @成员"
+                        )
+                    owner_bindings[role] = person_id
                 snapshot = self.templates.instantiate(
                     self.tenant_id,
                     template_id,
                     inputs=inputs,
-                    owner_bindings={role: event.sender_person_id for role in roles},
+                    owner_bindings=owner_bindings,
                 )
             except (
                 InvalidTemplateTransitionError,
@@ -568,6 +640,8 @@ class IMCommandWorker:
                 f"实例：{instance.id}\n"
                 f"目标：{instance.snapshot.goal}\n"
                 f"节点数：{len(instance.snapshot.nodes)}\n"
+                f"角色数：{len(roles)}，绑定给其他成员的角色："
+                f"{sum(person_id != event.sender_person_id for person_id in owner_bindings.values())}\n"
                 "请核对后回复：\n"
                 f"/larkflow confirm {instance.id}",
             )
@@ -876,17 +950,22 @@ class IMReplyWorker:
 
 def parse_im_command(text: str) -> tuple[str, str | None, dict[str, Any]]:
     """Parse the intentionally narrow v0 command grammar."""
+    parsed = _parse_im_command(text)
+    return parsed.command, parsed.argument, dict(parsed.inputs)
+
+
+def _parse_im_command(text: str) -> _ParsedIMCommand:
     parts = text.strip().split(maxsplit=3)
     if not parts or parts[0] != COMMAND_PREFIX:
         raise IMCommandRejected("命令必须以 /larkflow 开头")
     if len(parts) == 1 or parts[1] == "help":
         if len(parts) > 2:
             raise IMCommandRejected("help 命令不接受其他参数")
-        return "help", None, {}
+        return _ParsedIMCommand("help", None)
     if parts[1] == "list":
         if len(parts) != 2:
             raise IMCommandRejected("list 命令不接受其他参数")
-        return "list", None, {}
+        return _ParsedIMCommand("list", None)
     if parts[1] == "edit":
         if len(parts) != 4:
             raise IMCommandRejected(
@@ -900,52 +979,179 @@ def parse_im_command(text: str) -> tuple[str, str | None, dict[str, Any]]:
             isinstance(item, Mapping) for item in parsed
         ):
             raise IMCommandRejected("编辑操作必须是 JSON 对象数组")
-        return "edit", parts[2], {"operations": parsed}
+        return _ParsedIMCommand(
+            "edit",
+            parts[2],
+            inputs={"operations": parsed},
+        )
     if parts[1] == "edit-confirm":
         if len(parts) != 3:
             raise IMCommandRejected(
                 "用法：/larkflow edit-confirm <preview_id>"
             )
-        return "edit-confirm", parts[2], {}
+        return _ParsedIMCommand("edit-confirm", parts[2])
     if parts[1] == "restart":
         if len(parts) != 4:
             raise IMCommandRejected(
                 "用法：/larkflow restart <instance_id> <node_key>"
             )
-        return "restart", parts[2], {"node_key": parts[3]}
+        return _ParsedIMCommand(
+            "restart",
+            parts[2],
+            inputs={"node_key": parts[3]},
+        )
     if parts[1] == "restart-all":
         if len(parts) != 3:
             raise IMCommandRejected(
                 "用法：/larkflow restart-all <instance_id>"
             )
-        return "restart-all", parts[2], {}
+        return _ParsedIMCommand("restart-all", parts[2])
     if parts[1] == "restart-confirm":
         if len(parts) != 3:
             raise IMCommandRejected(
                 "用法：/larkflow restart-confirm <preview_id>"
             )
-        return "restart-confirm", parts[2], {}
+        return _ParsedIMCommand("restart-confirm", parts[2])
     if parts[1] in {"confirm", "status"}:
         if len(parts) != 3:
             raise IMCommandRejected(
                 f"用法：/larkflow {parts[1]} <instance_id>"
             )
-        return parts[1], parts[2], {}
+        return _ParsedIMCommand(parts[1], parts[2])
     if parts[1] != "start" or len(parts) < 3:
         raise IMCommandRejected(
             "仅支持 start、confirm、status、list、edit、edit-confirm、restart、"
             "restart-all、restart-confirm 和 help"
         )
+    inputs, owner_mentions = _parse_start_tail(parts[3] if len(parts) == 4 else "")
+    return _ParsedIMCommand(
+        "start",
+        parts[2],
+        inputs=inputs,
+        owner_mentions=owner_mentions,
+    )
+
+
+def _parse_start_tail(tail: str) -> tuple[dict[str, Any], dict[str, str]]:
+    remaining = tail.strip()
     inputs: dict[str, Any] = {}
-    if len(parts) == 4:
+    if remaining.startswith("{"):
         try:
-            parsed = json.loads(parts[3])
+            parsed, end = json.JSONDecoder().raw_decode(remaining)
         except json.JSONDecodeError as exc:
             raise IMCommandRejected("模板输入必须是 JSON 对象") from exc
         if not isinstance(parsed, Mapping):
             raise IMCommandRejected("模板输入必须是 JSON 对象")
         inputs = {str(key): value for key, value in parsed.items()}
-    return "start", parts[2], inputs
+        remaining = remaining[end:].strip()
+    elif remaining.startswith("["):
+        raise IMCommandRejected("模板输入必须是 JSON 对象")
+
+    owner_mentions: dict[str, str] = {}
+    for token in remaining.split():
+        role, separator, mention_key = token.partition("=")
+        if (
+            separator != "="
+            or not ROLE_BINDING_RE.fullmatch(role)
+            or not MENTION_KEY_RE.fullmatch(mention_key)
+        ):
+            raise IMCommandRejected(
+                "角色绑定必须使用 lower_snake_case=@成员"
+            )
+        if role in owner_mentions:
+            raise IMCommandRejected(f"角色重复绑定：{role}")
+        owner_mentions[role] = mention_key
+    if len(owner_mentions) > MAX_OWNER_BINDINGS:
+        raise IMCommandRejected("角色绑定数量超过上限")
+    return inputs, owner_mentions
+
+
+def _normalize_mentions(raw_mentions: Any) -> tuple[IMMention, ...]:
+    if raw_mentions is None:
+        return ()
+    if not isinstance(raw_mentions, Sequence) or isinstance(
+        raw_mentions, (str, bytes, bytearray)
+    ):
+        raise ValueError("IM mentions must be an array")
+    by_key: dict[str, IMMention] = {}
+    for index, item in enumerate(raw_mentions):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"IM mention {index} must be an object")
+        key = _required_text(item.get("key"), f"mentions[{index}].key")
+        if not MENTION_KEY_RE.fullmatch(key):
+            raise ValueError(f"IM mention {index} has an invalid key")
+        raw_id = item.get("id")
+        if isinstance(raw_id, Mapping):
+            person_id = raw_id.get("open_id")
+        else:
+            id_type = item.get("id_type")
+            if id_type not in (None, "open_id"):
+                raise ValueError(f"IM mention {index} is not an open_id")
+            person_id = raw_id or item.get("open_id")
+        mention = IMMention(
+            key=key,
+            person_id=_required_text(
+                person_id,
+                f"mentions[{index}].open_id",
+            ),
+        )
+        existing = by_key.get(key)
+        if existing is not None and existing != mention:
+            raise ValueError(f"IM mention key is ambiguous: {key}")
+        by_key[key] = mention
+    return tuple(by_key.values())
+
+
+def _extract_command_text(
+    text: Any,
+    mentions: tuple[IMMention, ...],
+) -> str | None:
+    if not isinstance(text, str):
+        return None
+    stripped = text.strip()
+    if stripped.startswith(COMMAND_PREFIX):
+        return stripped
+    command_index = stripped.find(COMMAND_PREFIX)
+    if command_index < 1:
+        return None
+    leading = stripped[:command_index].strip().split()
+    mention_keys = {mention.key for mention in mentions}
+    if not leading or any(token not in mention_keys for token in leading):
+        return None
+    return stripped[command_index:]
+
+
+def _owner_person_ids_from_mentions(event: IMCommandSignal) -> tuple[str, ...]:
+    try:
+        parsed = _parse_im_command(event.text)
+    except IMCommandRejected:
+        return ()
+    if parsed.command != "start" or not parsed.owner_mentions:
+        return ()
+    mentions_by_key = {
+        mention.key: mention.person_id for mention in event.mentions
+    }
+    person_ids = []
+    for mention_key in parsed.owner_mentions.values():
+        person_id = mentions_by_key.get(mention_key)
+        if person_id is None:
+            raise IMCommandRejected(
+                "角色绑定必须引用本条消息中的真实 @成员"
+            )
+        person_ids.append(person_id)
+    return tuple(person_ids)
+
+
+def _mention_to_dict(mention: IMMention) -> dict[str, str]:
+    return {"key": mention.key, "person_id": mention.person_id}
+
+
+def _mention_from_dict(raw: Mapping[str, Any]) -> IMMention:
+    key = _required_text(raw.get("key"), "mention.key")
+    person_id = _required_text(raw.get("person_id"), "mention.person_id")
+    if not MENTION_KEY_RE.fullmatch(key):
+        raise ValueError("persisted mention has an invalid key")
+    return IMMention(key=key, person_id=person_id)
 
 
 def _instance_id(tenant_id: str, message_id: str) -> str:
@@ -1002,7 +1208,8 @@ def _list_reply(summaries: tuple[WorkflowInstanceSummary, ...]) -> str:
         return (
             "我的最近流程\n"
             "暂无由你发起的流程。\n"
-            "使用 /larkflow start <template_id> [JSON输入] 创建流程。"
+            "使用 /larkflow start <template_id> [JSON输入] "
+            "[role=@成员 ...] 创建流程。"
         )
     lines = ["我的最近流程"]
     for index, summary in enumerate(summaries[:MAX_LIST_INSTANCES], start=1):
@@ -1208,6 +1415,7 @@ __all__ = [
     "IMCommandRejected",
     "IMCommandReport",
     "IMCommandSignal",
+    "IMMention",
     "IMCommandStatus",
     "IMCommandStore",
     "IMCommandVerificationWorker",

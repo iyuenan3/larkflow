@@ -95,6 +95,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0010_restart_previews",
         "0011_restart_scope",
         "0012_graph_edit_previews",
+        "0013_im_command_mentions",
     ]
     sql = migrations[0][1]
     for table in (
@@ -132,6 +133,8 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "workflow_restart_previews_scope_check" in migrations[10][1]
     assert "CREATE TABLE workflow_graph_edit_previews" in migrations[11][1]
     assert "workflow_graph_edit_previews_open_idx" in migrations[11][1]
+    assert "ADD COLUMN mentions" in migrations[12][1]
+    assert "workflow_im_commands_mentions_array" in migrations[12][1]
 
 
 def test_in_memory_repository_is_tenant_scoped():
