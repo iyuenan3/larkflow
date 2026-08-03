@@ -315,10 +315,15 @@ def test_recovery_card_bridge_accepts_lark_cli_callback_without_action_name():
             "instance_version": 4,
         },
         "token": "card-update-token",
-        "timestamp": "1785830400000",
+        # Captured lark-cli card callbacks use microseconds despite the
+        # current event schema describing this field as milliseconds.
+        "timestamp": "1785001477632461",
     }
 
     assert bridge("card.action.trigger", payload) is True
+    assert store.appended[0].occurred_at == datetime(
+        2026, 7, 25, 17, 44, 37, 632461, tzinfo=timezone.utc
+    )
     assert parse_im_command(store.appended[0].text) == (
         "recover",
         "instance_1",
@@ -331,6 +336,34 @@ def test_recovery_card_bridge_accepts_lark_cli_callback_without_action_name():
             "instance_version": 4,
         },
     )
+
+
+def test_recovery_card_bridge_falls_back_for_out_of_range_callback_timestamp():
+    store = MemoryStore()
+    bridge = RecoveryActionInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+
+    assert bridge(
+        "card.action.trigger",
+        {
+            "event_id": "event_recovery_out_of_range",
+            "message_id": "message_failure_card_out_of_range",
+            "chat_id": "chat_owner",
+            "operator_id": "person_node_owner",
+            "action_tag": "button",
+            "action_value": {
+                "kind": "workflow_recovery",
+                "action": "retry",
+                "instance_id": "instance_1",
+                "node_key": "draft",
+                "attempt_no": 1,
+                "node_version": 2,
+                "instance_version": 4,
+            },
+            "token": "card-update-token",
+            "timestamp": "999999999999999999999999999999999999",
+        },
+    ) is True
+    assert store.appended[0].occurred_at == NOW
 
 
 def test_recovery_card_bridge_never_trusts_identity_inside_action_value():

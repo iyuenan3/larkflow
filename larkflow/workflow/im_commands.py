@@ -19,6 +19,7 @@ from .editing import (
     GraphEditPreviewNotFoundError,
     StaleGraphEditPreviewError,
 )
+from .event_time import feishu_event_time
 from .model import InstanceStatus, WorkflowInstance, WorkflowInstanceSummary
 from .repository import (
     InstanceAlreadyExistsError,
@@ -351,7 +352,7 @@ class IMEventInboxBridge:
             chat_id=_required_text(chat_id, "chat_id"),
             sender_person_id=_required_text(sender_person_id, "sender.open_id"),
             text=command_text,
-            occurred_at=_event_time(occurred_at, fallback=now),
+            occurred_at=feishu_event_time(occurred_at, fallback=now),
             received_at=now,
             mentions=mentions,
         )
@@ -417,7 +418,7 @@ class RecoveryActionInboxBridge:
                 f"{COMMAND_PREFIX} recover "
                 + json.dumps(command_payload, separators=(",", ":"))
             ),
-            occurred_at=_event_time(payload.get("timestamp"), fallback=now),
+            occurred_at=feishu_event_time(payload.get("timestamp"), fallback=now),
             received_at=now,
             card_update_token=_required_text(payload.get("token"), "token"),
         )
@@ -1674,14 +1675,6 @@ def _required_text(value: Any, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"IM event requires {field_name}")
     return value.strip()
-
-
-def _event_time(value: Any, *, fallback: datetime) -> datetime:
-    try:
-        milliseconds = int(value)
-    except (TypeError, ValueError):
-        return fallback
-    return datetime.fromtimestamp(milliseconds / 1000, tz=timezone.utc)
 
 
 def _validate_worker(

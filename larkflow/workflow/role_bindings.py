@@ -9,6 +9,7 @@ import json
 from typing import Any, Protocol
 
 from .directory import CandidateDirectory, DirectoryValidationError
+from .event_time import feishu_event_time
 from .model import InstanceStatus, TemplateStatus
 from .repository import (
     InstanceAlreadyExistsError,
@@ -314,7 +315,7 @@ class RoleBindingActionInboxBridge:
             action_name=action_name,
             form_value=_required_text(payload.get("form_value"), "form_value"),
             update_token=_required_text(payload.get("token"), "token"),
-            occurred_at=_event_time(payload.get("timestamp"), fallback=now),
+            occurred_at=feishu_event_time(payload.get("timestamp"), fallback=now),
             received_at=now,
         )
         return self.store.append_role_binding_action(signal)
@@ -978,22 +979,6 @@ def _required_text(value: Any, field_name: str) -> str:
 
 def _optional_text(value: Any) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
-
-
-def _event_time(value: Any, *, fallback: datetime) -> datetime:
-    try:
-        raw_timestamp = int(value)
-    except (TypeError, ValueError):
-        return fallback
-    # lark-cli currently exposes card callback timestamps at microsecond
-    # precision, while other Feishu event families use milliseconds.  Keep
-    # both shapes because this bridge shares the long-lived callback channel
-    # with older cards and deployed CLI versions.
-    divisor = 1_000_000 if abs(raw_timestamp) >= 100_000_000_000_000 else 1_000
-    try:
-        return datetime.fromtimestamp(raw_timestamp / divisor, tz=timezone.utc)
-    except (OverflowError, OSError, ValueError):
-        return fallback
 
 
 __all__ = [
