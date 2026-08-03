@@ -130,11 +130,15 @@ Target Task 完成发现以周期状态轮询为可靠路径。`project` 启动�
 
 Target 订阅 `im.message.receive_v1`，只处理以 `/larkflow` 开头的文本。桥接层同时接受飞书原始 V2 信封和 lark-cli 拍平输出：原始事件的 `content` 是 JSON 字符串，拍平输出的 `content` 是普通文本，两者必须归一为同一个命令信号。其他消息不进入 Target 命令 Inbox。
 
-- `/larkflow help`：返回当前五个命令的用法。
+- `/larkflow help`：返回当前七个命令的用法。
 - `/larkflow start <template_id> [JSON对象]`：以 tenant 和 message ID 派生稳定 Instance ID，验证发送者属于当前企业且状态活跃，再把发送者绑定为 Instance Owner 和模板角色来源。命令只创建草稿并返回确认命令，不自动启动。
 - `/larkflow confirm <instance_id>`：重新校验发送者与草稿 Owner，确认并启动实例。
 - `/larkflow status <instance_id>`：重新校验发送者后，仅允许 Instance Owner 读取流程状态。实例不存在与非 Owner 统一返回“实例不存在或你无权查看”，避免枚举。回复最多列出 20 个节点，每个可变字段最多 120 个字符；只包含状态、进度、节点、executor 和相对责任人，不包含结果正文或人员 ID。该命令只读，不追加领域审计，也不改变 aggregate version。
 - `/larkflow list`：重新校验发送者后，只查询该发送者作为 Instance Owner 的最近实例。仓储按 `created_at DESC, id DESC` 排序，命令最多展示十条，并额外查询一条用于提示仍有更多结果。每条只包含 Instance ID、目标摘要、实例状态和完成节点数，不读取完整聚合，不包含节点结果或人员 ID。该命令只读，不追加领域审计，也不改变 aggregate version。
+- `/larkflow restart <instance_id> <node_key>`：重新校验发送者为 Instance Owner，服务端计算目标节点及全部可达下游，并持久化默认 15 分钟有效的只读预览。回复列出完整影响集合和当前 Attempt；预览绑定 tenant、Instance、actor、目标节点、影响集合、aggregate version 与 `graph_revision`，不改变 Instance、Node、Attempt 或领域审计。
+- `/larkflow restart-confirm <preview_id>`：只允许创建预览的当前 Instance Owner 确认。服务端重新校验有效期、aggregate version、`graph_revision` 和影响集合，在一个 PostgreSQL 事务内取消受影响的活动旧 Attempt、清除 claim、创建新 Attempt、消费预览并写入审计与投影 outbox。目标节点进入 `ready`，下游进入 `pending`，旧 Attempt、结果与质量记录保留；重复确认返回已执行状态，不再增加版本、Attempt、Task 或审计。过期或状态漂移的预览必须重新创建。
+
+当前只实现节点重启。可重启实例状态为 `running / done / failed`，目标节点状态为 `running / waiting_human / done / failed`，且目标节点直接依赖必须完成。失败实例若存在影响集合之外的失败节点会拒绝重启，避免把仍有未处理失败的实例错误恢复为 running。完整实例重启与运行中图编辑仍未实现。
 
 原始 event ID 与 message ID 都参与去重；验证、领域执行和回复各自使用可认领的耐久状态，不依赖单个进程在线。客户端 payload 中的身份、Owner 或状态不作为授权事实。命令回复、Agent / Tool 节点结果、完成文档与最终通知都由服务端状态生成，并以稳定幂等键落为 Projection。Instance 进入 `done` 后，Projection Worker 汇总四类节点结果创建 Docx，再向 Owner 发送含文档链接的最终消息。
 

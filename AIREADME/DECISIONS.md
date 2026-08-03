@@ -557,3 +557,14 @@
 - Alternatives(否决)：扫描后在 IM handler 过滤 Owner；逐条 `get` 完整聚合；允许节点 Owner 看到实例历史；无上限返回所有实例；仅按时间排序而没有稳定并列键；复用 legacy SQLite 搜索。
 - Tradeoff：当前没有分页、时间筛选或协作者视图；同一 Owner 超过十条时只能看到最近一页。后续若增加分页，游标必须同时包含创建时间和 Instance ID，并继续保持 tenant 与 Owner 的服务端过滤。
 - Evidence：完整离线套件 `698 passed, 9 skipped`，删除 Owner 或 tenant 过滤均被定向变异测试捕获。一次性 PostgreSQL 14 验证返回十条、Owner 隔离、稳定排序、草稿进度和索引存在性。开发服务器应用九份 migration 后，测试组织命令记录为 `processed / instances_listed`、回复为 `sent`；飞书服务端回读到十条本人实例，包含完成与进行中进度及详情提示，不包含人员 ID。六个 Python 服务均为 active、`NRestarts=0`。
+
+## ADR-070 · 2026-08-03 · 节点重启采用耐久预览与原子确认
+
+- **Status：Accepted · Development deployment。**
+- Problem：运行中、失败或已完成节点需要安全重做，但直接执行重启会隐藏影响范围，并可能覆盖历史结果、接受旧 Worker 的迟到回写，或在两次确认竞争时生成多轮 Attempt。Human 节点还存在外部 Task，若只改数据库状态，旧 Task 会继续误导 Owner。
+- Constraint：只有 Instance Owner 可以发起和确认；影响集合必须由服务端计算为目标节点及全部可达下游；预览期间 aggregate 或图发生任何变化都必须失效；历史 Attempt、结果和质量记录不可覆盖；aggregate、审计、outbox 与预览消费必须同事务；重复确认与命令重试不能重复创建 Attempt 或 Task；飞书副作用不能进入数据库事务。
+- Decision：`/larkflow restart` 创建默认 15 分钟有效的耐久 RestartPreview，绑定 tenant、Instance、创建 actor、目标节点、拓扑排序后的影响集合、aggregate version 与 `graph_revision`，不修改 aggregate 或审计。`/larkflow restart-confirm` 重新校验创建 actor 仍是当前 Instance Owner，锁定预览并重算影响；确认事务取消活动旧 Attempt、清除 claim、为影响节点创建新 Attempt、将目标置为 ready、下游置为 pending、消费预览并追加一条审计与 Human Task 收口 outbox。已消费预览返回当前状态，不再写入。节点重启不改变 `graph_revision`，因为图结构未变化。
+- Safety：当前只允许 `running / done / failed` Instance 和 `running / waiting_human / done / failed` 目标节点，且目标直接依赖必须完成。失败 Instance 若仍有影响集合之外的失败节点会拒绝重启。旧 Human Attempt 的投影按历史 Attempt 状态关闭，新的稳定 Attempt 键创建不同 Task；旧 Task 或旧 Worker 的迟到结果不能推进当前 Attempt。
+- Alternatives(否决)：收到命令立即重启；只在内存保存预览；相信客户端提交影响集合；覆盖原 Attempt；用 `graph_revision` 表示纯运行态重做；允许新 Owner 消费旧 Owner 的预览；数据库提交后才标记预览已消费；让重复确认再次重启；在领域事务内同步关闭或创建飞书 Task。
+- Tradeoff：每次预览都会留下耐久行，当前没有后台清理过期预览；首版只提供节点重启，不提供完整实例重启、批量选择或 UI 按钮。失败节点覆盖规则偏保守，可能要求 Owner 选择更上游的共同祖先。飞书 Task 收口仍依赖 outbox 最终一致性，短暂延迟期间旧 Task 可能仍可见，但不能通过领域授权推进当前 Attempt。
+- Evidence：完整离线套件 `709 passed, 10 skipped`。五类定向变异分别证明 Owner、版本、可达下游、外部失败节点和历史 Task 状态断言能够捕获缺陷。一次性 PostgreSQL 14 中两个真实连接确认同一预览，恰好一路执行、一路幂等回放，aggregate version 只增加 1、审计只有 1 条。测试组织实例在最终 Human 节点等待时完成预览、确认、旧 Task 关闭、新 Task 创建、重复确认 no-op 和新 Attempt 完成；Instance 最终为 done，两个 review Attempt 分别为 canceled 与 done，重启审计仍为 1 条。

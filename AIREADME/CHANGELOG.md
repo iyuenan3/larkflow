@@ -1,5 +1,16 @@
 # CHANGELOG · larkflow
 
+## v0.26.0-draft · 2026-08-03 · 节点安全重启闭环
+
+- Added：新增 `/larkflow restart <instance_id> <node_key>` 与 `/larkflow restart-confirm <preview_id>`。预览列出目标及全部可达下游，确认后为影响集合创建新 Attempt，旧 Attempt、结果和质量记录保持可查。
+- Security：预览绑定 tenant、Instance、创建 actor、aggregate version、`graph_revision`、稳定影响集合和 15 分钟有效期；确认时重新授权当前 Instance Owner。过期、版本漂移、图漂移、影响集合变化、不完整依赖和未覆盖失败节点都会拒绝执行。
+- Database：新增 migration `0010_restart_previews`。确认事务同时更新 aggregate、消费预览、取消活动旧 Attempt、清除 claim、写入一条重启审计和旧 Human Task 收口 outbox；重复确认只返回已应用结果。
+- Projection：旧 Human Attempt 的 Task 按历史 Attempt 状态关闭，新 Attempt 使用不同稳定幂等键创建新 Task；旧 Task 的迟到完成不能推进当前 Attempt。
+- Verified：完整离线套件 `709 passed, 10 skipped`。移除 Owner 检查、版本检查、可达下游计算、外部失败节点保护或历史 Task 状态映射时，对应变异测试都会失败。一次性 PostgreSQL 14 双连接同时确认同一预览，恰好一路执行、一路幂等回放，aggregate version 只增加 1，审计只有 1 条；测试库与上传件随后删除。
+- Deployment：内容提交 `b319494` 构建的 wheel SHA-256 为 `093c20fb9d1936f3060fbc3153e8805cee278acaef88eaefbdf2eac40740f358`，保存在 `releases/20260803_162724_node_restart/`。升级前备份成功，长期库已应用十份 migration；六个 Python 服务统一启动后 active、`NRestarts=0`，验收窗口无错误级日志。
+- Acceptance：测试组织实例 `im_64450d61fa02de36f86bcedd` 在最终 Human 节点等待时完成预览与确认。旧 Attempt 1 保留为 canceled，旧 Task 服务端为 done；新 Attempt 2 使用不同 Task，重复确认不增加版本、Attempt、Task 或审计。人工完成新 Task 后 Instance 回到 done，两条完成 Inbox 为 processed，11 条 Outbox 为 published，重启审计恰好 1 条，完成文档与最终通知均已投影。
+- Boundary：当前只实现节点重启，完整实例重启与运行中未来区域编辑仍未实现。验收只代表开发环境和测试组织，不代表生产装配。
+
 ## v0.25.0-draft · 2026-08-03 · Owner 最近实例列表闭环
 
 - Added：新增 `/larkflow list`，通过领域层 `list_for_owner` 和独立摘要 DTO 返回当前发送者拥有的最近实例；帮助文本同步扩展为五个窄命令。

@@ -1,6 +1,6 @@
 # DAG Contract v0.2
 
-> 状态：Target + Partial As-built · 既有契约简化版 · 模板生命周期、实例化和草稿预览已实现，编辑与重启仍待实现
+> 状态：Target + Partial As-built · 既有契约简化版 · 模板生命周期、实例化、草稿预览和节点重启已实现，运行中编辑与完整重启仍待实现
 >
 > 本文中的“必须、应该、可以”分别表示 MUST、SHOULD、MAY。当前 legacy YAML 兼容范围见 [SPEC.md](SPEC.md)。
 
@@ -201,13 +201,19 @@ Agent 或 Tool 节点执行中使用 `running`。Human 节点可从 `ready` 进�
 
 节点重启的影响集合为目标节点加所有可达下游。完整重启的影响集合为所有节点。
 
+当前 As-built 只支持节点重启。Instance Owner 先请求只读预览；预览默认有效 15 分钟，并绑定 tenant、Instance、actor、目标节点、稳定影响集合、aggregate version 与 `graph_revision`。预览不改变 Instance、Node、Attempt、graph revision 或领域审计。确认时服务端重新授权当前 Owner，并拒绝过期、版本漂移、图漂移或影响集合变化的预览。同一预览重复确认只返回已应用结果。
+
 确认重启后：
 
-- 当前活动执行被结束或失效。
+- 当前活动执行被取消，claim、token 和租期失效。
 - 受影响节点创建新的 Attempt。
 - 历史 Attempt、责任人、交付物和质量记录保持只读。
-- 节点按当前依赖重新进入 `pending` 或 `ready`。
-- 重启动作和影响集合进入审计。
+- 目标节点在直接依赖已完成时进入 `ready`，可达下游进入 `pending`。
+- Instance 回到 `running`，节点重启不改变 `graph_revision`。
+- 重启动作、目标和影响集合进入一条追加型审计。
+- 旧 Human Attempt 的 Task 被收口，新 Attempt 使用不同稳定幂等键创建新 Task。
+
+可重启 Instance 状态为 `running / done / failed`，目标节点状态为 `running / waiting_human / done / failed`。失败 Instance 若存在影响集合之外的失败节点必须拒绝，避免把未处理失败隐藏在重新运行的实例中。完整实例重启仍是 Target 契约，尚无 As-built 命令。
 
 ## 12. 质量结果
 

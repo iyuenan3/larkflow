@@ -2,9 +2,9 @@
 
 > 飞书原生的企业协作 DAG：把多人流程拆成有依赖、有唯一责任人、可验收和可追溯的节点。
 >
-> 文档状态：2026-08-03 Phase 1 中央工作流基础实现，飞书 IM 窄命令、Human-Agent-Tool-Human、完成文档、最终通知、Owner 状态查询和实例列表已在开发环境闭环；Personal Agent Edge Proof v0 已完成 loopback 开发部署与 SSH 隧道跨机验收，公网设备链路受 ICP 接入备案阻断，Caddy 已停止。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+> 文档状态：2026-08-03 Phase 1 中央工作流基础实现，飞书 IM 窄命令、Human-Agent-Tool-Human、完成文档、最终通知、Owner 查询和节点安全重启已在开发环境闭环；Personal Agent Edge Proof v0 已完成 loopback 开发部署与 SSH 隧道跨机验收，公网设备链路受 ICP 接入备案阻断，Caddy 已停止。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
-> last-synced: 7769071 · 2026-08-03
+> last-synced: b319494 · 2026-08-03
 
 ## 阅读顺序
 
@@ -23,11 +23,11 @@
 | CORE | ✅ | Target 身份、简化边界、Edge Proof 和不变量 |
 | PRODUCT_STRATEGY | ✅ | 范围收敛取舍、窄 Edge 实验，明确未做市场验证 |
 | PRD | ✅ | Target 单层 DAG MVP 与 Edge Proof 功能契约 |
-| DAG_TEMPLATE_SPEC | ⚑ | v0.2 模板生命周期、实例化与草稿预览已实现，编辑和重启仍是 Target |
+| DAG_TEMPLATE_SPEC | ⚑ | v0.2 模板、实例化、草稿预览和节点重启已实现，运行中编辑与完整重启仍是 Target |
 | ARCHITECTURE | ✅ | Target 模块化单体、中央 Worker、飞书 IM / Task / Doc 投影、Agent / Tool adapter、Edge Proof 和剩余差距 |
 | RELATIONS | ✅ | Target 飞书、中央 lark-cli、Edge HTTPS、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | Phase 1 已完成飞书窄命令、Owner 状态与实例列表查询、完成通知闭环，Edge 公网设备链路仍受备案阻断 |
-| SPEC | ✅ | legacy 契约、Target CLI、Owner 状态与实例列表查询、Task 入站、完成投影与私有 Edge v1 HTTP |
+| ROADMAP | ✅ | Phase 1 已完成飞书窄命令、Owner 查询、节点重启与完成通知闭环，Edge 公网设备链路仍受备案阻断 |
+| SPEC | ✅ | legacy 契约、Target CLI、七个飞书窄命令、Task 入站、节点重启、完成投影与私有 Edge v1 HTTP |
 | DEPLOYMENT | ✅ | Legacy ECS 与 Target 六服务、飞书真实闭环、Caddy、PostgreSQL、备份和恢复实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
 | DECISIONS | ✅ | Append-only ADR 历史，新 ADR 显式 supersede 旧范围 |
