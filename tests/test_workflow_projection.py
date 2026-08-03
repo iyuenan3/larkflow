@@ -496,6 +496,14 @@ def test_failed_agent_projects_a_recovery_card_and_takeover_task():
         for column in buttons
     }
     assert actions == {"retry", "human_takeover"}
+    names = {
+        column["elements"][0]["name"]
+        for column in buttons
+    }
+    assert names == {
+        "workflow_recovery_retry",
+        "workflow_recovery_human_takeover",
+    }
 
     node = failed.nodes["draft"]
     service.recover_failed_node(

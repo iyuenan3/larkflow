@@ -261,7 +261,7 @@ def test_recovery_card_bridge_persists_a_verified_version_bound_command():
         "chat_id": "chat_owner",
         "operator_id": "person_node_owner",
         "action_tag": "button",
-        "action_name": "workflow_recovery",
+        "action_name": "workflow_recovery_human_takeover",
         "action_value": {
             "kind": "workflow_recovery",
             "action": "human_takeover",
@@ -318,8 +318,36 @@ def test_recovery_card_bridge_never_trusts_identity_inside_action_value():
                 "chat_id": "chat_owner",
                 "operator_id": "actual-clicker",
                 "action_tag": "button",
-                "action_name": "workflow_recovery",
+                "action_name": "workflow_recovery_retry",
                 "action_value": value,
+                "token": "card-update-token",
+            },
+        )
+
+
+def test_recovery_card_bridge_rejects_a_mismatched_unique_button_name():
+    store = MemoryStore()
+    bridge = RecoveryActionInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+
+    with pytest.raises(ValueError, match="does not match"):
+        bridge(
+            "card.action.trigger",
+            {
+                "event_id": "event_recovery_mismatch",
+                "message_id": "message_failure_card_mismatch",
+                "chat_id": "chat_owner",
+                "operator_id": "actual-clicker",
+                "action_tag": "button",
+                "action_name": "workflow_recovery_retry",
+                "action_value": {
+                    "kind": "workflow_recovery",
+                    "action": "human_takeover",
+                    "instance_id": "instance_1",
+                    "node_key": "draft",
+                    "attempt_no": 1,
+                    "node_version": 2,
+                    "instance_version": 4,
+                },
                 "token": "card-update-token",
             },
         )

@@ -31,6 +31,12 @@ class RecoveryAction(str, Enum):
     HUMAN_TAKEOVER = "human_takeover"
 
 
+def recovery_action_name(action: RecoveryAction | str) -> str:
+    """Return the unique Card 2.0 element name for one recovery action."""
+
+    return f"{RECOVERY_ACTION_NAME}_{RecoveryAction(action).value}"
+
+
 class RecoveryNotAllowedError(RuntimeError):
     """The current aggregate is not an eligible automated failure."""
 
@@ -152,4 +158,5 @@ __all__ = [
     "RecoveryNotAllowedError",
     "StaleRecoveryError",
     "apply_failed_node_recovery",
+    "recovery_action_name",
 ]

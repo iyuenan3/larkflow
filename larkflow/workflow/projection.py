@@ -11,7 +11,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from .model import ExecutorKind, FrozenDict, NodeStatus, WorkflowInstance
-from .recovery import RECOVERY_ACTION_NAME, RecoveryAction
+from .recovery import RECOVERY_ACTION_NAME, RecoveryAction, recovery_action_name
 from .repository import OutboxStore, ProjectionStore, WorkflowRepository
 from .serde import to_json_value
 
@@ -968,7 +968,7 @@ def _recovery_card(
     def button(label: str, action: RecoveryAction, style: str) -> dict[str, Any]:
         return {
             "tag": "button",
-            "name": RECOVERY_ACTION_NAME,
+            "name": recovery_action_name(action),
             "text": {"tag": "plain_text", "content": label},
             "type": style,
             "behaviors": [

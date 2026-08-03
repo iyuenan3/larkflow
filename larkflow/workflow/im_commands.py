@@ -30,6 +30,7 @@ from .recovery import (
     RecoveryAction,
     RecoveryNotAllowedError,
     StaleRecoveryError,
+    recovery_action_name,
 )
 from .runner import AuthorizationError
 from .role_bindings import RoleBindingRequest
@@ -376,7 +377,10 @@ class RecoveryActionInboxBridge:
     def __call__(self, event_type: str, payload: Mapping[str, Any]) -> bool:
         if event_type != "card.action.trigger":
             return False
-        if payload.get("action_name") != RECOVERY_ACTION_NAME:
+        action_name = payload.get("action_name")
+        if action_name not in {
+            recovery_action_name(action) for action in RecoveryAction
+        }:
             return False
         if payload.get("action_tag") != "button":
             raise ValueError("recovery action must come from a button")
@@ -384,6 +388,8 @@ class RecoveryActionInboxBridge:
         if not isinstance(value, Mapping):
             raise ValueError("recovery action_value must be an object")
         command_payload = _validated_recovery_payload(value)
+        if action_name != recovery_action_name(command_payload["action"]):
+            raise ValueError("recovery action name does not match its value")
         now = self.clock()
         event = IMCommandSignal(
             id=_required_text(payload.get("event_id"), "event_id"),
