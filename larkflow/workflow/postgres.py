@@ -189,9 +189,9 @@ class PostgresWorkflowRepository:
                     tenant_id, id, instance_id, actor_person_id, node_key,
                     affected_node_keys, expected_instance_version,
                     graph_revision, created_at, expires_at,
-                    consumed_at, applied_instance_version
+                    consumed_at, applied_instance_version, scope
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (tenant_id, id) DO NOTHING
                 RETURNING id
@@ -209,6 +209,7 @@ class PostgresWorkflowRepository:
                     preview.expires_at,
                     preview.consumed_at,
                     preview.applied_instance_version,
+                    preview.scope.value,
                 ),
             ).fetchone()
         if inserted is None:
@@ -1294,6 +1295,7 @@ class PostgresWorkflowRepository:
             graph_revision=int(row["graph_revision"]),
             created_at=row["created_at"],
             expires_at=row["expires_at"],
+            scope=row["scope"],
             consumed_at=row["consumed_at"],
             applied_instance_version=(
                 int(row["applied_instance_version"])

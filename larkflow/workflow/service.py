@@ -24,9 +24,11 @@ from .restart import (
     RestartConfirmation,
     RestartPreview,
     RestartPreviewExpiredError,
+    RestartScope,
     StaleRestartPreviewError,
+    affected_instance_restart_node_keys,
     affected_restart_node_keys,
-    apply_node_restart,
+    apply_restart,
 )
 from .runner import AuthorizationError, NodeRunner
 from .scheduler import Scheduler
@@ -593,18 +595,56 @@ class WorkflowService:
         instance = self.repository.get(tenant_id, instance_id)
         self._require_instance_owner(instance, actor_person_id)
         affected = affected_restart_node_keys(instance, node_key)
+        return self._add_restart_preview(
+            instance,
+            actor_person_id=actor_person_id,
+            scope=RestartScope.NODE,
+            node_key=node_key,
+            affected_node_keys=affected,
+        )
+
+    def preview_instance_restart(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        *,
+        actor_person_id: str,
+    ) -> RestartPreview:
+        """Persist a short-lived full-graph restart preview."""
+
+        instance = self.repository.get(tenant_id, instance_id)
+        self._require_instance_owner(instance, actor_person_id)
+        affected = affected_instance_restart_node_keys(instance)
+        return self._add_restart_preview(
+            instance,
+            actor_person_id=actor_person_id,
+            scope=RestartScope.INSTANCE,
+            node_key=None,
+            affected_node_keys=affected,
+        )
+
+    def _add_restart_preview(
+        self,
+        instance: WorkflowInstance,
+        *,
+        actor_person_id: str,
+        scope: RestartScope,
+        node_key: str | None,
+        affected_node_keys: tuple[str, ...],
+    ) -> RestartPreview:
         now = self.clock()
         preview = RestartPreview(
             id=self.id_factory(),
-            tenant_id=tenant_id,
+            tenant_id=instance.tenant_id,
             instance_id=instance.id,
             actor_person_id=actor_person_id,
             node_key=node_key,
-            affected_node_keys=affected,
+            affected_node_keys=affected_node_keys,
             expected_instance_version=instance.version,
             graph_revision=instance.graph_revision,
             created_at=now,
             expires_at=now + self.restart_preview_ttl,
+            scope=scope,
         )
         self.repository.add_restart_preview(preview)
         return preview
@@ -616,9 +656,43 @@ class WorkflowService:
         *,
         actor_person_id: str,
     ) -> RestartConfirmation:
-        """Consume one preview and atomically create fresh downstream Attempts."""
+        """Consume a node-scoped preview for backwards-compatible callers."""
+
+        return self._confirm_restart(
+            tenant_id,
+            preview_id,
+            actor_person_id=actor_person_id,
+            expected_scope=RestartScope.NODE,
+        )
+
+    def confirm_restart(
+        self,
+        tenant_id: str,
+        preview_id: str,
+        *,
+        actor_person_id: str,
+    ) -> RestartConfirmation:
+        """Consume either explicit restart scope atomically."""
+
+        return self._confirm_restart(
+            tenant_id,
+            preview_id,
+            actor_person_id=actor_person_id,
+        )
+
+    def _confirm_restart(
+        self,
+        tenant_id: str,
+        preview_id: str,
+        *,
+        actor_person_id: str,
+        expected_scope: RestartScope | None = None,
+    ) -> RestartConfirmation:
+        """Consume one preview and atomically create fresh Attempts."""
 
         preview = self.repository.get_restart_preview(tenant_id, preview_id)
+        if expected_scope is not None and preview.scope != expected_scope:
+            raise StaleRestartPreviewError("restart preview scope does not match")
         if preview.actor_person_id != actor_person_id:
             raise AuthorizationError("only the preview actor may confirm restart")
         instance = self.repository.get(tenant_id, preview.instance_id)
@@ -637,17 +711,28 @@ class WorkflowService:
             node_key: instance.nodes[node_key].current_attempt_no
             for node_key in preview.affected_node_keys
         }
-        apply_node_restart(instance, preview, now=now)
+        apply_restart(instance, preview, now=now)
+        audit_event_type = (
+            "instance.node_restarted"
+            if preview.scope == RestartScope.NODE
+            else "instance.restarted"
+        )
+        audit_node_key = preview.node_key
         audit = self._audit(
             instance,
-            "instance.node_restarted",
+            audit_event_type,
             actor_person_id=actor_person_id,
             correlation_id=preview.id,
             aggregate_version=expected_version + 1,
             now=now,
-            node_key=preview.node_key,
-            attempt_no=instance.nodes[preview.node_key].current_attempt_no,
+            node_key=audit_node_key,
+            attempt_no=(
+                instance.nodes[audit_node_key].current_attempt_no
+                if audit_node_key is not None
+                else None
+            ),
             payload={
+                "scope": preview.scope.value,
                 "affected_node_keys": preview.affected_node_keys,
                 "graph_revision": preview.graph_revision,
                 "preview_instance_version": preview.expected_instance_version,

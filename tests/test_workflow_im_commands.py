@@ -622,6 +622,93 @@ def test_restart_requires_preview_owner_confirmation_and_is_idempotent():
     assert repository.get_restart_preview(TENANT, preview_id).consumed_at == NOW
 
 
+def test_full_instance_restart_command_previews_all_nodes_before_confirmation():
+    repository = InMemoryWorkflowRepository()
+    templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
+    templates.create_template(
+        tenant_id=TENANT,
+        actor_person_id="person_admin",
+        document=template_document(),
+    )
+    templates.enable(TENANT, "quick_review", actor_person_id="person_admin")
+    snapshot = templates.instantiate(
+        TENANT,
+        "quick_review",
+        inputs={"brief": "ready"},
+        owner_bindings={"reviewer": "person_owner"},
+    )
+    service = WorkflowService(repository, clock=lambda: NOW)
+    service.create_draft(
+        instance_id="restart_all_from_im",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=snapshot,
+    )
+    service.confirm_draft(
+        TENANT,
+        "restart_all_from_im",
+        actor_person_id="person_owner",
+    )
+    activation = service.dispatch_ready(TENANT, "restart_all_from_im")[0]
+    service.submit_human(
+        TENANT,
+        "restart_all_from_im",
+        "review",
+        actor_person_id="person_owner",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        result={"decision": "approved"},
+    )
+    store = MemoryStore()
+    worker = IMCommandWorker(
+        store,
+        service,
+        templates,
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    )
+    version_before = service.get(TENANT, "restart_all_from_im").version
+    store.command_claims = [
+        IMCommandClaim(
+            signal(
+                "/larkflow restart-all restart_all_from_im",
+                event_id="event_restart_all_preview",
+            ),
+            "restart-all-preview-token",
+            1,
+        )
+    ]
+
+    preview_report = worker.run_once()
+
+    assert preview_report.processed == 1
+    preview_reply = store.processed[-1][2]["reply_text"]
+    assert store.processed[-1][2]["outcome"] == "instance_restart_previewed"
+    assert "完整实例重启预览" in preview_reply
+    assert "范围：全部节点" in preview_reply
+    assert "Review brief (review)" in preview_reply
+    assert service.get(TENANT, "restart_all_from_im").version == version_before
+    confirm_command = preview_reply.splitlines()[-1]
+
+    store.command_claims = [
+        IMCommandClaim(
+            signal(confirm_command, event_id="event_restart_all_confirm"),
+            "restart-all-confirm-token",
+            1,
+        )
+    ]
+    confirm_report = worker.run_once()
+
+    assert confirm_report.processed == 1
+    assert "完整实例已重启" in store.processed[-1][2]["reply_text"]
+    restarted = service.get(TENANT, "restart_all_from_im")
+    assert restarted.status == InstanceStatus.RUNNING
+    assert restarted.nodes["review"].current_attempt_no == 2
+    assert restarted.nodes["review"].status.value == "ready"
+
+
 def test_help_lists_status_command():
     store = MemoryStore()
     store.command_claims = [
@@ -645,6 +732,10 @@ def test_help_lists_status_command():
     )
     assert (
         "/larkflow restart-confirm <preview_id>"
+        in store.processed[-1][2]["reply_text"]
+    )
+    assert (
+        "/larkflow restart-all <instance_id>"
         in store.processed[-1][2]["reply_text"]
     )
 
@@ -737,6 +828,8 @@ def test_non_owner_confirm_is_rejected_without_retrying_forever():
         "/larkflow status instance extra",
         "/larkflow list extra",
         "/larkflow restart instance_only",
+        "/larkflow restart-all",
+        "/larkflow restart-all instance extra",
         "/larkflow restart-confirm",
         "/larkflow restart-confirm preview extra",
         "/larkflow start quick_review []",
@@ -769,6 +862,11 @@ def test_command_parser_accepts_restart_preview_and_confirmation():
     assert parse_im_command("/larkflow restart-confirm preview_1") == (
         "restart-confirm",
         "preview_1",
+        {},
+    )
+    assert parse_im_command("/larkflow restart-all instance_1") == (
+        "restart-all",
+        "instance_1",
         {},
     )
 

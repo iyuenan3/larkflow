@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 
 from .graph import reachable_downstream, topological_order
 from .model import (
@@ -35,6 +36,13 @@ class StaleRestartPreviewError(RestartError):
     """The aggregate changed after the restart preview was created."""
 
 
+class RestartScope(str, Enum):
+    """Explicit impact boundary carried by a durable restart preview."""
+
+    NODE = "node"
+    INSTANCE = "instance"
+
+
 @dataclass(frozen=True)
 class RestartPreview:
     """Durable, bounded authority for one explicit restart confirmation."""
@@ -43,21 +51,31 @@ class RestartPreview:
     tenant_id: str
     instance_id: str
     actor_person_id: str
-    node_key: str
+    node_key: str | None
     affected_node_keys: tuple[str, ...]
     expected_instance_version: int
     graph_revision: int
     created_at: datetime
     expires_at: datetime
+    scope: RestartScope = RestartScope.NODE
     consumed_at: datetime | None = None
     applied_instance_version: int | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "scope", RestartScope(self.scope))
         object.__setattr__(
             self,
             "affected_node_keys",
             tuple(self.affected_node_keys),
         )
+        if self.scope == RestartScope.NODE and not self.node_key:
+            raise ValueError("node restart preview requires node_key")
+        if self.scope == RestartScope.INSTANCE and self.node_key is not None:
+            raise ValueError("instance restart preview cannot have node_key")
+        if not self.affected_node_keys:
+            raise ValueError("restart preview requires affected nodes")
+        if len(set(self.affected_node_keys)) != len(self.affected_node_keys):
+            raise ValueError("restart preview affected nodes must be unique")
 
 
 @dataclass(frozen=True)
@@ -123,6 +141,21 @@ def affected_restart_node_keys(
     )
 
 
+def affected_instance_restart_node_keys(
+    instance: WorkflowInstance,
+) -> tuple[str, ...]:
+    """Return every node in stable topological order for a full restart."""
+
+    if instance.status not in RESTARTABLE_INSTANCE_STATUSES:
+        raise RestartNotAllowedError(
+            f"instance cannot be restarted from {instance.status.value}"
+        )
+    affected = topological_order(instance.snapshot)
+    if not affected:
+        raise RestartNotAllowedError("instance has no nodes to restart")
+    return affected
+
+
 def apply_node_restart(
     instance: WorkflowInstance,
     preview: RestartPreview,
@@ -131,13 +164,58 @@ def apply_node_restart(
 ) -> None:
     """Create fresh Attempts without overwriting any historical attempt."""
 
+    if preview.scope != RestartScope.NODE or preview.node_key is None:
+        raise StaleRestartPreviewError("restart preview is not node-scoped")
+    _apply_restart(instance, preview, now=now)
+
+
+def apply_instance_restart(
+    instance: WorkflowInstance,
+    preview: RestartPreview,
+    *,
+    now: datetime,
+) -> None:
+    """Create fresh Attempts for the complete frozen graph."""
+
+    if preview.scope != RestartScope.INSTANCE or preview.node_key is not None:
+        raise StaleRestartPreviewError("restart preview is not instance-scoped")
+    _apply_restart(instance, preview, now=now)
+
+
+def apply_restart(
+    instance: WorkflowInstance,
+    preview: RestartPreview,
+    *,
+    now: datetime,
+) -> None:
+    """Apply either explicit restart scope using the same safety checks."""
+
+    if preview.scope == RestartScope.NODE:
+        apply_node_restart(instance, preview, now=now)
+        return
+    apply_instance_restart(instance, preview, now=now)
+
+
+def _apply_restart(
+    instance: WorkflowInstance,
+    preview: RestartPreview,
+    *,
+    now: datetime,
+) -> None:
+    """Reset the preview impact set without overwriting historical Attempts."""
+
     if instance.id != preview.instance_id or instance.tenant_id != preview.tenant_id:
         raise StaleRestartPreviewError("restart preview targets another instance")
     if instance.version != preview.expected_instance_version:
         raise StaleRestartPreviewError("instance changed after restart preview")
     if instance.graph_revision != preview.graph_revision:
         raise StaleRestartPreviewError("graph changed after restart preview")
-    affected = affected_restart_node_keys(instance, preview.node_key)
+    if preview.scope == RestartScope.NODE:
+        if preview.node_key is None:
+            raise StaleRestartPreviewError("node restart preview has no target")
+        affected = affected_restart_node_keys(instance, preview.node_key)
+    else:
+        affected = affected_instance_restart_node_keys(instance)
     if affected != preview.affected_node_keys:
         raise StaleRestartPreviewError("restart impact changed after preview")
 
@@ -171,8 +249,17 @@ def apply_node_restart(
             input_snapshot=FrozenDict({"deps": spec.deps, "work": spec.work}),
         )
 
-    target = instance.nodes[preview.node_key]
-    target.status = NodeStatus.READY
-    target.ready_at = now
+    if preview.scope == RestartScope.NODE:
+        ready_keys = (preview.node_key,)
+    else:
+        ready_keys = tuple(
+            spec.key for spec in instance.snapshot.nodes if not spec.deps
+        )
+    for node_key in ready_keys:
+        if node_key is None:
+            continue
+        node = instance.nodes[node_key]
+        node.status = NodeStatus.READY
+        node.ready_at = now
     instance.status = InstanceStatus.RUNNING
     instance.completed_at = None

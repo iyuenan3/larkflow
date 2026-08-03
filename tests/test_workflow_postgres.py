@@ -31,6 +31,7 @@ from larkflow.workflow import (
     PostgresEdgeStore,
     PairingCodeUsedError,
     ProjectionRecord,
+    RestartScope,
     TaskCompletionSignal,
     TemplateService,
     TemplateStatus,
@@ -277,7 +278,10 @@ def test_postgres_owner_instance_list_is_isolated_ordered_and_bounded():
     assert index_row is not None
 
 
-def test_postgres_restart_preview_is_durable_and_consumed_exactly_once():
+@pytest.mark.parametrize("restart_scope", (RestartScope.NODE, RestartScope.INSTANCE))
+def test_postgres_restart_preview_is_durable_and_consumed_exactly_once(
+    restart_scope,
+):
     assert POSTGRES_DSN is not None
     connection_factory = postgres_connection_factory(POSTGRES_DSN)
     apply_migrations(connection_factory)
@@ -323,12 +327,19 @@ def test_postgres_restart_preview_is_durable_and_consumed_exactly_once():
         result={"decision": "approved"},
     )
     version_before = repository.get(tenant_id, instance_id).version
-    preview = service.preview_node_restart(
-        tenant_id,
-        instance_id,
-        "review",
-        actor_person_id=owner,
-    )
+    if restart_scope == RestartScope.NODE:
+        preview = service.preview_node_restart(
+            tenant_id,
+            instance_id,
+            "review",
+            actor_person_id=owner,
+        )
+    else:
+        preview = service.preview_instance_restart(
+            tenant_id,
+            instance_id,
+            actor_person_id=owner,
+        )
     assert repository.get_restart_preview(tenant_id, preview.id) == preview
 
     barrier = Barrier(2)
@@ -338,7 +349,7 @@ def test_postgres_restart_preview_is_durable_and_consumed_exactly_once():
             BarrierRestartRepository(connection_factory, barrier),
             clock=clock,
         )
-        return concurrent.confirm_node_restart(
+        return concurrent.confirm_restart(
             tenant_id,
             preview.id,
             actor_person_id=owner,
@@ -363,9 +374,17 @@ def test_postgres_restart_preview_is_durable_and_consumed_exactly_once():
             """
             SELECT count(*) AS count FROM workflow_audit_events
             WHERE tenant_id = %s AND instance_id = %s
-              AND event_type = 'instance.node_restarted'
+              AND event_type = %s
             """,
-            (tenant_id, instance_id),
+            (
+                tenant_id,
+                instance_id,
+                (
+                    "instance.node_restarted"
+                    if restart_scope == RestartScope.NODE
+                    else "instance.restarted"
+                ),
+            ),
         ).fetchone()["count"]
         index_row = connection.execute(
             """
@@ -376,6 +395,7 @@ def test_postgres_restart_preview_is_durable_and_consumed_exactly_once():
         ).fetchone()
     assert audit_count == 1
     assert index_row is not None
+    assert stored.scope == restart_scope
 
 
 def test_postgres_persists_a_dependent_draft_before_nodes_are_materialized():

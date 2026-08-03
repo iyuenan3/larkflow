@@ -594,9 +594,10 @@ class WorkflowProjectionWorker:
                 kind=FEISHU_DOCUMENT_KIND,
                 external_id=external.document_id,
                 external_url=external.url,
-                idempotency_key=_projection_key(
+                idempotency_key=_completion_projection_key(
                     self.tenant_id,
                     instance.id,
+                    attempt_no,
                     FEISHU_DOCUMENT_KIND,
                 ),
                 sync_version=instance.version,
@@ -627,9 +628,10 @@ class WorkflowProjectionWorker:
                         f"流程已完成。\n实例：{instance.id}\n"
                         f"目标：{instance.snapshot.goal}{url_line}"
                     ),
-                    idempotency_key=_projection_key(
+                    idempotency_key=_completion_projection_key(
                         self.tenant_id,
                         instance.id,
+                        attempt_no,
                         FEISHU_INSTANCE_MESSAGE_KIND,
                     ),
                 )
@@ -873,6 +875,19 @@ class _ProjectionOutcome:
 def _projection_key(*parts: str) -> str:
     digest = hashlib.sha256(":".join(parts).encode("utf-8")).hexdigest()[:44]
     return f"lf-{digest}"
+
+
+def _completion_projection_key(
+    tenant_id: str,
+    instance_id: str,
+    attempt_no: int,
+    kind: str,
+) -> str:
+    """Keep first-run keys stable while versioning restarted completions."""
+
+    if attempt_no == 1:
+        return _projection_key(tenant_id, instance_id, kind)
+    return _projection_key(tenant_id, instance_id, str(attempt_no), kind)
 
 
 def _canonical_terminal_node(instance: WorkflowInstance) -> str:

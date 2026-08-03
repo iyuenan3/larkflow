@@ -156,9 +156,13 @@ from .restart import (
     RestartPreview,
     RestartPreviewExpiredError,
     RestartPreviewNotFoundError,
+    RestartScope,
     StaleRestartPreviewError,
+    affected_instance_restart_node_keys,
     affected_restart_node_keys,
+    apply_instance_restart,
     apply_node_restart,
+    apply_restart,
 )
 from .postgres import (
     PostgresIMCommandStore,

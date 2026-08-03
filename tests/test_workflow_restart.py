@@ -17,6 +17,7 @@ from larkflow.workflow import (
     NodeStatus,
     RestartNotAllowedError,
     RestartPreviewExpiredError,
+    RestartScope,
     StaleAttemptError,
     StaleRestartPreviewError,
     WorkflowProjectionWorker,
@@ -317,6 +318,128 @@ def test_restart_confirmation_preserves_history_and_is_idempotent():
     assert finished.current_attempt("left_draft").result == {
         "content": "left result v2"
     }
+
+
+def test_full_instance_restart_resets_every_node_and_preserves_history():
+    service, repository = build_service()
+    finish_instance(service)
+    before = service.get(TENANT, "instance_restart")
+
+    with pytest.raises(AuthorizationError):
+        service.preview_instance_restart(
+            TENANT,
+            "instance_restart",
+            actor_person_id="person_intruder",
+        )
+    preview = service.preview_instance_restart(
+        TENANT,
+        "instance_restart",
+        actor_person_id="person_owner",
+    )
+
+    assert preview.scope == RestartScope.INSTANCE
+    assert preview.node_key is None
+    assert preview.affected_node_keys == tuple(
+        spec.key for spec in before.snapshot.nodes
+    )
+    assert service.get(TENANT, "instance_restart") == before
+
+    confirmation = service.confirm_restart(
+        TENANT,
+        preview.id,
+        actor_person_id="person_owner",
+    )
+    restarted = confirmation.instance
+
+    assert confirmation.already_applied is False
+    assert restarted.status == InstanceStatus.RUNNING
+    assert restarted.completed_at is None
+    assert restarted.graph_revision == before.graph_revision
+    assert all(node.current_attempt_no == 2 for node in restarted.nodes.values())
+    assert restarted.nodes["intake"].status == NodeStatus.READY
+    assert all(
+        restarted.nodes[node_key].status == NodeStatus.PENDING
+        for node_key in ("left_draft", "right_review", "merge", "final_review")
+    )
+    assert restarted.attempts[("intake", 1)].result == {"brief": "synthetic"}
+    assert restarted.attempts[("left_draft", 1)].result == {
+        "content": "left result"
+    }
+    assert restarted.attempts[("final_review", 1)].result == {
+        "decision": "accepted"
+    }
+    assert all(
+        restarted.attempts[(node_key, 2)].result is None
+        for node_key in preview.affected_node_keys
+    )
+    audit = repository.audit_log(TENANT, "instance_restart")[-1]
+    assert audit.event_type == "instance.restarted"
+    assert audit.node_key is None
+    assert audit.payload["scope"] == "instance"
+    assert audit.payload["affected_node_keys"] == preview.affected_node_keys
+    version_after = restarted.version
+
+    replay = service.confirm_restart(
+        TENANT,
+        preview.id,
+        actor_person_id="person_owner",
+    )
+    assert replay.already_applied is True
+    assert replay.instance.version == version_after
+    assert len(
+        [
+            event
+            for event in repository.audit_log(TENANT, "instance_restart")
+            if event.event_type == "instance.restarted"
+        ]
+    ) == 1
+
+
+def test_full_instance_restart_makes_every_root_ready():
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=Clock())
+    snapshot = InstanceSnapshot(
+        nodes=(
+            NodeSpec("root_a", "Root A", "person_owner", "human", work=work()),
+            NodeSpec("root_b", "Root B", "person_owner", "human", work=work()),
+            NodeSpec(
+                "join",
+                "Join",
+                "person_owner",
+                "tool",
+                deps=("root_a", "root_b"),
+                work=work(tool_kind="content.merge"),
+            ),
+        )
+    )
+    service.create_draft(
+        instance_id="multi_root_restart",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=snapshot,
+    )
+    service.confirm_draft(
+        TENANT,
+        "multi_root_restart",
+        actor_person_id="person_owner",
+    )
+
+    preview = service.preview_instance_restart(
+        TENANT,
+        "multi_root_restart",
+        actor_person_id="person_owner",
+    )
+    restarted = service.confirm_restart(
+        TENANT,
+        preview.id,
+        actor_person_id="person_owner",
+    ).instance
+
+    assert restarted.nodes["root_a"].status == NodeStatus.READY
+    assert restarted.nodes["root_b"].status == NodeStatus.READY
+    assert restarted.nodes["join"].status == NodeStatus.PENDING
+    assert all(node.current_attempt_no == 2 for node in restarted.nodes.values())
 
 
 def test_restart_invalidates_an_active_claim_and_rejects_its_late_result():

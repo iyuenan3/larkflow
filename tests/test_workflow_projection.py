@@ -91,9 +91,10 @@ class RecordingDocuments:
 
     def create_document(self, request):
         self.requests.append(request)
+        number = len(self.requests)
         return ExternalDocument(
-            document_id="document-1",
-            url="https://example.invalid/docs/document-1",
+            document_id=f"document-{number}",
+            url=f"https://example.invalid/docs/document-{number}",
         )
 
 
@@ -555,6 +556,91 @@ def test_explicit_reconciliation_repairs_a_missing_instance_completion_outbox():
     assert unchanged.noops == 1
     assert len(documents.requests) == 1
     assert len(messages.requests) == 1
+
+
+def test_completed_instance_restart_creates_new_completion_projections():
+    clock = Clock()
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=clock)
+    service.create_draft(
+        instance_id="instance_completion_restart",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=human_snapshot(),
+    )
+    service.confirm_draft(
+        TENANT,
+        "instance_completion_restart",
+        actor_person_id="person_owner",
+    )
+    tasks = RecordingTasks()
+    messages = RecordingMessages()
+    documents = RecordingDocuments()
+    worker = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        tasks,
+        message_adapter=messages,
+        document_adapter=documents,
+        tenant_id=TENANT,
+        worker_id="projection_restart",
+        clock=clock,
+    )
+    assert worker.run_once().noops == 1
+
+    first = service.dispatch_ready(TENANT, "instance_completion_restart")[0]
+    assert worker.run_once().tasks_created == 1
+    service.submit_human(
+        TENANT,
+        "instance_completion_restart",
+        "approve",
+        actor_person_id="person_reviewer",
+        attempt_no=first.attempt_no,
+        expected_node_version=first.expected_node_version,
+        result={"decision": "approved"},
+    )
+    first_completion = worker.run_once()
+    assert first_completion.documents_created == 1
+    assert first_completion.messages_sent == 1
+
+    preview = service.preview_instance_restart(
+        TENANT,
+        "instance_completion_restart",
+        actor_person_id="person_owner",
+    )
+    service.confirm_restart(
+        TENANT,
+        preview.id,
+        actor_person_id="person_owner",
+    )
+    assert worker.run_once().tasks_completed == 0
+    second = service.dispatch_ready(TENANT, "instance_completion_restart")[0]
+    assert worker.run_once().tasks_created == 1
+    service.submit_human(
+        TENANT,
+        "instance_completion_restart",
+        "approve",
+        actor_person_id="person_reviewer",
+        attempt_no=second.attempt_no,
+        expected_node_version=second.expected_node_version,
+        result={"decision": "approved again"},
+    )
+    second_completion = worker.run_once()
+
+    assert second_completion.documents_created == 1
+    assert second_completion.messages_sent == 1
+    assert len(documents.requests) == 2
+    assert len(messages.requests) == 2
+    records = repository.projection_records(TENANT)
+    completion_records = [
+        record
+        for record in records
+        if record.kind in {FEISHU_DOCUMENT_KIND, FEISHU_INSTANCE_MESSAGE_KIND}
+    ]
+    assert {record.attempt_no for record in completion_records} == {1, 2}
+    assert len({record.idempotency_key for record in completion_records}) == 4
 
 
 def test_projection_worker_does_not_claim_events_owned_by_other_consumers():
