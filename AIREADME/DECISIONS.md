@@ -568,3 +568,14 @@
 - Alternatives(否决)：收到命令立即重启；只在内存保存预览；相信客户端提交影响集合；覆盖原 Attempt；用 `graph_revision` 表示纯运行态重做；允许新 Owner 消费旧 Owner 的预览；数据库提交后才标记预览已消费；让重复确认再次重启；在领域事务内同步关闭或创建飞书 Task。
 - Tradeoff：每次预览都会留下耐久行，当前没有后台清理过期预览；首版只提供节点重启，不提供完整实例重启、批量选择或 UI 按钮。失败节点覆盖规则偏保守，可能要求 Owner 选择更上游的共同祖先。飞书 Task 收口仍依赖 outbox 最终一致性，短暂延迟期间旧 Task 可能仍可见，但不能通过领域授权推进当前 Attempt。
 - Evidence：完整离线套件 `709 passed, 10 skipped`。五类定向变异分别证明 Owner、版本、可达下游、外部失败节点和历史 Task 状态断言能够捕获缺陷。一次性 PostgreSQL 14 中两个真实连接确认同一预览，恰好一路执行、一路幂等回放，aggregate version 只增加 1、审计只有 1 条。测试组织实例在最终 Human 节点等待时完成预览、确认、旧 Task 关闭、新 Task 创建、重复确认 no-op 和新 Attempt 完成；Instance 最终为 done，两个 review Attempt 分别为 canceled 与 done，重启审计仍为 1 条。
+
+## ADR-071 · 2026-08-03 · 完整实例重启使用显式 scope 并分代完成投影
+
+- **Status：Accepted · Development deployment。**
+- Problem：节点重启已经具备安全预览与原子确认，但完整实例重做不能可靠表达为“选择某个特殊节点”。特殊值会污染节点标识、产生含糊授权，并且无法正确处理多根图。实例再次完成时若继续复用原完成 Projection 键，Owner 也看不到新一轮文档和最终通知。
+- Constraint：中央冻结图仍是唯一影响计算来源；只有 Instance Owner 可以预览和确认；节点与实例 scope 必须可判别且由数据库约束；全图重启必须支持多个根节点；旧 Attempt、结果、Task、文档、通知和审计不得覆盖；重复确认与并发确认必须幂等；首次完成的既有幂等键不能因升级改变。
+- Decision：RestartPreview 增加显式 `node / instance` scope。node scope 必须有节点键，instance scope 的节点键必须为空；后者的影响集合是拓扑排序后的全部节点。共享确认事务按 scope 重算影响，为每个节点创建新 Attempt，并把所有根节点置为 ready、其他节点置为 pending。完整重启不改变 `graph_revision`。完成文档与最终通知在 Attempt 1 继续使用历史键，从 Attempt 2 开始把当前规范终端节点 Attempt 编号纳入幂等键和 Projection 唯一性。
+- Alternatives(否决)：用 `*`、空字符串或虚构 root 作为节点键；逐个调用节点重启；只重启单个根节点；覆盖旧 Attempt 或旧完成 Projection；每次对账都创建新完成资源；改变首次完成的历史幂等键。
+- Tradeoff：完成轮次暂以排序后的规范终端节点 Attempt 编号标识，能够覆盖当前单层 DAG 和多根场景，但产品界面还没有跨轮次浏览与显式 completion generation。过期预览仍没有后台清理；外部投影继续最终一致，短时可能先完成领域状态再出现新文档。
+- Supersedes / refines：扩展 ADR-070 的首版范围限制，保留其 Owner 重授权、耐久预览、版本校验、历史不可变、同事务写入和重复确认 no-op 原则。
+- Evidence：完整离线套件 `715 passed, 11 skipped`。一次性 PostgreSQL 14 中，instance scope 的两个真实连接确认同一预览，恰好一路执行、一路幂等回放，aggregate version 只增加 1，全部受影响节点进入下一 Attempt，旧结果保留且实例重启审计只有 1 条。测试组织三节点实例从完成态执行全图重启后，当前 Attempt 为 2、2、3，根节点重新调度并再次完成；重复确认不新增版本、Attempt、Task 或审计。两轮完成文档和最终通知使用不同外部 ID，新文档已从飞书服务端回读三节点结果。内容提交 `e66f6ab` 已部署到开发服务器，六个 Python 服务均为 active、`NRestarts=0`，验收窗口无错误级日志。

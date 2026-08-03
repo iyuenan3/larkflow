@@ -9,7 +9,7 @@
 目标：以既有设计为底稿，围绕最小闭环做减法，并切断 Target 与 As-built 的混写。
 
 - 核对既有 AIREADME 的范围、依赖和实现边界。
-- 固定单层 DAG、模板可选、草稿确认、未来区域编辑和节点重启范围。
+- 固定单层 DAG、模板可选、草稿确认、未来区域编辑、节点重启和完整实例重启范围。
 - 明确每节点唯一人类 Owner，Human、Agent、Tool 只表示执行器。
 - 从近期产品范围移除子 DAG、个人 Agent Edge 产品化、通用 Capability Lease、RAG、Kafka 和复杂模板治理。
 - 保留飞书 adapter、幂等、对账、权限纯函数和重算机制的迁移价值。
@@ -35,20 +35,20 @@
 - 每个节点的唯一 Owner 解析与服务端授权。当前内核已拒绝非 Owner 提交，飞书 IM 命令发送者的活跃成员校验已在测试组织通过；草稿 Owner 全量企业目录校验已落码并部署但默认关闭。
 - 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则、持久化、常驻 Worker、Agent adapter、首个 Tool adapter、真实开发链路与恢复扫描已落码，更多业务 Tool 按验证需求增加。
 - 已完成启动全量 Task 对账、缺失 Projection 补建和确认删除后的外部 Task 重建；一次性 PostgreSQL 与常驻开发服务均已验证补建、真实删除换绑、重入及修复后完成入站。
-- 已完成飞书窄命令入口与完成投影：`/larkflow help / start / confirm / status / list / restart / restart-confirm`、耐久发送者校验与回复、Agent / Tool 结果消息、完成 Docx 和最终通知已完成真实开发链路。`status` 只允许 Instance Owner 查看单实例有界摘要，`list` 只返回本人最近十个实例摘要；节点重启只允许 Owner 预览和确认。Task 事件在本轮仍未被 bot 长连接收到，周期状态轮询继续承担可靠完成发现。下一步是更多业务 Tool、运行中编辑、完整实例重启和生产装配。
+- 已完成飞书窄命令入口与完成投影：`/larkflow help / start / confirm / status / list / restart / restart-all / restart-confirm`、耐久发送者校验与回复、Agent / Tool 结果消息、完成 Docx 和最终通知已完成真实开发链路。`status` 只允许 Instance Owner 查看单实例有界摘要，`list` 只返回本人最近十个实例摘要；两类重启只允许 Owner 预览和确认。Task 事件在本轮仍未被 bot 长连接收到，周期状态轮询继续承担可靠完成发现。下一步是更多业务 Tool、运行中编辑和生产装配。
 - 已完成节点安全重启：服务端计算目标及可达下游，耐久预览绑定 actor、版本和图 revision，确认事务创建新 Attempt、保留历史并收口旧 Human Task；重复确认 no-op。离线变异、一次性 PostgreSQL 14 双连接竞争及测试组织 Human-Agent-Human 真实闭环均已通过。
+- 已完成完整实例安全重启：显式 instance scope 计算全图影响，确认后为所有节点创建新 Attempt，从全部根节点重新调度；旧 Attempt 与两轮完成投影保留。离线套件、一次性 PostgreSQL 14 双连接竞争和测试组织三节点第二轮闭环均已通过。
 - 从 legacy 原型提炼 adapter、事件韧性和 Mock 测试资产。
 - 已完成 Personal Agent Edge Proof v0：一次性配对、哈希凭据、设备撤销、Owner 与 capability 双重过滤、现有 Attempt claim 续租、迟到结果拒绝、loopback Gateway、手工 `run-once` 和 Codex 只读适配器。离线测试、一次性 PostgreSQL 14、长期开发库 migration、loopback systemd 部署、SSH 隧道跨机 Codex、Caddy 与受信任源站证书已通过；公网设备链路受 ICP 接入备案阻断，Caddy 验证后已停止，凭据系统存储和安全评审仍未完成。
 
-**Demo：** 已从真实飞书消息创建并确认模板草稿，在测试组织完成 Human-Agent-Tool-Human，最终 Docx 包含四个节点结果，Owner 收到带链接的完成通知；重复修复为 no-op。另一个 Human-Agent-Human 实例在最终 Human 节点等待时完成节点重启，旧 Task 收口、新 Task 完成、重复确认 no-op，Instance 最终回到 done。该证据仅覆盖开发环境，无模板定义的同等真栈入口仍待补充。
+**Demo：** 已从真实飞书消息创建并确认模板草稿，在测试组织完成 Human-Agent-Tool-Human，最终 Docx 包含四个节点结果，Owner 收到带链接的完成通知；重复修复为 no-op。另一个 Human-Agent-Human 实例先完成最终节点重启，再完成全图实例重启；第二轮从根节点重新调度，三个新 Attempt 均完成，新旧 Task、结果、文档和最终通知均保留，重复确认 no-op。该证据仅覆盖开发环境，无模板定义的同等真栈入口仍待补充。
 
 ## Next · Phase 2 受控变化与恢复
 
 目标：让运行中流程可以安全修改、重做和运营，而不覆盖历史。
 
 - 未来区域编辑、影响预览、确认和 `graph_revision` 乐观并发。
-- 完整实例重启及其全图影响预览。
-- 节点重启已保留 Attempt 历史、结果和质量记录；继续补全交付物引用与跨轮次浏览体验。
+- 两类重启已保留 Attempt 历史、结果、质量记录和完成投影；继续补全交付物引用与跨轮次浏览体验。
 - `pass/fail + evidence + suggestion` 质量结果与有限 Agent 重试。
 - 暂停、恢复、取消、失败处理、人工接管和运维告警。
 - 投影缺失重建、重复事件与乱序事件验证。
