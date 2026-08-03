@@ -469,3 +469,36 @@ def test_role_binding_card_requires_a_bounded_candidate_snapshot():
         assert "requires candidates" in str(exc)
     else:
         raise AssertionError("empty candidates must be rejected")
+
+
+def test_settled_role_binding_card_never_combines_required_and_disabled():
+    req = request(candidates=("person_owner", "person_reviewer"))
+
+    editable = role_binding_card(req, req.candidate_person_ids)
+    settled = role_binding_card(
+        req,
+        req.candidate_person_ids,
+        owner_bindings={
+            "requester": "person_owner",
+            "reviewer": "person_reviewer",
+        },
+        settled_instance_id="im_instance",
+    )
+
+    editable_form = editable["body"]["elements"][1]
+    settled_form = settled["body"]["elements"][1]
+    editable_selectors = [
+        element
+        for element in editable_form["elements"]
+        if element["tag"] == "select_person"
+    ]
+    settled_selectors = [
+        element
+        for element in settled_form["elements"]
+        if element["tag"] == "select_person"
+    ]
+
+    assert all(element["required"] is True for element in editable_selectors)
+    assert all(element["disabled"] is False for element in editable_selectors)
+    assert all("required" not in element for element in settled_selectors)
+    assert all(element["disabled"] is True for element in settled_selectors)

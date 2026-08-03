@@ -859,12 +859,13 @@ def role_binding_card(
         selector = {
             "tag": "select_person",
             "name": f"{ROLE_FIELD_PREFIX}{role}",
-            "required": True,
             "width": "fill",
             "placeholder": {"tag": "plain_text", "content": "请选择成员"},
             "options": options,
             "disabled": settled,
         }
+        if not settled:
+            selector["required"] = True
         if initial in candidate_person_ids:
             selector["initial_option"] = initial
         form_elements.append(selector)
