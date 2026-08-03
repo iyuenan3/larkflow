@@ -977,10 +977,18 @@ def _optional_text(value: Any) -> str | None:
 
 def _event_time(value: Any, *, fallback: datetime) -> datetime:
     try:
-        milliseconds = int(value)
+        raw_timestamp = int(value)
     except (TypeError, ValueError):
         return fallback
-    return datetime.fromtimestamp(milliseconds / 1000, tz=timezone.utc)
+    # lark-cli currently exposes card callback timestamps at microsecond
+    # precision, while other Feishu event families use milliseconds.  Keep
+    # both shapes because this bridge shares the long-lived callback channel
+    # with older cards and deployed CLI versions.
+    divisor = 1_000_000 if abs(raw_timestamp) >= 100_000_000_000_000 else 1_000
+    try:
+        return datetime.fromtimestamp(raw_timestamp / divisor, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return fallback
 
 
 __all__ = [

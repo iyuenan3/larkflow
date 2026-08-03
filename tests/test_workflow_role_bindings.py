@@ -228,6 +228,54 @@ def test_card_bridge_accepts_only_the_named_role_binding_form():
     assert bridge("card.action.trigger", payload) is False
     assert bridge("card.action.trigger", {**payload, "action_name": "other"}) is False
     assert store.appended[0].operator_person_id == "person_owner"
+    assert store.appended[0].occurred_at == datetime(
+        2026, 8, 3, 6, 40, tzinfo=timezone.utc
+    )
+
+
+def test_card_bridge_accepts_real_microsecond_callback_timestamp():
+    store = MemoryRoleStore()
+    bridge = RoleBindingActionInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+
+    assert bridge(
+        "card.action.trigger",
+        {
+            "event_id": "action_microseconds",
+            "message_id": "card_message_1",
+            "chat_id": "chat_p2p",
+            "operator_id": "person_owner",
+            "action_tag": "button",
+            "action_name": "role_binding_submit",
+            "form_value": '{"role__requester":"person_owner"}',
+            "token": "update_token",
+            # Captured from the real lark-cli callback shape.
+            "timestamp": "1785001477632461",
+        },
+    ) is True
+    assert store.appended[0].occurred_at == datetime(
+        2026, 7, 25, 17, 44, 37, 632461, tzinfo=timezone.utc
+    )
+
+
+def test_card_bridge_falls_back_for_out_of_range_callback_timestamp():
+    store = MemoryRoleStore()
+    bridge = RoleBindingActionInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+
+    assert bridge(
+        "card.action.trigger",
+        {
+            "event_id": "action_out_of_range",
+            "message_id": "card_message_1",
+            "chat_id": "chat_p2p",
+            "operator_id": "person_owner",
+            "action_tag": "button",
+            "action_name": "role_binding_submit",
+            "form_value": '{"role__requester":"person_owner"}',
+            "token": "update_token",
+            "timestamp": "999999999999999999999999999999999999",
+        },
+    ) is True
+    assert store.appended[0].occurred_at == NOW
 
 
 def test_card_worker_freezes_candidates_and_projects_card_2():
