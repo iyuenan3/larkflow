@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.28.2-draft · 2026-08-03 · 跨人员非 Owner 真实飞书回归
+
+- Directory：开发应用发布所需通讯录数据范围后，中央应用从根部门目录读取到五名活跃成员，并能解析选定测试成员在本应用下的身份。
+- Acceptance：以该测试成员为 Owner 创建三节点合成实例并生成真实 Human Task 投影；测试成员无需完成待办。当前登录用户从真实飞书会话发送 `/larkflow edit`，命令被耐久处理为 `rejected:command`，合并拒绝回复成功发送。
+- Integrity：实例保持 `running / graph_revision 1`，目标节点标题不变；GraphEditPreview 为 0，`instance.graph_edited` 审计为 0，拒绝路径没有污染领域状态。
+- Operations：五个 Target 服务与 legacy 事件消费者均为 active 且 `NRestarts=0`；本次验收窗口没有 warning 级日志。
+- Boundary：测试实例由正式中央 CLI 创建并确认，Owner 身份已由同一中央应用独立实时验证；本结论证明开发测试组织中的跨人员非 Owner 编辑拒绝，不代表生产装配或完整权限清单已经验收。
+
 ## v0.28.1-draft · 2026-08-03 · 运行中未来区域真实飞书验收
 
 - Acceptance：Owner 从真实飞书创建并确认三节点实例，在首个 Human 节点等待时预览并确认最终 Human 节点改名；重复确认返回 no-op。后续 Agent、更新标题的 Human Task、完成 Docx 与最终通知均真实投影并从飞书服务端回读，Instance 最终为 `done / version 8 / graph_revision 2`，三个当前 Attempt 均为 `done`。
