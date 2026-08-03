@@ -381,6 +381,12 @@ class RecoveryActionInboxBridge:
         if action_name not in {
             recovery_action_name(action) for action in RecoveryAction
         }:
+            value = payload.get("action_value")
+            if isinstance(value, Mapping) and value.get("kind") == RECOVERY_ACTION_NAME:
+                raise ValueError(
+                    "unexpected recovery action name: "
+                    f"{_safe_callback_name(action_name)}"
+                )
             return False
         if payload.get("action_tag") != "button":
             raise ValueError("recovery action must come from a button")
@@ -409,6 +415,20 @@ class RecoveryActionInboxBridge:
             card_update_token=_required_text(payload.get("token"), "token"),
         )
         return self.store.append_im_command(event)
+
+
+def _safe_callback_name(value: Any) -> str:
+    """Bound callback diagnostics to a non-sensitive, log-safe token."""
+
+    if not isinstance(value, str) or not value:
+        return "<missing>"
+    if len(value) > 64 or not all(
+        character.isascii()
+        and (character.isalnum() or character in {"_", "-", ".", ":"})
+        for character in value
+    ):
+        return "<invalid>"
+    return value
 
 
 @dataclass(frozen=True)

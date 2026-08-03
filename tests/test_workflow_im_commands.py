@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import re
 
 import pytest
 
@@ -351,6 +352,50 @@ def test_recovery_card_bridge_rejects_a_mismatched_unique_button_name():
                 "token": "card-update-token",
             },
         )
+
+
+@pytest.mark.parametrize(
+    ("action_name", "diagnostic"),
+    [
+        ("workflow_recovery", "workflow_recovery"),
+        (None, "<missing>"),
+        ("workflow_recovery\nsecret", "<invalid>"),
+    ],
+)
+def test_recovery_card_bridge_reports_safe_diagnostics_for_unmatched_recovery_names(
+    action_name,
+    diagnostic,
+):
+    store = MemoryStore()
+    bridge = RecoveryActionInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+
+    with pytest.raises(
+        ValueError,
+        match=f"unexpected recovery action name: {re.escape(diagnostic)}",
+    ):
+        bridge(
+            "card.action.trigger",
+            {
+                "action_name": action_name,
+                "action_value": {
+                    "kind": "workflow_recovery",
+                    "action": "retry",
+                },
+            },
+        )
+
+
+def test_recovery_card_bridge_ignores_unrelated_card_actions():
+    store = MemoryStore()
+    bridge = RecoveryActionInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+
+    assert bridge(
+        "card.action.trigger",
+        {
+            "action_name": "role_binding_submit",
+            "action_value": {"kind": "role_binding"},
+        },
+    ) is False
 
 
 def test_bridge_accepts_group_command_with_authenticated_mentions():
