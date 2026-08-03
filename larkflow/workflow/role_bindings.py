@@ -790,8 +790,12 @@ class RoleBindingReplyWorker:
                             settled_instance_id=claim.instance_id,
                         ),
                     )
-                except Exception:
+                except Exception as exc:
                     card_updates_failed += 1
+                    errors.append(
+                        f"{claim.action.id}: card update "
+                        f"{type(exc).__name__}: {exc}"
+                    )
                 external_id = self.sender.send_chat_message(
                     chat_id=claim.request.chat_id,
                     text=claim.text,
@@ -885,7 +889,7 @@ def role_binding_card(
     )
     return {
         "schema": "2.0",
-        "config": {"width_mode": "default"},
+        "config": {"width_mode": "default", "update_multi": True},
         "header": {
             "title": {
                 "tag": "plain_text",

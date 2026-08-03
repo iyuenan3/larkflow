@@ -412,9 +412,54 @@ def test_reply_worker_settles_card_and_sends_stable_text_reply():
 
     assert report.sent == 1
     assert sender.updates[0]["card"]["header"]["template"] == "green"
+    assert sender.updates[0]["card"]["config"]["update_multi"] is True
     assert sender.messages[0]["text"] == "draft ready"
     assert sender.messages[0]["idempotency_key"].startswith("lf-role-reply-")
     assert store.reply_sent[0][2]["external_id"] == "reply_message_1"
+
+
+def test_reply_worker_reports_card_update_error_without_losing_text_reply():
+    class FailingCardSender(Sender):
+        def update_chat_card(self, **kwargs):
+            self.updates.append(kwargs)
+            raise RuntimeError("Feishu card update rejected")
+
+    store = MemoryRoleStore()
+    store.reply_claims = [
+        RoleBindingReplyClaim(
+            action=action(),
+            request=request(
+                candidates=("person_owner", "person_reviewer"),
+                card_message_id="card_message_1",
+            ),
+            owner_bindings={
+                "requester": "person_owner",
+                "reviewer": "person_reviewer",
+            },
+            instance_id="im_instance",
+            text="draft ready",
+            claim_token="reply-token",
+            attempt_count=1,
+        )
+    ]
+    sender = FailingCardSender()
+
+    report = RoleBindingReplyWorker(
+        store,
+        sender,
+        tenant_id=TENANT,
+        worker_id="reply_worker",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.sent == 1
+    assert report.failed == 0
+    assert report.card_updates_failed == 1
+    assert report.errors == (
+        "action_1: card update RuntimeError: Feishu card update rejected",
+    )
+    assert store.reply_sent[0][2]["external_id"] == "reply_message_1"
+    assert store.reply_failed == []
 
 
 def test_role_binding_card_requires_a_bounded_candidate_snapshot():
