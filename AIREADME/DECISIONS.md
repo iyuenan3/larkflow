@@ -603,3 +603,14 @@
 - Alternatives(否决)：把 open_id 写进命令；按显示名称搜索通讯录；把角色绑定放进普通 JSON 输入；只在桥接进程内保存 mention；让领域 Worker直接读取飞书；为跨人员创建另开一套管理员 CLI。
 - Tradeoff：首版语法适合显式模板角色，不提供自然语言识别、角色选择 UI、部门或群组 Owner，也不允许一个角色绑定多人。真实正向验证需要一个包含机器人和测试成员的群聊，因为单聊未必能 @到第三人。目录调用数随被引用的不同人员线性增加，当前上限由模板和最多 100 个绑定共同约束。
 - Evidence：聚焦离线套件 `73 passed`，完整离线套件 `740 passed, 13 skipped`。覆盖原始 V2 与拍平 mention 形状、群聊前缀、恶意前缀、缺失元数据、重复与未知角色、非活跃成员、旧命令兼容、跨人员冻结 Snapshot、模板双角色和 PostgreSQL 可选往返测试。长期开发库、真实群聊、模板发布和跨人员 Task 投影尚未验收。
+
+## ADR-074 · 2026-08-04 · 跨人员分工不依赖群聊，单聊使用耐久人员选择卡
+
+- **Status：Accepted · Development validation。**
+- Problem：`role=@成员` 能安全复用本条消息的认证 mention，但用户为了给其他员工派单而临时拉群并不是流程成立的必要条件。单聊无法稳定 mention 第三人，继续要求群聊会把聊天拓扑错误地变成工作流依赖。
+- Constraint：Instance Owner 仍是发起人；每个角色仍冻结到一个活跃人员；卡片 payload、显示名称和客户端身份都不是授权事实；领域侧不能读取 lark-cli profile；回调、草稿创建、卡片回写和文本回复必须耐久、幂等并可恢复。
+- Decision：当 `start` 的启用模板含发送者之外的未绑定角色时，凭据侧先读取有界活跃成员候选快照，再发送 Card 2.0 `select_person` 表单。回调只接受原命令发送者，凭据侧重新读取目录并验证每个选择仍属于候选快照且状态活跃；领域侧随后按 tenant、message 和角色绑定确定性生成一个 Instance ID，并冻结一个草稿。群聊 mention 入口继续保留，两条入口收敛到同一 Template Service 与 Instance Snapshot。
+- Safety：migration `0014_role_binding_cards` 分离卡片发送、回调验证、领域处理和回复投影四类耐久状态。成功后原卡片更新为绿色已确认状态，选择器和按钮禁用，重复回调只回读首次结果。飞书回调时间接受秒、毫秒和微秒精度；已禁用选择器不再声明 `required=true`；卡片更新失败单独计数并记录，不回滚已提交草稿。
+- Alternatives(否决)：强制用户拉群；按显示名称搜索；把完整通讯录或 open_id 放进不可信文本；让卡片直接创建实例；把候选列表只保存在进程内；卡片更新失败时回滚领域事务；重复点击创建多个草稿。
+- Tradeoff：候选列表需要凭据侧目录权限且当前采用有界快照，大组织仍需搜索或分页体验。Runtime 与 Projection 的开发空闲退避上限已从 5 秒收紧到 1 秒，把真实回调服务端总耗时从 8.881 秒降到 3.272 秒，但增加空闲数据库轮询频率；长期应评估 PostgreSQL `LISTEN/NOTIFY` 或等价唤醒机制。
+- Evidence：完整离线套件 `758 passed, 13 skipped`。开发服务器已应用十四份 migration，并安装内容提交 `19ea7be` 的 wheel；群聊 mention 与单聊 Card 2.0 均创建跨人员冻结草稿。单聊实例 `im_7575ba0f48ef145a782a20c3` 只创建一次，回复为 sent，原卡片成功冻结；Runtime、Projection 和其余四个 Python 服务均为 active、`NRestarts=0`。性能配置内容提交为 `409167d`。

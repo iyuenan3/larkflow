@@ -145,7 +145,7 @@ Target 订阅 `im.message.receive_v1`，处理以 `/larkflow` 开头的文本，
 
 原始 event ID 与 message ID 都参与去重；验证、领域执行和回复各自使用可认领的耐久状态，不依赖单个进程在线。mention 元数据随命令写入 PostgreSQL，凭据侧与领域侧读取同一耐久记录。客户端 payload 中的身份、Owner 或状态不作为授权事实。命令回复、Agent / Tool 节点结果、完成文档与最终通知都由服务端状态生成，并以稳定幂等键落为 Projection。Instance 进入 `done` 后，Projection Worker 汇总节点结果创建 Docx，再向 Owner 发送含文档链接的最终消息。首次完成的幂等键保持原格式；重启后的完成投影按当前终端节点 Attempt 编号分代，因此同一实例再次完成会产生新的文档和最终通知，同时保留旧轮次 Projection。
 
-跨人员角色绑定、`collaborative_agent_review` 双角色模板和 migration `0013_im_command_mentions` 已通过完整离线套件。它们尚未部署到开发服务器，也尚未完成真实群聊 mention、目录验证、草稿确认和跨人员 Task 投影验收。
+跨人员角色绑定、`collaborative_agent_review` 双角色模板和 migration `0013_im_command_mentions` 已完成开发部署与真实群聊验收。单聊中，若模板含发送者之外的未绑定角色，`start` 会返回 Card 2.0 人员选择表单；候选人是凭据侧冻结的有界活跃成员快照，回调只接受创建命令的操作人和快照内人员，经目录再次验证后由领域侧幂等创建一个草稿。migration `0014_role_binding_cards` 保存候选快照、回调验证、领域处理、卡片更新和文本回复状态。成功后原卡片变为绿色已确认状态，选择器和按钮禁用，重复回调不创建第二个草稿。
 
 `reconcile-instance-completion <instance_id>` 是显式的单实例恢复命令。它只接受已完成实例，只补齐缺失的完成文档或最终通知；重复执行返回 no-op，不批量扫描历史实例，也不复制已存在的外部资源。
 

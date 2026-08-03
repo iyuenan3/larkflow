@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.30.0-draft · 2026-08-04 · 单聊人员选择卡与交互延迟收敛
+
+- Added：多角色模板在单聊中缺少显式绑定时返回 Card 2.0 人员选择表单。候选快照、卡片发送、回调、目录再验证、领域处理、卡片更新和文本回复都使用 PostgreSQL 耐久状态；成功回调只创建一个冻结草稿，并把原卡片更新为绿色已确认状态。
+- Security：回调只接受原命令发送者；被选人员必须来自冻结候选快照并再次通过当前企业活跃成员校验。卡片中的身份、显示名称和手填 open_id 不参与授权，领域侧仍不读取 lark-cli profile。
+- Fixed：接受飞书回调中的秒、毫秒和微秒时间戳；补齐开发凭据身份对 `workflow_role_binding_actions` 的最小 ACL；启用 `config.update_multi`；卡片更新失败进入结构化计数与日志；已禁用的已确认选择器不再携带 `required=true`。
+- Performance：Runtime 与 Projection 的开发空闲轮询上限由 5 秒收紧到 1 秒。真实人员分工卡片回调的服务端总耗时从 8.881 秒降至 3.272 秒，用户观察约 4 秒。长期仍需评估数据库通知唤醒，当前数据不能外推到生产负载。
+- Deployment：代码发布件对应内容提交 `19ea7be`，wheel SHA-256 为 `ab18ddf5a2cf42084129893a9e2e16640ed1b769fb4bc089aa361128588688e0`；长期开发库已应用十四份 migration，六个 Python 服务 active 且 `NRestarts=0`。开发延迟配置与内容提交 `409167d` 对齐，原 5 秒 env 已保留可恢复备份。
+- Validation：群聊 mention 和单聊 Card 2.0 两条跨人员正向入口均在测试组织通过。完整离线套件为 `758 passed, 13 skipped`。该证据仅代表开发环境和测试组织，不代表生产上线。
+
 ## v0.29.0-draft · 2026-08-03 · 飞书 mention 跨人员角色绑定
 
 - Added：`/larkflow start <template_id> [JSON对象] [role=@成员 ...]` 支持按逻辑角色绑定本条消息中真实 @到的成员；未显式绑定的角色仍归发起人，Instance Owner 不变。新增 `collaborative_agent_review` 双角色 Human-Agent-Human 模板。
