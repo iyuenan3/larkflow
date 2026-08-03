@@ -105,6 +105,18 @@ class BarrierRepository(PostgresWorkflowRepository):
         return instance
 
 
+class BarrierRestartRepository(PostgresWorkflowRepository):
+    """Make two restart confirmations reach the atomic save together."""
+
+    def __init__(self, connection_factory, barrier: Barrier) -> None:
+        super().__init__(connection_factory)
+        self.barrier = barrier
+
+    def save_restart(self, *args, **kwargs):
+        self.barrier.wait(timeout=5)
+        return super().save_restart(*args, **kwargs)
+
+
 def template_document() -> dict:
     return {
         "schema_version": "0.2",
@@ -262,6 +274,107 @@ def test_postgres_owner_instance_list_is_isolated_ordered_and_bounded():
               AND indexname = 'workflow_instances_owner_recent_idx'
             """
         ).fetchone()
+    assert index_row is not None
+
+
+def test_postgres_restart_preview_is_durable_and_consumed_exactly_once():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_restart_{suffix}"
+    instance_id = f"instance_restart_{suffix}"
+    owner = f"person_owner_{suffix}"
+    repository = PostgresWorkflowRepository(connection_factory)
+    clock = Clock(datetime(2026, 8, 3, 4, 0, tzinfo=timezone.utc))
+    service = WorkflowService(repository, clock=clock)
+    snapshot = InstanceSnapshot(
+        nodes=(
+            NodeSpec(
+                "review",
+                "Review",
+                owner,
+                "human",
+                work={
+                    "objective": "Review the brief",
+                    "inputs": [],
+                    "outputs": [{"id": "decision", "type": "data"}],
+                    "acceptance": ["A decision exists"],
+                },
+            ),
+        )
+    )
+    service.create_draft(
+        instance_id=instance_id,
+        tenant_id=tenant_id,
+        owner_person_id=owner,
+        actor_person_id=owner,
+        snapshot=snapshot,
+    )
+    service.confirm_draft(tenant_id, instance_id, actor_person_id=owner)
+    activation = service.dispatch_ready(tenant_id, instance_id)[0]
+    service.submit_human(
+        tenant_id,
+        instance_id,
+        "review",
+        actor_person_id=owner,
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        result={"decision": "approved"},
+    )
+    version_before = repository.get(tenant_id, instance_id).version
+    preview = service.preview_node_restart(
+        tenant_id,
+        instance_id,
+        "review",
+        actor_person_id=owner,
+    )
+    assert repository.get_restart_preview(tenant_id, preview.id) == preview
+
+    barrier = Barrier(2)
+
+    def confirm(_index):
+        concurrent = WorkflowService(
+            BarrierRestartRepository(connection_factory, barrier),
+            clock=clock,
+        )
+        return concurrent.confirm_node_restart(
+            tenant_id,
+            preview.id,
+            actor_person_id=owner,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        confirmations = list(pool.map(confirm, (1, 2)))
+
+    assert sorted(item.already_applied for item in confirmations) == [False, True]
+    restarted = repository.get(tenant_id, instance_id)
+    assert restarted.version == version_before + 1
+    assert restarted.status == InstanceStatus.RUNNING
+    assert restarted.nodes["review"].current_attempt_no == 2
+    assert restarted.nodes["review"].status.value == "ready"
+    assert restarted.attempts[("review", 1)].result == {"decision": "approved"}
+    assert restarted.attempts[("review", 2)].result is None
+    stored = repository.get_restart_preview(tenant_id, preview.id)
+    assert stored.consumed_at == clock.now
+    assert stored.applied_instance_version == restarted.version
+    with connection_factory() as connection:
+        audit_count = connection.execute(
+            """
+            SELECT count(*) AS count FROM workflow_audit_events
+            WHERE tenant_id = %s AND instance_id = %s
+              AND event_type = 'instance.node_restarted'
+            """,
+            (tenant_id, instance_id),
+        ).fetchone()["count"]
+        index_row = connection.execute(
+            """
+            SELECT indexname FROM pg_indexes
+            WHERE schemaname = 'public'
+              AND indexname = 'workflow_restart_previews_open_idx'
+            """
+        ).fetchone()
+    assert audit_count == 1
     assert index_row is not None
 
 

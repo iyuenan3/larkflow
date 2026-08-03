@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -19,7 +19,15 @@ from .model import (
     WorkflowInstance,
     WorkflowInstanceSummary,
 )
-from .repository import WorkflowRepository
+from .repository import ConcurrentUpdateError, WorkflowRepository
+from .restart import (
+    RestartConfirmation,
+    RestartPreview,
+    RestartPreviewExpiredError,
+    StaleRestartPreviewError,
+    affected_restart_node_keys,
+    apply_node_restart,
+)
 from .runner import AuthorizationError, NodeRunner
 from .scheduler import Scheduler
 from .transitions import TransitionError, transition_instance
@@ -37,13 +45,17 @@ class WorkflowService:
         directory: PersonDirectory | None = None,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
+        restart_preview_ttl: timedelta = timedelta(minutes=15),
     ) -> None:
+        if restart_preview_ttl <= timedelta(0):
+            raise ValueError("restart_preview_ttl must be positive")
         self.repository = repository
         self.scheduler = scheduler or Scheduler()
         self.runner = runner or NodeRunner()
         self.directory = directory
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.id_factory = id_factory or (lambda: str(uuid4()))
+        self.restart_preview_ttl = restart_preview_ttl
 
     def create_draft(
         self,
@@ -566,6 +578,125 @@ class WorkflowService:
             tenant_id,
             owner_person_id=actor_person_id,
             limit=limit,
+        )
+
+    def preview_node_restart(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        node_key: str,
+        *,
+        actor_person_id: str,
+    ) -> RestartPreview:
+        """Persist a short-lived preview without changing the aggregate."""
+
+        instance = self.repository.get(tenant_id, instance_id)
+        self._require_instance_owner(instance, actor_person_id)
+        affected = affected_restart_node_keys(instance, node_key)
+        now = self.clock()
+        preview = RestartPreview(
+            id=self.id_factory(),
+            tenant_id=tenant_id,
+            instance_id=instance.id,
+            actor_person_id=actor_person_id,
+            node_key=node_key,
+            affected_node_keys=affected,
+            expected_instance_version=instance.version,
+            graph_revision=instance.graph_revision,
+            created_at=now,
+            expires_at=now + self.restart_preview_ttl,
+        )
+        self.repository.add_restart_preview(preview)
+        return preview
+
+    def confirm_node_restart(
+        self,
+        tenant_id: str,
+        preview_id: str,
+        *,
+        actor_person_id: str,
+    ) -> RestartConfirmation:
+        """Consume one preview and atomically create fresh downstream Attempts."""
+
+        preview = self.repository.get_restart_preview(tenant_id, preview_id)
+        if preview.actor_person_id != actor_person_id:
+            raise AuthorizationError("only the preview actor may confirm restart")
+        instance = self.repository.get(tenant_id, preview.instance_id)
+        self._require_instance_owner(instance, actor_person_id)
+        if preview.consumed_at is not None:
+            return RestartConfirmation(
+                instance=instance,
+                preview=preview,
+                already_applied=True,
+            )
+        now = self.clock()
+        if now >= preview.expires_at:
+            raise RestartPreviewExpiredError(preview.id)
+        expected_version = instance.version
+        old_attempt_nos = {
+            node_key: instance.nodes[node_key].current_attempt_no
+            for node_key in preview.affected_node_keys
+        }
+        apply_node_restart(instance, preview, now=now)
+        audit = self._audit(
+            instance,
+            "instance.node_restarted",
+            actor_person_id=actor_person_id,
+            correlation_id=preview.id,
+            aggregate_version=expected_version + 1,
+            now=now,
+            node_key=preview.node_key,
+            attempt_no=instance.nodes[preview.node_key].current_attempt_no,
+            payload={
+                "affected_node_keys": preview.affected_node_keys,
+                "graph_revision": preview.graph_revision,
+                "preview_instance_version": preview.expected_instance_version,
+            },
+        )
+        outbox = tuple(
+            self._outbox(
+                instance,
+                event_type="node.projection_sync_requested",
+                aggregate_type="node_instance",
+                aggregate_id=instance.nodes[node_key].id,
+                aggregate_version=instance.nodes[node_key].version,
+                payload={
+                    "instance_id": instance.id,
+                    "node_key": node_key,
+                    "attempt_no": old_attempt_nos[node_key],
+                    "status": "canceled",
+                },
+                now=now,
+            )
+            for node_key in preview.affected_node_keys
+            if instance.nodes[node_key].executor == ExecutorKind.HUMAN
+        )
+        try:
+            saved = self.repository.save_restart(
+                instance,
+                preview=preview,
+                expected_version=expected_version,
+                consumed_at=now,
+                audit_events=(audit,),
+                outbox_events=outbox,
+            )
+        except ConcurrentUpdateError as exc:
+            raise StaleRestartPreviewError(
+                "instance changed while confirming restart"
+            ) from exc
+        if not saved:
+            current_preview = self.repository.get_restart_preview(
+                tenant_id,
+                preview_id,
+            )
+            return RestartConfirmation(
+                instance=self.repository.get(tenant_id, preview.instance_id),
+                preview=current_preview,
+                already_applied=True,
+            )
+        return RestartConfirmation(
+            instance=self.repository.get(tenant_id, instance.id),
+            preview=self.repository.get_restart_preview(tenant_id, preview_id),
         )
 
     def _audit(

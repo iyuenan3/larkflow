@@ -92,6 +92,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0007_edge_devices",
         "0008_im_commands",
         "0009_owner_instance_list",
+        "0010_restart_previews",
     ]
     sql = migrations[0][1]
     for table in (
@@ -122,6 +123,9 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "CREATE TABLE workflow_im_commands" in migrations[7][1]
     assert "workflow_im_command_claimable_idx" in migrations[7][1]
     assert "workflow_im_reply_claimable_idx" in migrations[7][1]
+    assert "workflow_instances_owner_recent_idx" in migrations[8][1]
+    assert "CREATE TABLE workflow_restart_previews" in migrations[9][1]
+    assert "workflow_restart_previews_open_idx" in migrations[9][1]
 
 
 def test_in_memory_repository_is_tenant_scoped():

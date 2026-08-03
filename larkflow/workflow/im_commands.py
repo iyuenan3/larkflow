@@ -17,6 +17,14 @@ from .repository import (
     TemplateNotFoundError,
 )
 from .runner import AuthorizationError
+from .restart import (
+    RestartConfirmation,
+    RestartNotAllowedError,
+    RestartPreview,
+    RestartPreviewExpiredError,
+    RestartPreviewNotFoundError,
+    StaleRestartPreviewError,
+)
 from .service import WorkflowService
 from .template_service import (
     InvalidTemplateTransitionError,
@@ -500,7 +508,9 @@ class IMCommandWorker:
                 "/larkflow start <template_id> [JSON输入]\n"
                 "/larkflow confirm <instance_id>\n"
                 "/larkflow status <instance_id>\n"
-                "/larkflow list",
+                "/larkflow list\n"
+                "/larkflow restart <instance_id> <node_key>\n"
+                "/larkflow restart-confirm <preview_id>",
             )
         if command == "start":
             template_id = argument or ""
@@ -602,6 +612,66 @@ class IMCommandWorker:
                 "instances_listed",
                 None,
                 _list_reply(summaries),
+            )
+        if command == "restart":
+            instance_id = argument or ""
+            node_key = str(inputs.get("node_key") or "")
+            try:
+                preview = self.service.preview_node_restart(
+                    self.tenant_id,
+                    instance_id,
+                    node_key,
+                    actor_person_id=event.sender_person_id,
+                )
+                instance = self.service.get_for_owner(
+                    self.tenant_id,
+                    instance_id,
+                    actor_person_id=event.sender_person_id,
+                )
+                if instance.version != preview.expected_instance_version:
+                    raise StaleRestartPreviewError(
+                        "instance changed while rendering restart preview"
+                    )
+            except (
+                AuthorizationError,
+                InstanceNotFoundError,
+                RestartNotAllowedError,
+            ):
+                raise IMCommandRejected(
+                    "实例或节点不存在、无权操作，或当前状态不可重启"
+                ) from None
+            except StaleRestartPreviewError:
+                raise IMCommandRejected("流程状态已变化，请重新预览") from None
+            return (
+                "restart_previewed",
+                instance.id,
+                _restart_preview_reply(preview, instance),
+            )
+        if command == "restart-confirm":
+            preview_id = argument or ""
+            try:
+                confirmation = self.service.confirm_node_restart(
+                    self.tenant_id,
+                    preview_id,
+                    actor_person_id=event.sender_person_id,
+                )
+            except RestartPreviewExpiredError:
+                raise IMCommandRejected("重启预览已过期，请重新预览") from None
+            except StaleRestartPreviewError:
+                raise IMCommandRejected("流程状态已变化，请重新预览") from None
+            except (
+                AuthorizationError,
+                InstanceNotFoundError,
+                RestartNotAllowedError,
+                RestartPreviewNotFoundError,
+            ):
+                raise IMCommandRejected(
+                    "重启预览不存在、已失效或你无权确认"
+                ) from None
+            return (
+                "restart_confirmed",
+                confirmation.instance.id,
+                _restart_confirmation_reply(confirmation),
             )
         raise IMCommandRejected("不支持的命令")
 
@@ -711,6 +781,18 @@ def parse_im_command(text: str) -> tuple[str, str | None, dict[str, Any]]:
         if len(parts) != 2:
             raise IMCommandRejected("list 命令不接受其他参数")
         return "list", None, {}
+    if parts[1] == "restart":
+        if len(parts) != 4:
+            raise IMCommandRejected(
+                "用法：/larkflow restart <instance_id> <node_key>"
+            )
+        return "restart", parts[2], {"node_key": parts[3]}
+    if parts[1] == "restart-confirm":
+        if len(parts) != 3:
+            raise IMCommandRejected(
+                "用法：/larkflow restart-confirm <preview_id>"
+            )
+        return "restart-confirm", parts[2], {}
     if parts[1] in {"confirm", "status"}:
         if len(parts) != 3:
             raise IMCommandRejected(
@@ -718,7 +800,9 @@ def parse_im_command(text: str) -> tuple[str, str | None, dict[str, Any]]:
             )
         return parts[1], parts[2], {}
     if parts[1] != "start" or len(parts) < 3:
-        raise IMCommandRejected("仅支持 start、confirm、status、list 和 help")
+        raise IMCommandRejected(
+            "仅支持 start、confirm、status、list、restart、restart-confirm 和 help"
+        )
     inputs: dict[str, Any] = {}
     if len(parts) == 4:
         try:
@@ -800,6 +884,55 @@ def _list_reply(summaries: tuple[WorkflowInstanceSummary, ...]) -> str:
     if len(summaries) > MAX_LIST_INSTANCES:
         lines.append(f"仅显示最近 {MAX_LIST_INSTANCES} 个流程。")
     lines.append("使用 /larkflow status <instance_id> 查看节点详情。")
+    return "\n".join(lines)
+
+
+def _restart_preview_reply(
+    preview: RestartPreview,
+    instance: WorkflowInstance,
+) -> str:
+    lines = [
+        "节点重启预览",
+        f"实例：{_status_field(instance.id)}",
+        f"目标节点：{_status_field(instance.snapshot.node(preview.node_key).title)} "
+        f"({preview.node_key})",
+        f"影响节点：{len(preview.affected_node_keys)} 个",
+    ]
+    for node_key in preview.affected_node_keys:
+        spec = instance.snapshot.node(node_key)
+        attempt_no = instance.nodes[node_key].current_attempt_no
+        lines.append(
+            f"- {_status_field(spec.title)} ({node_key})｜"
+            f"当前 Attempt {attempt_no}"
+        )
+    lines.extend(
+        (
+            "确认后，上述节点将创建新 Attempt；旧 Attempt、结果和审计保留。",
+            "若流程状态发生变化，该预览会自动失效。",
+            "请确认：",
+            f"/larkflow restart-confirm {preview.id}",
+        )
+    )
+    return "\n".join(lines)
+
+
+def _restart_confirmation_reply(confirmation: RestartConfirmation) -> str:
+    preview = confirmation.preview
+    instance = confirmation.instance
+    prefix = "该重启已执行，无需重复操作。" if confirmation.already_applied else "节点已重启。"
+    lines = [
+        prefix,
+        f"实例：{_status_field(instance.id)}",
+        f"目标节点：{preview.node_key}",
+        f"影响节点：{len(preview.affected_node_keys)} 个",
+        f"状态：{_instance_status_label(instance.status.value)}",
+        "当前 Attempt：" if confirmation.already_applied else "新 Attempt：",
+    ]
+    for node_key in preview.affected_node_keys:
+        lines.append(
+            f"- {node_key}｜Attempt {instance.nodes[node_key].current_attempt_no}｜"
+            f"{_node_status_label(instance.nodes[node_key].status.value)}"
+        )
     return "\n".join(lines)
 
 

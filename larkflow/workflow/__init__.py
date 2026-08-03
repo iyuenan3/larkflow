@@ -149,6 +149,17 @@ from .repository import (
     TemplateStore,
     WorkflowRepository,
 )
+from .restart import (
+    RestartConfirmation,
+    RestartError,
+    RestartNotAllowedError,
+    RestartPreview,
+    RestartPreviewExpiredError,
+    RestartPreviewNotFoundError,
+    StaleRestartPreviewError,
+    affected_restart_node_keys,
+    apply_node_restart,
+)
 from .postgres import (
     PostgresIMCommandStore,
     PostgresWorkflowInbox,

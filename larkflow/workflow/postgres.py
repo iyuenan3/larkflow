@@ -51,6 +51,11 @@ from .repository import (
     TemplateAlreadyExistsError,
     TemplateNotFoundError,
 )
+from .restart import (
+    RestartPreview,
+    RestartPreviewExpiredError,
+    RestartPreviewNotFoundError,
+)
 from .projection import ProjectionRecord
 from .serde import (
     quality_from_dict,
@@ -175,6 +180,162 @@ class PostgresWorkflowRepository:
             )
             for row in rows
         )
+
+    def add_restart_preview(self, preview: RestartPreview) -> None:
+        with self.connection_factory() as connection:
+            inserted = connection.execute(
+                """
+                INSERT INTO workflow_restart_previews (
+                    tenant_id, id, instance_id, actor_person_id, node_key,
+                    affected_node_keys, expected_instance_version,
+                    graph_revision, created_at, expires_at,
+                    consumed_at, applied_instance_version
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (tenant_id, id) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    preview.tenant_id,
+                    preview.id,
+                    preview.instance_id,
+                    preview.actor_person_id,
+                    preview.node_key,
+                    Jsonb(list(preview.affected_node_keys)),
+                    preview.expected_instance_version,
+                    preview.graph_revision,
+                    preview.created_at,
+                    preview.expires_at,
+                    preview.consumed_at,
+                    preview.applied_instance_version,
+                ),
+            ).fetchone()
+        if inserted is None:
+            raise ValueError(f"restart preview already exists: {preview.id}")
+
+    def get_restart_preview(
+        self,
+        tenant_id: str,
+        preview_id: str,
+    ) -> RestartPreview:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM workflow_restart_previews
+                WHERE tenant_id = %s AND id = %s
+                """,
+                (tenant_id, preview_id),
+            ).fetchone()
+        if row is None:
+            raise RestartPreviewNotFoundError((tenant_id, preview_id))
+        return self._restart_preview_from_row(row)
+
+    def save_restart(
+        self,
+        instance: WorkflowInstance,
+        *,
+        preview: RestartPreview,
+        expected_version: int,
+        consumed_at: datetime,
+        audit_events: tuple[AuditEvent, ...] = (),
+        outbox_events: tuple[OutboxEvent, ...] = (),
+    ) -> bool:
+        self._require_created_at(instance)
+        self._validate_events(instance, audit_events, outbox_events)
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                row = connection.execute(
+                    """
+                    SELECT * FROM workflow_restart_previews
+                    WHERE tenant_id = %s AND id = %s
+                    FOR UPDATE
+                    """,
+                    (preview.tenant_id, preview.id),
+                ).fetchone()
+                if row is None:
+                    raise RestartPreviewNotFoundError(
+                        (preview.tenant_id, preview.id)
+                    )
+                stored = self._restart_preview_from_row(row)
+                if stored.consumed_at is not None:
+                    return False
+                if stored != preview:
+                    raise ValueError("restart preview changed before confirmation")
+                if consumed_at >= stored.expires_at:
+                    raise RestartPreviewExpiredError(preview.id)
+
+                updated = connection.execute(
+                    """
+                    UPDATE workflow_instances
+                    SET owner_person_id = %s,
+                        template_version_id = %s,
+                        status = %s,
+                        graph_revision = %s,
+                        version = version + 1,
+                        schema_version = %s,
+                        goal = %s,
+                        inputs = %s,
+                        snapshot = %s,
+                        confirmed_at = %s,
+                        completed_at = %s
+                    WHERE tenant_id = %s AND id = %s AND version = %s
+                    RETURNING version
+                    """,
+                    (
+                        instance.owner_person_id,
+                        instance.snapshot.template_version_id,
+                        instance.status.value,
+                        instance.graph_revision,
+                        instance.snapshot.schema_version,
+                        instance.snapshot.goal,
+                        Jsonb(to_json_value(instance.snapshot.inputs)),
+                        Jsonb(snapshot_to_dict(instance.snapshot)),
+                        instance.confirmed_at,
+                        instance.completed_at,
+                        instance.tenant_id,
+                        instance.id,
+                        expected_version,
+                    ),
+                ).fetchone()
+                if updated is None:
+                    current = connection.execute(
+                        """
+                        SELECT version FROM workflow_instances
+                        WHERE tenant_id = %s AND id = %s
+                        """,
+                        (instance.tenant_id, instance.id),
+                    ).fetchone()
+                    if current is None:
+                        raise InstanceNotFoundError(
+                            (instance.tenant_id, instance.id)
+                        )
+                    raise ConcurrentUpdateError(
+                        f"instance {instance.id} expected version "
+                        f"{expected_version}, found {current['version']}"
+                    )
+                instance.version = int(updated["version"])
+                self._write_children(connection, instance)
+                self._write_audit(connection, audit_events)
+                self._write_outbox(connection, outbox_events)
+                consumed = connection.execute(
+                    """
+                    UPDATE workflow_restart_previews
+                    SET consumed_at = %s, applied_instance_version = %s
+                    WHERE tenant_id = %s AND id = %s
+                      AND consumed_at IS NULL
+                    RETURNING id
+                    """,
+                    (
+                        consumed_at,
+                        instance.version,
+                        preview.tenant_id,
+                        preview.id,
+                    ),
+                ).fetchone()
+                if consumed is None:
+                    raise RuntimeError("restart preview was consumed concurrently")
+        return True
 
     def add_template(
         self,
@@ -1113,6 +1274,32 @@ class PostgresWorkflowRepository:
             aggregate_version=int(row["aggregate_version"]),
             payload=row["payload"],
             occurred_at=row["occurred_at"],
+        )
+
+    @staticmethod
+    def _restart_preview_from_row(row: dict[str, Any]) -> RestartPreview:
+        affected = row["affected_node_keys"]
+        if not isinstance(affected, list) or not all(
+            isinstance(item, str) for item in affected
+        ):
+            raise ValueError("restart preview affected_node_keys is invalid")
+        return RestartPreview(
+            id=row["id"],
+            tenant_id=row["tenant_id"],
+            instance_id=row["instance_id"],
+            actor_person_id=row["actor_person_id"],
+            node_key=row["node_key"],
+            affected_node_keys=tuple(affected),
+            expected_instance_version=int(row["expected_instance_version"]),
+            graph_revision=int(row["graph_revision"]),
+            created_at=row["created_at"],
+            expires_at=row["expires_at"],
+            consumed_at=row["consumed_at"],
+            applied_instance_version=(
+                int(row["applied_instance_version"])
+                if row["applied_instance_version"] is not None
+                else None
+            ),
         )
 
     @staticmethod

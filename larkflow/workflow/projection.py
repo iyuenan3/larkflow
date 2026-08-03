@@ -417,9 +417,14 @@ class WorkflowProjectionWorker:
         verify_external: bool,
     ) -> _ProjectionOutcome:
         node = instance.nodes[node_key]
-        if node.status in {NodeStatus.PENDING, NodeStatus.READY}:
+        attempt = instance.attempts[(node_key, attempt_no)]
+        effective_status = (
+            node.status
+            if attempt_no == node.current_attempt_no
+            else NodeStatus(attempt.status.value)
+        )
+        if effective_status in {NodeStatus.PENDING, NodeStatus.READY}:
             return _ProjectionOutcome(noop=True)
-        instance.attempts[(node_key, attempt_no)]
 
         record = self.projections.get_projection(
             self.tenant_id,
@@ -429,7 +434,7 @@ class WorkflowProjectionWorker:
         )
         created = False
         recreated = False
-        terminal = node.status in {
+        terminal = effective_status in {
             NodeStatus.DONE,
             NodeStatus.FAILED,
             NodeStatus.CANCELED,
@@ -479,7 +484,10 @@ class WorkflowProjectionWorker:
         if terminal and not bool(record.state.get("completed")):
             self.task_adapter.complete_task(record.external_id)
             completed = True
-        desired_state = {"node_status": node.status.value, "completed": terminal}
+        desired_state = {
+            "node_status": effective_status.value,
+            "completed": terminal,
+        }
         repair_generation = _repair_generation(record.state)
         if repair_generation:
             desired_state["repair_generation"] = repair_generation

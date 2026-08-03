@@ -502,6 +502,126 @@ def test_list_reports_empty_owner_history_without_disclosing_other_instances():
     assert "暂无由你发起的流程" in store.processed[-1][2]["reply_text"]
 
 
+def test_restart_requires_preview_owner_confirmation_and_is_idempotent():
+    repository = InMemoryWorkflowRepository()
+    templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
+    templates.create_template(
+        tenant_id=TENANT,
+        actor_person_id="person_admin",
+        document=template_document(),
+    )
+    templates.enable(TENANT, "quick_review", actor_person_id="person_admin")
+    snapshot = templates.instantiate(
+        TENANT,
+        "quick_review",
+        inputs={"brief": "ready"},
+        owner_bindings={"reviewer": "person_owner"},
+    )
+    service = WorkflowService(repository, clock=lambda: NOW)
+    service.create_draft(
+        instance_id="restart_from_im",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=snapshot,
+    )
+    service.confirm_draft(
+        TENANT,
+        "restart_from_im",
+        actor_person_id="person_owner",
+    )
+    activation = service.dispatch_ready(TENANT, "restart_from_im")[0]
+    service.submit_human(
+        TENANT,
+        "restart_from_im",
+        "review",
+        actor_person_id="person_owner",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        result={"decision": "approved"},
+    )
+    store = MemoryStore()
+    worker = IMCommandWorker(
+        store,
+        service,
+        templates,
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    )
+    version_before = service.get(TENANT, "restart_from_im").version
+    store.command_claims = [
+        IMCommandClaim(
+            signal(
+                "/larkflow restart restart_from_im review",
+                event_id="event_restart_preview",
+            ),
+            "restart-preview-token",
+            1,
+        )
+    ]
+
+    preview_report = worker.run_once()
+
+    assert preview_report.processed == 1
+    preview_reply = store.processed[-1][2]["reply_text"]
+    assert store.processed[-1][2]["outcome"] == "restart_previewed"
+    assert "节点重启预览" in preview_reply
+    assert "Review brief (review)" in preview_reply
+    assert "旧 Attempt、结果和审计保留" in preview_reply
+    assert "person_owner" not in preview_reply
+    assert service.get(TENANT, "restart_from_im").version == version_before
+    confirm_command = preview_reply.splitlines()[-1]
+    preview_id = confirm_command.split()[-1]
+
+    intruder_event = IMCommandSignal(
+        **{
+            **signal(
+                confirm_command,
+                event_id="event_restart_intruder",
+            ).__dict__,
+            "sender_person_id": "person_intruder",
+        }
+    )
+    store.command_claims = [
+        IMCommandClaim(intruder_event, "intruder-token", 1)
+    ]
+    intruder_report = worker.run_once()
+    assert intruder_report.rejected == 1
+    assert service.get(TENANT, "restart_from_im").version == version_before
+
+    store.command_claims = [
+        IMCommandClaim(
+            signal(confirm_command, event_id="event_restart_confirm"),
+            "restart-confirm-token",
+            1,
+        )
+    ]
+    confirm_report = worker.run_once()
+
+    assert confirm_report.processed == 1
+    assert store.processed[-1][2]["outcome"] == "restart_confirmed"
+    assert "节点已重启" in store.processed[-1][2]["reply_text"]
+    restarted = service.get(TENANT, "restart_from_im")
+    assert restarted.status == InstanceStatus.RUNNING
+    assert restarted.nodes["review"].current_attempt_no == 2
+    assert restarted.nodes["review"].status.value == "ready"
+    version_after = restarted.version
+
+    store.command_claims = [
+        IMCommandClaim(
+            signal(confirm_command, event_id="event_restart_replay"),
+            "restart-replay-token",
+            1,
+        )
+    ]
+    replay_report = worker.run_once()
+    assert replay_report.processed == 1
+    assert "无需重复操作" in store.processed[-1][2]["reply_text"]
+    assert service.get(TENANT, "restart_from_im").version == version_after
+    assert repository.get_restart_preview(TENANT, preview_id).consumed_at == NOW
+
+
 def test_help_lists_status_command():
     store = MemoryStore()
     store.command_claims = [
@@ -519,6 +639,14 @@ def test_help_lists_status_command():
     assert report.processed == 1
     assert "/larkflow status <instance_id>" in store.processed[-1][2]["reply_text"]
     assert "/larkflow list" in store.processed[-1][2]["reply_text"]
+    assert (
+        "/larkflow restart <instance_id> <node_key>"
+        in store.processed[-1][2]["reply_text"]
+    )
+    assert (
+        "/larkflow restart-confirm <preview_id>"
+        in store.processed[-1][2]["reply_text"]
+    )
 
 
 def test_unknown_template_is_rejected_without_retrying_forever():
@@ -608,6 +736,9 @@ def test_non_owner_confirm_is_rejected_without_retrying_forever():
         "/larkflow status",
         "/larkflow status instance extra",
         "/larkflow list extra",
+        "/larkflow restart instance_only",
+        "/larkflow restart-confirm",
+        "/larkflow restart-confirm preview extra",
         "/larkflow start quick_review []",
         "/larkflow unsupported",
     ),
@@ -627,6 +758,19 @@ def test_command_parser_accepts_status():
 
 def test_command_parser_accepts_list():
     assert parse_im_command("/larkflow list") == ("list", None, {})
+
+
+def test_command_parser_accepts_restart_preview_and_confirmation():
+    assert parse_im_command("/larkflow restart instance_1 review") == (
+        "restart",
+        "instance_1",
+        {"node_key": "review"},
+    )
+    assert parse_im_command("/larkflow restart-confirm preview_1") == (
+        "restart-confirm",
+        "preview_1",
+        {},
+    )
 
 
 def test_reply_worker_uses_stable_key_and_records_external_message():

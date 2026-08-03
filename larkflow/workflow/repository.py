@@ -27,6 +27,11 @@ from .model import (
     WorkflowTemplate,
     WorkflowTemplateVersion,
 )
+from .restart import (
+    RestartPreview,
+    RestartPreviewExpiredError,
+    RestartPreviewNotFoundError,
+)
 
 
 class InstanceNotFoundError(KeyError):
@@ -82,6 +87,32 @@ class WorkflowRepository(Protocol):
         owner_person_id: str,
         limit: int = 10,
     ) -> tuple[WorkflowInstanceSummary, ...]:
+        ...
+
+    def add_restart_preview(self, preview: RestartPreview) -> None:
+        ...
+
+    def get_restart_preview(
+        self,
+        tenant_id: str,
+        preview_id: str,
+    ) -> RestartPreview:
+        ...
+
+    def save_restart(
+        self,
+        instance: WorkflowInstance,
+        *,
+        preview: RestartPreview,
+        expected_version: int,
+        consumed_at: datetime,
+        audit_events: tuple[AuditEvent, ...] = (),
+        outbox_events: tuple[OutboxEvent, ...] = (),
+    ) -> bool:
+        """Persist the restart and consume its preview atomically.
+
+        Return ``False`` when another worker already consumed the same preview.
+        """
         ...
 
     def projection_instance_ids(
@@ -226,6 +257,7 @@ class InMemoryWorkflowRepository:
         self._outbox: dict[tuple[str, str], OutboxRecord] = {}
         self._outbox_dedupe: set[tuple[str, tuple[str, str, str, int]]] = set()
         self._projections: dict[tuple[str, str, int, str], ProjectionRecord] = {}
+        self._restart_previews: dict[tuple[str, str], RestartPreview] = {}
 
     def add(
         self,
@@ -316,6 +348,63 @@ class InMemoryWorkflowRepository:
             )
             for instance in candidates[:limit]
         )
+
+    def add_restart_preview(self, preview: RestartPreview) -> None:
+        key = (preview.tenant_id, preview.id)
+        if key in self._restart_previews:
+            raise ValueError(f"restart preview already exists: {preview.id}")
+        if (preview.tenant_id, preview.instance_id) not in self._instances:
+            raise InstanceNotFoundError((preview.tenant_id, preview.instance_id))
+        self._restart_previews[key] = deepcopy(preview)
+
+    def get_restart_preview(
+        self,
+        tenant_id: str,
+        preview_id: str,
+    ) -> RestartPreview:
+        try:
+            return deepcopy(self._restart_previews[(tenant_id, preview_id)])
+        except KeyError as exc:
+            raise RestartPreviewNotFoundError((tenant_id, preview_id)) from exc
+
+    def save_restart(
+        self,
+        instance: WorkflowInstance,
+        *,
+        preview: RestartPreview,
+        expected_version: int,
+        consumed_at: datetime,
+        audit_events: tuple[AuditEvent, ...] = (),
+        outbox_events: tuple[OutboxEvent, ...] = (),
+    ) -> bool:
+        key = (instance.tenant_id, instance.id)
+        current = self._instances.get(key)
+        if current is None:
+            raise InstanceNotFoundError(key)
+        stored = self._restart_previews.get((preview.tenant_id, preview.id))
+        if stored is None:
+            raise RestartPreviewNotFoundError((preview.tenant_id, preview.id))
+        if stored.consumed_at is not None:
+            return False
+        if stored != preview:
+            raise ValueError("restart preview changed before confirmation")
+        if consumed_at >= stored.expires_at:
+            raise RestartPreviewExpiredError(preview.id)
+        if current.version != expected_version:
+            raise ConcurrentUpdateError(
+                f"instance {instance.id} expected version {expected_version}, "
+                f"found {current.version}"
+            )
+        self._validate_events(instance, audit_events, outbox_events)
+        instance.version = expected_version + 1
+        self._instances[key] = deepcopy(instance)
+        self._restart_previews[(preview.tenant_id, preview.id)] = replace(
+            preview,
+            consumed_at=consumed_at,
+            applied_instance_version=instance.version,
+        )
+        self._append_events(audit_events, outbox_events)
+        return True
 
     def projection_instance_ids(
         self,
