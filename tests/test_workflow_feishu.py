@@ -203,6 +203,42 @@ def test_cli_message_projection_sends_as_bot_with_stable_key():
     ]
 
 
+def test_cli_message_projection_sends_and_updates_card_2_as_bot():
+    calls = []
+    adapter = CliFeishuMessageProjection(
+        profile="dev",
+        runner=lambda argv: calls.append(argv) or {"message_id": "card_1"},
+    )
+    card = {
+        "schema": "2.0",
+        "body": {"elements": [{"tag": "markdown", "content": "ready"}]},
+    }
+
+    message_id = adapter.send_chat_card(
+        chat_id="chat_1",
+        card=card,
+        idempotency_key="lf-card-key",
+    )
+    adapter.update_chat_card(token="update-token", card=card)
+
+    assert message_id == "card_1"
+    assert calls[0][3:8] == [
+        "im",
+        "+messages-send",
+        "--chat-id",
+        "chat_1",
+        "--msg-type",
+    ]
+    assert calls[0][calls[0].index("--content") + 1].startswith('{"schema":"2.0"')
+    assert calls[1][3:7] == [
+        "api",
+        "POST",
+        "/open-apis/interactive/v1/card/update",
+        "--data",
+    ]
+    assert '"token":"update-token"' in calls[1][7]
+
+
 def test_cli_document_projection_extracts_nested_document_response():
     calls = []
     adapter = CliFeishuDocumentProjection(

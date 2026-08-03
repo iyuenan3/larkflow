@@ -26,6 +26,7 @@ from .repository import (
     TemplateNotFoundError,
 )
 from .runner import AuthorizationError
+from .role_bindings import RoleBindingRequest
 from .restart import (
     RestartConfirmation,
     RestartNotAllowedError,
@@ -70,6 +71,12 @@ class InvalidIMCommandClaimError(RuntimeError):
 
 class IMCommandRejected(ValueError):
     """The authenticated sender supplied an invalid or unauthorized command."""
+
+
+class _RoleBindingRequired(RuntimeError):
+    def __init__(self, request: RoleBindingRequest) -> None:
+        super().__init__(request.command_id)
+        self.request = request
 
 
 @dataclass(frozen=True)
@@ -185,6 +192,17 @@ class IMCommandStore(Protocol):
         outcome: str,
         instance_id: str | None,
         reply_text: str,
+        now: datetime,
+    ) -> None:
+        ...
+
+    def mark_im_role_binding_requested(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        request: RoleBindingRequest,
         now: datetime,
     ) -> None:
         ...
@@ -523,6 +541,16 @@ class IMCommandWorker:
         for claim in claims:
             try:
                 outcome, instance_id, reply = self._apply(claim.event)
+            except _RoleBindingRequired as required:
+                self.store.mark_im_role_binding_requested(
+                    self.tenant_id,
+                    claim.event.id,
+                    claim_token=claim.claim_token,
+                    request=required.request,
+                    now=now,
+                )
+                processed += 1
+                continue
             except IMCommandRejected as exc:
                 rejected += 1
                 self.store.mark_im_processed(
@@ -576,6 +604,7 @@ class IMCommandWorker:
                 None,
                 "可用命令：\n"
                 "/larkflow start <template_id> [JSON输入] [role=@成员 ...]\n"
+                "多角色流程在单聊中会发送人员选择卡片。\n"
                 "/larkflow confirm <instance_id>\n"
                 "/larkflow status <instance_id>\n"
                 "/larkflow list\n"
@@ -612,6 +641,21 @@ class IMCommandWorker:
                     inputs=inputs,
                     owner_bindings=owner_bindings,
                 )
+                if len(roles) > 1 and not parsed.owner_mentions:
+                    raise _RoleBindingRequired(
+                        RoleBindingRequest(
+                            command_id=event.id,
+                            tenant_id=self.tenant_id,
+                            message_id=event.message_id,
+                            chat_id=event.chat_id,
+                            initiator_person_id=event.sender_person_id,
+                            template_id=template_id,
+                            template_version=version.version,
+                            goal=snapshot.goal,
+                            inputs=inputs,
+                            roles=tuple(sorted(roles)),
+                        )
+                    )
             except (
                 InvalidTemplateTransitionError,
                 TemplateNotFoundError,

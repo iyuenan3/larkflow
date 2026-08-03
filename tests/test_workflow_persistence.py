@@ -96,6 +96,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0011_restart_scope",
         "0012_graph_edit_previews",
         "0013_im_command_mentions",
+        "0014_role_binding_cards",
     ]
     sql = migrations[0][1]
     for table in (
@@ -135,6 +136,8 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "workflow_graph_edit_previews_open_idx" in migrations[11][1]
     assert "ADD COLUMN mentions" in migrations[12][1]
     assert "workflow_im_commands_mentions_array" in migrations[12][1]
+    assert "CREATE TABLE workflow_role_binding_actions" in migrations[13][1]
+    assert "reply_kind IN ('text', 'role_binding_card')" in migrations[13][1]
 
 
 def test_in_memory_repository_is_tenant_scoped():

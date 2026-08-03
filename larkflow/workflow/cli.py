@@ -54,6 +54,12 @@ from .postgres import (
 )
 from .projection import WorkflowProjectionWorker
 from .projection_daemon import ProjectionWorkerLoop
+from .role_bindings import (
+    RoleBindingActionWorker,
+    RoleBindingCardWorker,
+    RoleBindingReplyWorker,
+    RoleBindingVerificationWorker,
+)
 from .runner import NodeRunner
 from .runtime import AutomatedExecutor, WorkflowWorker
 from .serde import quality_to_dict, snapshot_from_dict, to_json_value
@@ -601,13 +607,18 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             else None
         )
         im_store = PostgresIMCommandStore(connection_factory)
+        directory_adapter = (
+            CliFeishuDirectory(
+                profile=lark_profile,
+                identity=namespace.lark_identity,
+            )
+            if enable_im_commands
+            else None
+        )
         im_verification_worker = (
             IMCommandVerificationWorker(
                 im_store,
-                CliFeishuDirectory(
-                    profile=lark_profile,
-                    identity=namespace.lark_identity,
-                ),
+                directory_adapter,
                 tenant_id=settings.tenant_id,
                 worker_id=f"{settings.worker_id}:im-verify",
                 claim_limit=settings.claim_limit,
@@ -616,6 +627,51 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 retry_max=settings.retry_max,
             )
             if enable_im_commands
+            else None
+        )
+        role_binding_card_worker = (
+            RoleBindingCardWorker(
+                im_store,
+                directory_adapter,
+                message_adapter,
+                tenant_id=settings.tenant_id,
+                worker_id=f"{settings.worker_id}:role-card",
+                claim_limit=settings.claim_limit,
+                claim_ttl=settings.claim_ttl,
+                retry_base=settings.retry_base,
+                retry_max=settings.retry_max,
+            )
+            if enable_im_commands
+            and directory_adapter is not None
+            and message_adapter is not None
+            else None
+        )
+        role_binding_verification_worker = (
+            RoleBindingVerificationWorker(
+                im_store,
+                directory_adapter,
+                tenant_id=settings.tenant_id,
+                worker_id=f"{settings.worker_id}:role-verify",
+                claim_limit=settings.claim_limit,
+                claim_ttl=settings.claim_ttl,
+                retry_base=settings.retry_base,
+                retry_max=settings.retry_max,
+            )
+            if enable_im_commands and directory_adapter is not None
+            else None
+        )
+        role_binding_reply_worker = (
+            RoleBindingReplyWorker(
+                im_store,
+                message_adapter,
+                tenant_id=settings.tenant_id,
+                worker_id=f"{settings.worker_id}:role-reply",
+                claim_limit=settings.claim_limit,
+                claim_ttl=settings.claim_ttl,
+                retry_base=settings.retry_base,
+                retry_max=settings.retry_max,
+            )
+            if enable_im_commands and message_adapter is not None
             else None
         )
         im_reply_worker = (
@@ -667,6 +723,29 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                         "errors": list(verification.errors),
                     },
                 )
+            if role_binding_card_worker is not None:
+                cards = role_binding_card_worker.run_once()
+                log(
+                    "role_binding_card_tick",
+                    {
+                        "claimed": cards.claimed,
+                        "sent": cards.sent,
+                        "failed": cards.failed,
+                        "errors": list(cards.errors),
+                    },
+                )
+            if role_binding_verification_worker is not None:
+                bindings = role_binding_verification_worker.run_once()
+                log(
+                    "role_binding_verification_tick",
+                    {
+                        "claimed": bindings.claimed,
+                        "verified": bindings.verified,
+                        "rejected": bindings.rejected,
+                        "failed": bindings.failed,
+                        "errors": list(bindings.errors),
+                    },
+                )
             report = worker.run_once()
             log("projection_tick", ProjectionWorkerLoop._report_fields(report))
             if im_reply_worker is not None:
@@ -678,6 +757,20 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                         "sent": replies.sent,
                         "failed": replies.failed,
                         "errors": list(replies.errors),
+                    },
+                )
+            if role_binding_reply_worker is not None:
+                binding_replies = role_binding_reply_worker.run_once()
+                log(
+                    "role_binding_reply_tick",
+                    {
+                        "claimed": binding_replies.claimed,
+                        "sent": binding_replies.sent,
+                        "card_updates_failed": (
+                            binding_replies.card_updates_failed
+                        ),
+                        "failed": binding_replies.failed,
+                        "errors": list(binding_replies.errors),
                     },
                 )
             return int(bool(report.errors))
@@ -737,6 +830,11 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             completion_poller=completion_poller,
             im_verification_worker=im_verification_worker,
             im_reply_worker=im_reply_worker,
+            role_binding_card_worker=role_binding_card_worker,
+            role_binding_verification_worker=(
+                role_binding_verification_worker
+            ),
+            role_binding_reply_worker=role_binding_reply_worker,
             completion_poll_seconds=settings.completion_poll_seconds,
             log=log,
         ).run(stop_event)
@@ -767,13 +865,27 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
         candidate_limit=settings.candidate_limit,
     )
     enable_im_commands = _env_boolean("LARKFLOW_TARGET_ENABLE_IM_COMMANDS")
+    im_store = PostgresIMCommandStore(connection_factory)
     im_command_worker = (
         IMCommandWorker(
-            PostgresIMCommandStore(connection_factory),
+            im_store,
             service,
             templates,
             tenant_id=settings.tenant_id,
             worker_id=f"{settings.worker_id}:im-command",
+        )
+        if enable_im_commands
+        else None
+    )
+    role_binding_worker = (
+        RoleBindingActionWorker(
+            im_store,
+            service,
+            templates,
+            tenant_id=settings.tenant_id,
+            worker_id=f"{settings.worker_id}:role-binding",
+            claim_limit=settings.candidate_limit,
+            claim_ttl=settings.claim_ttl,
         )
         if enable_im_commands
         else None
@@ -789,6 +901,18 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                     "rejected": command_report.rejected,
                     "failed": command_report.failed,
                     "errors": list(command_report.errors),
+                },
+            )
+        if role_binding_worker is not None:
+            binding_report = role_binding_worker.run_once()
+            log(
+                "role_binding_tick",
+                {
+                    "claimed": binding_report.claimed,
+                    "processed": binding_report.processed,
+                    "rejected": binding_report.rejected,
+                    "failed": binding_report.failed,
+                    "errors": list(binding_report.errors),
                 },
             )
         report = worker.run_once()
@@ -813,6 +937,7 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
     WorkflowWorkerLoop(
         worker,
         im_command_worker=im_command_worker,
+        role_binding_worker=role_binding_worker,
         settings=settings.loop,
         log=log,
     ).run(stop_event)

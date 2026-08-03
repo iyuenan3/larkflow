@@ -1,0 +1,1010 @@
+"""Durable person-selection cards for multi-owner workflow drafts."""
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+from typing import Any, Protocol
+
+from .directory import CandidateDirectory, DirectoryValidationError
+from .model import InstanceStatus, TemplateStatus
+from .repository import (
+    InstanceAlreadyExistsError,
+    InstanceNotFoundError,
+    TemplateNotFoundError,
+)
+from .service import WorkflowService
+from .template_service import (
+    InvalidTemplateTransitionError,
+    TemplateService,
+    TemplateValidationError,
+    instantiate_template_version,
+)
+
+
+CARD_ACTION_EVENT = "card.action.trigger"
+ROLE_FIELD_PREFIX = "role__"
+ROLE_FORM_NAME = "role_binding_form"
+ROLE_SUBMIT_NAME = "role_binding_submit"
+MAX_CARD_CANDIDATES = 100
+
+
+class InvalidRoleBindingClaimError(RuntimeError):
+    """A worker tried to settle a role-binding claim it no longer owns."""
+
+
+class RoleBindingRejected(ValueError):
+    """A person-selection request or callback failed a durable invariant."""
+
+
+@dataclass(frozen=True)
+class RoleBindingRequest:
+    command_id: str
+    tenant_id: str
+    message_id: str
+    chat_id: str
+    initiator_person_id: str
+    template_id: str
+    template_version: int
+    goal: str
+    inputs: Mapping[str, Any]
+    roles: tuple[str, ...]
+    candidate_person_ids: tuple[str, ...] = field(default_factory=tuple)
+    card_message_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RoleBindingCardClaim:
+    request: RoleBindingRequest
+    claim_token: str
+    attempt_count: int
+
+
+@dataclass(frozen=True)
+class RoleBindingActionSignal:
+    id: str
+    tenant_id: str
+    message_id: str
+    chat_id: str
+    operator_person_id: str
+    action_tag: str
+    action_name: str
+    form_value: str
+    update_token: str
+    occurred_at: datetime
+    received_at: datetime
+
+
+@dataclass(frozen=True)
+class RoleBindingActionClaim:
+    action: RoleBindingActionSignal
+    request: RoleBindingRequest | None
+    claim_token: str
+    attempt_count: int
+    owner_bindings: Mapping[str, str] = field(default_factory=dict)
+    instance_id: str | None = None
+    reply_text: str | None = None
+
+
+@dataclass(frozen=True)
+class RoleBindingReplyClaim:
+    action: RoleBindingActionSignal
+    request: RoleBindingRequest
+    owner_bindings: Mapping[str, str]
+    instance_id: str
+    text: str
+    claim_token: str
+    attempt_count: int
+
+
+class RoleBindingStore(Protocol):
+    def claim_role_binding_cards(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[RoleBindingCardClaim, ...]:
+        ...
+
+    def mark_role_binding_card_sent(
+        self,
+        tenant_id: str,
+        command_id: str,
+        *,
+        claim_token: str,
+        candidate_person_ids: tuple[str, ...],
+        external_id: str,
+        now: datetime,
+    ) -> None:
+        ...
+
+    def mark_role_binding_card_failed(
+        self,
+        tenant_id: str,
+        command_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        ...
+
+    def append_role_binding_action(self, event: RoleBindingActionSignal) -> bool:
+        ...
+
+    def claim_role_binding_verification(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[RoleBindingActionClaim, ...]:
+        ...
+
+    def mark_role_binding_verified(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        owner_bindings: Mapping[str, str],
+        now: datetime,
+    ) -> None:
+        ...
+
+    def mark_role_binding_rejected(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        outcome: str,
+        reply_text: str | None,
+        now: datetime,
+    ) -> None:
+        ...
+
+    def mark_role_binding_verification_failed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        ...
+
+    def claim_role_binding_actions(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[RoleBindingActionClaim, ...]:
+        ...
+
+    def mark_role_binding_processed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        instance_id: str,
+        reply_text: str,
+        now: datetime,
+    ) -> None:
+        ...
+
+    def mark_role_binding_failed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        ...
+
+    def claim_role_binding_replies(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[RoleBindingReplyClaim, ...]:
+        ...
+
+    def mark_role_binding_reply_sent(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        external_id: str,
+        now: datetime,
+    ) -> None:
+        ...
+
+    def mark_role_binding_reply_failed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        ...
+
+
+class RoleBindingCardSender(Protocol):
+    def send_chat_card(
+        self,
+        *,
+        chat_id: str,
+        card: Mapping[str, Any],
+        idempotency_key: str,
+    ) -> str:
+        ...
+
+    def update_chat_card(
+        self,
+        *,
+        token: str,
+        card: Mapping[str, Any],
+    ) -> None:
+        ...
+
+    def send_chat_message(
+        self,
+        *,
+        chat_id: str,
+        text: str,
+        idempotency_key: str,
+    ) -> str:
+        ...
+
+
+class RoleBindingActionInboxBridge:
+    """Persist only callbacks emitted by the role-binding form."""
+
+    def __init__(
+        self,
+        store: RoleBindingStore,
+        *,
+        tenant_id: str,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        if not tenant_id.strip():
+            raise ValueError("Target tenant_id is required")
+        self.store = store
+        self.tenant_id = tenant_id
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
+
+    def __call__(self, event_type: str, payload: Mapping[str, Any]) -> bool:
+        if event_type != CARD_ACTION_EVENT:
+            return False
+        action_name = _optional_text(payload.get("action_name"))
+        if action_name != ROLE_SUBMIT_NAME:
+            return False
+        now = self.clock()
+        signal = RoleBindingActionSignal(
+            id=_required_text(payload.get("event_id"), "event_id"),
+            tenant_id=self.tenant_id,
+            message_id=_required_text(payload.get("message_id"), "message_id"),
+            chat_id=_required_text(payload.get("chat_id"), "chat_id"),
+            operator_person_id=_required_text(
+                payload.get("operator_id"),
+                "operator_id",
+            ),
+            action_tag=_required_text(payload.get("action_tag"), "action_tag"),
+            action_name=action_name,
+            form_value=_required_text(payload.get("form_value"), "form_value"),
+            update_token=_required_text(payload.get("token"), "token"),
+            occurred_at=_event_time(payload.get("timestamp"), fallback=now),
+            received_at=now,
+        )
+        return self.store.append_role_binding_action(signal)
+
+
+@dataclass(frozen=True)
+class RoleBindingCardReport:
+    claimed: int = 0
+    sent: int = 0
+    failed: int = 0
+    errors: tuple[str, ...] = field(default_factory=tuple)
+
+
+class RoleBindingCardWorker:
+    """Resolve a bounded directory snapshot and project selection cards."""
+
+    def __init__(
+        self,
+        store: RoleBindingStore,
+        directory: CandidateDirectory,
+        sender: RoleBindingCardSender,
+        *,
+        tenant_id: str,
+        worker_id: str,
+        candidate_limit: int = MAX_CARD_CANDIDATES,
+        clock: Callable[[], datetime] | None = None,
+        claim_limit: int = 20,
+        claim_ttl: timedelta = timedelta(minutes=2),
+        retry_base: timedelta = timedelta(seconds=5),
+        retry_max: timedelta = timedelta(minutes=5),
+    ) -> None:
+        _validate_worker(tenant_id, worker_id, claim_limit, claim_ttl)
+        if candidate_limit < 1 or candidate_limit > MAX_CARD_CANDIDATES:
+            raise ValueError("role-binding candidate limit must be between 1 and 100")
+        self.store = store
+        self.directory = directory
+        self.sender = sender
+        self.tenant_id = tenant_id
+        self.worker_id = worker_id
+        self.candidate_limit = candidate_limit
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.claim_limit = claim_limit
+        self.claim_ttl = claim_ttl
+        self.retry_base = retry_base
+        self.retry_max = retry_max
+
+    def run_once(self) -> RoleBindingCardReport:
+        now = self.clock()
+        claims = self.store.claim_role_binding_cards(
+            self.tenant_id,
+            worker_id=self.worker_id,
+            now=now,
+            limit=self.claim_limit,
+            claim_ttl=self.claim_ttl,
+        )
+        sent = failed = 0
+        errors = []
+        for claim in claims:
+            try:
+                candidates = self.directory.list_candidate_people(
+                    self.tenant_id,
+                    limit=self.candidate_limit,
+                )
+                candidate_ids = {person.person_id for person in candidates if person.active}
+                initiator = self.directory.get_person(
+                    self.tenant_id,
+                    claim.request.initiator_person_id,
+                )
+                if not initiator.active:
+                    raise DirectoryValidationError("workflow initiator is inactive")
+                candidate_ids.add(initiator.person_id)
+                if len(candidate_ids) > self.candidate_limit:
+                    raise DirectoryValidationError(
+                        "directory candidate snapshot exceeds the card limit"
+                    )
+                frozen_candidates = tuple(sorted(candidate_ids))
+                external_id = self.sender.send_chat_card(
+                    chat_id=claim.request.chat_id,
+                    card=role_binding_card(claim.request, frozen_candidates),
+                    idempotency_key=_card_key(claim.request.command_id),
+                )
+                if not external_id.strip():
+                    raise ValueError("Feishu card send returned no message_id")
+                self.store.mark_role_binding_card_sent(
+                    self.tenant_id,
+                    claim.request.command_id,
+                    claim_token=claim.claim_token,
+                    candidate_person_ids=frozen_candidates,
+                    external_id=external_id,
+                    now=now,
+                )
+                sent += 1
+            except Exception as exc:
+                failed += 1
+                error = (
+                    f"{claim.request.command_id}: {type(exc).__name__}: {exc}"
+                )
+                errors.append(error)
+                self.store.mark_role_binding_card_failed(
+                    self.tenant_id,
+                    claim.request.command_id,
+                    claim_token=claim.claim_token,
+                    error=error,
+                    retry_at=now + _retry_delay(
+                        claim.attempt_count,
+                        self.retry_base,
+                        self.retry_max,
+                    ),
+                )
+        return RoleBindingCardReport(
+            claimed=len(claims),
+            sent=sent,
+            failed=failed,
+            errors=tuple(errors),
+        )
+
+
+@dataclass(frozen=True)
+class RoleBindingVerificationReport:
+    claimed: int = 0
+    verified: int = 0
+    rejected: int = 0
+    failed: int = 0
+    errors: tuple[str, ...] = field(default_factory=tuple)
+
+
+class RoleBindingVerificationWorker:
+    """Authenticate the callback and revalidate every selected person."""
+
+    def __init__(
+        self,
+        store: RoleBindingStore,
+        directory: CandidateDirectory,
+        *,
+        tenant_id: str,
+        worker_id: str,
+        clock: Callable[[], datetime] | None = None,
+        claim_limit: int = 20,
+        claim_ttl: timedelta = timedelta(minutes=2),
+        retry_base: timedelta = timedelta(seconds=5),
+        retry_max: timedelta = timedelta(minutes=5),
+    ) -> None:
+        _validate_worker(tenant_id, worker_id, claim_limit, claim_ttl)
+        self.store = store
+        self.directory = directory
+        self.tenant_id = tenant_id
+        self.worker_id = worker_id
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.claim_limit = claim_limit
+        self.claim_ttl = claim_ttl
+        self.retry_base = retry_base
+        self.retry_max = retry_max
+
+    def run_once(self) -> RoleBindingVerificationReport:
+        now = self.clock()
+        claims = self.store.claim_role_binding_verification(
+            self.tenant_id,
+            worker_id=self.worker_id,
+            now=now,
+            limit=self.claim_limit,
+            claim_ttl=self.claim_ttl,
+        )
+        verified = rejected = failed = 0
+        errors = []
+        for claim in claims:
+            try:
+                bindings = self._verify(claim)
+            except RoleBindingRejected as exc:
+                rejected += 1
+                self.store.mark_role_binding_rejected(
+                    self.tenant_id,
+                    claim.action.id,
+                    claim_token=claim.claim_token,
+                    outcome="rejected:role_binding",
+                    reply_text=None,
+                    now=now,
+                )
+                continue
+            except Exception as exc:
+                failed += 1
+                error = f"{claim.action.id}: {type(exc).__name__}: {exc}"
+                errors.append(error)
+                self.store.mark_role_binding_verification_failed(
+                    self.tenant_id,
+                    claim.action.id,
+                    claim_token=claim.claim_token,
+                    error=error,
+                    retry_at=now + _retry_delay(
+                        claim.attempt_count,
+                        self.retry_base,
+                        self.retry_max,
+                    ),
+                )
+                continue
+            self.store.mark_role_binding_verified(
+                self.tenant_id,
+                claim.action.id,
+                claim_token=claim.claim_token,
+                owner_bindings=bindings,
+                now=now,
+            )
+            verified += 1
+        return RoleBindingVerificationReport(
+            claimed=len(claims),
+            verified=verified,
+            rejected=rejected,
+            failed=failed,
+            errors=tuple(errors),
+        )
+
+    def _verify(self, claim: RoleBindingActionClaim) -> dict[str, str]:
+        request = claim.request
+        action = claim.action
+        if request is None:
+            raise RoleBindingRejected("callback does not reference a known card")
+        if action.action_tag != "button" or action.action_name != ROLE_SUBMIT_NAME:
+            raise RoleBindingRejected("callback is not a role-binding form submit")
+        if action.operator_person_id != request.initiator_person_id:
+            raise RoleBindingRejected("only the workflow initiator may bind roles")
+        if action.message_id != request.card_message_id:
+            raise RoleBindingRejected("callback message does not match the request")
+        if action.chat_id != request.chat_id:
+            raise RoleBindingRejected("callback chat does not match the request")
+        try:
+            raw_form = json.loads(action.form_value)
+        except json.JSONDecodeError as exc:
+            raise RoleBindingRejected("role-binding form is not valid JSON") from exc
+        if not isinstance(raw_form, dict):
+            raise RoleBindingRejected("role-binding form must be an object")
+        expected_fields = {f"{ROLE_FIELD_PREFIX}{role}" for role in request.roles}
+        if set(raw_form) != expected_fields:
+            raise RoleBindingRejected("role-binding form fields do not match the template")
+        candidates = set(request.candidate_person_ids)
+        if not candidates:
+            raise RoleBindingRejected("role-binding candidate snapshot is empty")
+        bindings: dict[str, str] = {}
+        for role in request.roles:
+            person_id = raw_form.get(f"{ROLE_FIELD_PREFIX}{role}")
+            if not isinstance(person_id, str) or person_id not in candidates:
+                raise RoleBindingRejected("selected person is outside the frozen candidates")
+            bindings[role] = person_id
+        for person_id in sorted({action.operator_person_id, *bindings.values()}):
+            person = self.directory.get_person(self.tenant_id, person_id)
+            if person.person_id != person_id or not person.active:
+                raise RoleBindingRejected("selected person is not an active tenant member")
+        return bindings
+
+
+@dataclass(frozen=True)
+class RoleBindingActionReport:
+    claimed: int = 0
+    processed: int = 0
+    rejected: int = 0
+    failed: int = 0
+    errors: tuple[str, ...] = field(default_factory=tuple)
+
+
+class RoleBindingActionWorker:
+    """Freeze verified role bindings into one idempotent workflow draft."""
+
+    def __init__(
+        self,
+        store: RoleBindingStore,
+        service: WorkflowService,
+        templates: TemplateService,
+        *,
+        tenant_id: str,
+        worker_id: str,
+        clock: Callable[[], datetime] | None = None,
+        claim_limit: int = 20,
+        claim_ttl: timedelta = timedelta(minutes=2),
+        retry_base: timedelta = timedelta(seconds=5),
+        retry_max: timedelta = timedelta(minutes=5),
+    ) -> None:
+        _validate_worker(tenant_id, worker_id, claim_limit, claim_ttl)
+        self.store = store
+        self.service = service
+        self.templates = templates
+        self.tenant_id = tenant_id
+        self.worker_id = worker_id
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.claim_limit = claim_limit
+        self.claim_ttl = claim_ttl
+        self.retry_base = retry_base
+        self.retry_max = retry_max
+
+    def run_once(self) -> RoleBindingActionReport:
+        now = self.clock()
+        claims = self.store.claim_role_binding_actions(
+            self.tenant_id,
+            worker_id=self.worker_id,
+            now=now,
+            limit=self.claim_limit,
+            claim_ttl=self.claim_ttl,
+        )
+        processed = rejected = failed = 0
+        errors = []
+        for claim in claims:
+            try:
+                instance_id, reply = self._apply(claim)
+            except RoleBindingRejected as exc:
+                rejected += 1
+                self.store.mark_role_binding_rejected(
+                    self.tenant_id,
+                    claim.action.id,
+                    claim_token=claim.claim_token,
+                    outcome="rejected:role_binding_domain",
+                    reply_text=f"人员分工未应用：{exc}",
+                    now=now,
+                )
+                continue
+            except Exception as exc:
+                failed += 1
+                error = f"{claim.action.id}: {type(exc).__name__}: {exc}"
+                errors.append(error)
+                self.store.mark_role_binding_failed(
+                    self.tenant_id,
+                    claim.action.id,
+                    claim_token=claim.claim_token,
+                    error=error,
+                    retry_at=now + _retry_delay(
+                        claim.attempt_count,
+                        self.retry_base,
+                        self.retry_max,
+                    ),
+                )
+                continue
+            self.store.mark_role_binding_processed(
+                self.tenant_id,
+                claim.action.id,
+                claim_token=claim.claim_token,
+                instance_id=instance_id,
+                reply_text=reply,
+                now=now,
+            )
+            processed += 1
+        return RoleBindingActionReport(
+            claimed=len(claims),
+            processed=processed,
+            rejected=rejected,
+            failed=failed,
+            errors=tuple(errors),
+        )
+
+    def _apply(self, claim: RoleBindingActionClaim) -> tuple[str, str]:
+        request = claim.request
+        if request is None:
+            raise RoleBindingRejected("role-binding request no longer exists")
+        if set(claim.owner_bindings) != set(request.roles):
+            raise RoleBindingRejected("verified role bindings do not match the request")
+        try:
+            template = self.templates.get_template(
+                self.tenant_id,
+                request.template_id,
+            )
+            if template.status != TemplateStatus.ENABLED:
+                raise RoleBindingRejected("template is no longer enabled")
+            version = self.templates.get_version(
+                self.tenant_id,
+                request.template_id,
+                request.template_version,
+            )
+            snapshot = instantiate_template_version(
+                version,
+                inputs=request.inputs,
+                owner_bindings=claim.owner_bindings,
+            )
+        except (
+            InvalidTemplateTransitionError,
+            TemplateNotFoundError,
+            TemplateValidationError,
+        ) as exc:
+            raise RoleBindingRejected(str(exc)) from exc
+        instance_id = role_binding_instance_id(
+            self.tenant_id,
+            request.message_id,
+        )
+        try:
+            instance = self.service.create_draft(
+                instance_id=instance_id,
+                tenant_id=self.tenant_id,
+                owner_person_id=request.initiator_person_id,
+                actor_person_id=request.initiator_person_id,
+                snapshot=snapshot,
+                correlation_id=request.message_id,
+            )
+        except InstanceAlreadyExistsError:
+            try:
+                instance = self.service.get(self.tenant_id, instance_id)
+            except InstanceNotFoundError as exc:
+                raise RoleBindingRejected("existing draft cannot be read") from exc
+            if (
+                instance.owner_person_id != request.initiator_person_id
+                or instance.snapshot != snapshot
+            ):
+                raise RoleBindingRejected("message id is already bound to another draft")
+        other_count = sum(
+            person_id != request.initiator_person_id
+            for person_id in claim.owner_bindings.values()
+        )
+        if instance.status == InstanceStatus.DRAFT:
+            tail = "请核对后回复：\n" f"/larkflow confirm {instance.id}"
+        else:
+            tail = f"当前状态：{instance.status.value}"
+        reply = (
+            "人员分工已确认，流程草稿已创建。\n"
+            f"模板：{request.template_id}\n"
+            f"实例：{instance.id}\n"
+            f"目标：{instance.snapshot.goal}\n"
+            f"节点数：{len(instance.snapshot.nodes)}\n"
+            f"角色数：{len(request.roles)}，绑定给其他成员的角色：{other_count}\n"
+            f"{tail}"
+        )
+        return instance.id, reply
+
+
+@dataclass(frozen=True)
+class RoleBindingReplyReport:
+    claimed: int = 0
+    sent: int = 0
+    card_updates_failed: int = 0
+    failed: int = 0
+    errors: tuple[str, ...] = field(default_factory=tuple)
+
+
+class RoleBindingReplyWorker:
+    """Settle the card visually and deliver the durable draft reply."""
+
+    def __init__(
+        self,
+        store: RoleBindingStore,
+        sender: RoleBindingCardSender,
+        *,
+        tenant_id: str,
+        worker_id: str,
+        clock: Callable[[], datetime] | None = None,
+        claim_limit: int = 20,
+        claim_ttl: timedelta = timedelta(minutes=2),
+        retry_base: timedelta = timedelta(seconds=5),
+        retry_max: timedelta = timedelta(minutes=5),
+    ) -> None:
+        _validate_worker(tenant_id, worker_id, claim_limit, claim_ttl)
+        self.store = store
+        self.sender = sender
+        self.tenant_id = tenant_id
+        self.worker_id = worker_id
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.claim_limit = claim_limit
+        self.claim_ttl = claim_ttl
+        self.retry_base = retry_base
+        self.retry_max = retry_max
+
+    def run_once(self) -> RoleBindingReplyReport:
+        now = self.clock()
+        claims = self.store.claim_role_binding_replies(
+            self.tenant_id,
+            worker_id=self.worker_id,
+            now=now,
+            limit=self.claim_limit,
+            claim_ttl=self.claim_ttl,
+        )
+        sent = failed = card_updates_failed = 0
+        errors = []
+        for claim in claims:
+            try:
+                try:
+                    self.sender.update_chat_card(
+                        token=claim.action.update_token,
+                        card=role_binding_card(
+                            claim.request,
+                            claim.request.candidate_person_ids,
+                            owner_bindings=claim.owner_bindings,
+                            settled_instance_id=claim.instance_id,
+                        ),
+                    )
+                except Exception:
+                    card_updates_failed += 1
+                external_id = self.sender.send_chat_message(
+                    chat_id=claim.request.chat_id,
+                    text=claim.text,
+                    idempotency_key=_action_reply_key(claim.action.id),
+                )
+                if not external_id.strip():
+                    raise ValueError("Feishu role-binding reply returned no message_id")
+                self.store.mark_role_binding_reply_sent(
+                    self.tenant_id,
+                    claim.action.id,
+                    claim_token=claim.claim_token,
+                    external_id=external_id,
+                    now=now,
+                )
+                sent += 1
+            except Exception as exc:
+                failed += 1
+                error = f"{claim.action.id}: {type(exc).__name__}: {exc}"
+                errors.append(error)
+                self.store.mark_role_binding_reply_failed(
+                    self.tenant_id,
+                    claim.action.id,
+                    claim_token=claim.claim_token,
+                    error=error,
+                    retry_at=now + _retry_delay(
+                        claim.attempt_count,
+                        self.retry_base,
+                        self.retry_max,
+                    ),
+                )
+        return RoleBindingReplyReport(
+            claimed=len(claims),
+            sent=sent,
+            card_updates_failed=card_updates_failed,
+            failed=failed,
+            errors=tuple(errors),
+        )
+
+
+def role_binding_card(
+    request: RoleBindingRequest,
+    candidate_person_ids: tuple[str, ...],
+    *,
+    owner_bindings: Mapping[str, str] | None = None,
+    settled_instance_id: str | None = None,
+) -> dict[str, Any]:
+    if not candidate_person_ids:
+        raise ValueError("role-binding card requires candidates")
+    bindings = dict(owner_bindings or {})
+    settled = settled_instance_id is not None
+    options = [{"value": person_id} for person_id in candidate_person_ids]
+    form_elements: list[dict[str, Any]] = []
+    for role in request.roles:
+        form_elements.append(
+            {
+                "tag": "markdown",
+                "content": f"**角色：{_escape_markdown(role)}**",
+            }
+        )
+        initial = bindings.get(role, request.initiator_person_id)
+        selector = {
+            "tag": "select_person",
+            "name": f"{ROLE_FIELD_PREFIX}{role}",
+            "required": True,
+            "width": "fill",
+            "placeholder": {"tag": "plain_text", "content": "请选择成员"},
+            "options": options,
+            "disabled": settled,
+        }
+        if initial in candidate_person_ids:
+            selector["initial_option"] = initial
+        form_elements.append(selector)
+    form_elements.append(
+        {
+            "tag": "button",
+            "name": ROLE_SUBMIT_NAME,
+            "text": {
+                "tag": "plain_text",
+                "content": "已确认" if settled else "确认人员分工",
+            },
+            "type": "primary_filled",
+            "width": "fill",
+            "form_action_type": "submit",
+            "disabled": settled,
+        }
+    )
+    intro = (
+        f"<text_tag color='green'>已冻结</text_tag> 实例 `{settled_instance_id}`"
+        if settled
+        else "为每个角色选择负责人。提交后会冻结本次人员分工，再创建流程草稿。"
+    )
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "default"},
+        "header": {
+            "title": {
+                "tag": "plain_text",
+                "content": "人员分工已确认" if settled else "选择流程参与人",
+            },
+            "subtitle": {
+                "tag": "plain_text",
+                "content": request.template_id,
+            },
+            "template": "green" if settled else "blue",
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": (
+                        f"**{_escape_markdown(request.goal or '流程草稿')}**\n{intro}"
+                    ),
+                },
+                {
+                    "tag": "form",
+                    "name": ROLE_FORM_NAME,
+                    "direction": "vertical",
+                    "vertical_spacing": "medium",
+                    "elements": form_elements,
+                },
+            ]
+        },
+    }
+
+
+def role_binding_instance_id(tenant_id: str, message_id: str) -> str:
+    digest = hashlib.sha256(
+        f"{tenant_id}:{message_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    return f"im_{digest}"
+
+
+def _card_key(command_id: str) -> str:
+    return "lf-role-card-" + hashlib.sha256(command_id.encode()).hexdigest()[:32]
+
+
+def _action_reply_key(event_id: str) -> str:
+    return "lf-role-reply-" + hashlib.sha256(event_id.encode()).hexdigest()[:32]
+
+
+def _escape_markdown(value: str) -> str:
+    replacements = {
+        "&": "&#38;",
+        "<": "&#60;",
+        ">": "&#62;",
+        "*": "&#42;",
+        "_": "&#95;",
+        "`": "&#96;",
+    }
+    return "".join(replacements.get(char, char) for char in value)
+
+
+def _retry_delay(
+    attempt_count: int,
+    retry_base: timedelta,
+    retry_max: timedelta,
+) -> timedelta:
+    multiplier = 2 ** min(max(attempt_count - 1, 0), 10)
+    return min(retry_max, retry_base * multiplier)
+
+
+def _validate_worker(
+    tenant_id: str,
+    worker_id: str,
+    claim_limit: int,
+    claim_ttl: timedelta,
+) -> None:
+    if not tenant_id.strip() or not worker_id.strip():
+        raise ValueError("role-binding tenant_id and worker_id are required")
+    if claim_limit < 1 or claim_ttl <= timedelta(0):
+        raise ValueError("role-binding claim settings are invalid")
+
+
+def _required_text(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"card action requires {field_name}")
+    return value.strip()
+
+
+def _optional_text(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _event_time(value: Any, *, fallback: datetime) -> datetime:
+    try:
+        milliseconds = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return datetime.fromtimestamp(milliseconds / 1000, tz=timezone.utc)
+
+
+__all__ = [
+    "CARD_ACTION_EVENT",
+    "InvalidRoleBindingClaimError",
+    "MAX_CARD_CANDIDATES",
+    "ROLE_FIELD_PREFIX",
+    "ROLE_FORM_NAME",
+    "ROLE_SUBMIT_NAME",
+    "RoleBindingActionClaim",
+    "RoleBindingActionInboxBridge",
+    "RoleBindingActionReport",
+    "RoleBindingActionSignal",
+    "RoleBindingActionWorker",
+    "RoleBindingCardClaim",
+    "RoleBindingCardReport",
+    "RoleBindingCardWorker",
+    "RoleBindingRejected",
+    "RoleBindingReplyClaim",
+    "RoleBindingReplyReport",
+    "RoleBindingReplyWorker",
+    "RoleBindingRequest",
+    "RoleBindingVerificationReport",
+    "RoleBindingVerificationWorker",
+    "role_binding_card",
+    "role_binding_instance_id",
+]

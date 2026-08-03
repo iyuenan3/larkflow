@@ -60,6 +60,7 @@ class MemoryStore:
         self.verification_failed = []
         self.verification_rejected = []
         self.processed = []
+        self.role_binding_requested = []
         self.failed = []
         self.reply_sent = []
         self.reply_failed = []
@@ -89,6 +90,9 @@ class MemoryStore:
 
     def mark_im_processed(self, tenant_id, event_id, **kwargs):
         self.processed.append((tenant_id, event_id, kwargs))
+
+    def mark_im_role_binding_requested(self, tenant_id, event_id, **kwargs):
+        self.role_binding_requested.append((tenant_id, event_id, kwargs))
 
     def mark_im_failed(self, tenant_id, event_id, **kwargs):
         self.failed.append((tenant_id, event_id, kwargs))
@@ -604,6 +608,47 @@ def test_start_binds_mentioned_reviewer_and_keeps_sender_as_requester():
     reply = store.processed[0][2]["reply_text"]
     assert "绑定给其他成员的角色：1" in reply
     assert "/larkflow confirm" in reply
+
+
+def test_multi_role_start_without_mentions_requests_person_selection_card():
+    repository = InMemoryWorkflowRepository()
+    templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
+    templates.create_template(
+        tenant_id=TENANT,
+        actor_person_id="person_admin",
+        document=collaborative_template_document(),
+    )
+    templates.enable(
+        TENANT,
+        "collaborative_review",
+        actor_person_id="person_admin",
+    )
+    store = MemoryStore()
+    event = signal(
+        '/larkflow start collaborative_review {"brief":"ready"}',
+    )
+    store.command_claims = [IMCommandClaim(event, "start-token", 1)]
+
+    report = IMCommandWorker(
+        store,
+        WorkflowService(repository, clock=lambda: NOW),
+        templates,
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.processed == 1
+    assert not repository.list_for_owner(
+        TENANT,
+        owner_person_id="person_owner",
+        limit=10,
+    )
+    request = store.role_binding_requested[0][2]["request"]
+    assert request.template_id == "collaborative_review"
+    assert request.template_version == 1
+    assert request.inputs == {"brief": "ready"}
+    assert request.roles == ("requester", "reviewer")
 
 
 @pytest.mark.parametrize(

@@ -39,6 +39,10 @@ class WorkerLoopSummary:
     im_commands_processed: int = 0
     im_commands_rejected: int = 0
     im_commands_failed: int = 0
+    role_bindings_claimed: int = 0
+    role_bindings_processed: int = 0
+    role_bindings_rejected: int = 0
+    role_bindings_failed: int = 0
 
 
 class WorkflowWorkerLoop:
@@ -49,11 +53,13 @@ class WorkflowWorkerLoop:
         worker: WorkflowWorker,
         *,
         im_command_worker: Any | None = None,
+        role_binding_worker: Any | None = None,
         settings: WorkerLoopSettings | None = None,
         log: LogEvent | None = None,
     ) -> None:
         self.worker = worker
         self.im_command_worker = im_command_worker
+        self.role_binding_worker = role_binding_worker
         self.settings = settings or WorkerLoopSettings()
         self.log = log or (lambda _event, _fields: None)
 
@@ -73,6 +79,10 @@ class WorkflowWorkerLoop:
             "im_commands_processed": 0,
             "im_commands_rejected": 0,
             "im_commands_failed": 0,
+            "role_bindings_claimed": 0,
+            "role_bindings_processed": 0,
+            "role_bindings_rejected": 0,
+            "role_bindings_failed": 0,
         }
         while not stop_event.is_set():
             if self.im_command_worker is not None:
@@ -98,6 +108,31 @@ class WorkflowWorkerLoop:
                                 "rejected": command_report.rejected,
                                 "failed": command_report.failed,
                                 "errors": list(command_report.errors),
+                            },
+                        )
+            if self.role_binding_worker is not None:
+                try:
+                    binding_report = self.role_binding_worker.run_once()
+                except Exception as exc:
+                    totals["role_bindings_failed"] += 1
+                    self.log(
+                        "role_binding_tick_failed",
+                        {"error_type": type(exc).__name__, "error": str(exc)},
+                    )
+                else:
+                    totals["role_bindings_claimed"] += binding_report.claimed
+                    totals["role_bindings_processed"] += binding_report.processed
+                    totals["role_bindings_rejected"] += binding_report.rejected
+                    totals["role_bindings_failed"] += binding_report.failed
+                    if binding_report.claimed or binding_report.errors:
+                        self.log(
+                            "role_binding_tick",
+                            {
+                                "claimed": binding_report.claimed,
+                                "processed": binding_report.processed,
+                                "rejected": binding_report.rejected,
+                                "failed": binding_report.failed,
+                                "errors": list(binding_report.errors),
                             },
                         )
             try:

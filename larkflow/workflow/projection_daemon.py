@@ -51,6 +51,14 @@ class ProjectionLoopSummary:
     im_verification_failed: int = 0
     im_replies_sent: int = 0
     im_replies_failed: int = 0
+    role_cards_sent: int = 0
+    role_cards_failed: int = 0
+    role_bindings_verified: int = 0
+    role_bindings_rejected: int = 0
+    role_binding_verification_failed: int = 0
+    role_binding_replies_sent: int = 0
+    role_binding_card_updates_failed: int = 0
+    role_binding_replies_failed: int = 0
     noops: int = 0
     failed: int = 0
 
@@ -67,6 +75,9 @@ class ProjectionWorkerLoop:
         completion_poller: TaskCompletionPoller | None = None,
         im_verification_worker: Any | None = None,
         im_reply_worker: Any | None = None,
+        role_binding_card_worker: Any | None = None,
+        role_binding_verification_worker: Any | None = None,
+        role_binding_reply_worker: Any | None = None,
         completion_poll_seconds: float = 30.0,
         monotonic: Callable[[], float] | None = None,
         log: LogEvent | None = None,
@@ -81,6 +92,9 @@ class ProjectionWorkerLoop:
         self.completion_poller = completion_poller
         self.im_verification_worker = im_verification_worker
         self.im_reply_worker = im_reply_worker
+        self.role_binding_card_worker = role_binding_card_worker
+        self.role_binding_verification_worker = role_binding_verification_worker
+        self.role_binding_reply_worker = role_binding_reply_worker
         self.completion_poll_seconds = completion_poll_seconds
         self.monotonic = monotonic or time.monotonic
         self.log = log or (lambda _event, _fields: None)
@@ -118,6 +132,14 @@ class ProjectionWorkerLoop:
             "im_verification_failed": 0,
             "im_replies_sent": 0,
             "im_replies_failed": 0,
+            "role_cards_sent": 0,
+            "role_cards_failed": 0,
+            "role_bindings_verified": 0,
+            "role_bindings_rejected": 0,
+            "role_binding_verification_failed": 0,
+            "role_binding_replies_sent": 0,
+            "role_binding_card_updates_failed": 0,
+            "role_binding_replies_failed": 0,
             "noops": 0,
             "failed": 0,
         }
@@ -191,6 +213,80 @@ class ProjectionWorkerLoop:
                                 "sent": replies.sent,
                                 "failed": replies.failed,
                                 "errors": list(replies.errors),
+                            },
+                        )
+            if self.role_binding_card_worker is not None:
+                try:
+                    cards = self.role_binding_card_worker.run_once()
+                except Exception as exc:
+                    totals["role_cards_failed"] += 1
+                    self.log(
+                        "role_binding_card_tick_failed",
+                        {"error_type": type(exc).__name__, "error": str(exc)},
+                    )
+                else:
+                    totals["role_cards_sent"] += cards.sent
+                    totals["role_cards_failed"] += cards.failed
+                    if cards.claimed or cards.errors:
+                        self.log(
+                            "role_binding_card_tick",
+                            {
+                                "claimed": cards.claimed,
+                                "sent": cards.sent,
+                                "failed": cards.failed,
+                                "errors": list(cards.errors),
+                            },
+                        )
+            if self.role_binding_verification_worker is not None:
+                try:
+                    bindings = self.role_binding_verification_worker.run_once()
+                except Exception as exc:
+                    totals["role_binding_verification_failed"] += 1
+                    self.log(
+                        "role_binding_verification_tick_failed",
+                        {"error_type": type(exc).__name__, "error": str(exc)},
+                    )
+                else:
+                    totals["role_bindings_verified"] += bindings.verified
+                    totals["role_bindings_rejected"] += bindings.rejected
+                    totals["role_binding_verification_failed"] += bindings.failed
+                    if bindings.claimed or bindings.errors:
+                        self.log(
+                            "role_binding_verification_tick",
+                            {
+                                "claimed": bindings.claimed,
+                                "verified": bindings.verified,
+                                "rejected": bindings.rejected,
+                                "failed": bindings.failed,
+                                "errors": list(bindings.errors),
+                            },
+                        )
+            if self.role_binding_reply_worker is not None:
+                try:
+                    binding_replies = self.role_binding_reply_worker.run_once()
+                except Exception as exc:
+                    totals["role_binding_replies_failed"] += 1
+                    self.log(
+                        "role_binding_reply_tick_failed",
+                        {"error_type": type(exc).__name__, "error": str(exc)},
+                    )
+                else:
+                    totals["role_binding_replies_sent"] += binding_replies.sent
+                    totals["role_binding_card_updates_failed"] += (
+                        binding_replies.card_updates_failed
+                    )
+                    totals["role_binding_replies_failed"] += binding_replies.failed
+                    if binding_replies.claimed or binding_replies.errors:
+                        self.log(
+                            "role_binding_reply_tick",
+                            {
+                                "claimed": binding_replies.claimed,
+                                "sent": binding_replies.sent,
+                                "card_updates_failed": (
+                                    binding_replies.card_updates_failed
+                                ),
+                                "failed": binding_replies.failed,
+                                "errors": list(binding_replies.errors),
                             },
                         )
             poll_now = self.monotonic()

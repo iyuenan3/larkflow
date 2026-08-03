@@ -410,9 +410,12 @@ def _cmd_serve(ns, factory, server_factory) -> int:
         event_keys = list(ns.event_key or DEFAULT_EVENT_KEYS)
         if _target_im_commands_enabled():
             from .workflow.im_commands import IM_MESSAGE_EVENT
+            from .workflow.role_bindings import CARD_ACTION_EVENT
 
             if IM_MESSAGE_EVENT not in event_keys:
                 event_keys.append(IM_MESSAGE_EVENT)
+            if CARD_ACTION_EVENT not in event_keys:
+                event_keys.append(CARD_ACTION_EVENT)
         server = server_factory(factory(ns),
                                 event_keys=event_keys,
                                 identity=ns.identity, profile=ns.profile,
@@ -435,6 +438,7 @@ def _target_event_observers():
     from .workflow.inbound import TaskEventInboxBridge
     from .workflow.migrate import postgres_connection_factory
     from .workflow.postgres import PostgresIMCommandStore, PostgresWorkflowInbox
+    from .workflow.role_bindings import RoleBindingActionInboxBridge
 
     connection_factory = postgres_connection_factory(dsn)
     observers = [
@@ -444,9 +448,16 @@ def _target_event_observers():
         )
     ]
     if _target_im_commands_enabled():
+        im_store = PostgresIMCommandStore(connection_factory)
         observers.append(
             IMEventInboxBridge(
-                PostgresIMCommandStore(connection_factory),
+                im_store,
+                tenant_id=tenant_id,
+            )
+        )
+        observers.append(
+            RoleBindingActionInboxBridge(
+                im_store,
                 tenant_id=tenant_id,
             )
         )

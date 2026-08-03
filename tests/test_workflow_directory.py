@@ -120,3 +120,71 @@ def test_workflow_validates_each_distinct_owner_once() -> None:
         snapshot=snapshot(),
     )
     assert seen == ["person_reviewer"]
+
+
+def test_cli_directory_expands_authorized_departments_and_revalidates_users() -> None:
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str]) -> dict[str, object]:
+        calls.append(argv)
+        if "/open-apis/contact/v3/scopes" in argv:
+            return {
+                "user_ids": ["person_owner"],
+                "department_ids": ["od-a"],
+                "has_more": False,
+            }
+        if "/open-apis/contact/v3/departments/od-a/children" in argv:
+            return {
+                "items": [{"open_department_id": "od-b"}],
+                "has_more": False,
+            }
+        if "/open-apis/contact/v3/departments/od-b/children" in argv:
+            return {"items": [], "has_more": False}
+        if "/open-apis/contact/v3/users/find_by_department" in argv:
+            params = argv[argv.index("--params") + 1]
+            person_id = "person_reviewer" if "od-a" in params else "person_writer"
+            return {"items": [{"open_id": person_id}], "has_more": False}
+        if "+get-user" in argv:
+            person_id = argv[argv.index("--user-id") + 1]
+            return {
+                "user": {
+                    "open_id": person_id,
+                    "status": {"is_activated": True},
+                }
+            }
+        raise AssertionError(argv)
+
+    people = CliFeishuDirectory(profile="dev", runner=runner).list_candidate_people(
+        "tenant",
+        limit=10,
+    )
+
+    assert tuple(person.person_id for person in people) == (
+        "person_owner",
+        "person_reviewer",
+        "person_writer",
+    )
+    assert sum("+get-user" in call for call in calls) == 3
+
+
+def test_cli_directory_rejects_candidate_sets_larger_than_the_card_limit() -> None:
+    def runner(argv: list[str]) -> dict[str, object]:
+        if "/open-apis/contact/v3/scopes" in argv:
+            return {
+                "user_ids": ["person_1", "person_2"],
+                "department_ids": [],
+                "has_more": False,
+            }
+        person_id = argv[argv.index("--user-id") + 1]
+        return {
+            "user": {
+                "open_id": person_id,
+                "status": {"is_activated": True},
+            }
+        }
+
+    with pytest.raises(DirectoryValidationError, match="more than 1"):
+        CliFeishuDirectory(profile="dev", runner=runner).list_candidate_people(
+            "tenant",
+            limit=1,
+        )

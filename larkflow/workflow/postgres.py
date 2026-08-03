@@ -63,6 +63,14 @@ from .restart import (
     RestartPreviewExpiredError,
     RestartPreviewNotFoundError,
 )
+from .role_bindings import (
+    InvalidRoleBindingClaimError,
+    RoleBindingActionClaim,
+    RoleBindingActionSignal,
+    RoleBindingCardClaim,
+    RoleBindingReplyClaim,
+    RoleBindingRequest,
+)
 from .projection import ProjectionRecord
 from .serde import (
     quality_from_dict,
@@ -2222,6 +2230,46 @@ class PostgresIMCommandStore:
             event_id,
         )
 
+    def mark_im_role_binding_requested(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        request: RoleBindingRequest,
+        now: datetime,
+    ) -> None:
+        if request.command_id != event_id or request.tenant_id != tenant_id:
+            raise ValueError("role-binding request does not match the IM command")
+        self._settle_command(
+            """
+            UPDATE workflow_im_commands
+            SET status = 'processed', processed_at = %s,
+                outcome = 'role_binding_requested',
+                failure_stage = NULL, last_error = NULL,
+                role_binding_request = %s,
+                role_binding_candidates = NULL,
+                reply_kind = 'role_binding_card',
+                reply_text = %s, reply_status = 'pending',
+                reply_available_at = %s,
+                claimed_by = NULL, claim_token = NULL,
+                claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND status = 'processing' AND claim_token = %s
+            RETURNING id
+            """,
+            (
+                now,
+                Jsonb(_role_request_to_dict(request)),
+                "请选择每个流程角色的负责人。",
+                now,
+                tenant_id,
+                event_id,
+                claim_token,
+            ),
+            event_id,
+        )
+
     def mark_im_failed(
         self,
         tenant_id: str,
@@ -2266,6 +2314,7 @@ class PostgresIMCommandStore:
                         SELECT tenant_id, id
                         FROM workflow_im_commands
                         WHERE tenant_id = %s
+                          AND reply_kind = 'text'
                           AND (
                             (reply_status IN ('pending', 'failed')
                                 AND reply_available_at <= %s)
@@ -2360,6 +2409,594 @@ class PostgresIMCommandStore:
             event_id,
         )
 
+    def claim_role_binding_cards(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[RoleBindingCardClaim, ...]:
+        self._validate_claim(worker_id, limit, claim_ttl)
+        token = secrets.token_urlsafe(24)
+        expires_at = now + claim_ttl
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                rows = connection.execute(
+                    """
+                    WITH selected AS (
+                        SELECT tenant_id, id
+                        FROM workflow_im_commands
+                        WHERE tenant_id = %s
+                          AND reply_kind = 'role_binding_card'
+                          AND (
+                            (reply_status IN ('pending', 'failed')
+                                AND reply_available_at <= %s)
+                            OR (
+                                reply_status = 'sending'
+                                AND reply_claim_expires_at <= %s
+                            )
+                          )
+                        ORDER BY reply_available_at, processed_at, id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT %s
+                    )
+                    UPDATE workflow_im_commands AS command
+                    SET reply_status = 'sending',
+                        reply_attempt_count = command.reply_attempt_count + 1,
+                        reply_claimed_by = %s,
+                        reply_claim_token = %s,
+                        reply_claim_expires_at = %s
+                    FROM selected
+                    WHERE command.tenant_id = selected.tenant_id
+                      AND command.id = selected.id
+                    RETURNING command.*
+                    """,
+                    (
+                        tenant_id,
+                        now,
+                        now,
+                        limit,
+                        worker_id,
+                        token,
+                        expires_at,
+                    ),
+                ).fetchall()
+        return tuple(
+            RoleBindingCardClaim(
+                request=_role_request_from_command_row(row),
+                claim_token=token,
+                attempt_count=int(row["reply_attempt_count"]),
+            )
+            for row in rows
+        )
+
+    def mark_role_binding_card_sent(
+        self,
+        tenant_id: str,
+        command_id: str,
+        *,
+        claim_token: str,
+        candidate_person_ids: tuple[str, ...],
+        external_id: str,
+        now: datetime,
+    ) -> None:
+        self._settle_command(
+            """
+            UPDATE workflow_im_commands
+            SET role_binding_candidates = %s,
+                reply_status = 'sent', reply_external_id = %s,
+                reply_sent_at = %s, reply_last_error = NULL,
+                reply_claimed_by = NULL, reply_claim_token = NULL,
+                reply_claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND reply_kind = 'role_binding_card'
+              AND reply_status = 'sending' AND reply_claim_token = %s
+            RETURNING id
+            """,
+            (
+                Jsonb(list(candidate_person_ids)),
+                external_id,
+                now,
+                tenant_id,
+                command_id,
+                claim_token,
+            ),
+            command_id,
+        )
+
+    def mark_role_binding_card_failed(
+        self,
+        tenant_id: str,
+        command_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        self._settle_command(
+            """
+            UPDATE workflow_im_commands
+            SET reply_status = 'failed', reply_available_at = %s,
+                reply_last_error = %s,
+                reply_claimed_by = NULL, reply_claim_token = NULL,
+                reply_claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND reply_kind = 'role_binding_card'
+              AND reply_status = 'sending' AND reply_claim_token = %s
+            RETURNING id
+            """,
+            (retry_at, error, tenant_id, command_id, claim_token),
+            command_id,
+        )
+
+    def append_role_binding_action(self, event: RoleBindingActionSignal) -> bool:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO workflow_role_binding_actions (
+                    tenant_id, id, message_id, chat_id, operator_person_id,
+                    action_tag, action_name, form_value, update_token,
+                    available_at, occurred_at, received_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                RETURNING id
+                """,
+                (
+                    event.tenant_id,
+                    event.id,
+                    event.message_id,
+                    event.chat_id,
+                    event.operator_person_id,
+                    event.action_tag,
+                    event.action_name,
+                    event.form_value,
+                    event.update_token,
+                    event.received_at,
+                    event.occurred_at,
+                    event.received_at,
+                ),
+            ).fetchone()
+        return row is not None
+
+    def claim_role_binding_verification(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[RoleBindingActionClaim, ...]:
+        return self._claim_role_binding_actions(
+            tenant_id,
+            worker_id=worker_id,
+            now=now,
+            limit=limit,
+            claim_ttl=claim_ttl,
+            stage="verification",
+        )
+
+    def claim_role_binding_actions(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[RoleBindingActionClaim, ...]:
+        return self._claim_role_binding_actions(
+            tenant_id,
+            worker_id=worker_id,
+            now=now,
+            limit=limit,
+            claim_ttl=claim_ttl,
+            stage="processing",
+        )
+
+    def _claim_role_binding_actions(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+        stage: str,
+    ) -> tuple[RoleBindingActionClaim, ...]:
+        self._validate_claim(worker_id, limit, claim_ttl)
+        if stage == "verification":
+            active = "verifying"
+            predicate = """
+                (status = 'pending' AND available_at <= %s)
+                OR (
+                    status = 'failed' AND failure_stage = 'verification'
+                    AND available_at <= %s
+                )
+                OR (status = 'verifying' AND claim_expires_at <= %s)
+            """
+        else:
+            active = "processing"
+            predicate = """
+                (status = 'verified' AND available_at <= %s)
+                OR (
+                    status = 'failed' AND failure_stage = 'processing'
+                    AND available_at <= %s
+                )
+                OR (status = 'processing' AND claim_expires_at <= %s)
+            """
+        token = secrets.token_urlsafe(24)
+        expires_at = now + claim_ttl
+        sql = f"""
+            WITH selected AS (
+                SELECT tenant_id, id
+                FROM workflow_role_binding_actions
+                WHERE tenant_id = %s AND ({predicate})
+                ORDER BY available_at, received_at, id
+                FOR UPDATE SKIP LOCKED
+                LIMIT %s
+            ), updated AS (
+                UPDATE workflow_role_binding_actions AS action
+                SET status = %s,
+                    attempt_count = action.attempt_count + 1,
+                    claimed_by = %s,
+                    claim_token = %s,
+                    claim_expires_at = %s
+                FROM selected
+                WHERE action.tenant_id = selected.tenant_id
+                  AND action.id = selected.id
+                RETURNING action.*
+            )
+            SELECT updated.*,
+                   command.id AS command_id,
+                   command.message_id AS command_message_id,
+                   command.chat_id AS command_chat_id,
+                   command.sender_person_id AS command_sender_person_id,
+                   command.role_binding_request,
+                   command.role_binding_candidates,
+                   command.reply_external_id AS card_message_id
+            FROM updated
+            LEFT JOIN workflow_im_commands AS command
+              ON command.tenant_id = updated.tenant_id
+             AND command.reply_kind = 'role_binding_card'
+             AND command.reply_external_id = updated.message_id
+        """
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                rows = connection.execute(
+                    sql,
+                    (
+                        tenant_id,
+                        now,
+                        now,
+                        now,
+                        limit,
+                        active,
+                        worker_id,
+                        token,
+                        expires_at,
+                    ),
+                ).fetchall()
+        return tuple(
+            _role_action_claim_from_row(row, token=token)
+            for row in rows
+        )
+
+    def mark_role_binding_verified(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        owner_bindings: Mapping[str, str],
+        now: datetime,
+    ) -> None:
+        self._settle_role_action(
+            """
+            UPDATE workflow_role_binding_actions
+            SET status = 'verified', verified_at = %s, available_at = %s,
+                owner_bindings = %s, failure_stage = NULL, last_error = NULL,
+                claimed_by = NULL, claim_token = NULL,
+                claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND status = 'verifying' AND claim_token = %s
+            RETURNING id
+            """,
+            (
+                now,
+                now,
+                Jsonb(dict(owner_bindings)),
+                tenant_id,
+                event_id,
+                claim_token,
+            ),
+            event_id,
+        )
+
+    def mark_role_binding_rejected(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        outcome: str,
+        reply_text: str | None,
+        now: datetime,
+    ) -> None:
+        self._settle_role_action(
+            """
+            UPDATE workflow_role_binding_actions
+            SET status = 'rejected', processed_at = %s, outcome = %s,
+                reply_text = %s,
+                reply_status = CASE WHEN %s IS NULL THEN NULL ELSE 'pending' END,
+                reply_available_at = CASE WHEN %s IS NULL THEN NULL ELSE %s END,
+                claimed_by = NULL, claim_token = NULL,
+                claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND status IN ('verifying', 'processing') AND claim_token = %s
+            RETURNING id
+            """,
+            (
+                now,
+                outcome,
+                reply_text,
+                reply_text,
+                reply_text,
+                now,
+                tenant_id,
+                event_id,
+                claim_token,
+            ),
+            event_id,
+        )
+
+    def mark_role_binding_verification_failed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        self._mark_role_binding_action_failed(
+            tenant_id,
+            event_id,
+            claim_token=claim_token,
+            error=error,
+            retry_at=retry_at,
+            stage="verification",
+        )
+
+    def mark_role_binding_failed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        self._mark_role_binding_action_failed(
+            tenant_id,
+            event_id,
+            claim_token=claim_token,
+            error=error,
+            retry_at=retry_at,
+            stage="processing",
+        )
+
+    def _mark_role_binding_action_failed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+        stage: str,
+    ) -> None:
+        active = "verifying" if stage == "verification" else "processing"
+        self._settle_role_action(
+            """
+            UPDATE workflow_role_binding_actions
+            SET status = 'failed', available_at = %s,
+                failure_stage = %s, last_error = %s,
+                claimed_by = NULL, claim_token = NULL,
+                claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND status = %s AND claim_token = %s
+            RETURNING id
+            """,
+            (
+                retry_at,
+                stage,
+                error,
+                tenant_id,
+                event_id,
+                active,
+                claim_token,
+            ),
+            event_id,
+        )
+
+    def mark_role_binding_processed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        instance_id: str,
+        reply_text: str,
+        now: datetime,
+    ) -> None:
+        self._settle_role_action(
+            """
+            UPDATE workflow_role_binding_actions
+            SET status = 'processed', processed_at = %s,
+                outcome = 'draft_created', instance_id = %s,
+                failure_stage = NULL, last_error = NULL,
+                reply_text = %s, reply_status = 'pending',
+                reply_available_at = %s,
+                claimed_by = NULL, claim_token = NULL,
+                claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND status = 'processing' AND claim_token = %s
+            RETURNING id
+            """,
+            (
+                now,
+                instance_id,
+                reply_text,
+                now,
+                tenant_id,
+                event_id,
+                claim_token,
+            ),
+            event_id,
+        )
+
+    def claim_role_binding_replies(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[RoleBindingReplyClaim, ...]:
+        self._validate_claim(worker_id, limit, claim_ttl)
+        token = secrets.token_urlsafe(24)
+        expires_at = now + claim_ttl
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                rows = connection.execute(
+                    """
+                    WITH selected AS (
+                        SELECT tenant_id, id
+                        FROM workflow_role_binding_actions
+                        WHERE tenant_id = %s
+                          AND (
+                            (reply_status IN ('pending', 'failed')
+                                AND reply_available_at <= %s)
+                            OR (
+                                reply_status = 'sending'
+                                AND reply_claim_expires_at <= %s
+                            )
+                          )
+                        ORDER BY reply_available_at, processed_at, id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT %s
+                    ), updated AS (
+                        UPDATE workflow_role_binding_actions AS action
+                        SET reply_status = 'sending',
+                            reply_attempt_count = action.reply_attempt_count + 1,
+                            reply_claimed_by = %s,
+                            reply_claim_token = %s,
+                            reply_claim_expires_at = %s
+                        FROM selected
+                        WHERE action.tenant_id = selected.tenant_id
+                          AND action.id = selected.id
+                        RETURNING action.*
+                    )
+                    SELECT updated.*,
+                           command.id AS command_id,
+                           command.message_id AS command_message_id,
+                           command.chat_id AS command_chat_id,
+                           command.sender_person_id AS command_sender_person_id,
+                           command.role_binding_request,
+                           command.role_binding_candidates,
+                           command.reply_external_id AS card_message_id
+                    FROM updated
+                    JOIN workflow_im_commands AS command
+                      ON command.tenant_id = updated.tenant_id
+                     AND command.reply_kind = 'role_binding_card'
+                     AND command.reply_external_id = updated.message_id
+                    """,
+                    (
+                        tenant_id,
+                        now,
+                        now,
+                        limit,
+                        worker_id,
+                        token,
+                        expires_at,
+                    ),
+                ).fetchall()
+        return tuple(
+            RoleBindingReplyClaim(
+                action=_role_action_from_row(row),
+                request=_role_request_from_joined_row(row),
+                owner_bindings=_owner_bindings_from_row(row),
+                instance_id=str(row["instance_id"]),
+                text=str(row["reply_text"]),
+                claim_token=token,
+                attempt_count=int(row["reply_attempt_count"]),
+            )
+            for row in rows
+        )
+
+    def mark_role_binding_reply_sent(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        external_id: str,
+        now: datetime,
+    ) -> None:
+        self._settle_role_action(
+            """
+            UPDATE workflow_role_binding_actions
+            SET reply_status = 'sent', reply_external_id = %s,
+                reply_sent_at = %s, reply_last_error = NULL,
+                reply_claimed_by = NULL, reply_claim_token = NULL,
+                reply_claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND reply_status = 'sending' AND reply_claim_token = %s
+            RETURNING id
+            """,
+            (external_id, now, tenant_id, event_id, claim_token),
+            event_id,
+        )
+
+    def mark_role_binding_reply_failed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        self._settle_role_action(
+            """
+            UPDATE workflow_role_binding_actions
+            SET reply_status = 'failed', reply_available_at = %s,
+                reply_last_error = %s,
+                reply_claimed_by = NULL, reply_claim_token = NULL,
+                reply_claim_expires_at = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND reply_status = 'sending' AND reply_claim_token = %s
+            RETURNING id
+            """,
+            (retry_at, error, tenant_id, event_id, claim_token),
+            event_id,
+        )
+
+    def _settle_role_action(
+        self,
+        sql: str,
+        parameters: tuple[Any, ...],
+        event_id: str,
+    ) -> None:
+        with self.connection_factory() as connection:
+            row = connection.execute(sql, parameters).fetchone()
+        if row is None:
+            raise InvalidRoleBindingClaimError(event_id)
+
     def _settle_command(
         self,
         sql: str,
@@ -2402,3 +3039,149 @@ class PostgresIMCommandStore:
             raise ValueError("IM claim_limit must be positive")
         if claim_ttl <= timedelta(0):
             raise ValueError("IM claim_ttl must be positive")
+
+
+def _role_request_to_dict(request: RoleBindingRequest) -> dict[str, Any]:
+    return {
+        "template_id": request.template_id,
+        "template_version": request.template_version,
+        "goal": request.goal,
+        "inputs": to_json_value(request.inputs),
+        "roles": list(request.roles),
+    }
+
+
+def _role_request_from_command_row(row: Mapping[str, Any]) -> RoleBindingRequest:
+    return _role_request_from_values(
+        command_id=row.get("id"),
+        tenant_id=row.get("tenant_id"),
+        message_id=row.get("message_id"),
+        chat_id=row.get("chat_id"),
+        initiator_person_id=row.get("sender_person_id"),
+        raw_request=row.get("role_binding_request"),
+        raw_candidates=row.get("role_binding_candidates"),
+        card_message_id=row.get("reply_external_id"),
+    )
+
+
+def _role_request_from_joined_row(row: Mapping[str, Any]) -> RoleBindingRequest:
+    return _role_request_from_values(
+        command_id=row.get("command_id"),
+        tenant_id=row.get("tenant_id"),
+        message_id=row.get("command_message_id"),
+        chat_id=row.get("command_chat_id"),
+        initiator_person_id=row.get("command_sender_person_id"),
+        raw_request=row.get("role_binding_request"),
+        raw_candidates=row.get("role_binding_candidates"),
+        card_message_id=row.get("card_message_id"),
+    )
+
+
+def _role_request_from_values(
+    *,
+    command_id: Any,
+    tenant_id: Any,
+    message_id: Any,
+    chat_id: Any,
+    initiator_person_id: Any,
+    raw_request: Any,
+    raw_candidates: Any,
+    card_message_id: Any,
+) -> RoleBindingRequest:
+    fields = {
+        "command_id": command_id,
+        "tenant_id": tenant_id,
+        "message_id": message_id,
+        "chat_id": chat_id,
+        "initiator_person_id": initiator_person_id,
+    }
+    if not all(isinstance(value, str) and value for value in fields.values()):
+        raise ValueError("persisted role-binding request identity is incomplete")
+    if not isinstance(raw_request, Mapping):
+        raise ValueError("persisted role-binding request must be an object")
+    template_id = raw_request.get("template_id")
+    template_version = raw_request.get("template_version")
+    goal = raw_request.get("goal")
+    inputs = raw_request.get("inputs")
+    roles = raw_request.get("roles")
+    if not isinstance(template_id, str) or not template_id:
+        raise ValueError("persisted role-binding template_id is invalid")
+    if isinstance(template_version, bool) or not isinstance(template_version, int):
+        raise ValueError("persisted role-binding template_version is invalid")
+    if not isinstance(goal, str) or not isinstance(inputs, Mapping):
+        raise ValueError("persisted role-binding request content is invalid")
+    if not isinstance(roles, list) or not roles or not all(
+        isinstance(role, str) and role for role in roles
+    ):
+        raise ValueError("persisted role-binding roles are invalid")
+    candidates = raw_candidates or []
+    if not isinstance(candidates, list) or not all(
+        isinstance(person_id, str) and person_id for person_id in candidates
+    ):
+        raise ValueError("persisted role-binding candidates are invalid")
+    if card_message_id is not None and not isinstance(card_message_id, str):
+        raise ValueError("persisted role-binding card message is invalid")
+    return RoleBindingRequest(
+        command_id=command_id,
+        tenant_id=tenant_id,
+        message_id=message_id,
+        chat_id=chat_id,
+        initiator_person_id=initiator_person_id,
+        template_id=template_id,
+        template_version=template_version,
+        goal=goal,
+        inputs=dict(inputs),
+        roles=tuple(roles),
+        candidate_person_ids=tuple(candidates),
+        card_message_id=card_message_id,
+    )
+
+
+def _role_action_from_row(row: Mapping[str, Any]) -> RoleBindingActionSignal:
+    return RoleBindingActionSignal(
+        id=str(row["id"]),
+        tenant_id=str(row["tenant_id"]),
+        message_id=str(row["message_id"]),
+        chat_id=str(row["chat_id"]),
+        operator_person_id=str(row["operator_person_id"]),
+        action_tag=str(row["action_tag"]),
+        action_name=str(row["action_name"]),
+        form_value=str(row["form_value"]),
+        update_token=str(row["update_token"]),
+        occurred_at=row["occurred_at"],
+        received_at=row["received_at"],
+    )
+
+
+def _owner_bindings_from_row(row: Mapping[str, Any]) -> dict[str, str]:
+    raw = row.get("owner_bindings") or {}
+    if not isinstance(raw, Mapping) or not all(
+        isinstance(role, str)
+        and role
+        and isinstance(person_id, str)
+        and person_id
+        for role, person_id in raw.items()
+    ):
+        raise ValueError("persisted owner bindings are invalid")
+    return dict(raw)
+
+
+def _role_action_claim_from_row(
+    row: Mapping[str, Any],
+    *,
+    token: str,
+) -> RoleBindingActionClaim:
+    request = (
+        None
+        if row.get("command_id") is None
+        else _role_request_from_joined_row(row)
+    )
+    return RoleBindingActionClaim(
+        action=_role_action_from_row(row),
+        request=request,
+        claim_token=token,
+        attempt_count=int(row["attempt_count"]),
+        owner_bindings=_owner_bindings_from_row(row),
+        instance_id=row.get("instance_id"),
+        reply_text=row.get("reply_text"),
+    )

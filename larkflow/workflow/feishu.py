@@ -1,7 +1,7 @@
 """Feishu projection adapters backed by lark-cli."""
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import json
 from typing import Any
 
@@ -236,6 +236,67 @@ class CliFeishuMessageProjection:
             idempotency_key=idempotency_key,
         )
         return _message_id(data)
+
+    def send_chat_card(
+        self,
+        *,
+        chat_id: str,
+        card: Mapping[str, Any],
+        idempotency_key: str,
+    ) -> str:
+        if not chat_id.strip() or not idempotency_key.strip():
+            raise ValueError("Feishu card chat and key are required")
+        if card.get("schema") != "2.0":
+            raise ValueError("Target person-selection card must use Card 2.0")
+        data = self.runner(
+            [
+                self.executable,
+                "--profile",
+                self.profile,
+                "im",
+                "+messages-send",
+                "--chat-id",
+                chat_id,
+                "--msg-type",
+                "interactive",
+                "--content",
+                json.dumps(card, ensure_ascii=False, separators=(",", ":")),
+                "--idempotency-key",
+                idempotency_key,
+                "--as",
+                self.identity,
+                "--json",
+            ]
+        )
+        return _message_id(data)
+
+    def update_chat_card(
+        self,
+        *,
+        token: str,
+        card: Mapping[str, Any],
+    ) -> None:
+        if not token.strip() or card.get("schema") != "2.0":
+            raise ValueError("Feishu card update token and Card 2.0 body are required")
+        self.runner(
+            [
+                self.executable,
+                "--profile",
+                self.profile,
+                "api",
+                "POST",
+                "/open-apis/interactive/v1/card/update",
+                "--data",
+                json.dumps(
+                    {"token": token, "card": dict(card)},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                "--as",
+                self.identity,
+                "--json",
+            ]
+        )
 
     def _send(
         self,
