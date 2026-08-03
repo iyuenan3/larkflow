@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.31.0-draft · 2026-08-04 · Agent 失败恢复与人工接管
+
+- Added：自动 Agent / Tool 节点失败后向节点 Owner 发送 Card 2.0，提供“重新执行”和“人工接管”。卡片回调进入耐久 IM 命令，操作成功后更新原卡片并发送文本回执。
+- Domain：重试为目标节点及可达下游创建新 Attempt；人工接管为失败节点创建新 `waiting_human` Attempt 和 Human Task。原失败 Attempt、结果、错误代码和审计保留，人工接管 Task 也会在后续重启时被受控关闭。
+- Security：操作人只从飞书顶层认证字段取值；凭据侧重新验证企业成员，领域侧精确校验节点 Owner、Instance version、Node version 和 Attempt 编号。卡片只显示稳定 `error_code`，不投影原始异常文本。
+- Database：新增 migration `0015_recovery_cards`，为耐久命令增加卡片更新 token。wheel 回读已确认包含恢复模块与第十五份 migration。
+- Verified：实现内容提交为 `fc48b4f8a295c19ba02f08e5b87e006988eccf44`；完整离线套件为 `769 passed, 13 skipped`；Owner 授权定向变异会让回归测试失败。
+- Boundary：本记录反映已提交的代码与离线证据。文档提交时，长期 PostgreSQL 库 migration、开发服务部署和真实飞书恢复卡回调仍待验收，不得描述为开发真栈或生产上线。
+
 ## v0.30.0-draft · 2026-08-04 · 单聊人员选择卡与交互延迟收敛
 
 - Added：多角色模板在单聊中缺少显式绑定时返回 Card 2.0 人员选择表单。候选快照、卡片发送、回调、目录再验证、领域处理、卡片更新和文本回复都使用 PostgreSQL 耐久状态；成功回调只创建一个冻结草稿，并把原卡片更新为绿色已确认状态。

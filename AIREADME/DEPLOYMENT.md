@@ -6,6 +6,7 @@
 
 ## Target PostgreSQL 开发验证状态（2026-08-04）
 
+- 待部署候选件对应内容提交 `fc48b4f8a295c19ba02f08e5b87e006988eccf44`，新增失败自动节点的 Owner 恢复卡、重试、人工接管和 migration `0015_recovery_cards`。wheel 已在本机回读包含 `recovery.py` 与第十五份 migration，完整离线套件为 `769 passed, 13 skipped`。下文的长期库、发布件和真实飞书记录均是本次部署前的已验证状态，不能当作恢复卡已部署证据。
 - `alicloud-sh` 的 PostgreSQL 14.23 保持 active，`listen_addresses=localhost`，5432 只监听 `127.0.0.1`。宿主系统盘约有 33 GB 可用，内存约有 993 MB available。该数据库是自建 Target 开发环境，不是生产数据库，也不具备托管数据库的高可用能力。
 - 一次性数据库与最小权限密码角色通过本机 SSH 隧道运行完整 `tests/test_workflow_postgres.py`，3 项全部通过：migration 重入、聚合与 outbox 往返、两个真实连接竞争同一节点、过期 claim 恢复。测试前先跑单 Worker 基线；完成后数据库与角色均已删除，并从系统目录回读为 0。
 - 重启候选件另在一次性 PostgreSQL 14 数据库应用十一份 migration，并分别以节点和完整实例 scope 用两个真实连接同时确认同一 RestartPreview。两种 scope 都恰好一路执行、一路幂等回放，aggregate version 只增加 1，Attempt 从 1 增至 2，旧结果保留且对应重启审计只有 1 条；跨 tenant 读取预览被拒绝。测试库、安装目录和上传件随后删除并回读为 0。

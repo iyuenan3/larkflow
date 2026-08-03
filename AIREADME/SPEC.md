@@ -147,6 +147,15 @@ Target 订阅 `im.message.receive_v1`，处理以 `/larkflow` 开头的文本，
 
 跨人员角色绑定、`collaborative_agent_review` 双角色模板和 migration `0013_im_command_mentions` 已完成开发部署与真实群聊验收。单聊中，若模板含发送者之外的未绑定角色，`start` 会返回 Card 2.0 人员选择表单；候选人是凭据侧冻结的有界活跃成员快照，回调只接受创建命令的操作人和快照内人员，经目录再次验证后由领域侧幂等创建一个草稿。migration `0014_role_binding_cards` 保存候选快照、回调验证、领域处理、卡片更新和文本回复状态。成功后原卡片变为绿色已确认状态，选择器和按钮禁用，重复回调不创建第二个草稿。
 
+自动 Agent 或 Tool 节点的当前 Attempt 失败后，Projection 向该节点唯一 Owner 发送 Card 2.0，只显示稳定的 `error_code`，不显示原始 `error_message`。卡片提供“重新执行”和“人工接管”两个显式操作：
+
+- 恢复回调的操作人只从飞书顶层认证字段取值，卡片 payload 只能表达 action 和目标快照，不能自证身份或权限。
+- 凭据侧重新确认操作人是当前企业活跃成员；领域侧只允许当前节点 Owner，并精确比较 Instance version、Node version 和 Attempt 编号。实例已变化、节点已重启、旧 Attempt 或非 Owner 操作均 fail closed。
+- “重新执行”为目标节点及可达下游创建新 Attempt，语义与受控节点重启一致。“人工接管”只为失败节点创建新 `waiting_human` Attempt，然后复用当前 Human Task、凭据侧完成验证和领域提交链路。
+- 原失败 Attempt、结果、错误代码和审计保留。新操作成功后原卡片收口为无可点击按钮的结果卡，重复回调只返回首次结果。
+
+migration `0015_recovery_cards` 为耐久命令保存卡片更新 token。该契约和离线实现已完成，本文档提交时尚待长期开发库 migration 和真实飞书恢复卡验收。
+
 `reconcile-instance-completion <instance_id>` 是显式的单实例恢复命令。它只接受已完成实例，只补齐缺失的完成文档或最终通知；重复执行返回 no-op，不批量扫描历史实例，也不复制已存在的外部资源。
 
 ### Target Personal Agent Edge Proof v0 的 `/edge/v1` HTTP

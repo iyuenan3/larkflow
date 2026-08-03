@@ -614,3 +614,14 @@
 - Alternatives(否决)：强制用户拉群；按显示名称搜索；把完整通讯录或 open_id 放进不可信文本；让卡片直接创建实例；把候选列表只保存在进程内；卡片更新失败时回滚领域事务；重复点击创建多个草稿。
 - Tradeoff：候选列表需要凭据侧目录权限且当前采用有界快照，大组织仍需搜索或分页体验。Runtime 与 Projection 的开发空闲退避上限已从 5 秒收紧到 1 秒，把真实回调服务端总耗时从 8.881 秒降到 3.272 秒，但增加空闲数据库轮询频率；长期应评估 PostgreSQL `LISTEN/NOTIFY` 或等价唤醒机制。
 - Evidence：完整离线套件 `758 passed, 13 skipped`。开发服务器已应用十四份 migration，并安装内容提交 `19ea7be` 的 wheel；群聊 mention 与单聊 Card 2.0 均创建跨人员冻结草稿。单聊实例 `im_7575ba0f48ef145a782a20c3` 只创建一次，回复为 sent，原卡片成功冻结；Runtime、Projection 和其余四个 Python 服务均为 active、`NRestarts=0`。性能配置内容提交为 `409167d`。
+
+## ADR-075 · 2026-08-04 · 自动节点失败通过 Owner 恢复卡进入重试或人工接管
+
+- **Status：Accepted · Offline implementation。**
+- Problem：Agent 或 Tool 执行失败后，领域内核会保留失败 Attempt，但责任人只能依赖通用重启命令和文本消息处理。这既不是就地的责任入口，也没有将“再跑一次”与“由人完成本节点”分成两条可审计路径。
+- Constraint：原失败 Attempt、结果和错误不得覆盖；只有失败节点的当前唯一 Owner 可以恢复；卡片 payload 和客户端身份字段不是授权事实；回调必须耐久、可重放和幂等；PostgreSQL 聚合仍是唯一业务真相，卡片不得直接修改状态。
+- Decision：Projection 在自动节点失败后向节点 Owner 发送 Card 2.0，显示稳定 `error_code` 并提供 `retry / human_takeover` 两个显式操作。`RecoveryActionInboxBridge` 把回调转为耐久 IM 命令，操作人只从飞书顶层认证字段取值。凭据侧重新校验企业成员，领域侧重新校验 Owner、Instance version、Node version 和 Attempt 编号。重试按受控节点重启语义创建新自动 Attempt；人工接管创建新 `waiting_human` Attempt，并复用现有 Task 投影和完成入站链路。
+- Safety：非 Owner、非当前 Attempt、版本漂移、Human 节点和已由人提交的 Attempt 全部 fail closed。卡片不展示原始 `error_message`，避免把上游响应或凭据泄露给飞书。操作成功后使用卡片更新 token 收口原卡片，重复回调只回读首次结果。节点重启会关闭旧的人工接管 Task，避免陈旧待办继续推进领域状态。
+- Alternatives(否决)：覆盖失败 Attempt；信任卡片携带的操作人；在回调进程中直接修改聚合；只提供 Instance Owner 的通用重启；人工接管时改写原 Agent / Tool executor 定义；把原始异常文本完整投影到飞书。
+- Tradeoff：首版是显式人工选择，没有按错误类型的自动重试预算、暂停队列或运营告警视图。飞书长连接离线时点击不会自动进入中央 Inbox，因此回调服务的在线性仍需运维保证。
+- Evidence：内容提交 `fc48b4f8a295c19ba02f08e5b87e006988eccf44`；完整离线套件 `769 passed, 13 skipped`；删除 Owner 校验的定向变异被回归测试捕获；wheel 回读包含 `recovery.py` 和 migration `0015_recovery_cards`。本 ADR 提交时长期开发库仍为十四份 migration，真实飞书恢复卡验收尚未开始。
