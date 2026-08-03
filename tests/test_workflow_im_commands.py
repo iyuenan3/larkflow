@@ -296,6 +296,43 @@ def test_recovery_card_bridge_persists_a_verified_version_bound_command():
     )
 
 
+def test_recovery_card_bridge_accepts_lark_cli_callback_without_action_name():
+    store = MemoryStore()
+    bridge = RecoveryActionInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+    payload = {
+        "event_id": "event_recovery_without_name",
+        "message_id": "message_failure_card_without_name",
+        "chat_id": "chat_owner",
+        "operator_id": "person_node_owner",
+        "action_tag": "button",
+        "action_value": {
+            "kind": "workflow_recovery",
+            "action": "retry",
+            "instance_id": "instance_1",
+            "node_key": "draft",
+            "attempt_no": 1,
+            "node_version": 2,
+            "instance_version": 4,
+        },
+        "token": "card-update-token",
+        "timestamp": "1785830400000",
+    }
+
+    assert bridge("card.action.trigger", payload) is True
+    assert parse_im_command(store.appended[0].text) == (
+        "recover",
+        "instance_1",
+        {
+            "kind": "workflow_recovery",
+            "action": "retry",
+            "node_key": "draft",
+            "attempt_no": 1,
+            "node_version": 2,
+            "instance_version": 4,
+        },
+    )
+
+
 def test_recovery_card_bridge_never_trusts_identity_inside_action_value():
     store = MemoryStore()
     bridge = RecoveryActionInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
@@ -358,7 +395,6 @@ def test_recovery_card_bridge_rejects_a_mismatched_unique_button_name():
     ("action_name", "diagnostic"),
     [
         ("workflow_recovery", "workflow_recovery"),
-        (None, "<missing>"),
         ("workflow_recovery\nsecret", "<invalid>"),
     ],
 )

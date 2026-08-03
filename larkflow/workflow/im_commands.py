@@ -382,19 +382,26 @@ class RecoveryActionInboxBridge:
             recovery_action_name(action) for action in RecoveryAction
         }:
             value = payload.get("action_value")
-            if isinstance(value, Mapping) and value.get("kind") == RECOVERY_ACTION_NAME:
+            if not (
+                isinstance(value, Mapping)
+                and value.get("kind") == RECOVERY_ACTION_NAME
+            ):
+                return False
+            if action_name is not None:
                 raise ValueError(
                     "unexpected recovery action name: "
                     f"{_safe_callback_name(action_name)}"
                 )
-            return False
         if payload.get("action_tag") != "button":
             raise ValueError("recovery action must come from a button")
         value = payload.get("action_value")
         if not isinstance(value, Mapping):
             raise ValueError("recovery action_value must be an object")
         command_payload = _validated_recovery_payload(value)
-        if action_name != recovery_action_name(command_payload["action"]):
+        if (
+            action_name is not None
+            and action_name != recovery_action_name(command_payload["action"])
+        ):
             raise ValueError("recovery action name does not match its value")
         now = self.clock()
         event = IMCommandSignal(
