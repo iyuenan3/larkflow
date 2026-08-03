@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.29.0-draft · 2026-08-03 · 飞书 mention 跨人员角色绑定
+
+- Added：`/larkflow start <template_id> [JSON对象] [role=@成员 ...]` 支持按逻辑角色绑定本条消息中真实 @到的成员；未显式绑定的角色仍归发起人，Instance Owner 不变。新增 `collaborative_agent_review` 双角色 Human-Agent-Human 模板。
+- Security：桥接层只保存飞书 mention 的 key 与 open_id，不保存显示名称。凭据侧在领域命令前验证发送者和被引用人员均为当前 tenant 活跃成员；领域侧只接受本条耐久消息中的 mention key，不接受手填 open_id、名称或缺失元数据的 token。群聊只允许认证 mention token 位于 `/larkflow` 前。
+- Database：新增 migration `0013_im_command_mentions`，以受数组约束的 JSONB 保存最小化 mention 元数据，保证凭据侧校验和领域侧角色冻结读取同一条命令记录。增加可选真实 PostgreSQL 往返测试。
+- Compatibility：公共 `parse_im_command` 返回值保持不变；旧的 `start` 命令继续把全部角色绑定给发送者。重复角色、未知角色、非法大小写、非 mention 值、缺失 mention 和非活跃成员均被拒绝。
+- Verified：完整离线套件 `740 passed, 13 skipped`；本次聚焦套件 `73 passed`。默认套件不访问网络、真实飞书或 PostgreSQL。
+- Boundary：内容提交 `289fdc0` 已推送；尚未部署或升级长期开发库，也未在真实群聊中完成跨人员正向创建、确认和 Task 投影验收，不能标记为开发真栈通过。
+
 ## v0.28.2-draft · 2026-08-03 · 跨人员非 Owner 真实飞书回归
 
 - Directory：开发应用发布所需通讯录数据范围后，中央应用从根部门目录读取到五名活跃成员，并能解析选定测试成员在本应用下的身份。

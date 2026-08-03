@@ -128,10 +128,10 @@ Target Task 完成发现以周期状态轮询为可靠路径。`project` 启动�
 
 ### Target 飞书 IM 命令与完成投影 as-built
 
-Target 订阅 `im.message.receive_v1`，只处理以 `/larkflow` 开头的文本。桥接层同时接受飞书原始 V2 信封和 lark-cli 拍平输出：原始事件的 `content` 是 JSON 字符串，拍平输出的 `content` 是普通文本，两者必须归一为同一个命令信号。其他消息不进入 Target 命令 Inbox。
+Target 订阅 `im.message.receive_v1`，处理以 `/larkflow` 开头的文本，也接受群聊中只有认证 mention token 位于命令前的 `@机器人 /larkflow ...` 形式。桥接层同时接受飞书原始 V2 信封和 lark-cli 拍平输出：原始事件的 `content` 是 JSON 字符串，拍平输出的 `content` 是普通文本，两者必须归一为同一个命令信号。桥接层只保存 mention 的 `key` 与 `open_id`，不保存显示名称；其他消息不进入 Target 命令 Inbox。
 
 - `/larkflow help`：返回当前十个命令的用法。
-- `/larkflow start <template_id> [JSON对象]`：以 tenant 和 message ID 派生稳定 Instance ID，验证发送者属于当前企业且状态活跃，再把发送者绑定为 Instance Owner 和模板角色来源。命令只创建草稿并返回确认命令，不自动启动。
+- `/larkflow start <template_id> [JSON对象] [role=@成员 ...]`：以 tenant 和 message ID 派生稳定 Instance ID，验证发送者属于当前企业且状态活跃，再把发送者绑定为 Instance Owner。显式角色绑定使用 lower snake case 角色名和本条消息的 mention key；凭据侧通过企业目录验证每名被引用人员仍在当前 tenant 且状态活跃，领域侧再把 mention key 映射到冻结 Snapshot。原始文本中的 open_id、显示名称或不存在于 mention 元数据的 token 均不能授权。未显式绑定的模板角色继续归发送者。命令只创建草稿并返回确认命令，不自动启动。
 - `/larkflow confirm <instance_id>`：重新校验发送者与草稿 Owner，确认并启动实例。
 - `/larkflow status <instance_id>`：重新校验发送者后，仅允许 Instance Owner 读取流程状态。实例不存在与非 Owner 统一返回“实例不存在或你无权查看”，避免枚举。回复最多列出 20 个节点，每个可变字段最多 120 个字符；只包含状态、进度、节点、executor 和相对责任人，不包含结果正文或人员 ID。该命令只读，不追加领域审计，也不改变 aggregate version。
 - `/larkflow list`：重新校验发送者后，只查询该发送者作为 Instance Owner 的最近实例。仓储按 `created_at DESC, id DESC` 排序，命令最多展示十条，并额外查询一条用于提示仍有更多结果。每条只包含 Instance ID、目标摘要、实例状态和完成节点数，不读取完整聚合，不包含节点结果或人员 ID。该命令只读，不追加领域审计，也不改变 aggregate version。
@@ -143,7 +143,9 @@ Target 订阅 `im.message.receive_v1`，只处理以 `/larkflow` 开头的文本
 
 节点重启、完整实例重启和运行中未来区域编辑都已实现。可重启实例状态为 `running / done / failed`。节点 scope 的目标节点状态必须为 `running / waiting_human / done / failed`，且目标节点直接依赖必须完成；失败实例若存在影响集合之外的失败节点会拒绝节点重启，避免把仍有未处理失败的实例错误恢复为 running。完整实例 scope 覆盖全图，因此不需要外部失败节点例外。图编辑只允许 `running` 实例的未开始区域，已开始节点和锁定实例都拒绝。编辑代码、离线套件、一次性 PostgreSQL 竞争、开发服务器部署和 Owner 真实飞书闭环已经验证；真实命令也拒绝了冻结线修改、成环图和状态漂移后的陈旧预览。开发应用发布所需通讯录数据范围后，当前登录用户对测试成员持有实例发送的真实 `/larkflow edit` 也被统一拒绝，回复成功发送，实例没有新增预览、图修订或编辑审计。
 
-原始 event ID 与 message ID 都参与去重；验证、领域执行和回复各自使用可认领的耐久状态，不依赖单个进程在线。客户端 payload 中的身份、Owner 或状态不作为授权事实。命令回复、Agent / Tool 节点结果、完成文档与最终通知都由服务端状态生成，并以稳定幂等键落为 Projection。Instance 进入 `done` 后，Projection Worker 汇总节点结果创建 Docx，再向 Owner 发送含文档链接的最终消息。首次完成的幂等键保持原格式；重启后的完成投影按当前终端节点 Attempt 编号分代，因此同一实例再次完成会产生新的文档和最终通知，同时保留旧轮次 Projection。
+原始 event ID 与 message ID 都参与去重；验证、领域执行和回复各自使用可认领的耐久状态，不依赖单个进程在线。mention 元数据随命令写入 PostgreSQL，凭据侧与领域侧读取同一耐久记录。客户端 payload 中的身份、Owner 或状态不作为授权事实。命令回复、Agent / Tool 节点结果、完成文档与最终通知都由服务端状态生成，并以稳定幂等键落为 Projection。Instance 进入 `done` 后，Projection Worker 汇总节点结果创建 Docx，再向 Owner 发送含文档链接的最终消息。首次完成的幂等键保持原格式；重启后的完成投影按当前终端节点 Attempt 编号分代，因此同一实例再次完成会产生新的文档和最终通知，同时保留旧轮次 Projection。
+
+跨人员角色绑定、`collaborative_agent_review` 双角色模板和 migration `0013_im_command_mentions` 已通过完整离线套件。它们尚未部署到开发服务器，也尚未完成真实群聊 mention、目录验证、草稿确认和跨人员 Task 投影验收。
 
 `reconcile-instance-completion <instance_id>` 是显式的单实例恢复命令。它只接受已完成实例，只补齐缺失的完成文档或最终通知；重复执行返回 no-op，不批量扫描历史实例，也不复制已存在的外部资源。
 

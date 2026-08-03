@@ -591,3 +591,15 @@
 - Tradeoff：操作语法刻意较窄，首版没有图形化 diff、批量多次改写同一节点、字段级 ACL 或预览后台清理。更新未开始节点会保留当前 Attempt 编号，这能避免制造虚假历史，但跨轮次产品界面仍需明确区分结构 revision 与 Attempt generation。外部投影继续最终一致，陈旧事件必须由 Worker 的 no-op 语义收口。
 - Supersedes / refines：实现并细化 ADR-013 与 ADR-050 中的未来区域编辑目标，保留冻结线、模板不可变、Owner 授权、预览确认和 revision 乐观并发原则。
 - Evidence：完整离线套件 `726 passed, 12 skipped`。一次性 PostgreSQL 14 应用十二份 migration，两个真实连接并发确认同一编辑预览，恰好一路执行、一路幂等回放，aggregate version 和 `graph_revision` 都只增加 1，候选节点与依赖正确，审计只有一条；测试库与临时文件随后删除。内容提交 `6645d9d` 构建的 wheel SHA-256 为 `7ef30780e53df895a4c93d3c4eeb1783007cf2ed5f5c26015120f722423169d1`，已安装到开发服务器 Target 与 legacy 环境；长期库应用 `0012_graph_edit_previews` 后，六个 Python 服务均为 active、`NRestarts=0`，部署窗口无 warning 级日志。真实飞书 edit 命令验收将在本次发布流程的文档提交后执行。
+
+## ADR-073 · 2026-08-03 · 飞书角色绑定只引用认证 mention 元数据
+
+- **Status：Accepted · Offline implementation。**
+- Problem：模板已经使用逻辑 `owner_role`，但飞书 `/larkflow start` 过去把全部角色固定给发送者，无法从真实会话建立跨人员责任。允许用户直接填写 open_id 或显示名称会把身份解析和授权交给不可信文本，并且无法证明该人员来自本条消息或当前企业。
+- Constraint：Instance Owner 仍是发送者；每个节点仍只有一个人类 Owner；模板不能保存真实人员 ID；草稿确认门不变；凭据侧可以读取企业目录，领域侧不能读取 lark-cli profile；命令必须耐久、可重放、可审计且不依赖显示名称；旧命令保持兼容。
+- Decision：`start` 增加可选 `role=@成员` 绑定。`@成员` 在飞书文本中表现为 mention key，桥接层从同一条认证事件提取 key 与 open_id 并随命令持久化。凭据侧验证发送者和所有被引用人员属于当前 tenant 且状态活跃；领域侧只用已保存的 key 映射人员并冻结 Snapshot。未显式绑定的角色归发送者，发送者继续作为 Instance Owner。群聊中允许一个或多个认证 mention token 位于命令前，用于兼容 @机器人唤起。
+- Safety：角色名限定为 lower snake case；重复角色、未知模板角色、非法 mention key、缺失或歧义 mention、非 open_id 标识和非活跃成员全部 fail closed。显示名称不持久化，也不参与授权。文本里直接出现的 open_id、名称或伪造 `@_user_N` 不能建立绑定。
+- Persistence：migration `0013_im_command_mentions` 为 `workflow_im_commands` 增加非空 JSONB 数组。验证 Worker 和领域 Worker 从同一记录读取 mention，避免进程间重新解析显示文本或依赖短期内存。
+- Alternatives(否决)：把 open_id 写进命令；按显示名称搜索通讯录；把角色绑定放进普通 JSON 输入；只在桥接进程内保存 mention；让领域 Worker直接读取飞书；为跨人员创建另开一套管理员 CLI。
+- Tradeoff：首版语法适合显式模板角色，不提供自然语言识别、角色选择 UI、部门或群组 Owner，也不允许一个角色绑定多人。真实正向验证需要一个包含机器人和测试成员的群聊，因为单聊未必能 @到第三人。目录调用数随被引用的不同人员线性增加，当前上限由模板和最多 100 个绑定共同约束。
+- Evidence：聚焦离线套件 `73 passed`，完整离线套件 `740 passed, 13 skipped`。覆盖原始 V2 与拍平 mention 形状、群聊前缀、恶意前缀、缺失元数据、重复与未知角色、非活跃成员、旧命令兼容、跨人员冻结 Snapshot、模板双角色和 PostgreSQL 可选往返测试。长期开发库、真实群聊、模板发布和跨人员 Task 投影尚未验收。
