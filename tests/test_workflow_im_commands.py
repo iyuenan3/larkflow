@@ -301,6 +301,63 @@ def test_bridge_accepts_flattened_string_open_id_mentions():
     )
 
 
+def test_bridge_restores_lark_cli_rendered_mentions_before_parsing():
+    store = MemoryStore()
+    bridge = IMEventInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+    text = (
+        '@Larkflow /larkflow start collaborative_review {"brief":"ready"} '
+        "reviewer=@Reviewer"
+    )
+
+    assert bridge(
+        "im.message.receive_v1",
+        flattened_event_payload(
+            text,
+            mentions=[
+                {
+                    "key": "@_user_1",
+                    "id": "bot_open_id",
+                    "name": "Larkflow",
+                },
+                {
+                    "key": "@_user_2",
+                    "id": "person_reviewer",
+                    "name": "Reviewer",
+                },
+            ],
+        ),
+    ) is True
+    event = store.appended[0]
+    assert event.text == (
+        '/larkflow start collaborative_review {"brief":"ready"} '
+        "reviewer=@_user_2"
+    )
+    assert event.mentions == (
+        IMMention(key="@_user_1", person_id="bot_open_id"),
+        IMMention(key="@_user_2", person_id="person_reviewer"),
+    )
+
+
+def test_bridge_rejects_ambiguous_rendered_mention_text():
+    store = MemoryStore()
+    bridge = IMEventInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+
+    assert bridge(
+        "im.message.receive_v1",
+        flattened_event_payload(
+            "@Larkflow /larkflow help copied-from @Larkflow",
+            mentions=[
+                {
+                    "key": "@_user_1",
+                    "id": "bot_open_id",
+                    "name": "Larkflow",
+                }
+            ],
+        ),
+    ) is False
+    assert store.appended == []
+
+
 def test_bridge_rejects_non_mention_text_before_command():
     store = MemoryStore()
     bridge = IMEventInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)

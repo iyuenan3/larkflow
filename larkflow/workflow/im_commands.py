@@ -303,6 +303,8 @@ class IMEventInboxBridge:
         if message_type != "text":
             return False
         mentions = _normalize_mentions(raw_mentions)
+        if not (isinstance(header, Mapping) and isinstance(body, Mapping)):
+            text = _restore_flattened_mention_keys(text, raw_mentions)
         command_text = _extract_command_text(text, mentions)
         if command_text is None:
             return False
@@ -1100,6 +1102,56 @@ def _normalize_mentions(raw_mentions: Any) -> tuple[IMMention, ...]:
             raise ValueError(f"IM mention key is ambiguous: {key}")
         by_key[key] = mention
     return tuple(by_key.values())
+
+
+def _restore_flattened_mention_keys(text: Any, raw_mentions: Any) -> Any:
+    """Undo lark-cli display-name rendering using its authenticated mentions.
+
+    The flattened ``im.message.receive_v1`` contract renders each real mention
+    as ``@<display name>`` while retaining the original placeholder key in the
+    sibling ``mentions`` array.  Domain parsing must use those keys, never the
+    display names.  Ambiguous or incomplete rendering is left untouched so the
+    command boundary fails closed.
+    """
+    if not isinstance(text, str) or not raw_mentions:
+        return text
+    if not isinstance(raw_mentions, Sequence) or isinstance(
+        raw_mentions, (str, bytes, bytearray)
+    ):
+        return text
+
+    replacements: list[tuple[str, str]] = []
+    rendered_counts: dict[str, int] = {}
+    for item in raw_mentions:
+        if not isinstance(item, Mapping):
+            return text
+        key = item.get("key")
+        name = item.get("name")
+        if not isinstance(key, str) or not MENTION_KEY_RE.fullmatch(key):
+            return text
+        if key in text:
+            continue
+        if not isinstance(name, str) or not name.strip():
+            return text
+        rendered = f"@{name}"
+        replacements.append((rendered, key))
+        rendered_counts[rendered] = rendered_counts.get(rendered, 0) + 1
+
+    if any(
+        text.count(rendered) != count
+        for rendered, count in rendered_counts.items()
+    ):
+        return text
+
+    restored = text
+    search_from = 0
+    for rendered, key in replacements:
+        index = restored.find(rendered, search_from)
+        if index < 0:
+            return text
+        restored = restored[:index] + key + restored[index + len(rendered) :]
+        search_from = index + len(key)
+    return restored
 
 
 def _extract_command_text(
