@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.31.1-draft · 2026-08-04 · Agent 失败恢复开发真栈闭环
+
+- Fixed：Card 2.0 的两个操作使用唯一按钮名称；桥接层归一化 lark-cli 字符串化 `action_value`、可缺失 `action_name` 和微秒时间戳。若动作名称存在则必须与服务端动作值交叉一致，身份与授权仍完全由服务端事实决定。
+- Shared：新增统一事件时间解析边界，恢复卡与人员分工卡共同接受秒、毫秒和微秒时间戳，避免两个回调桥接器独立演化。
+- Verified：最终实现内容提交为 `50d3d7136160f4208421ff194f6929200103f141`；完整离线套件为 `776 passed, 13 skipped`，定向变异覆盖动作名称和微秒时间戳旧缺陷。
+- Deployment：wheel SHA-256 为 `5000b1ebdc42524cc7f709ebc7f2fc723d2fd969e9d234540b132001f958c56b`，长期开发库已应用十五份 migration。六个 Python 服务统一重启后均为 active、`NRestarts=0`。
+- Acceptance：真实合成实例的两个不同失败卡片分别创建 Attempt 2 与 3，人工接管创建 Attempt 4 与飞书 Task；Task 完成后 Instance 与 Attempt 4 进入 `done`，Attempts 1 至 3、错误、审计和投影全部保留，完成文档和最终通知已投影。
+- Boundary：以上仅证明开发服务器与测试组织中的真栈闭环，不代表生产上线、生产容量或生产高可用。
+
 ## v0.31.0-draft · 2026-08-04 · Agent 失败恢复与人工接管
 
 - Added：自动 Agent / Tool 节点失败后向节点 Owner 发送 Card 2.0，提供“重新执行”和“人工接管”。卡片回调进入耐久 IM 命令，操作成功后更新原卡片并发送文本回执。

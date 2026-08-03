@@ -2,9 +2,9 @@
 
 > 飞书原生的企业协作 DAG：把多人流程拆成有依赖、有唯一责任人、可验收和可追溯的节点。
 >
-> 文档状态：2026-08-04 Phase 1 中央工作流基础实现，飞书 IM 窄命令、Human-Agent-Tool-Human、完成投影、Owner 查询、两类重启和运行中未来区域编辑已在开发环境闭环；失败自动节点的 Owner 重试、人工接管、耐久卡片回调和新 Attempt 历史保护已落码，开发服务器与真实飞书验收待本次部署完成。跨人员分工已同时完成群聊 `role=@成员` 和单聊 Card 2.0 人员选择的开发真栈验收。Personal Agent Edge Proof v0 已完成 loopback 开发部署与 SSH 隧道跨机验收，公网设备链路受 ICP 接入备案阻断，Caddy 已停止。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+> 文档状态：2026-08-04 Phase 1 中央工作流基础实现，飞书 IM 窄命令、Human-Agent-Tool-Human、完成投影、Owner 查询、两类重启、运行中未来区域编辑和自动节点失败恢复均已在开发环境闭环。失败恢复真实验收覆盖两个连续重试、新 Attempt 历史保护、人工接管、飞书 Task 完成、完成文档与最终通知。跨人员分工已同时完成群聊 `role=@成员` 和单聊 Card 2.0 人员选择的开发真栈验收。Personal Agent Edge Proof v0 已完成 loopback 开发部署与 SSH 隧道跨机验收，公网设备链路受 ICP 接入备案阻断，Caddy 已停止。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
-> last-synced: fc48b4f8a295c19ba02f08e5b87e006988eccf44 · 2026-08-04
+> last-synced: 50d3d7136160f4208421ff194f6929200103f141 · 2026-08-04
 
 ## 阅读顺序
 
@@ -31,8 +31,8 @@
 | DEPLOYMENT | ✅ | Legacy ECS 与 Target 六服务、飞书真实闭环、Caddy、PostgreSQL、备份和恢复实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
 | DECISIONS | ✅ | Append-only ADR 历史，新 ADR 显式 supersede 旧范围 |
-| CHANGELOG | ✅ | Append-only 已实现变更，最新为 Agent 失败恢复卡、重试与人工接管 |
-| MEMORY | ⚑ | Append-only 经验，仍含待真实运行补全的语义占位 |
+| CHANGELOG | ✅ | Append-only 已实现变更，最新为 Agent 失败恢复开发真栈闭环 |
+| MEMORY | ⚑ | Append-only 经验，仍含语义占位，已记录恢复卡真实回调与契约漂移事故 |
 
 ## 按任务读取
 
