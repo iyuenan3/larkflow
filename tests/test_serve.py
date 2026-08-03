@@ -357,6 +357,32 @@ def test_the_single_event_pump_can_forward_a_task_event_to_target_inbox():
     assert srv.stats["skipped"] == 1
 
 
+def test_a_card_observer_receives_the_normalized_lark_cli_action_value():
+    svc, io, llm = contract()
+    seen = []
+    observer = lambda key, payload: seen.append((key, payload)) or True
+    srv, pumps = served(svc, event_observers=(observer,))
+    srv.start()
+    action_value = {
+        "kind": "workflow_recovery",
+        "action": "retry",
+        "instance_id": "instance_failure",
+    }
+
+    pumps[0].feed(
+        CARD_ACTION,
+        {
+            "action_name": "workflow_recovery_retry",
+            "action_tag": "button",
+            "action_value": json.dumps(action_value),
+        },
+    )
+
+    assert seen[0][0] == CARD_ACTION
+    assert seen[0][1]["action_value"] == action_value
+    assert srv.stats["forwarded"] == 1
+
+
 def test_a_target_inbox_failure_does_not_block_legacy_event_routing():
     svc, io, llm = contract()
     svc.start(instance_id="observer-failure", reporter="ou_owner", inputs=INPUTS)

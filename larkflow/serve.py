@@ -239,9 +239,10 @@ class LarkFlowServer:
         """
         self._bump("events")
         event = normalize_event(key, payload)
+        observer_payload = event if key == CARD_ACTION else payload
         for observer in self.event_observers:
             try:
-                forwarded = observer(key, payload)
+                forwarded = observer(key, observer_payload)
             except Exception as exc:
                 self._error(f"event_observer:{type(observer).__name__}", exc)
                 continue
