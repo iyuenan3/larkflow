@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.28.1-draft · 2026-08-03 · 运行中未来区域真实飞书验收
+
+- Acceptance：Owner 从真实飞书创建并确认三节点实例，在首个 Human 节点等待时预览并确认最终 Human 节点改名；重复确认返回 no-op。后续 Agent、更新标题的 Human Task、完成 Docx 与最终通知均真实投影并从飞书服务端回读，Instance 最终为 `done / version 8 / graph_revision 2`，三个当前 Attempt 均为 `done`。
+- Rejection：独立实例真实拒绝对 `waiting_human` 节点的冻结线修改和会形成环的依赖修改。另一个有效预览创建后先推进 Human 节点，使 aggregate version 漂移，再确认时收到陈旧预览拒绝；预览保持未消费，Instance 最终为 `done / version 7 / graph_revision 1`，图编辑审计为 0。
+- Persistence：正向实例只有一条 `instance.graph_edited` 审计，预览记录为已消费并保存应用版本；两条 Human Task、完成文档、自动节点消息与最终通知全部绑定。负向实例两条 Human Task、完成文档与消息也已绑定，拒绝路径没有污染图 revision 或审计。
+- Operations：五个 Target 服务与 legacy 事件消费者均为 active 且 `NRestarts=0`；验收窗口没有 warning 级日志。两个验收实例都已完成，没有遗留运行中节点。
+- Tester：组织中新增激活成员可由当前用户搜索到，已通过用户身份为其中一人成功创建并分配明确标注“无需操作”的合成 Task，任务不要求完成。
+- Boundary：开发应用的通讯录数据范围仍只返回当前 Owner，读取根部门返回 `40004`。中央应用尚不能取得新增成员在本应用下的 open_id，因此没有伪造跨应用身份，也没有把真实跨人员非 Owner 命令标记通过。下一次回归只需把一名测试成员加入最小通讯录数据范围，不需要其完成 Task。
+
 ## v0.28.0-draft · 2026-08-03 · 运行中未来区域安全编辑
 
 - Added：新增 `/larkflow edit <instance_id> <JSON操作数组>` 与 `/larkflow edit-confirm <preview_id>`。首版支持有界的 `add_node / update_node / remove_node`，只修改 `running` 且未锁定 Instance 中没有执行痕迹的 `pending / ready` 节点；Template 和已执行历史保持不变。
