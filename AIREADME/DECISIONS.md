@@ -579,3 +579,15 @@
 - Tradeoff：完成轮次暂以排序后的规范终端节点 Attempt 编号标识，能够覆盖当前单层 DAG 和多根场景，但产品界面还没有跨轮次浏览与显式 completion generation。过期预览仍没有后台清理；外部投影继续最终一致，短时可能先完成领域状态再出现新文档。
 - Supersedes / refines：扩展 ADR-070 的首版范围限制，保留其 Owner 重授权、耐久预览、版本校验、历史不可变、同事务写入和重复确认 no-op 原则。
 - Evidence：完整离线套件 `715 passed, 11 skipped`。一次性 PostgreSQL 14 中，instance scope 的两个真实连接确认同一预览，恰好一路执行、一路幂等回放，aggregate version 只增加 1，全部受影响节点进入下一 Attempt，旧结果保留且实例重启审计只有 1 条。测试组织三节点实例从完成态执行全图重启后，当前 Attempt 为 2、2、3，根节点重新调度并再次完成；重复确认不新增版本、Attempt、Task 或审计。两轮完成文档和最终通知使用不同外部 ID，新文档已从飞书服务端回读三节点结果。内容提交 `e66f6ab` 已部署到开发服务器，六个 Python 服务均为 active、`NRestarts=0`，验收窗口无错误级日志。
+
+## ADR-072 · 2026-08-03 · 运行中图编辑采用未来区域预览与原子确认
+
+- **Status：Accepted · Development deployment。**
+- Problem：Instance 启动后仍可能需要补充、调整或删除尚未开始的工作，但直接修改冻结图会绕过 Owner 授权和 DAG 校验，也可能覆盖已执行历史、接受陈旧确认，或让飞书投影继续处理已删除节点。
+- Constraint：只有当前 Instance Owner 可以发起和确认；首版只允许 `running` 且未锁定实例；已开始、已产生 claim、结果、质量、时间戳、提交者或错误的节点都不能跨越冻结线；Template 与已执行 Attempt 必须保持不变；预览期间 aggregate、revision 或编辑语义发生变化必须失效；聚合、预览消费、审计与 outbox 必须同事务；并发和重复确认不能重复应用。
+- Decision：`/larkflow edit` 只接受有界的 `add_node / update_node / remove_node` JSON 操作，并只允许修改没有执行痕迹的 `pending / ready` 当前 Attempt。服务端重新验证完整 DAG、Owner 与工作定义，生成默认 15 分钟有效的耐久 GraphEditPreview，绑定 tenant、Instance、创建 actor、规范化操作、增删改集合、aggregate version、当前与目标 `graph_revision` 及候选 Snapshot SHA-256。`/larkflow edit-confirm` 重新授权创建预览的当前 Owner，重新执行操作并比较全部语义摘要；确认事务保存 aggregate、消费预览、把 `graph_revision` 增加 1、追加一条审计及必要 outbox。客户端提供的身份、revision、影响集合和候选图都不是授权事实。
+- Safety：单次最多 50 个操作，确认后的图最多 100 个节点，同一节点每次只能触碰一次。新增节点创建 Attempt 1；更新节点保留未开始 Attempt 并刷新输入快照；删除节点只移除未开始 Node 与 Attempt。已删除节点的陈旧投影创建事件按 no-op 收口。若删除最后一批未完成未来节点后剩余节点均已完成，Instance 可以进入 `done`。重复确认只回读首次应用结果。
+- Alternatives(否决)：直接执行消息中的图变更；把预览只存在进程内；允许编辑 `running / waiting_human / done / failed` 节点；覆盖已有 Attempt；反写 Template；信任客户端的 Owner、revision 或影响集合；只比较 aggregate version 而不比较候选图语义；用节点重启表达结构变化；在数据库事务内同步调用飞书。
+- Tradeoff：操作语法刻意较窄，首版没有图形化 diff、批量多次改写同一节点、字段级 ACL 或预览后台清理。更新未开始节点会保留当前 Attempt 编号，这能避免制造虚假历史，但跨轮次产品界面仍需明确区分结构 revision 与 Attempt generation。外部投影继续最终一致，陈旧事件必须由 Worker 的 no-op 语义收口。
+- Supersedes / refines：实现并细化 ADR-013 与 ADR-050 中的未来区域编辑目标，保留冻结线、模板不可变、Owner 授权、预览确认和 revision 乐观并发原则。
+- Evidence：完整离线套件 `726 passed, 12 skipped`。一次性 PostgreSQL 14 应用十二份 migration，两个真实连接并发确认同一编辑预览，恰好一路执行、一路幂等回放，aggregate version 和 `graph_revision` 都只增加 1，候选节点与依赖正确，审计只有一条；测试库与临时文件随后删除。内容提交 `6645d9d` 构建的 wheel SHA-256 为 `7ef30780e53df895a4c93d3c4eeb1783007cf2ed5f5c26015120f722423169d1`，已安装到开发服务器 Target 与 legacy 环境；长期库应用 `0012_graph_edit_previews` 后，六个 Python 服务均为 active、`NRestarts=0`，部署窗口无 warning 级日志。真实飞书 edit 命令验收将在本次发布流程的文档提交后执行。

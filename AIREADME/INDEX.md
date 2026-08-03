@@ -2,9 +2,9 @@
 
 > 飞书原生的企业协作 DAG：把多人流程拆成有依赖、有唯一责任人、可验收和可追溯的节点。
 >
-> 文档状态：2026-08-03 Phase 1 中央工作流基础实现，飞书 IM 窄命令、Human-Agent-Tool-Human、完成文档、最终通知、Owner 查询、节点重启和完整实例重启已在开发环境闭环；Personal Agent Edge Proof v0 已完成 loopback 开发部署与 SSH 隧道跨机验收，公网设备链路受 ICP 接入备案阻断，Caddy 已停止。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+> 文档状态：2026-08-03 Phase 1 中央工作流基础实现，飞书 IM 窄命令、Human-Agent-Tool-Human、完成文档、最终通知、Owner 查询、节点重启和完整实例重启已在开发环境闭环；运行中未来区域编辑已完成代码、真库竞争与开发部署验证，真实飞书命令验收将在本次发布流程的文档提交后执行；Personal Agent Edge Proof v0 已完成 loopback 开发部署与 SSH 隧道跨机验收，公网设备链路受 ICP 接入备案阻断，Caddy 已停止。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
-> last-synced: e66f6ab · 2026-08-03
+> last-synced: 6645d9d · 2026-08-03
 
 ## 阅读顺序
 
@@ -23,15 +23,15 @@
 | CORE | ✅ | Target 身份、简化边界、Edge Proof 和不变量 |
 | PRODUCT_STRATEGY | ✅ | 范围收敛取舍、窄 Edge 实验，明确未做市场验证 |
 | PRD | ✅ | Target 单层 DAG MVP 与 Edge Proof 功能契约 |
-| DAG_TEMPLATE_SPEC | ⚑ | v0.2 模板、实例化、草稿预览、节点重启和完整实例重启已实现，运行中编辑仍是 Target |
+| DAG_TEMPLATE_SPEC | ✅ | v0.2 模板、实例化、草稿预览、未来区域编辑和两类重启已实现 |
 | ARCHITECTURE | ✅ | Target 模块化单体、中央 Worker、飞书 IM / Task / Doc 投影、Agent / Tool adapter、Edge Proof 和剩余差距 |
 | RELATIONS | ✅ | Target 飞书、中央 lark-cli、Edge HTTPS、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | Phase 1 已完成飞书窄命令、Owner 查询、两类重启与完成通知闭环，Edge 公网设备链路仍受备案阻断 |
-| SPEC | ✅ | legacy 契约、Target CLI、八个飞书窄命令、Task 入站、两类重启、完成投影与私有 Edge v1 HTTP |
+| ROADMAP | ✅ | Phase 1 已完成飞书窄命令、Owner 查询、未来区域编辑、两类重启与完成通知，Edge 公网设备链路仍受备案阻断 |
+| SPEC | ✅ | legacy 契约、Target CLI、十个飞书窄命令、Task 入站、未来区域编辑、两类重启、完成投影与私有 Edge v1 HTTP |
 | DEPLOYMENT | ✅ | Legacy ECS 与 Target 六服务、飞书真实闭环、Caddy、PostgreSQL、备份和恢复实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
 | DECISIONS | ✅ | Append-only ADR 历史，新 ADR 显式 supersede 旧范围 |
-| CHANGELOG | ✅ | Append-only 已实现变更，最新为完整实例安全重启闭环 |
+| CHANGELOG | ✅ | Append-only 已实现变更，最新为运行中未来区域安全编辑 |
 | MEMORY | ⚑ | Append-only 经验，仍含待真实运行补全的语义占位 |
 
 ## 按任务读取

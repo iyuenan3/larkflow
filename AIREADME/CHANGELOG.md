@@ -1,5 +1,16 @@
 # CHANGELOG · larkflow
 
+## v0.28.0-draft · 2026-08-03 · 运行中未来区域安全编辑
+
+- Added：新增 `/larkflow edit <instance_id> <JSON操作数组>` 与 `/larkflow edit-confirm <preview_id>`。首版支持有界的 `add_node / update_node / remove_node`，只修改 `running` 且未锁定 Instance 中没有执行痕迹的 `pending / ready` 节点；Template 和已执行历史保持不变。
+- Security：GraphEditPreview 默认有效 15 分钟，绑定 tenant、Instance、创建 actor、规范化操作、增删改集合、aggregate version、当前与目标 `graph_revision` 及候选 Snapshot SHA-256。确认重新授权当前 Owner、重放操作并比较完整语义摘要；客户端身份、revision、影响集合与候选图都不可信。
+- Database：新增 migration `0012_graph_edit_previews`，保存耐久预览、操作摘要、候选图哈希、消费时间与应用版本。确认事务原子保存 aggregate、消费预览、增加一次 `graph_revision`、追加一条审计及必要 outbox；重复确认只回读已应用结果。
+- Projection：未来节点被删除后，先前排队的节点创建事件按 no-op 收口，不会重建已删除节点的外部 Task。若编辑后剩余节点均已完成，实例可以进入完成态并请求完成投影。
+- Verified：完整离线套件 `726 passed, 12 skipped`。一次性 PostgreSQL 14 应用十二份 migration，两个真实连接并发确认同一编辑预览时恰好一路执行、一路幂等回放，aggregate version 和 `graph_revision` 都只增加 1，节点、依赖和单条审计正确；测试库与临时文件随后删除并回读为不存在。
+- Deployment：内容提交 `6645d9d` 构建的 wheel SHA-256 为 `7ef30780e53df895a4c93d3c4eeb1783007cf2ed5f5c26015120f722423169d1`，保存在 `releases/20260803_190102_graph_edit_6645d9d/`。升级前备份回读成功，长期库已应用十二份 migration；六个 Python 服务统一启动后 active、`NRestarts=0`，部署窗口无 warning 级日志。
+- Acceptance：真实飞书 `edit / edit-confirm` 命令验收将在本次发布流程的文档提交后执行，不在本提交中提前标记通过。
+- Boundary：当前只提供窄 JSON 命令和服务端文本预览，没有图形化 diff、批量编排体验或生产装配。验证仅代表开发环境，不代表生产上线。
+
 ## v0.27.0-draft · 2026-08-03 · 完整实例安全重启闭环
 
 - Added：新增 `/larkflow restart-all <instance_id>`，并让共享的 `/larkflow restart-confirm <preview_id>` 按显式 `node / instance` scope 执行。完整实例预览列出拓扑排序后的全部节点，确认后为全图创建新 Attempt，从所有根节点重新调度。

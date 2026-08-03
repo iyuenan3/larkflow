@@ -1,6 +1,6 @@
 # DAG Contract v0.2
 
-> 状态：Target + Partial As-built · 既有契约简化版 · 模板生命周期、实例化、草稿预览、节点重启和完整实例重启已实现，运行中编辑仍待实现
+> 状态：Target + As-built · 既有契约简化版 · 模板生命周期、实例化、草稿预览、运行中未来区域编辑、节点重启和完整实例重启已实现
 >
 > 本文中的“必须、应该、可以”分别表示 MUST、SHOULD、MAY。当前 legacy YAML 兼容范围见 [SPEC.md](SPEC.md)。
 
@@ -190,12 +190,17 @@ Agent 或 Tool 节点执行中使用 `running`。Human 节点可从 `ready` 进�
 
 运行中编辑只改变 Instance Snapshot，不反写 Template。
 
-1. 客户端提交目标变更和 `expected_graph_revision`。
-2. 服务端验证只影响未开始节点，并返回变更 diff、影响节点与风险。
-3. 用户以同一 revision 确认。
-4. revision 未变化时事务提交，成功后递增。
+当前 As-built 只允许 Instance Owner 编辑 `running` 且快照未锁定的实例。客户端通过 `/larkflow edit <instance_id> <JSON操作数组>` 提交 `add_node / update_node / remove_node`；每个请求最多 50 个操作，确认后的图最多 100 个节点，同一请求不得多次触碰同一节点。
 
-`running`、`waiting_human`、`done` 或已有审计结果的节点不得被静默删除或改写。`locked` 模板实例不接受结构编辑。
+- `add_node` 必须给出完整的 `key / title / owner_person_id / executor / deps / work`。
+- `update_node` 只允许修改 `title / owner_person_id / executor / deps / work`。
+- `remove_node` 只接受节点键。
+
+已有节点只有同时满足当前 Node 状态为 `pending / ready`、当前 Attempt 为 `pending`、没有结果、质量结果、claim、开始或完成时间、提交者及错误信息时，才属于可编辑的未来区域。`running`、`waiting_human`、`done`、`failed` 或任何留下执行痕迹的节点都不能被修改或删除。变更后的完整 Snapshot 必须继续满足节点唯一、依赖存在、DAG 无环、执行器与工作定义合法以及 Owner 有效等服务端规则。`locked` 实例拒绝结构编辑。
+
+预览默认有效 15 分钟，耐久绑定 tenant、Instance、创建 actor、规范化操作、增删改节点集合、aggregate version、当前与目标 `graph_revision`，以及候选 Snapshot 的 SHA-256。客户端不提交可信 revision、Owner、影响集合或候选图。`/larkflow edit-confirm <preview_id>` 会重新授权创建预览的当前 Instance Owner，检查有效期、aggregate version 与 `graph_revision`，重新执行同一组操作，并比较规范化操作、增删改集合、候选图哈希和目标 revision。任何状态或语义漂移都使预览失效。
+
+确认在单个 PostgreSQL 事务内保存聚合、消费预览、追加一条 `instance.graph_edited` 审计并写必要 outbox。成功后 `graph_revision` 只增加 1；新增节点从 Attempt 1 开始，更新节点保留未开始的当前 Attempt 并刷新输入快照，删除节点只移除其未开始 Node 与 Attempt。已执行历史不被覆盖，Template 不变。同一预览重复确认只回读已应用结果，不增加版本、节点、Attempt 或审计。若删除最后一批未完成未来节点后剩余节点均已完成，Instance 可以在该事务中进入 `done`。投影 Worker 遇到已被删除节点的陈旧创建事件时按 no-op 收口。
 
 ## 11. 重启与 Attempt
 
