@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from larkflow.workflow.edge_cli import DEFAULT_CREDENTIAL_FILE, build_parser
+from larkflow.workflow.edge_cli import (
+    DEFAULT_CREDENTIAL_FILE,
+    _validate_serve_workspace,
+    build_parser,
+)
 from larkflow.workflow.edge_gateway_cli import (
     _loopback_host,
     _positive_integer,
@@ -12,16 +16,31 @@ from larkflow.workflow.edge_gateway_cli import (
 )
 
 
-def test_edge_cli_exposes_only_manual_pair_and_run_once_commands():
+def test_edge_cli_exposes_pair_run_once_and_foreground_serve_commands():
     parser = build_parser()
     paired = parser.parse_args(
         ["pair", "--server", "https://edge.example.com", "--name", "Mac"]
     )
     run = parser.parse_args(["run-once", "--workspace", "/workspace"])
+    serve = parser.parse_args(["serve", "--workspace", "/workspace"])
 
     assert paired.command == "pair"
     assert run.command == "run-once"
+    assert serve.command == "serve"
+    assert serve.wait_seconds == 20
+    assert serve.heartbeat_seconds == 60
+    assert serve.max_tasks == 0
     assert Path(paired.credential_file) == DEFAULT_CREDENTIAL_FILE
+
+
+def test_serve_workspace_cannot_contain_the_device_credential(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    credential = workspace / "device.json"
+    credential.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="cannot be inside"):
+        _validate_serve_workspace(workspace, credential)
 
 
 def test_gateway_rejects_non_loopback_bind_addresses():

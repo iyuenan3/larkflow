@@ -5,16 +5,22 @@ import json
 from pathlib import Path
 import stat
 import subprocess
+from threading import Event, Thread
 from typing import Any
 
+import httpx
 import pytest
 
 import larkflow.workflow.edge_client as edge_client
+from larkflow.workflow.edge_agent import EdgeAgentLoop
 from larkflow.workflow.edge_client import (
     CodexReadonlyExecutor,
+    EdgeDeviceLock,
+    EdgeExecutionCancelled,
     EdgeLeasePayload,
     EdgeTransportError,
     EdgeWorker,
+    EdgeWorkerReport,
     HttpEdgeTransport,
     StoredEdgeCredential,
     load_edge_credential,
@@ -206,6 +212,30 @@ def test_http_transport_rejects_redirect_responses_even_with_json():
     assert error.value.status == 307
 
 
+def test_http_transport_normalizes_network_failures():
+    class UnavailableHttpClient(FakeHttpClient):
+        def post(self, path: str, **kwargs: Any) -> FakeResponse:
+            raise httpx.ConnectError(
+                "unreachable",
+                request=httpx.Request("POST", f"https://edge.example.com{path}"),
+            )
+
+    transport = HttpEdgeTransport(
+        "https://edge.example.com",
+        credential="device_1.secret",
+        client_factory=lambda **kwargs: UnavailableHttpClient(
+            {},
+            FakeResponse(500),
+            **kwargs,
+        ),
+    )
+
+    with pytest.raises(EdgeTransportError) as error:
+        transport.claim()
+    assert error.value.status == 0
+    assert error.value.code == "transport_unavailable"
+
+
 class FakeProcess:
     def __init__(self, stdout: str = "reviewed") -> None:
         self.stdout = stdout
@@ -350,6 +380,50 @@ def test_codex_communication_error_also_terminates_the_process_group(
     assert terminated == [process]
 
 
+def test_codex_stop_event_terminates_the_process_group(tmp_path: Path):
+    class BlockingProcess:
+        def __init__(self) -> None:
+            self.pid = None
+            self.returncode: int | None = None
+            self.started = Event()
+            self.released = Event()
+
+        def communicate(
+            self,
+            _value: str | None = None,
+            timeout: float | None = None,
+        ) -> tuple[str, str]:
+            self.started.set()
+            assert self.released.wait(timeout or 1)
+            return "", ""
+
+        def terminate(self) -> None:
+            self.returncode = -15
+            self.released.set()
+
+    process = BlockingProcess()
+    stop_event = Event()
+
+    def request_stop() -> None:
+        assert process.started.wait(1)
+        stop_event.set()
+
+    requester = Thread(target=request_stop)
+    requester.start()
+    executor = CodexReadonlyExecutor(
+        tmp_path,
+        codex_binary="/fake/codex",
+        timeout_seconds=5,
+        clock=lambda: NOW,
+        popen_factory=lambda *_args, **_kwargs: process,
+    )
+
+    with pytest.raises(EdgeExecutionCancelled):
+        executor.execute(lease_payload(), stop_event=stop_event)
+    requester.join(timeout=1)
+    assert process.returncode == -15
+
+
 class FakeTransport:
     def __init__(self, lease: EdgeLeasePayload | None) -> None:
         self.lease = lease
@@ -373,7 +447,12 @@ def test_local_executor_error_does_not_fail_the_business_workflow():
     transport = FakeTransport(lease_payload())
 
     class BrokenExecutor:
-        def execute(self, _lease: EdgeLeasePayload):
+        def execute(
+            self,
+            _lease: EdgeLeasePayload,
+            *,
+            stop_event: Event | None = None,
+        ):
             raise OSError("local setup is unavailable")
 
     report = EdgeWorker(transport, BrokenExecutor()).run_once()
@@ -382,3 +461,217 @@ def test_local_executor_error_does_not_fail_the_business_workflow():
     assert report.error == "OSError"
     assert transport.completed == []
     assert transport.failed == []
+
+
+def test_renewal_loss_cancels_local_execution_and_never_completes():
+    execution_stopped = Event()
+
+    class RenewalFailureTransport(FakeTransport):
+        def renew(self, lease: EdgeLeasePayload) -> datetime:
+            raise OSError("renewal unavailable")
+
+    class WaitingExecutor:
+        def execute(
+            self,
+            _lease: EdgeLeasePayload,
+            *,
+            stop_event: Event | None = None,
+        ) -> dict[str, str]:
+            assert stop_event is not None
+            assert stop_event.wait(1)
+            execution_stopped.set()
+            raise EdgeExecutionCancelled("lease lost")
+
+    transport = RenewalFailureTransport(lease_payload())
+    report = EdgeWorker(
+        transport,
+        WaitingExecutor(),
+        renew_interval_seconds=0.01,
+    ).run_once()
+
+    assert report.status == "lease_lost"
+    assert report.error == "OSError"
+    assert execution_stopped.is_set()
+    assert transport.completed == []
+
+
+def test_successful_renewal_is_observable_during_execution():
+    renewed = Event()
+    observed: list[datetime] = []
+
+    def observe(expires_at: datetime) -> None:
+        observed.append(expires_at)
+        renewed.set()
+
+    class WaitingExecutor:
+        def execute(
+            self,
+            _lease: EdgeLeasePayload,
+            *,
+            stop_event: Event | None = None,
+        ) -> dict[str, str]:
+            assert renewed.wait(1)
+            return {"content": "done"}
+
+    transport = FakeTransport(lease_payload())
+    report = EdgeWorker(
+        transport,
+        WaitingExecutor(),
+        renew_interval_seconds=0.01,
+        renewal_observer=observe,
+    ).run_once()
+
+    assert report.status == "completed"
+    assert observed == [lease_payload().claim_expires_at + timedelta(minutes=1)]
+
+
+def test_external_stop_cancels_execution_without_completing():
+    execution_started = Event()
+    outer_stop = Event()
+
+    class WaitingExecutor:
+        def execute(
+            self,
+            _lease: EdgeLeasePayload,
+            *,
+            stop_event: Event | None = None,
+        ) -> dict[str, str]:
+            assert stop_event is not None
+            execution_started.set()
+            assert stop_event.wait(1)
+            raise EdgeExecutionCancelled("service stopped")
+
+    def request_stop() -> None:
+        assert execution_started.wait(1)
+        outer_stop.set()
+
+    requester = Thread(target=request_stop)
+    requester.start()
+    transport = FakeTransport(lease_payload())
+    report = EdgeWorker(transport, WaitingExecutor()).run_once(
+        stop_event=outer_stop,
+    )
+    requester.join(timeout=1)
+
+    assert report.status == "stopped"
+    assert transport.completed == []
+
+
+class FakeAgentWorker:
+    def __init__(self, responses: list[Any]) -> None:
+        self.responses = responses
+        self.calls: list[tuple[float, Event | None]] = []
+
+    def run_once(
+        self,
+        *,
+        wait_seconds: float = 0,
+        stop_event: Event | None = None,
+    ) -> EdgeWorkerReport:
+        self.calls.append((wait_seconds, stop_event))
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+def test_edge_agent_continues_until_bounded_task_limit():
+    lease = lease_payload()
+    worker = FakeAgentWorker(
+        [
+            EdgeWorkerReport(status="no_work"),
+            EdgeWorkerReport(status="completed", lease=lease),
+            EdgeWorkerReport(status="completed", lease=lease),
+        ]
+    )
+    events: list[tuple[str, Any]] = []
+
+    summary = EdgeAgentLoop(
+        worker,  # type: ignore[arg-type]
+        max_tasks=2,
+        log=lambda event, fields: events.append((event, fields)),
+    ).run(Event())
+
+    assert summary.ticks == 3
+    assert summary.tasks_claimed == 2
+    assert summary.completed == 2
+    assert summary.no_work == 1
+    assert [call[0] for call in worker.calls] == [20, 20, 20]
+    assert events[-1][0] == "edge_agent_stopped"
+
+
+def test_edge_agent_emits_application_heartbeat_after_server_round_trip():
+    lease = lease_payload()
+    worker = FakeAgentWorker(
+        [
+            EdgeWorkerReport(status="no_work"),
+            EdgeWorkerReport(status="completed", lease=lease),
+        ]
+    )
+    monotonic_values = iter((0.0, 61.0, 62.0))
+    events: list[tuple[str, Any]] = []
+
+    EdgeAgentLoop(
+        worker,  # type: ignore[arg-type]
+        heartbeat_seconds=60,
+        max_tasks=1,
+        monotonic=lambda: next(monotonic_values),
+        clock=lambda: NOW,
+        log=lambda event, fields: events.append((event, fields)),
+    ).run(Event())
+
+    heartbeat = next(fields for event, fields in events if event == "edge_agent_heartbeat")
+    assert heartbeat["last_server_ok_at"] == NOW.isoformat()
+    assert heartbeat["no_work"] == 1
+
+
+def test_edge_agent_retries_transient_transport_error_with_bounded_backoff():
+    lease = lease_payload()
+    worker = FakeAgentWorker(
+        [
+            EdgeTransportError(503, "transport_unavailable", "unavailable"),
+            EdgeWorkerReport(status="completed", lease=lease),
+        ]
+    )
+    waits: list[float] = []
+
+    summary = EdgeAgentLoop(
+        worker,  # type: ignore[arg-type]
+        retry_base_seconds=2,
+        retry_max_seconds=8,
+        max_tasks=1,
+        random_value=lambda: 0.5,
+        wait_for_stop=lambda _event, delay: waits.append(delay) or False,
+    ).run(Event())
+
+    assert summary.transport_errors == 1
+    assert summary.completed == 1
+    assert waits == [2]
+
+
+def test_edge_agent_stops_on_revoked_device_without_retrying():
+    worker = FakeAgentWorker(
+        [EdgeTransportError(403, "device_revoked", "revoked")]
+    )
+    waits: list[float] = []
+
+    summary = EdgeAgentLoop(
+        worker,  # type: ignore[arg-type]
+        wait_for_stop=lambda _event, delay: waits.append(delay) or False,
+    ).run(Event())
+
+    assert summary.fatal_error == "device_revoked"
+    assert summary.transport_errors == 1
+    assert waits == []
+
+
+def test_edge_device_lock_rejects_a_second_worker(tmp_path: Path):
+    credential_path = tmp_path / "device.json"
+
+    with EdgeDeviceLock(credential_path):
+        with pytest.raises(RuntimeError, match="another Edge worker"):
+            with EdgeDeviceLock(credential_path):
+                pass
+
+    with EdgeDeviceLock(credential_path):
+        assert (tmp_path / "device.json.lock").stat().st_mode & 0o077 == 0
