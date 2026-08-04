@@ -689,10 +689,10 @@
 
 ## ADR-082 · 2026-08-05 · macOS Edge 密钥进入 Keychain，连接元数据留在私有文件
 
-- **Status：Accepted · Local implementation and synthetic Keychain validation。**
+- **Status：Accepted · Local implementation and real Owner device validation。**
 - Problem：Edge 设备凭据可持续领取本人 `personal.readonly` 节点并回传结果。即使普通文件权限为 `0600`，长期密钥仍会以明文进入磁盘、备份和误提交面；把 server URL、device ID 与密钥整体塞进进程参数或环境变量又会扩大进程观察面。
 - Constraint：中央配对与租约协议不能改变；密钥不得进入 argv、环境变量、日志或磁盘元数据；运行时仍需知道 server URL 与 device ID，并以稳定路径实现同设备单 Worker 锁；迁移不能在 Keychain 回读一致前删除旧密钥；非 macOS 和显式开发模式必须保持兼容；首版仍只支持当前 OS 用户的一枚默认 Edge 凭据。
 - Decision：macOS 的 `auto` 模式把完整设备密钥保存为登录 Keychain 的固定 generic password，`0600` 元数据文件只保存 `credential_store=keychain`、server URL 与 device ID。写入通过无回显伪终端响应 `/usr/bin/security` 的两次密码提示，密钥不作为命令参数；回读后重新验证密钥内 device ID。配对只有在 Keychain 和元数据都成功时才完成本地保存，元数据失败会回滚新 Keychain 项。`credential-migrate --delete-source` 在回读完整匹配后原子替换旧文件为非敏感元数据；不加该选项时保留旧文件作为可恢复源，但运行时优先读 Keychain。
 - Alternatives(否决)：继续只用 `0600` 明文文件；把密钥放入 argv 或环境变量调用系统工具；把整个 JSON 作为 Keychain password；配对成功后只存 Keychain 而不保留连接元数据；迁移先删旧文件再验证；立即增加 launchd、硬件密钥或跨平台抽象层。
 - Tradeoff：Keychain 后端是 macOS 专用，非 macOS 仍有明文文件兼容风险。固定 service/account 暂不支持同一 OS 用户并列多个中央节点；登录钥匙串不可用时 Edge 会 fail closed。伪终端路径增加实现复杂度，且设备密钥必须满足安全交互输入上限。该变化降低静态凭据暴露，不证明受恶意本机进程控制时仍安全，也不替代正式安全评审。
-- Evidence：实现内容提交为 `4d9cef0836859bb0a6772eb08640b9e6b29030c8`。Edge 客户端与 CLI 聚焦测试 `34 passed`，完整离线套件 `816 passed, 17 skipped`。wheel SHA-256 为 `7be7c47a7b076585e0ed2133ae034dc5d3f58bf59d801de09a8fd56d2287164a`，独立安装目录已解析迁移命令。隔离合成 Keychain 项已用真实登录钥匙串完成创建、回读一致和删除；正式默认项与元数据路径均为空。未完成真实 Edge 设备配对、员工分发、开发服务器部署或安全评审。
+- Evidence：实现内容提交为 `4d9cef0836859bb0a6772eb08640b9e6b29030c8`。Edge 客户端与 CLI 聚焦测试 `34 passed`，完整离线套件 `816 passed, 17 skipped`。wheel SHA-256 为 `7be7c47a7b076585e0ed2133ae034dc5d3f58bf59d801de09a8fd56d2287164a`，独立安装目录已解析迁移命令。隔离合成 Keychain 项已用真实登录钥匙串完成创建、回读一致和删除。随后员工 Mac 通过临时 SSH 隧道，以既有真实流程 Owner 身份消费一次性配对码；默认 Keychain 项和 `0600` 非敏感元数据均创建并回读一致，`run-once` 返回 `no_work`，服务器设备为 active、凭据 hash 存在、配对审计唯一且认证后的 `last_seen_at` 晚于创建时间。持久设备保留，隧道已关闭。仍未完成员工安装分发、升级、安全评审或可持续公网连接。

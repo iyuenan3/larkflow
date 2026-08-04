@@ -6,8 +6,8 @@
 - Migration：新增 `credential-migrate [--delete-source]`。迁移先写入并回读校验 Keychain；`--delete-source` 仅在一致后把原明文文件原子替换为非敏感元数据。校验或替换失败会删除本次新建的 Keychain 项，保留旧文件。
 - Security：密钥不进入 `/usr/bin/security` 的 argv、环境变量、结构化日志或磁盘元数据。Keychain 写入通过无回显伪终端完成两次系统提示；读取后重新校验密钥内 device ID 与元数据一致。配对同时创建 Keychain 项和元数据，元数据失败会回滚新项。
 - Compatibility：非 macOS 默认继续使用当前用户所有的 `0600` 文件；显式 `--credential-store file` 保留开发兼容路径。已有明文文件在不删除源时仍可作为非敏感字段来源，但运行时优先使用已存在的 Keychain 密钥。
-- Verified：Edge 客户端与 CLI 聚焦套件 `34 passed`，完整离线套件 `816 passed, 17 skipped`。wheel SHA-256 为 `7be7c47a7b076585e0ed2133ae034dc5d3f58bf59d801de09a8fd56d2287164a`，安装态能解析迁移命令。隔离合成 Keychain 项已真实创建、完整回读并删除；正式 service/account 与默认元数据路径均读回为空。
-- Boundary：实现内容提交为 `4d9cef0836859bb0a6772eb08640b9e6b29030c8`。尚未部署到开发服务器或用真实 Edge 设备完成配对；正式员工安装、升级、安全评审和生产上线仍未完成。
+- Verified：Edge 客户端与 CLI 聚焦套件 `34 passed`，完整离线套件 `816 passed, 17 skipped`。wheel SHA-256 为 `7be7c47a7b076585e0ed2133ae034dc5d3f58bf59d801de09a8fd56d2287164a`，安装态能解析迁移命令。隔离合成 Keychain 项已真实创建、完整回读并删除。员工 Mac 随后通过临时 SSH 隧道，以真实流程 Owner 身份完成默认槽位配对；元数据为 `0600` 且不含 secret，Keychain 完整回读一致，`run-once` 返回 `no_work`，服务器设备 active、凭据 hash、唯一配对审计和认证后时间戳均已回读。
+- Boundary：实现内容提交为 `4d9cef0836859bb0a6772eb08640b9e6b29030c8`，验收前文档基线为 `398658a6a5886aba701842276e0bab4d7d8acec6`。客户端变更不要求替换现有 Gateway。持久 Keychain 凭据与非敏感元数据继续保留，临时隧道已关闭；正式员工安装、升级、安全评审、可持续公网连接和生产上线仍未完成。
 
 ## v0.35.0-draft · 2026-08-05 · 前台 Personal Agent Edge serve
 
