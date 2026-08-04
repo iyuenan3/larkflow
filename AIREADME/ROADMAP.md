@@ -35,17 +35,19 @@
 - 每个节点的唯一 Owner 解析与服务端授权。当前内核已拒绝非 Owner 提交，飞书 IM 命令发送者的活跃成员校验已在测试组织通过；草稿 Owner 全量企业目录校验已落码并部署但默认关闭。
 - 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则、持久化、常驻 Worker、Agent adapter、首个 Tool adapter、真实开发链路与恢复扫描已落码，更多业务 Tool 按验证需求增加。
 - 已完成启动全量 Task 对账、缺失 Projection 补建和确认删除后的外部 Task 重建；一次性 PostgreSQL 与常驻开发服务均已验证补建、真实删除换绑、重入及修复后完成入站。
-- 已完成飞书窄命令入口与完成投影：`/larkflow help / start / confirm / status / list / restart / restart-all / restart-confirm / edit / edit-confirm`、耐久发送者校验与回复、Agent / Tool 结果消息、完成 Docx 和最终通知已进入开发链路。`start` 的 `role=@成员` mention 角色绑定和单聊 Card 2.0 人员选择均已完成开发部署、目录再验证、冻结 Snapshot、幂等草稿创建与真实跨人员验收。人员选择卡和失败恢复卡统一在动作耐久落库后先尝试显示无按钮“处理中”，再收口为成功或拒绝；同一人员选择卡只有一个 canonical 动作。`status` 只允许 Instance Owner 查看单实例有界摘要，`list` 只返回本人最近十个实例摘要；两类重启和未来区域编辑只允许 Owner 预览和确认。既有十个命令均已完成 Owner 真实飞书闭环，编辑拒绝矩阵已覆盖冻结线、非法 DAG、陈旧预览与跨人员非 Owner。Task 事件在本轮仍未被 bot 长连接收到，周期状态轮询继续承担可靠完成发现。migration `0018_worker_wakeups` 已让 Runtime、Projection、凭据侧入站和领域侧入站在耐久队列提交后收到数据库通知，原有有界轮询继续兜底。通知版本的真实人员选择卡测得首个服务端反馈 0.868 秒、领域处理 1.912 秒、最终回复 2.200 秒；原卡片已从飞书服务端读回且不含操作控件。该指标不包含客户端渲染。
+- 已完成飞书窄命令入口与完成投影：`/larkflow help / start / confirm / status / list / restart / restart-all / restart-confirm / edit / edit-confirm`、耐久发送者校验与回复、Agent / Tool 结果消息、完成 Docx 和最终通知已进入开发链路。`start` 的 `role=@成员` mention 角色绑定和单聊 Card 2.0 人员选择均已完成开发部署、目录再验证、冻结 Snapshot、幂等草稿创建与真实跨人员验收。人员选择卡和失败恢复卡统一在动作耐久落库后先尝试显示无按钮“处理中”，再收口为成功或拒绝；同一人员选择卡只有一个 canonical 动作。`status` 只允许 Instance Owner 查看单实例有界摘要，`list` 只返回本人最近十个实例摘要；两类重启和未来区域编辑只允许 Owner 预览和确认。既有十个命令均已完成 Owner 真实飞书闭环，编辑拒绝矩阵已覆盖冻结线、非法 DAG、陈旧预览与跨人员非 Owner。Task 事件在本轮仍未被 bot 长连接收到，周期状态轮询继续承担可靠完成发现。migration `0018_worker_wakeups` 已让 Runtime、Projection、凭据侧入站和领域侧入站在耐久队列提交后收到数据库通知，原有有界轮询继续兜底。提交 `a506e7d` 又把批次 Worker 的完成时间改为逐项结算。修正版五次真实人员选择卡的首反馈 P50 / P95 为 0.991 / 1.274 秒，最终回复为 12.670 / 19.298 秒；前四次突发点击的最终回复范围为 8.368 到 19.569 秒，第五次隔离点击为 4.044 秒。五张原卡片均已从飞书服务端读回且不含操作控件。首反馈指标不包含客户端渲染。
 - 已完成节点安全重启：服务端计算目标及可达下游，耐久预览绑定 actor、版本和图 revision，确认事务创建新 Attempt、保留历史并收口旧 Human Task；重复确认 no-op。离线变异、一次性 PostgreSQL 14 双连接竞争及测试组织 Human-Agent-Human 真实闭环均已通过。
 - 已完成完整实例安全重启：显式 instance scope 计算全图影响，确认后为所有节点创建新 Attempt，从全部根节点重新调度；旧 Attempt 与两轮完成投影保留。离线套件、一次性 PostgreSQL 14 双连接竞争和测试组织三节点第二轮闭环均已通过。
 - 已完成运行中未来区域安全编辑：`add_node / update_node / remove_node` 只触及没有执行痕迹的 `pending / ready` 节点；耐久预览绑定 actor、aggregate version、`graph_revision` 与候选 Snapshot SHA-256，确认事务只递增一次 revision 并保留已执行历史。完整离线套件、一次性 PostgreSQL 14 双连接竞争、十四份 migration、开发服务器部署和 Owner 真实飞书闭环均已通过；真实命令还拒绝了冻结线修改、成环依赖和陈旧预览。
-- 已完成自动节点失败恢复闭环：向节点 Owner 发送恢复卡，卡片回调进入耐久命令，领域侧重新校验 Owner 与精确 Instance / Node / Attempt 版本。重试和人工接管都创建新 Attempt，失败历史不覆盖。完整离线套件为 `786 passed, 15 skipped`；长期 PostgreSQL 十八份 migration、两个连续真实重试、人工接管、Human Task 完成、最终投影，以及恢复卡 0.990 秒首个服务端反馈均已在开发环境验收。
+- 已完成自动节点失败恢复闭环：向节点 Owner 发送恢复卡，卡片回调进入耐久命令，领域侧重新校验 Owner 与精确 Instance / Node / Attempt 版本。重试和人工接管都创建新 Attempt，失败历史不覆盖。完整离线套件为 `788 passed, 16 skipped`；长期 PostgreSQL 十八份 migration、两个连续真实重试、人工接管、Human Task 完成、最终投影，以及恢复卡 0.990 秒首个服务端反馈均已在开发环境验收。
 - 从 legacy 原型提炼 adapter、事件韧性和 Mock 测试资产。
 - 已完成 Personal Agent Edge Proof v0：一次性配对、哈希凭据、设备撤销、Owner 与 capability 双重过滤、现有 Attempt claim 续租、迟到结果拒绝、loopback Gateway、手工 `run-once` 和 Codex 只读适配器。离线测试、一次性 PostgreSQL 14、长期开发库 migration、loopback systemd 部署、SSH 隧道跨机 Codex、Caddy 与受信任源站证书已通过；公网设备链路受 ICP 接入备案阻断，Caddy 验证后已停止，凭据系统存储和安全评审仍未完成。
 
 **Demo：** 已从真实飞书消息创建并确认模板草稿，在测试组织完成 Human-Agent-Tool-Human，最终 Docx 包含四个节点结果，Owner 收到带链接的完成通知；重复修复为 no-op。另一个 Human-Agent-Human 实例先完成最终节点重启，再完成全图实例重启；第二轮从根节点重新调度，三个新 Attempt 均完成，新旧 Task、结果、文档和最终通知均保留，重复确认 no-op。未来区域编辑实例在首个 Human 节点等待时修改最终 Human 节点标题，幂等确认后完成 Agent、更新标题 Task、Docx 与最终通知；独立负向实例拒绝冻结线、成环依赖和陈旧预览。失败恢复实例连续重试两次后由 Owner 人工接管，真实 Task 完成后第四个 Attempt 和 Instance 进入 `done`，前三次失败历史与全部投影仍可追溯。测试成员持有的合成实例还验证了当前登录用户的真实跨人员编辑命令被拒绝，且图修订、预览和审计保持不变。跨人员正向分工分别通过群聊 mention 和单聊人员选择卡创建冻结草稿；卡片成功后回写为已确认状态。该证据仅覆盖开发环境，无模板定义的同等真栈入口仍待补充。
 
 ## Next · Phase 2 受控变化与恢复
+
+- 针对五次卡片验收暴露的队头阻塞，先设计并验证批次内有界逐项并发或更小 claim 批次。改动必须保持租约、幂等、顺序不变量和飞书限流安全，并以突发与隔离样本分别验收，不再用混合样本的单一平均值掩盖排队效应。
 
 目标：让运行中流程可以安全修改、重做和运营，而不覆盖历史。
 

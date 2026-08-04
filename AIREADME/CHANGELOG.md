@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.33.1-draft · 2026-08-04 · 批次完成时间逐项结算
+
+- Fixed：人员分工与 IM 命令 Worker 不再把批次开始时间写入所有工作的验证、领域处理和回复完成字段；每条工作实际完成后独立读取时钟。PostgreSQL 条件更新显式转换可空文本参数类型，兼容 psycopg 3.3.4 的类型推断。
+- Verified：内容提交为 `a506e7df078cbb6d8fa5f359272505ba62cac241`；完整离线套件为 `788 passed, 16 skipped`。定向变异证明旧批次开始行为会让新增回归失败；一次性真实 PostgreSQL 验证同批两条记录分别持久化 `+1000 ms` 和 `+2000 ms` 完成时间，测试库与临时文件随后删除。
+- Deployment：wheel SHA-256 为 `385e9b2a272246b683d49b7232dcbbdd788aa1ee2efa051ee7cdff95bca46b6b`，发布件保存在 `releases/20260804_185244_item_completion_a506e7d/`。升级前备份为 136056 bytes、`0600 lf_target_dev:lf_target_dev`；长期库保持十八份 migration，六服务均为 `active / running / NRestarts=0`，四条监听连接存在，部署窗口 warning 级日志数为 0。
+- Acceptance：五次真实人员选择卡全部进入 `processed / draft_created / reply sent`，每张卡只产生一个 canonical 动作和一个草稿；应用 bot 读回五张原卡片均为已确认终态且没有操作控件。首反馈、凭据验证、领域处理和最终回复的 P50 / P95 分别为 0.991 / 1.274 秒、4.757 / 12.358 秒、4.941 / 12.582 秒和 12.670 / 19.298 秒。前四次在 7.548 秒内到达，最终回复范围为 8.368 到 19.569 秒；第五次约 19 分钟后隔离点击，全链路为 4.044 秒。
+- Correction：既有记录中的首反馈值来自独立单调计时，继续有效。提交 `a506e7d` 之前列出的身份校验、领域处理和最终回复精确耗时使用了批次开始时间，本条明确废止其逐项延迟解释。
+- Boundary：五次样本由四次突发和一次隔离点击组成，不能视为同一并发负载。该验收只覆盖开发服务器与测试组织中的服务端区间，不包含客户端渲染，不代表生产容量。
+
 ## v0.33.0-draft · 2026-08-04 · PostgreSQL Worker 通知唤醒
 
 - Added：migration `0018_worker_wakeups` 为 Outbox、Inbox、IM 命令和人员分工动作的可认领状态增加事务后 `pg_notify` 触发器。四类 Target 常驻服务在首次扫描前分别建立专用 `LISTEN larkflow_work_available` 连接。
