@@ -4,8 +4,9 @@
 >
 > 除修正事实错误外，不再给这套部署增加新的产品领域能力。个人端不得复用下文的企业 bot 全局凭证；中央端和个人端必须使用不同身份、权限与生命周期。
 
-## Target PostgreSQL 开发验证状态（2026-08-04）
+## Target PostgreSQL 开发验证状态（2026-08-05）
 
+- 内容提交 `fd6933a186bf115fe83adc5ac7d3a3b6153b0436` 新增员工设备前台 `larkflow-edge serve`，已完成 `807 passed, 17 skipped`、两项定向变异和安装态 wheel 验证。该提交尚未安装到 `alicloud-sh` 或员工设备，也没有签发新配对码、启动真实 Codex、修改 Gateway 或恢复 Caddy；下述开发服务器发布状态仍对应 `5312f6c`。
 - 当前开发发布件对应内容提交 `5312f6c026453ac6d9e2e62679b755f271c114f3`，把五条凭据侧交互车道从 Projection 拆到两个独立 Interactive 副本，每个副本固定 `claim_limit=1`。完整离线套件为 `796 passed, 17 skipped`；长期库保持十八份 migration，八服务与六条真实监听连接已回读。一次性真实 PostgreSQL 竞争证明两个副本各领取一条不同记录；三次真实飞书突发点击也已由两个副本实际分流并全部成功。隔离与更高强度限流回归尚未完成。
 - `alicloud-sh` 的 PostgreSQL 14.23 保持 active，`listen_addresses=localhost`，5432 只监听 `127.0.0.1`。宿主系统盘约有 33 GB 可用，内存约有 993 MB available。该数据库是自建 Target 开发环境，不是生产数据库，也不具备托管数据库的高可用能力。
 - 一次性数据库与最小权限密码角色通过本机 SSH 隧道运行完整 `tests/test_workflow_postgres.py`，3 项全部通过：migration 重入、聚合与 outbox 往返、两个真实连接竞争同一节点、过期 claim 恢复。测试前先跑单 Worker 基线；完成后数据库与角色均已删除，并从系统目录回读为 0。

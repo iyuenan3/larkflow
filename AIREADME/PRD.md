@@ -1,6 +1,6 @@
 # PRD · larkflow（飞流）
 
-> 状态：Target + Experimental Edge · 既有设计简化版 · 2026-08-02
+> 状态：Target + Experimental Edge · 既有设计简化版 · 2026-08-05
 >
 > 证据边界：本 PRD 是既有设计的范围简化，不代表市场需求已经验证。
 
@@ -89,10 +89,10 @@ MVP 只实现单个顶层 DAG，不实现子 DAG 和完整项目平台。个人 
 - Edge 不是飞书机器人，也不使用员工电脑上的 `lark-cli` 与中央节点通信；它只通过中央私有 HTTPS API 领取工作。
 - 管理员只能为指定 tenant 和 person 签发短时、一次性配对码；设备凭据可列出、撤销且服务端只保存哈希。
 - v0 唯一能力是 `personal.readonly`。设备只能领取 Owner 等于配对人员、执行器为 Agent 且显式声明该 kind 的节点。
-- 用户必须在本人电脑手工执行 `run-once` 并显式选择工作区。Codex 使用 `read-only + ephemeral + ignore-user-config` 启动，Edge 凭据、Target DSN 和飞书应用凭据不传给子进程。
+- 用户必须在本人电脑显式选择工作区，可以手工执行一次 `run-once`，也可以主动启动保持可见的前台 `serve` 会话。一个 `serve` 会话只使用启动时固定的单工作区和既有 `personal.readonly` capability，不注册操作系统后台服务。Codex 使用 `read-only + ephemeral + ignore-user-config` 启动，Edge 凭据、Target DSN 和飞书应用凭据不传给子进程。
 - 长任务通过当前 Attempt、节点版本、Worker、token 和过期时间续租；撤销设备后不能续租或回传，迟到结果不能改变状态。
 - 本机执行器异常不直接把业务流程判为失败，中央等待租约过期后允许其他合法设备接管。
-- v0 不提供后台常驻、任意 shell、文件写入、飞书操作、Human gate 代答、通用能力安装或公网直连 Gateway。
+- v0 不提供操作系统后台常驻、自动启动、任意 shell、文件写入、飞书操作、Human gate 代答、通用能力安装或公网直连 Gateway。
 
 ## 5. 体验原则
 

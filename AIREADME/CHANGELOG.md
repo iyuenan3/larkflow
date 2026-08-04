@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.35.0-draft · 2026-08-05 · 前台 Personal Agent Edge serve
+
+- Added：新增 `larkflow-edge serve --workspace <path>`，在用户主动启动且保持可见的会话中持续领取 `personal.readonly` 节点。默认使用 20 秒长轮询、带抖动的有界指数退避、60 秒应用心跳和结构化任务摘要。
+- Safety：同一设备凭据通过 POSIX 非阻塞文件锁限制为一个 `serve` 或 `run-once`。文件系统根目录、用户主目录和包含设备凭据的工作区不能作为前台会话范围。SIGINT、SIGTERM 或续租失败都会取消在途 Codex 进程组，不回传可能失去租约的结果。
+- Reliability：网络请求异常统一为稳定 transport error；撤销或无效设备凭据立即停止，瞬时网络、执行器、陈旧租约和续租故障按上限退避。应用续租可观测，但日志不包含设备 secret、人员 ID、Instance ID 或 Node ID。本机执行器基础设施异常仍不调用领域失败命令。
+- Verified：内容提交为 `fd6933a186bf115fe83adc5ac7d3a3b6153b0436`；Edge 聚焦测试为 `39 passed`，完整离线套件为 `807 passed, 17 skipped`。两项定向变异均捕获对应错误实现。wheel 共 103 个条目并包含新模块，安装态 `serve` CLI 与模块导入已通过。
+- Boundary：本条只证明代码、离线故障路径和安装包形状。尚未部署到员工电脑或 `alicloud-sh`，没有真实设备凭据、真实租约、真实 Codex、操作系统后台服务或公网 Edge 验收；开发服务器仍运行内容提交 `5312f6c` 的 Gateway 与其他 Target 服务。
+- Product：交互延迟继续由既有耐久指标在真实功能验收中自然采集，不再把反复人工点击计时作为独立发布门槛；既有小样本仍不得外推为生产容量。
+
 ## v0.34.0-draft · 2026-08-04 · 独立 Interactive 双副本
 
 - Added：新增 `interact-once / interact` 凭据侧 Worker，顺序访问 IM 命令验证与回复、人员分工卡创建、回调验证和回复五条车道。每条车道一次只领取一项，配置拒绝任何不等于 1 的 claim limit。

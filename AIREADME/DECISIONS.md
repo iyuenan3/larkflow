@@ -676,3 +676,13 @@
 - Alternatives(否决)：继续在 Projection 内扩大批次；在同一进程中用线程共享 lark-cli profile；无限增加副本；只继续缩短轮询；让卡片桥接器直接执行领域命令；在真实飞书验收前按数据库竞争结果声明吞吐提升。
 - Tradeoff：两个副本新增两条 PostgreSQL 监听连接和两个常驻进程，并会并发访问同一受限 bot profile。每个副本内部的五条车道仍是顺序访问，所以两个副本都阻塞于同一车道时仍可能出现跨车道等待。当前设计只针对开发环境观察到的突发队头阻塞，真实飞书回归必须同时观察限流、重试风暴、重复点击、卡片终态和共享 profile 稳定性。
 - Evidence：内容提交 `5312f6c026453ac6d9e2e62679b755f271c114f3`；完整离线套件 `796 passed, 17 skipped`。三组变异分别破坏领取后立即排空、`claim_limit=1` 和第二副本部署，均被回归捕获；一次性真实 PostgreSQL 验证两个连接同时各领取一条不同人员分工记录，`claimed_by` 分别为两个 Worker。开发 wheel SHA-256 为 `4f0ac761284da5e82ff52118da3b4ba5e273c4c8081b3f0170ccc65993d04ba2`；八个 Python 服务均为 `active / NRestarts=0`，六条监听连接存在，两个 Interactive 启动日志分别显示稳定 Worker ID 与 `claim_limit=1`。三次真实飞书突发点击均为唯一 canonical 动作并进入 `processed / draft_created / sent`，两个副本分别承担 2 / 1 条验证和 1 / 2 条回复，最终回复 P50 / P95 为 4.793 / 5.498 秒。应用 bot 回读三张原卡片均为已冻结确认终态，验收窗口无 warning。隔离与更高强度限流验收待完成。
+
+## ADR-081 · 2026-08-05 · Personal Agent Edge 使用用户启动的前台持续会话
+
+- **Status：Accepted · Code implemented，device deployment pending。**
+- Problem：`run-once` 每次只能领取一个节点，需要用户反复启动，无法表达“我现在允许这台电脑在这个工作区为我处理匹配的只读 Agent 节点”。直接注册系统 daemon 会把一次明确授权扩大为隐藏、跨重启的长期权限，也会在凭据撤销、工作区范围、升级和健康状态尚未产品化时过早增加风险。
+- Constraint：中央 PostgreSQL、Node Attempt、Owner 与 `personal.readonly` 继续是唯一授权和状态边界；Human gate 不可领取；一个会话只能固定一个明确工作区；设备凭据不得进入 Codex 环境；续租失败、服务停止或凭据撤销后不得回传结果；本机执行器故障不能直接把业务节点判失败；首版不注册操作系统服务，不自动启动，不增加写能力或通用 capability。
+- Decision：新增 `larkflow-edge serve --workspace <path>`，把用户启动并保持可见的进程视为会话级授权。客户端使用有界长轮询持续领取，瞬时故障采用带抖动的有界指数退避，撤销与无效凭据立即停止；结构化日志输出启动、应用心跳、续租、单任务结果、故障与停止摘要。同一设备凭据通过 POSIX 非阻塞文件锁限制为一个 `serve` 或 `run-once`。SIGINT、SIGTERM 和续租失败都会向执行器传递停止信号并终止整个 Codex 进程组，失去租约的结果不得完成。启动时拒绝文件系统根目录、用户主目录以及包含设备凭据的工作区。
+- Alternatives(否决)：继续要求每个节点手动 `run-once`；直接安装 launchd 或 systemd 用户服务；把设备在线状态提升为中央调度真相；每种 Agent 工具各建一套租约协议；续租失败后允许本地执行完成并尝试迟到回传；允许同一凭据并行启动多个 Worker。
+- Tradeoff：前台进程仍要求用户主动保持终端会话，最长长轮询会让无在途任务的停止存在有限等待；POSIX 文件锁暂不支持 Windows；普通 `0600` 文件仍不等于系统安全存储。Codex 只读沙箱继续只证明写入受限，不能证明目录级读取隔离或无模型外发。会话持续领取减少了重复操作，但不证明员工采用、企业政策接受或生产安全已经成立。
+- Evidence：内容提交 `fd6933a186bf115fe83adc5ac7d3a3b6153b0436` 已发布。Edge 聚焦测试 `39 passed`，完整离线套件 `807 passed, 17 skipped`。两项变异分别移除续租失败取消与设备单例锁，新增回归均按预期失败并在恢复实现后通过。wheel 共 103 个条目，包含 `edge_agent.py`、客户端与 CLI，安装态 `larkflow-edge serve --help` 和模块导入已验证。当前证据不包含员工设备部署、真实租约、真实 Codex 或公网 HTTPS。

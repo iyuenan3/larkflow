@@ -1,6 +1,6 @@
 # CORE · larkflow（飞流）
 
-> 状态：Target + Experimental Edge · 既有设计简化版 · 2026-08-02
+> 状态：Target + Experimental Edge · 既有设计简化版 · 2026-08-05
 
 ## 身份
 
@@ -44,4 +44,4 @@ larkflow 是基于飞书的企业协作 DAG 系统。它把一个多人协作目
 
 当前阶段是中央工作流基础实现。设计取舍见 [`research/design-simplification.md`](../research/design-simplification.md)。仓库中的 LangGraph + SQLite + lark-cli 代码仍是 legacy 机制原型，不是上述目标架构的已实现版本。
 
-仓库允许一个不改变 MVP 主线的 Personal Agent Edge Proof v0：用户用一次性配对码注册本人设备，手工运行一次只读 `personal.readonly` 节点，设备通过中央 HTTPS 边界领取短时执行租约并回传结果。中央 PostgreSQL、节点 Owner、Human gate 和服务端授权不变；设备不是责任主体，也不能经该通道修改文件、执行任意 shell、操作飞书或更改流程图。该 Proof 只验证架构可行性，不代表真实采用、市场需求或生产安全已经成立。
+仓库允许一个不改变 MVP 主线的 Personal Agent Edge Proof v0：用户用一次性配对码注册本人设备，可手工运行一次只读 `personal.readonly` 节点，也可主动启动一个固定单工作区的前台领取会话。设备通过中央 HTTPS 边界领取短时执行租约并回传结果。前台会话不是操作系统后台服务，不改变配对 capability，也不构成产品化。中央 PostgreSQL、节点 Owner、Human gate 和服务端授权不变；设备不是责任主体，也不能经该通道修改文件、执行任意 shell、操作飞书或更改流程图。该 Proof 只验证架构可行性，不代表真实采用、市场需求或生产安全已经成立。
