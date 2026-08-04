@@ -263,11 +263,15 @@ def test_bridge_accepts_flattened_lark_cli_event_payload():
 def test_recovery_card_bridge_persists_a_verified_version_bound_command():
     store = MemoryStore()
     updates = []
+    reports = []
+    monotonic_values = iter((30.0, 30.25, 31.0, 32.0))
     bridge = RecoveryActionInboxBridge(
         store,
         tenant_id=TENANT,
         clock=lambda: NOW,
+        monotonic=lambda: next(monotonic_values),
         card_updater=lambda **kwargs: updates.append(kwargs),
+        feedback_reporter=lambda event, fields: reports.append((event, fields)),
     )
     payload = {
         "event_id": "event_recovery_1",
@@ -302,7 +306,25 @@ def test_recovery_card_bridge_persists_a_verified_version_bound_command():
     assert "button" not in json.dumps(updates[0]["card"], ensure_ascii=False)
     assert store.appended[0].available_at == NOW + timedelta(seconds=10)
     assert store.released == [
-        (TENANT, "event_recovery_1", {"available_at": NOW})
+        (
+            TENANT,
+            "event_recovery_1",
+            {
+                "available_at": NOW,
+                "feedback_status": "updated",
+                "feedback_elapsed_ms": 250,
+            },
+        )
+    ]
+    assert reports == [
+        (
+            "card_feedback",
+            {
+                "card_kind": "recovery",
+                "status": "updated",
+                "elapsed_ms": 250,
+            },
+        )
     ]
     event = store.appended[0]
     assert event.sender_person_id == "person_node_owner"
@@ -324,6 +346,8 @@ def test_recovery_card_bridge_persists_a_verified_version_bound_command():
 
 def test_recovery_card_bridge_persists_before_fast_feedback_failure():
     store = MemoryStore()
+    reports = []
+    monotonic_values = iter((40.0, 39.5))
 
     def fail_update(**_kwargs):
         raise RuntimeError("card update failed")
@@ -332,7 +356,9 @@ def test_recovery_card_bridge_persists_before_fast_feedback_failure():
         store,
         tenant_id=TENANT,
         clock=lambda: NOW,
+        monotonic=lambda: next(monotonic_values),
         card_updater=fail_update,
+        feedback_reporter=lambda event, fields: reports.append((event, fields)),
     )
 
     with pytest.raises(RuntimeError, match="card update failed"):
@@ -361,8 +387,21 @@ def test_recovery_card_bridge_persists_before_fast_feedback_failure():
         "event_recovery_feedback_failure"
     ]
     assert store.released == [
-        (TENANT, "event_recovery_feedback_failure", {"available_at": NOW})
+        (
+            TENANT,
+            "event_recovery_feedback_failure",
+            {
+                "available_at": NOW,
+                "feedback_status": "failed",
+                "feedback_elapsed_ms": 0,
+            },
+        )
     ]
+    assert reports[0][1] == {
+        "card_kind": "recovery",
+        "status": "failed",
+        "elapsed_ms": 0,
+    }
 
 
 def test_recovery_card_bridge_accepts_lark_cli_callback_without_action_name():

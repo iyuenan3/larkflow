@@ -99,6 +99,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0014_role_binding_cards",
         "0015_recovery_cards",
         "0016_role_card_single_action",
+        "0017_card_feedback_metrics",
     ]
     sql = migrations[0][1]
     for table in (
@@ -145,6 +146,10 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "row_number() OVER" in migrations[15][1]
     assert "workflow_role_binding_action_message_idx" in migrations[15][1]
     assert "WHERE is_canonical" in migrations[15][1]
+    assert "ADD COLUMN feedback_status" in migrations[16][1]
+    assert "ADD COLUMN feedback_elapsed_ms" in migrations[16][1]
+    assert "workflow_im_commands_feedback_complete" in migrations[16][1]
+    assert "workflow_role_binding_actions_feedback_complete" in migrations[16][1]
 
 
 def test_in_memory_repository_is_tenant_scoped():

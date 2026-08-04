@@ -8,9 +8,14 @@ from enum import Enum
 import hashlib
 import json
 import re
+import time
 from typing import Any, Protocol
 
-from .card_feedback import CARD_FEEDBACK_FALLBACK, processing_card
+from .card_feedback import (
+    CARD_FEEDBACK_FALLBACK,
+    processing_card,
+    report_card_feedback,
+)
 from .directory import PersonDirectory
 from .editing import (
     GraphEditConfirmation,
@@ -146,6 +151,8 @@ class IMCommandStore(Protocol):
         event_id: str,
         *,
         available_at: datetime,
+        feedback_status: str,
+        feedback_elapsed_ms: int,
     ) -> None:
         ...
 
@@ -379,14 +386,18 @@ class RecoveryActionInboxBridge:
         *,
         tenant_id: str,
         clock: Callable[[], datetime] | None = None,
+        monotonic: Callable[[], float] | None = None,
         card_updater: Callable[..., None] | None = None,
+        feedback_reporter: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         if not tenant_id.strip():
             raise ValueError("Target tenant_id is required")
         self.store = store
         self.tenant_id = tenant_id
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.monotonic = monotonic or time.monotonic
         self.card_updater = card_updater
+        self.feedback_reporter = feedback_reporter
 
     def __call__(self, event_type: str, payload: Mapping[str, Any]) -> bool:
         if event_type != "card.action.trigger":
@@ -417,6 +428,7 @@ class RecoveryActionInboxBridge:
             and action_name != recovery_action_name(command_payload["action"])
         ):
             raise ValueError("recovery action name does not match its value")
+        feedback_started = self.monotonic()
         now = self.clock()
         event = IMCommandSignal(
             id=_required_text(payload.get("event_id"), "event_id"),
@@ -446,6 +458,7 @@ class RecoveryActionInboxBridge:
                 RecoveryAction.RETRY: "重新执行",
                 RecoveryAction.HUMAN_TAKEOVER: "人工接管",
             }[RecoveryAction(command_payload["action"])]
+            feedback_status = "updated"
             try:
                 self.card_updater(
                     token=event.card_update_token,
@@ -454,11 +467,27 @@ class RecoveryActionInboxBridge:
                         content=f"已收到“{label}”，正在重新校验权限与流程状态。",
                     ),
                 )
+            except Exception:
+                feedback_status = "failed"
+                raise
             finally:
+                completed_at = self.clock()
+                elapsed_ms = max(
+                    0,
+                    int((self.monotonic() - feedback_started) * 1000 + 0.5),
+                )
                 self.store.release_im_command(
                     self.tenant_id,
                     event.id,
-                    available_at=self.clock(),
+                    available_at=completed_at,
+                    feedback_status=feedback_status,
+                    feedback_elapsed_ms=elapsed_ms,
+                )
+                report_card_feedback(
+                    self.feedback_reporter,
+                    card_kind="recovery",
+                    status=feedback_status,
+                    elapsed_ms=elapsed_ms,
                 )
         return appended
 

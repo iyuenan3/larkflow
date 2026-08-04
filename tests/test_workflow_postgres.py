@@ -197,7 +197,19 @@ def test_postgres_im_command_round_trips_authenticated_mentions():
         tenant_id,
         event.id,
         available_at=now,
+        feedback_status="updated",
+        feedback_elapsed_ms=275,
     )
+    with connection_factory() as connection:
+        feedback = connection.execute(
+            """
+            SELECT feedback_status, feedback_elapsed_ms, feedback_completed_at
+            FROM workflow_im_commands
+            WHERE tenant_id = %s AND id = %s
+            """,
+            (tenant_id, event.id),
+        ).fetchone()
+    assert tuple(feedback) == ("updated", 275, now)
     claims = store.claim_im_verification(
         tenant_id,
         worker_id="verify_mentions",
@@ -248,7 +260,19 @@ def test_postgres_unknown_role_card_can_settle_to_a_generic_rejection():
         tenant_id,
         action.id,
         available_at=now,
+        feedback_status="updated",
+        feedback_elapsed_ms=325,
     )
+    with connection_factory() as connection:
+        feedback = connection.execute(
+            """
+            SELECT feedback_status, feedback_elapsed_ms, feedback_completed_at
+            FROM workflow_role_binding_actions
+            WHERE tenant_id = %s AND id = %s
+            """,
+            (tenant_id, action.id),
+        ).fetchone()
+    assert tuple(feedback) == ("updated", 325, now)
     verification = store.claim_role_binding_verification(
         tenant_id,
         worker_id="verify_unknown",

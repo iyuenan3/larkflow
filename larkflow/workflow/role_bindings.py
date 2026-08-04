@@ -6,12 +6,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import time
 from typing import Any, Protocol
 
 from .card_feedback import (
     CARD_FEEDBACK_FALLBACK,
     processing_card,
     rejected_card,
+    report_card_feedback,
 )
 from .directory import CandidateDirectory, DirectoryValidationError
 from .event_time import feishu_event_time
@@ -150,6 +152,8 @@ class RoleBindingStore(Protocol):
         event_id: str,
         *,
         available_at: datetime,
+        feedback_status: str,
+        feedback_elapsed_ms: int,
     ) -> None:
         ...
 
@@ -303,14 +307,18 @@ class RoleBindingActionInboxBridge:
         *,
         tenant_id: str,
         clock: Callable[[], datetime] | None = None,
+        monotonic: Callable[[], float] | None = None,
         card_updater: Callable[..., None] | None = None,
+        feedback_reporter: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         if not tenant_id.strip():
             raise ValueError("Target tenant_id is required")
         self.store = store
         self.tenant_id = tenant_id
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.monotonic = monotonic or time.monotonic
         self.card_updater = card_updater
+        self.feedback_reporter = feedback_reporter
 
     def __call__(self, event_type: str, payload: Mapping[str, Any]) -> bool:
         if event_type != CARD_ACTION_EVENT:
@@ -318,6 +326,7 @@ class RoleBindingActionInboxBridge:
         action_name = _optional_text(payload.get("action_name"))
         if action_name != ROLE_SUBMIT_NAME:
             return False
+        feedback_started = self.monotonic()
         now = self.clock()
         signal = RoleBindingActionSignal(
             id=_required_text(payload.get("event_id"), "event_id"),
@@ -342,6 +351,7 @@ class RoleBindingActionInboxBridge:
         )
         appended = self.store.append_role_binding_action(signal)
         if appended and self.card_updater is not None:
+            feedback_status = "updated"
             try:
                 self.card_updater(
                     token=signal.update_token,
@@ -350,11 +360,27 @@ class RoleBindingActionInboxBridge:
                         content="正在核验操作人、候选成员与模板状态。",
                     ),
                 )
+            except Exception:
+                feedback_status = "failed"
+                raise
             finally:
+                completed_at = self.clock()
+                elapsed_ms = max(
+                    0,
+                    int((self.monotonic() - feedback_started) * 1000 + 0.5),
+                )
                 self.store.release_role_binding_action(
                     self.tenant_id,
                     signal.id,
-                    available_at=self.clock(),
+                    available_at=completed_at,
+                    feedback_status=feedback_status,
+                    feedback_elapsed_ms=elapsed_ms,
+                )
+                report_card_feedback(
+                    self.feedback_reporter,
+                    card_kind="role_binding",
+                    status=feedback_status,
+                    elapsed_ms=elapsed_ms,
                 )
         return appended
 

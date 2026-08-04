@@ -438,6 +438,7 @@ def _target_event_observers(*, identity: str = "bot", profile: str | None = None
         raise RuntimeError(
             "LARKFLOW_TARGET_INBOX_DSN and LARKFLOW_TARGET_TENANT must be set together"
         )
+    from .workflow.cli import JsonLogger
     from .workflow.im_commands import IMEventInboxBridge, RecoveryActionInboxBridge
     from .workflow.inbound import TaskEventInboxBridge
     from .workflow.migrate import postgres_connection_factory
@@ -460,6 +461,7 @@ def _target_event_observers(*, identity: str = "bot", profile: str | None = None
             profile=profile,
             runner=partial(run_cli, timeout=3),
         )
+        feedback_logger = JsonLogger()
         observers.append(
             IMEventInboxBridge(
                 im_store,
@@ -471,6 +473,7 @@ def _target_event_observers(*, identity: str = "bot", profile: str | None = None
                 im_store,
                 tenant_id=tenant_id,
                 card_updater=card_io.update_card,
+                feedback_reporter=feedback_logger,
             )
         )
         observers.append(
@@ -478,6 +481,7 @@ def _target_event_observers(*, identity: str = "bot", profile: str | None = None
                 im_store,
                 tenant_id=tenant_id,
                 card_updater=card_io.update_card,
+                feedback_reporter=feedback_logger,
             )
         )
     return tuple(observers)

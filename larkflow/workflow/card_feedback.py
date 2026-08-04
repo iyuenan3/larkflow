@@ -1,11 +1,36 @@
 """Fast visual feedback for interactive Feishu cards."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 
 CARD_FEEDBACK_FALLBACK = timedelta(seconds=10)
+
+
+def report_card_feedback(
+    reporter: Callable[[str, dict[str, Any]], None] | None,
+    *,
+    card_kind: str,
+    status: str,
+    elapsed_ms: int,
+) -> None:
+    """Emit a bounded metric without allowing diagnostics to break callbacks."""
+
+    if reporter is None:
+        return
+    try:
+        reporter(
+            "card_feedback",
+            {
+                "card_kind": card_kind,
+                "status": status,
+                "elapsed_ms": max(0, elapsed_ms),
+            },
+        )
+    except Exception:
+        return
 
 
 def processing_card(*, title: str, content: str) -> dict[str, Any]:
@@ -57,4 +82,9 @@ def rejected_card(*, title: str, content: str) -> dict[str, Any]:
     }
 
 
-__all__ = ["CARD_FEEDBACK_FALLBACK", "processing_card", "rejected_card"]
+__all__ = [
+    "CARD_FEEDBACK_FALLBACK",
+    "processing_card",
+    "rejected_card",
+    "report_card_feedback",
+]

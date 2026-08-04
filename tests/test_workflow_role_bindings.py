@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from larkflow.workflow.card_feedback import report_card_feedback
 from larkflow.workflow import (
     DirectoryPerson,
     InMemoryTemplateStore,
@@ -30,6 +31,24 @@ from larkflow.workflow import (
 
 NOW = datetime(2026, 8, 3, 4, 0, tzinfo=timezone.utc)
 TENANT = "tenant_roles"
+
+
+def test_card_feedback_reporter_failure_cannot_break_the_callback_path():
+    calls = []
+
+    def fail_report(event, fields):
+        calls.append((event, fields))
+        raise RuntimeError("diagnostic sink unavailable")
+
+    report_card_feedback(
+        fail_report,
+        card_kind="role_binding",
+        status="updated",
+        elapsed_ms=-1,
+    )
+
+    assert calls[0][0] == "card_feedback"
+    assert calls[0][1]["elapsed_ms"] == 0
 
 
 def request(*, candidates=(), card_message_id=None):
@@ -221,11 +240,15 @@ def template_document():
 def test_card_bridge_accepts_only_the_named_role_binding_form():
     store = MemoryRoleStore()
     updates = []
+    reports = []
+    monotonic_values = iter((10.0, 10.123, 11.0, 12.0))
     bridge = RoleBindingActionInboxBridge(
         store,
         tenant_id=TENANT,
         clock=lambda: NOW,
+        monotonic=lambda: next(monotonic_values),
         card_updater=lambda **kwargs: updates.append(kwargs),
+        feedback_reporter=lambda event, fields: reports.append((event, fields)),
     )
     payload = {
         "event_id": "action_1",
@@ -253,7 +276,25 @@ def test_card_bridge_accepts_only_the_named_role_binding_form():
     assert "button" not in json.dumps(updates[0]["card"], ensure_ascii=False)
     assert store.appended[0].available_at == NOW + timedelta(seconds=10)
     assert store.released == [
-        (TENANT, "action_1", {"available_at": NOW})
+        (
+            TENANT,
+            "action_1",
+            {
+                "available_at": NOW,
+                "feedback_status": "updated",
+                "feedback_elapsed_ms": 123,
+            },
+        )
+    ]
+    assert reports == [
+        (
+            "card_feedback",
+            {
+                "card_kind": "role_binding",
+                "status": "updated",
+                "elapsed_ms": 123,
+            },
+        )
     ]
     assert store.appended[0].operator_person_id == "person_owner"
     assert store.appended[0].occurred_at == datetime(
@@ -263,6 +304,8 @@ def test_card_bridge_accepts_only_the_named_role_binding_form():
 
 def test_card_bridge_persists_before_fast_feedback_failure():
     store = MemoryRoleStore()
+    reports = []
+    monotonic_values = iter((20.0, 20.456))
 
     def fail_update(**_kwargs):
         raise RuntimeError("card update failed")
@@ -271,7 +314,9 @@ def test_card_bridge_persists_before_fast_feedback_failure():
         store,
         tenant_id=TENANT,
         clock=lambda: NOW,
+        monotonic=lambda: next(monotonic_values),
         card_updater=fail_update,
+        feedback_reporter=lambda event, fields: reports.append((event, fields)),
     )
 
     with pytest.raises(RuntimeError, match="card update failed"):
@@ -292,8 +337,21 @@ def test_card_bridge_persists_before_fast_feedback_failure():
 
     assert [event.id for event in store.appended] == ["action_feedback_failure"]
     assert store.released == [
-        (TENANT, "action_feedback_failure", {"available_at": NOW})
+        (
+            TENANT,
+            "action_feedback_failure",
+            {
+                "available_at": NOW,
+                "feedback_status": "failed",
+                "feedback_elapsed_ms": 456,
+            },
+        )
     ]
+    assert reports[0][1] == {
+        "card_kind": "role_binding",
+        "status": "failed",
+        "elapsed_ms": 456,
+    }
 
 
 def test_card_bridge_accepts_real_microsecond_callback_timestamp():

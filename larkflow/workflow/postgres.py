@@ -2003,16 +2003,28 @@ class PostgresIMCommandStore:
         event_id: str,
         *,
         available_at: datetime,
+        feedback_status: str,
+        feedback_elapsed_ms: int,
     ) -> None:
         with self.connection_factory() as connection:
             row = connection.execute(
                 """
                 UPDATE workflow_im_commands
-                SET available_at = LEAST(available_at, %s)
+                SET available_at = LEAST(available_at, %s),
+                    feedback_status = %s,
+                    feedback_elapsed_ms = %s,
+                    feedback_completed_at = %s
                 WHERE tenant_id = %s AND id = %s AND status = 'pending'
                 RETURNING id
                 """,
-                (available_at, tenant_id, event_id),
+                (
+                    available_at,
+                    feedback_status,
+                    feedback_elapsed_ms,
+                    available_at,
+                    tenant_id,
+                    event_id,
+                ),
             ).fetchone()
         if row is None:
             raise InvalidIMCommandClaimError(event_id)
@@ -2588,17 +2600,29 @@ class PostgresIMCommandStore:
         event_id: str,
         *,
         available_at: datetime,
+        feedback_status: str,
+        feedback_elapsed_ms: int,
     ) -> None:
         with self.connection_factory() as connection:
             row = connection.execute(
                 """
                 UPDATE workflow_role_binding_actions
-                SET available_at = LEAST(available_at, %s)
+                SET available_at = LEAST(available_at, %s),
+                    feedback_status = %s,
+                    feedback_elapsed_ms = %s,
+                    feedback_completed_at = %s
                 WHERE tenant_id = %s AND id = %s
                   AND is_canonical AND status = 'pending'
                 RETURNING id
                 """,
-                (available_at, tenant_id, event_id),
+                (
+                    available_at,
+                    feedback_status,
+                    feedback_elapsed_ms,
+                    available_at,
+                    tenant_id,
+                    event_id,
+                ),
             ).fetchone()
         if row is None:
             raise InvalidRoleBindingClaimError(event_id)
