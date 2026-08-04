@@ -6,7 +6,7 @@
 >
 > Personal Agent Edge 的 macOS 默认凭据后端已切换为登录 Keychain，磁盘只留 `0600` 非敏感引用；旧明文文件支持回读校验后迁移。合成 Keychain 项的真实创建、回读和删除已通过。默认槽位现绑定员工 Mac 的真实 Owner 设备，`run-once` 认证返回 `no_work`，服务器回读 active、配对审计和认证后时间戳均成立。凭据与元数据继续保留，当前隧道已关闭。该证据不包含员工安装分发、安全评审或可持续公网连接。
 >
-> last-synced: 398658a6a5886aba701842276e0bab4d7d8acec6 · 2026-08-05
+> last-synced: de3a4e0454f099a4e6c4a4db2774a71702d74b28 · 2026-08-05
 
 ## 阅读顺序
 
