@@ -14,6 +14,7 @@ from .projection import (
     ProjectionWorkerReport,
     WorkflowProjectionWorker,
 )
+from .wakeup import WaitForWork, wait_for_stop
 
 
 LogEvent = Callable[[str, dict[str, Any]], None]
@@ -80,6 +81,7 @@ class ProjectionWorkerLoop:
         role_binding_reply_worker: Any | None = None,
         completion_poll_seconds: float = 30.0,
         monotonic: Callable[[], float] | None = None,
+        wait_for_work: WaitForWork | None = None,
         log: LogEvent | None = None,
     ) -> None:
         if reconcile_batch_size < 1:
@@ -97,6 +99,7 @@ class ProjectionWorkerLoop:
         self.role_binding_reply_worker = role_binding_reply_worker
         self.completion_poll_seconds = completion_poll_seconds
         self.monotonic = monotonic or time.monotonic
+        self.wait_for_work = wait_for_work or wait_for_stop
         self.log = log or (lambda _event, _fields: None)
 
     def run(self, stop_event: Event) -> ProjectionLoopSummary:
@@ -323,7 +326,7 @@ class ProjectionWorkerLoop:
                     "projection_tick_failed",
                     {"error_type": type(exc).__name__, "error": str(exc)},
                 )
-                if stop_event.wait(idle_seconds):
+                if self.wait_for_work(stop_event, idle_seconds):
                     break
                 idle_seconds = self._next_idle(idle_seconds)
                 continue
@@ -336,7 +339,7 @@ class ProjectionWorkerLoop:
                 continue
             if report.errors:
                 self.log("projection_tick", self._report_fields(report))
-            if stop_event.wait(idle_seconds):
+            if self.wait_for_work(stop_event, idle_seconds):
                 break
             idle_seconds = self._next_idle(idle_seconds)
 

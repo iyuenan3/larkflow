@@ -13,6 +13,7 @@ from .inbound import (
     VerificationWorkerReport,
     WorkflowInboundWorker,
 )
+from .wakeup import WaitForWork, wait_for_stop
 
 
 LogEvent = Callable[[str, dict[str, Any]], None]
@@ -35,10 +36,12 @@ class InboundWorkerLoop:
         worker: WorkflowInboundWorker,
         *,
         settings: WorkerLoopSettings | None = None,
+        wait_for_work: WaitForWork | None = None,
         log: LogEvent | None = None,
     ) -> None:
         self.worker = worker
         self.settings = settings or WorkerLoopSettings()
+        self.wait_for_work = wait_for_work or wait_for_stop
         self.log = log or (lambda _event, _fields: None)
 
     def run(self, stop_event: Event) -> InboundLoopSummary:
@@ -61,7 +64,7 @@ class InboundWorkerLoop:
                     "inbound_tick_failed",
                     {"error_type": type(exc).__name__, "error": str(exc)},
                 )
-                if stop_event.wait(idle_seconds):
+                if self.wait_for_work(stop_event, idle_seconds):
                     break
                 idle_seconds = min(
                     self.settings.idle_max_seconds,
@@ -82,7 +85,7 @@ class InboundWorkerLoop:
             if report.claimed:
                 idle_seconds = self.settings.idle_min_seconds
                 continue
-            if stop_event.wait(idle_seconds):
+            if self.wait_for_work(stop_event, idle_seconds):
                 break
             idle_seconds = min(self.settings.idle_max_seconds, idle_seconds * 2)
         summary = InboundLoopSummary(**totals)
@@ -124,10 +127,12 @@ class VerificationWorkerLoop:
         worker: TaskVerificationWorker,
         *,
         settings: WorkerLoopSettings | None = None,
+        wait_for_work: WaitForWork | None = None,
         log: LogEvent | None = None,
     ) -> None:
         self.worker = worker
         self.settings = settings or WorkerLoopSettings()
+        self.wait_for_work = wait_for_work or wait_for_stop
         self.log = log or (lambda _event, _fields: None)
 
     def run(self, stop_event: Event) -> VerificationLoopSummary:
@@ -149,7 +154,7 @@ class VerificationWorkerLoop:
                     "inbound_verification_tick_failed",
                     {"error_type": type(exc).__name__, "error": str(exc)},
                 )
-                if stop_event.wait(idle_seconds):
+                if self.wait_for_work(stop_event, idle_seconds):
                     break
                 idle_seconds = min(
                     self.settings.idle_max_seconds,
@@ -167,7 +172,7 @@ class VerificationWorkerLoop:
             if report.claimed:
                 idle_seconds = self.settings.idle_min_seconds
                 continue
-            if stop_event.wait(idle_seconds):
+            if self.wait_for_work(stop_event, idle_seconds):
                 break
             idle_seconds = min(self.settings.idle_max_seconds, idle_seconds * 2)
         summary = VerificationLoopSummary(**totals)

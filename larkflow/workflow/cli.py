@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
 import json
@@ -65,6 +66,7 @@ from .runtime import AutomatedExecutor, WorkflowWorker
 from .serde import quality_to_dict, snapshot_from_dict, to_json_value
 from .service import WorkflowService
 from .template_service import TemplateService, template_document
+from .wakeup import PostgresWorkerWakeup, WaitForWork
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -504,7 +506,13 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 "idle_max_seconds": settings.loop.idle_max_seconds,
             },
         )
-        InboundWorkerLoop(worker, settings=settings.loop, log=log).run(stop_event)
+        with _postgres_worker_wakeup(connection_factory, log) as wait_for_work:
+            InboundWorkerLoop(
+                worker,
+                settings=settings.loop,
+                wait_for_work=wait_for_work,
+                log=log,
+            ).run(stop_event)
         return 0
 
     if verification_command:
@@ -558,11 +566,13 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 "lark_identity": namespace.lark_identity,
             },
         )
-        VerificationWorkerLoop(
-            worker,
-            settings=settings.loop,
-            log=log,
-        ).run(stop_event)
+        with _postgres_worker_wakeup(connection_factory, log) as wait_for_work:
+            VerificationWorkerLoop(
+                worker,
+                settings=settings.loop,
+                wait_for_work=wait_for_work,
+                log=log,
+            ).run(stop_event)
         return 0
 
     if projection_command:
@@ -823,21 +833,23 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 "doc_projection_enabled": enable_doc_projection,
             },
         )
-        ProjectionWorkerLoop(
-            worker,
-            settings=settings.loop,
-            reconcile_batch_size=settings.reconcile_batch_size,
-            completion_poller=completion_poller,
-            im_verification_worker=im_verification_worker,
-            im_reply_worker=im_reply_worker,
-            role_binding_card_worker=role_binding_card_worker,
-            role_binding_verification_worker=(
-                role_binding_verification_worker
-            ),
-            role_binding_reply_worker=role_binding_reply_worker,
-            completion_poll_seconds=settings.completion_poll_seconds,
-            log=log,
-        ).run(stop_event)
+        with _postgres_worker_wakeup(connection_factory, log) as wait_for_work:
+            ProjectionWorkerLoop(
+                worker,
+                settings=settings.loop,
+                reconcile_batch_size=settings.reconcile_batch_size,
+                completion_poller=completion_poller,
+                im_verification_worker=im_verification_worker,
+                im_reply_worker=im_reply_worker,
+                role_binding_card_worker=role_binding_card_worker,
+                role_binding_verification_worker=(
+                    role_binding_verification_worker
+                ),
+                role_binding_reply_worker=role_binding_reply_worker,
+                completion_poll_seconds=settings.completion_poll_seconds,
+                wait_for_work=wait_for_work,
+                log=log,
+            ).run(stop_event)
         return 0
 
     settings = TargetRuntimeSettings.from_environ(
@@ -934,14 +946,29 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             "im_commands_enabled": enable_im_commands,
         },
     )
-    WorkflowWorkerLoop(
-        worker,
-        im_command_worker=im_command_worker,
-        role_binding_worker=role_binding_worker,
-        settings=settings.loop,
-        log=log,
-    ).run(stop_event)
+    with _postgres_worker_wakeup(connection_factory, log) as wait_for_work:
+        WorkflowWorkerLoop(
+            worker,
+            im_command_worker=im_command_worker,
+            role_binding_worker=role_binding_worker,
+            settings=settings.loop,
+            wait_for_work=wait_for_work,
+            log=log,
+        ).run(stop_event)
     return 0
+
+
+@contextmanager
+def _postgres_worker_wakeup(
+    connection_factory: Any,
+    log: JsonLogger,
+) -> Iterator[WaitForWork]:
+    wakeup = PostgresWorkerWakeup(connection_factory, log=log)
+    wakeup.start()
+    try:
+        yield wakeup.wait
+    finally:
+        wakeup.close()
 
 
 def _executors(

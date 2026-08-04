@@ -7,6 +7,7 @@ from threading import Event
 from typing import Any
 
 from .runtime import WorkflowWorker, WorkflowWorkerReport
+from .wakeup import WaitForWork, wait_for_stop
 
 
 LogEvent = Callable[[str, dict[str, Any]], None]
@@ -55,12 +56,14 @@ class WorkflowWorkerLoop:
         im_command_worker: Any | None = None,
         role_binding_worker: Any | None = None,
         settings: WorkerLoopSettings | None = None,
+        wait_for_work: WaitForWork | None = None,
         log: LogEvent | None = None,
     ) -> None:
         self.worker = worker
         self.im_command_worker = im_command_worker
         self.role_binding_worker = role_binding_worker
         self.settings = settings or WorkerLoopSettings()
+        self.wait_for_work = wait_for_work or wait_for_stop
         self.log = log or (lambda _event, _fields: None)
 
     def run(self, stop_event: Event) -> WorkerLoopSummary:
@@ -143,7 +146,7 @@ class WorkflowWorkerLoop:
                     "worker_tick_failed",
                     {"error_type": type(exc).__name__, "error": str(exc)},
                 )
-                if stop_event.wait(idle_seconds):
+                if self.wait_for_work(stop_event, idle_seconds):
                     break
                 idle_seconds = self._next_idle(idle_seconds)
                 continue
@@ -157,7 +160,7 @@ class WorkflowWorkerLoop:
 
             if report.conflicts or report.stale_results or report.errors:
                 self.log("worker_tick", self._report_fields(report))
-            if stop_event.wait(idle_seconds):
+            if self.wait_for_work(stop_event, idle_seconds):
                 break
             idle_seconds = self._next_idle(idle_seconds)
 

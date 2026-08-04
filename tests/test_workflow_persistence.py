@@ -100,6 +100,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0015_recovery_cards",
         "0016_role_card_single_action",
         "0017_card_feedback_metrics",
+        "0018_worker_wakeups",
     ]
     sql = migrations[0][1]
     for table in (
@@ -128,6 +129,15 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "CREATE TABLE workflow_edge_events" in migrations[6][1]
     assert "workflow_edge_events_append_only" in migrations[6][1]
     assert "CREATE TABLE workflow_im_commands" in migrations[7][1]
+    wakeup_sql = migrations[17][1]
+    assert "pg_notify('larkflow_work_available', '')" in wakeup_sql
+    for trigger in (
+        "workflow_outbox_worker_wakeup",
+        "workflow_inbox_worker_wakeup",
+        "workflow_im_command_worker_wakeup",
+        "workflow_role_binding_worker_wakeup",
+    ):
+        assert f"CREATE TRIGGER {trigger}" in wakeup_sql
     assert "workflow_im_command_claimable_idx" in migrations[7][1]
     assert "workflow_im_reply_claimable_idx" in migrations[7][1]
     assert "workflow_instances_owner_recent_idx" in migrations[8][1]

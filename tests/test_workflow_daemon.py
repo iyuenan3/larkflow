@@ -67,6 +67,18 @@ class RecordingStop:
         return self.stopped
 
 
+class RecordingWakeup:
+    def __init__(self, *, stop_after_waits: int):
+        self.stop_after_waits = stop_after_waits
+        self.waits = []
+
+    def __call__(self, stop, seconds):
+        self.waits.append(seconds)
+        if len(self.waits) >= self.stop_after_waits:
+            stop.stopped = True
+        return stop.stopped
+
+
 class ScriptedPoller:
     def __init__(self, reports):
         self.reports = iter(reports)
@@ -243,6 +255,37 @@ def test_verification_loop_uses_the_same_bounded_backoff_contract():
     assert summary.verified == 1
     assert summary.failed == 1
     assert summary.exhausted == 1
+
+
+def test_all_persistent_loops_accept_notification_driven_waits():
+    cases = (
+        (
+            WorkflowWorkerLoop,
+            ScriptedWorker([WorkflowWorkerReport()]),
+        ),
+        (
+            ProjectionWorkerLoop,
+            ScriptedWorker([ProjectionWorkerReport()]),
+        ),
+        (
+            InboundWorkerLoop,
+            ScriptedWorker([InboundWorkerReport()]),
+        ),
+        (
+            VerificationWorkerLoop,
+            ScriptedWorker([VerificationWorkerReport()]),
+        ),
+    )
+
+    for loop_type, worker in cases:
+        stop = RecordingStop(stop_after_waits=99)
+        wakeup = RecordingWakeup(stop_after_waits=1)
+
+        summary = loop_type(worker, wait_for_work=wakeup).run(stop)
+
+        assert wakeup.waits == [0.25]
+        assert stop.waits == []
+        assert summary.ticks == 1
 
 
 def request(*, kind="development.echo", args=None, executor="tool"):

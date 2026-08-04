@@ -34,6 +34,12 @@ from .migrate import (
     postgres_connection_factory,
     verify_migrations,
 )
+from .wakeup import (
+    WORKER_WAKEUP_CHANNEL,
+    PostgresWorkerWakeup,
+    WaitForWork,
+    wait_for_stop,
+)
 from .config import (
     TargetInboundSettings,
     TargetProjectionSettings,
@@ -377,6 +383,7 @@ __all__ = [
     "PostgresIMCommandStore",
     "PostgresWorkflowInbox",
     "PostgresWorkflowRepository",
+    "PostgresWorkerWakeup",
     "ProjectionLoopSummary",
     "ProjectionRecord",
     "ProjectionReconciliationReport",
@@ -446,6 +453,8 @@ __all__ = [
     "VerificationWorkerReport",
     "WorkerLoopSettings",
     "WorkerLoopSummary",
+    "WORKER_WAKEUP_CHANNEL",
+    "WaitForWork",
     "apply_migrations",
     "apply_failed_node_recovery",
     "apply_future_graph_edit",
@@ -466,4 +475,5 @@ __all__ = [
     "validate_snapshot_owners",
     "validate_template_definition",
     "verify_migrations",
+    "wait_for_stop",
 ]

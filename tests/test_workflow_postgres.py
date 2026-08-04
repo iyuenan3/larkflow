@@ -30,6 +30,7 @@ from larkflow.workflow import (
     NodeSpec,
     PostgresWorkflowInbox,
     PostgresIMCommandStore,
+    PostgresWorkerWakeup,
     PostgresWorkflowRepository,
     PostgresEdgeStore,
     PairingCodeUsedError,
@@ -132,6 +133,34 @@ class BarrierGraphEditRepository(PostgresWorkflowRepository):
     def save_graph_edit(self, *args, **kwargs):
         self.barrier.wait(timeout=5)
         return super().save_graph_edit(*args, **kwargs)
+
+
+def test_postgres_committed_queue_insert_wakes_listener():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    now = datetime(2026, 8, 4, 9, 0, tzinfo=timezone.utc)
+    wakeup = PostgresWorkerWakeup(connection_factory)
+    assert wakeup.start() is True
+    try:
+        inserted = PostgresIMCommandStore(connection_factory).append_im_command(
+            IMCommandSignal(
+                id=f"event_wakeup_{suffix}",
+                tenant_id=f"tenant_wakeup_{suffix}",
+                message_id=f"message_wakeup_{suffix}",
+                chat_id=f"chat_wakeup_{suffix}",
+                sender_person_id="person_owner",
+                text="/larkflow list",
+                occurred_at=now,
+                received_at=now,
+            )
+        )
+        assert inserted is True
+        assert wakeup.wait(Event(), 1.0) is False
+        assert wakeup.notifications_received == 1
+    finally:
+        wakeup.close()
 
 
 def template_document() -> dict:
