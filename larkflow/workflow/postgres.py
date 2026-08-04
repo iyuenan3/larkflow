@@ -2594,7 +2594,8 @@ class PostgresIMCommandStore:
                 """
                 UPDATE workflow_role_binding_actions
                 SET available_at = LEAST(available_at, %s)
-                WHERE tenant_id = %s AND id = %s AND status = 'pending'
+                WHERE tenant_id = %s AND id = %s
+                  AND is_canonical AND status = 'pending'
                 RETURNING id
                 """,
                 (available_at, tenant_id, event_id),
@@ -2675,7 +2676,7 @@ class PostgresIMCommandStore:
             WITH selected AS (
                 SELECT tenant_id, id
                 FROM workflow_role_binding_actions
-                WHERE tenant_id = %s AND ({predicate})
+                WHERE tenant_id = %s AND is_canonical AND ({predicate})
                 ORDER BY available_at, received_at, id
                 FOR UPDATE SKIP LOCKED
                 LIMIT %s
@@ -2919,7 +2920,7 @@ class PostgresIMCommandStore:
                     WITH selected AS (
                         SELECT tenant_id, id
                         FROM workflow_role_binding_actions
-                        WHERE tenant_id = %s
+                        WHERE tenant_id = %s AND is_canonical
                           AND (
                             (reply_status IN ('pending', 'failed')
                                 AND reply_available_at <= %s)

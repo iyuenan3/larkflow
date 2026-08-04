@@ -141,7 +141,10 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "ADD COLUMN card_update_token" in migrations[14][1]
     assert "CREATE TABLE workflow_role_binding_actions" in migrations[13][1]
     assert "reply_kind IN ('text', 'role_binding_card')" in migrations[13][1]
+    assert "ADD COLUMN is_canonical" in migrations[15][1]
+    assert "row_number() OVER" in migrations[15][1]
     assert "workflow_role_binding_action_message_idx" in migrations[15][1]
+    assert "WHERE is_canonical" in migrations[15][1]
 
 
 def test_in_memory_repository_is_tenant_scoped():
