@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.32.1-draft · 2026-08-04 · 卡片首个服务端反馈耐久观测
+
+- Added：migration `0017_card_feedback_metrics` 在 `workflow_im_commands` 与 `workflow_role_binding_actions` 增加 `feedback_status`、`feedback_elapsed_ms` 和 `feedback_completed_at`，并用完整性约束拒绝部分指标写入。
+- Changed：两类回调桥接器用单调时钟覆盖有效回调被接受、动作插入与直接卡片更新，在释放动作时原子保存成功或失败；结构化日志只包含动作类型、结果与耗时，不包含人员、消息或卡片标识。
+- Verified：内容提交为 `c1d8fe510805cbe209a6275c4e4b3d8311b6692c`；完整离线套件为 `780 passed, 14 skipped`。干净 wheel SHA-256 为 `779990ca33771e0eb2ece2fa30bc8c1d4d2062625e4ded0f08e90d951d403204`，包含第十七份 migration。
+- Deployment：发布件保存在 `releases/20260804_162012_card_metrics_c1d8fe5/`。升级前备份成功且为 124574 bytes、`0600 lf_target_dev:lf_target_dev`；长期库应用第十七份 migration 后，六个 Python 服务均回读 `active / running / NRestarts=0`，部署窗口 warning 级日志数为 0。
+- Acceptance：真实人员选择卡的首个服务端反馈为 1.264 秒，领域处理与最终回复分别在入站后 4.484 秒和 5.030 秒完成；真实失败恢复卡的对应三项耗时为 0.990 秒、2.844 秒和 3.213 秒。两张原卡片均从飞书服务端读回终态且不含操作控件。
+- Boundary：首个反馈指标从服务端接受有效回调计到飞书直接更新调用返回，不包含物理点击到服务端的网络时间，也不包含客户端渲染。以上仅代表开发服务器和测试组织，不代表生产上线。
+
 ## v0.32.0-draft · 2026-08-04 · 可操作卡片即时视觉反馈
 
 - Added：人员选择卡与失败恢复卡在动作耐久落库后，立即尝试把原卡片替换为蓝色无按钮“处理中”，最终再收口为无按钮的成功或拒绝。legacy 卡片沿用既有两阶段同步更新。
