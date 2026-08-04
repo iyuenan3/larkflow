@@ -177,9 +177,9 @@ migration `0015_recovery_cards` 为耐久命令保存卡片更新 token，`0016_
 | `POST /edge/v1/leases/complete` | Bearer 设备凭据 | 回传有大小上限的 JSON 结果，服务端重验 Owner、capability、Attempt、版本、Worker、token 与租期 |
 | `POST /edge/v1/leases/fail` | Bearer 设备凭据 | 显式报告已领取工作的领域失败；本机适配器基础设施异常不会调用它 |
 
-配对码有效期最多 1 小时且只能消费一次。服务端只保存 SHA-256 purpose-separated hash，不保存原始配对 secret 或设备 secret。设备撤销后认证、续租和结果回传均拒绝。凭据文件的 Proof 实现使用当前用户所有、权限 `0600` 的普通文件，禁止符号链接；操作系统 Keychain 或硬件密钥存储尚未实现。
+配对码有效期最多 1 小时且只能消费一次。服务端只保存 SHA-256 purpose-separated hash，不保存原始配对 secret 或设备 secret。设备撤销后认证、续租和结果回传均拒绝。macOS 客户端的 `auto` 凭据模式默认把设备密钥保存为当前用户登录 Keychain 中 service `com.larkflow.edge.device`、account `default` 的 generic password；密钥不进入命令行参数、环境变量、日志或磁盘元数据。`~/.config/larkflow/edge-device.json` 仍以 `0600` 保存 `credential_store=keychain`、server URL 与 device ID，并拒绝符号链接。非 macOS 客户端和显式 `--credential-store file` 保留当前用户所有的 `0600` 完整凭据文件兼容路径；硬件密钥存储尚未实现。
 
-本机 `larkflow-edge` 提供 `pair`、`run-once` 与前台 `serve`。两种执行命令都显式固定工作区并启动 `codex exec --sandbox read-only --ephemeral --ignore-user-config --skip-git-repo-check`；`serve` 使用最长 25 秒的有界长轮询持续领取，同一凭据通过 POSIX 非阻塞文件锁限制为一个本机 Worker。瞬时网络与执行错误使用带抖动的有界指数退避，撤销或无效设备凭据立即停止；结构化日志提供启动、应用心跳、续租、单任务结果、故障和停止摘要。SIGINT 或 SIGTERM 会传递停止信号，续租失败也会取消整个 Codex 进程组；两种情况均不提交可能失去租约的结果。本机执行器异常仍不调用领域 `fail`。
+本机 `larkflow-edge` 提供 `pair`、`credential-migrate`、`run-once` 与前台 `serve`。`credential-migrate` 先把旧文件中的密钥写入 Keychain 并回读完整设备凭据；只有回读一致时，`--delete-source` 才把原明文文件原子替换为非敏感 Keychain 元数据。迁移校验或替换失败会回滚本次新建的 Keychain 项，旧文件保持可恢复。两种执行命令都显式固定工作区并启动 `codex exec --sandbox read-only --ephemeral --ignore-user-config --skip-git-repo-check`；`serve` 使用最长 25 秒的有界长轮询持续领取，同一凭据通过 POSIX 非阻塞文件锁限制为一个本机 Worker。瞬时网络与执行错误使用带抖动的有界指数退避，撤销或无效设备凭据立即停止；结构化日志提供启动、应用心跳、续租、单任务结果、故障和停止摘要。SIGINT 或 SIGTERM 会传递停止信号，续租失败也会取消整个 Codex 进程组；两种情况均不提交可能失去租约的结果。本机执行器异常仍不调用领域 `fail`。
 
 `serve` 表示用户主动启动并保持可见的会话，不提供操作系统 daemon、开机启动或隐藏后台驻留。启动时拒绝文件系统根目录、用户主目录以及包含设备凭据的工作区。子进程环境使用最小 allowlist，不继承任意 API key、代理、SSH agent、Edge、Target 或飞书变量。显式 `--inherit-loopback-proxy` 只传递无用户名和密码的 loopback HTTP / HTTPS / SOCKS URL，远程或带凭据代理仍丢弃。这限制文件写入、会话持久化和环境凭据暴露，但当前没有证据证明目录级读取被限制在所选工作区；恶意任务输入仍可能诱导读取其他可读文件，也不代表模型调用无数据外发风险。
 

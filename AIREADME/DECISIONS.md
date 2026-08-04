@@ -686,3 +686,13 @@
 - Alternatives(否决)：继续要求每个节点手动 `run-once`；直接安装 launchd 或 systemd 用户服务；把设备在线状态提升为中央调度真相；每种 Agent 工具各建一套租约协议；续租失败后允许本地执行完成并尝试迟到回传；允许同一凭据并行启动多个 Worker。
 - Tradeoff：前台进程仍要求用户主动保持终端会话，最长长轮询会让无在途任务的停止存在有限等待；POSIX 文件锁暂不支持 Windows；普通 `0600` 文件仍不等于系统安全存储。Codex 只读沙箱继续只证明写入受限，不能证明目录级读取隔离或无模型外发。会话持续领取减少了重复操作，但不证明员工采用、企业政策接受或生产安全已经成立。
 - Evidence：内容提交 `fd6933a186bf115fe83adc5ac7d3a3b6153b0436` 已发布。Edge 聚焦测试 `39 passed`，完整离线套件 `807 passed, 17 skipped`。两项变异分别移除续租失败取消与设备单例锁，新增回归均按预期失败并在恢复实现后通过。wheel 共 103 个条目，包含 `edge_agent.py`、客户端与 CLI，安装态 `larkflow-edge serve --help` 和模块导入已验证。该 wheel 已部署到开发服务器，并以临时安装态在员工 Mac 上通过 SSH 隧道完成前台验收：37 次空闲心跳后领取一个合成节点，真实 Codex 执行产生 18 次续租并完成；同凭据第二进程被拒绝，SIGTERM 安全退出，撤销设备后再次领取返回 403。临时凭据和隧道均已删除。当前证据仍不包含正式员工分发、系统凭据存储、安全评审或公网 HTTPS。
+
+## ADR-082 · 2026-08-05 · macOS Edge 密钥进入 Keychain，连接元数据留在私有文件
+
+- **Status：Accepted · Local implementation and synthetic Keychain validation。**
+- Problem：Edge 设备凭据可持续领取本人 `personal.readonly` 节点并回传结果。即使普通文件权限为 `0600`，长期密钥仍会以明文进入磁盘、备份和误提交面；把 server URL、device ID 与密钥整体塞进进程参数或环境变量又会扩大进程观察面。
+- Constraint：中央配对与租约协议不能改变；密钥不得进入 argv、环境变量、日志或磁盘元数据；运行时仍需知道 server URL 与 device ID，并以稳定路径实现同设备单 Worker 锁；迁移不能在 Keychain 回读一致前删除旧密钥；非 macOS 和显式开发模式必须保持兼容；首版仍只支持当前 OS 用户的一枚默认 Edge 凭据。
+- Decision：macOS 的 `auto` 模式把完整设备密钥保存为登录 Keychain 的固定 generic password，`0600` 元数据文件只保存 `credential_store=keychain`、server URL 与 device ID。写入通过无回显伪终端响应 `/usr/bin/security` 的两次密码提示，密钥不作为命令参数；回读后重新验证密钥内 device ID。配对只有在 Keychain 和元数据都成功时才完成本地保存，元数据失败会回滚新 Keychain 项。`credential-migrate --delete-source` 在回读完整匹配后原子替换旧文件为非敏感元数据；不加该选项时保留旧文件作为可恢复源，但运行时优先读 Keychain。
+- Alternatives(否决)：继续只用 `0600` 明文文件；把密钥放入 argv 或环境变量调用系统工具；把整个 JSON 作为 Keychain password；配对成功后只存 Keychain 而不保留连接元数据；迁移先删旧文件再验证；立即增加 launchd、硬件密钥或跨平台抽象层。
+- Tradeoff：Keychain 后端是 macOS 专用，非 macOS 仍有明文文件兼容风险。固定 service/account 暂不支持同一 OS 用户并列多个中央节点；登录钥匙串不可用时 Edge 会 fail closed。伪终端路径增加实现复杂度，且设备密钥必须满足安全交互输入上限。该变化降低静态凭据暴露，不证明受恶意本机进程控制时仍安全，也不替代正式安全评审。
+- Evidence：实现内容提交为 `4d9cef0836859bb0a6772eb08640b9e6b29030c8`。Edge 客户端与 CLI 聚焦测试 `34 passed`，完整离线套件 `816 passed, 17 skipped`。wheel SHA-256 为 `7be7c47a7b076585e0ed2133ae034dc5d3f58bf59d801de09a8fd56d2287164a`，独立安装目录已解析迁移命令。隔离合成 Keychain 项已用真实登录钥匙串完成创建、回读一致和删除；正式默认项与元数据路径均为空。未完成真实 Edge 设备配对、员工分发、开发服务器部署或安全评审。

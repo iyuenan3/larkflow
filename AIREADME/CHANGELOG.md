@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.36.0-draft · 2026-08-05 · macOS Keychain 设备凭据
+
+- Added：macOS 上 `larkflow-edge --credential-store auto` 默认把设备密钥保存到当前用户登录 Keychain。`0600` 元数据文件只保留 server URL、device ID 和 Keychain store 标识，并继续作为单设备锁定位。
+- Migration：新增 `credential-migrate [--delete-source]`。迁移先写入并回读校验 Keychain；`--delete-source` 仅在一致后把原明文文件原子替换为非敏感元数据。校验或替换失败会删除本次新建的 Keychain 项，保留旧文件。
+- Security：密钥不进入 `/usr/bin/security` 的 argv、环境变量、结构化日志或磁盘元数据。Keychain 写入通过无回显伪终端完成两次系统提示；读取后重新校验密钥内 device ID 与元数据一致。配对同时创建 Keychain 项和元数据，元数据失败会回滚新项。
+- Compatibility：非 macOS 默认继续使用当前用户所有的 `0600` 文件；显式 `--credential-store file` 保留开发兼容路径。已有明文文件在不删除源时仍可作为非敏感字段来源，但运行时优先使用已存在的 Keychain 密钥。
+- Verified：Edge 客户端与 CLI 聚焦套件 `34 passed`，完整离线套件 `816 passed, 17 skipped`。wheel SHA-256 为 `7be7c47a7b076585e0ed2133ae034dc5d3f58bf59d801de09a8fd56d2287164a`，安装态能解析迁移命令。隔离合成 Keychain 项已真实创建、完整回读并删除；正式 service/account 与默认元数据路径均读回为空。
+- Boundary：实现内容提交为 `4d9cef0836859bb0a6772eb08640b9e6b29030c8`。尚未部署到开发服务器或用真实 Edge 设备完成配对；正式员工安装、升级、安全评审和生产上线仍未完成。
+
 ## v0.35.0-draft · 2026-08-05 · 前台 Personal Agent Edge serve
 
 - Added：新增 `larkflow-edge serve --workspace <path>`，在用户主动启动且保持可见的会话中持续领取 `personal.readonly` 节点。默认使用 20 秒长轮询、带抖动的有界指数退避、60 秒应用心跳和结构化任务摘要。
