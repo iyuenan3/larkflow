@@ -646,3 +646,13 @@
 - Alternatives(否决)：继续依赖人工计时；只记录最终领域与回复时间戳；只写日志不落库；把最终卡片读回当成延迟证据；信任客户端 payload 自报时间；为观测失败回滚动作。
 - Tradeoff：两张耐久表各增加三个字段与完整性约束，桥接器多一次原子更新。该指标能稳定比较服务端反馈，却不能证明用户屏幕何时变化；客户端感知仍需单独的受控端到端测量。
 - Evidence：内容提交 `c1d8fe510805cbe209a6275c4e4b3d8311b6692c`；完整离线套件 `780 passed, 14 skipped`；wheel SHA-256 `779990ca33771e0eb2ece2fa30bc8c1d4d2062625e4ded0f08e90d951d403204`。长期开发库已应用十七份 migration，六服务为 `active / running / NRestarts=0`。真实人员选择卡首个服务端反馈为 1.264 秒，真实失败恢复卡为 0.990 秒；两张卡片均从飞书服务端读回终态且不含操作控件。
+
+## ADR-078 · 2026-08-04 · PostgreSQL 通知只唤醒 Worker，耐久队列与轮询继续保证可靠性
+
+- **Status：Accepted · Development validation。**
+- Problem：人员选择卡一次交互依次跨过凭据验证、领域处理和回复投影。多个独立指数退避循环会把空闲等待串行叠加；继续缩短轮询上限会增加空查询，却不能从根本上消除提交到扫描之间的等待。
+- Constraint：PostgreSQL 队列表仍是唯一工作权威；通知可能合并、丢失或因连接中断不可用；Worker 必须在首次扫描前完成监听，避免启动竞态；通知不得携带 tenant、人员、消息、Instance、Node、Task、凭据或任何业务状态；离线测试、SQLite 路径和 SIGTERM 可中断等待契约不能改变。
+- Decision：migration `0018_worker_wakeups` 为 Outbox、Inbox、IM 命令和人员分工动作的可认领状态建立 AFTER 触发器，只执行 `pg_notify('larkflow_work_available', '')`。Runtime、Projection、凭据侧入站和领域侧入站分别持有专用连接并在首次扫描前执行静态 LISTEN；收到通知后只提前结束空闲等待，再按原有事务 claim 读取业务状态。连接建立或等待失败时，关闭失效连接，并用当前退避区间的剩余时间继续可中断等待。
+- Alternatives(否决)：把完整业务 payload 放入 NOTIFY；依赖通知直接处理而不扫描表；每个 tenant 或事件类型使用动态 channel；监听失败后忙循环；继续无限缩短所有轮询间隔；用内存事件替代跨进程信号。
+- Tradeoff：每个常驻 Worker 多占一条 PostgreSQL 连接，四类表的相关状态写入多执行一次轻量触发器。通知不是队列，突发写入可能合并，但只要轮询兜底仍在就不会影响最终处理；当前开发环境仍保留 1 秒上限，后续容量测试后才能决定是否放宽。
+- Evidence：内容提交 `72d2e286c4a44b7893896939acf93aa97662db83`；完整离线套件 `786 passed, 15 skipped`。一次性 PostgreSQL 14 验证未提交事务不通知、提交后通知一次，监听关闭后轮询仍领取工作。开发长期库已应用十八份 migration，四个触发器、四条监听连接和四条启动日志均已读回；六服务为 `active / running / NRestarts=0`，部署窗口 warning 为 0。真实人员选择卡首个服务端反馈为 0.868 秒，领域处理与最终回复为 1.912 秒和 2.200 秒，原卡片从飞书服务端读回为无操作控件的已确认终态。

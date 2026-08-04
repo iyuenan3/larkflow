@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.33.0-draft · 2026-08-04 · PostgreSQL Worker 通知唤醒
+
+- Added：migration `0018_worker_wakeups` 为 Outbox、Inbox、IM 命令和人员分工动作的可认领状态增加事务后 `pg_notify` 触发器。四类 Target 常驻服务在首次扫描前分别建立专用 `LISTEN larkflow_work_available` 连接。
+- Reliability：通知 payload 为空，Worker 收到通知后仍从 PostgreSQL 队列表 claim 业务状态。连接、监听或等待失败时只退回当前有界轮询区间的剩余时间；默认离线和 SQLite 测试路径保持原有等待契约。
+- Verified：内容提交为 `72d2e286c4a44b7893896939acf93aa97662db83`；完整离线套件为 `786 passed, 15 skipped`。一次性 PostgreSQL 14 验证未提交事务通知数为 0、提交后为 1，监听关闭后普通轮询仍领取同一类耐久工作；测试库与临时文件随后删除。
+- Deployment：wheel SHA-256 为 `f2fe2072f98ef1ba371d97b18e4ef2d070fa1bfa21b657f9c12876d314aa89bb`，发布件保存在 `releases/20260804_171500_worker_wakeup_72d2e28/`。升级前备份为 129748 bytes、`0600 lf_target_dev:lf_target_dev`；长期库应用第十八份 migration 后，六服务均为 `active / running / NRestarts=0`，四个 Target Worker 各有一条真实监听连接，部署窗口 warning 级日志数为 0。
+- Acceptance：真实人员选择卡只产生一个 canonical 动作和一个草稿。首个服务端反馈、身份校验、领域处理与最终回复分别为 0.868 秒、0.959 秒、1.912 秒和 2.200 秒；应用 bot 从飞书服务端读回原卡片为无按钮、无提交动作的已确认终态。
+- Boundary：通知只降低耐久阶段之间的空闲等待，不承载业务状态，也不替代轮询、claim、授权或幂等。卡片数据只代表开发服务器和测试组织中的单次服务端测量，不包含客户端渲染，不代表生产上线或生产容量。
+
 ## v0.32.1-draft · 2026-08-04 · 卡片首个服务端反馈耐久观测
 
 - Added：migration `0017_card_feedback_metrics` 在 `workflow_im_commands` 与 `workflow_role_binding_actions` 增加 `feedback_status`、`feedback_elapsed_ms` 和 `feedback_completed_at`，并用完整性约束拒绝部分指标写入。
