@@ -427,11 +427,11 @@ class RoleBindingCardWorker:
         self.retry_max = retry_max
 
     def run_once(self) -> RoleBindingCardReport:
-        now = self.clock()
+        claim_now = self.clock()
         claims = self.store.claim_role_binding_cards(
             self.tenant_id,
             worker_id=self.worker_id,
-            now=now,
+            now=claim_now,
             limit=self.claim_limit,
             claim_ttl=self.claim_ttl,
         )
@@ -463,16 +463,18 @@ class RoleBindingCardWorker:
                 )
                 if not external_id.strip():
                     raise ValueError("Feishu card send returned no message_id")
+                completed_at = self.clock()
                 self.store.mark_role_binding_card_sent(
                     self.tenant_id,
                     claim.request.command_id,
                     claim_token=claim.claim_token,
                     candidate_person_ids=frozen_candidates,
                     external_id=external_id,
-                    now=now,
+                    now=completed_at,
                 )
                 sent += 1
             except Exception as exc:
+                failed_at = self.clock()
                 failed += 1
                 error = (
                     f"{claim.request.command_id}: {type(exc).__name__}: {exc}"
@@ -483,7 +485,7 @@ class RoleBindingCardWorker:
                     claim.request.command_id,
                     claim_token=claim.claim_token,
                     error=error,
-                    retry_at=now + _retry_delay(
+                    retry_at=failed_at + _retry_delay(
                         claim.attempt_count,
                         self.retry_base,
                         self.retry_max,
@@ -534,11 +536,11 @@ class RoleBindingVerificationWorker:
         self.retry_max = retry_max
 
     def run_once(self) -> RoleBindingVerificationReport:
-        now = self.clock()
+        claim_now = self.clock()
         claims = self.store.claim_role_binding_verification(
             self.tenant_id,
             worker_id=self.worker_id,
-            now=now,
+            now=claim_now,
             limit=self.claim_limit,
             claim_ttl=self.claim_ttl,
         )
@@ -548,6 +550,7 @@ class RoleBindingVerificationWorker:
             try:
                 bindings = self._verify(claim)
             except RoleBindingRejected as exc:
+                completed_at = self.clock()
                 rejected += 1
                 self.store.mark_role_binding_rejected(
                     self.tenant_id,
@@ -555,10 +558,11 @@ class RoleBindingVerificationWorker:
                     claim_token=claim.claim_token,
                     outcome="rejected:role_binding",
                     reply_text="人员分工未执行。请重新发送流程启动命令后再试。",
-                    now=now,
+                    now=completed_at,
                 )
                 continue
             except Exception as exc:
+                failed_at = self.clock()
                 failed += 1
                 error = f"{claim.action.id}: {type(exc).__name__}: {exc}"
                 errors.append(error)
@@ -567,19 +571,20 @@ class RoleBindingVerificationWorker:
                     claim.action.id,
                     claim_token=claim.claim_token,
                     error=error,
-                    retry_at=now + _retry_delay(
+                    retry_at=failed_at + _retry_delay(
                         claim.attempt_count,
                         self.retry_base,
                         self.retry_max,
                     ),
                 )
                 continue
+            completed_at = self.clock()
             self.store.mark_role_binding_verified(
                 self.tenant_id,
                 claim.action.id,
                 claim_token=claim.claim_token,
                 owner_bindings=bindings,
-                now=now,
+                now=completed_at,
             )
             verified += 1
         return RoleBindingVerificationReport(
@@ -667,11 +672,11 @@ class RoleBindingActionWorker:
         self.retry_max = retry_max
 
     def run_once(self) -> RoleBindingActionReport:
-        now = self.clock()
+        claim_now = self.clock()
         claims = self.store.claim_role_binding_actions(
             self.tenant_id,
             worker_id=self.worker_id,
-            now=now,
+            now=claim_now,
             limit=self.claim_limit,
             claim_ttl=self.claim_ttl,
         )
@@ -681,6 +686,7 @@ class RoleBindingActionWorker:
             try:
                 instance_id, reply = self._apply(claim)
             except RoleBindingRejected as exc:
+                completed_at = self.clock()
                 rejected += 1
                 self.store.mark_role_binding_rejected(
                     self.tenant_id,
@@ -688,10 +694,11 @@ class RoleBindingActionWorker:
                     claim_token=claim.claim_token,
                     outcome="rejected:role_binding_domain",
                     reply_text=f"人员分工未应用：{exc}",
-                    now=now,
+                    now=completed_at,
                 )
                 continue
             except Exception as exc:
+                failed_at = self.clock()
                 failed += 1
                 error = f"{claim.action.id}: {type(exc).__name__}: {exc}"
                 errors.append(error)
@@ -700,20 +707,21 @@ class RoleBindingActionWorker:
                     claim.action.id,
                     claim_token=claim.claim_token,
                     error=error,
-                    retry_at=now + _retry_delay(
+                    retry_at=failed_at + _retry_delay(
                         claim.attempt_count,
                         self.retry_base,
                         self.retry_max,
                     ),
                 )
                 continue
+            completed_at = self.clock()
             self.store.mark_role_binding_processed(
                 self.tenant_id,
                 claim.action.id,
                 claim_token=claim.claim_token,
                 instance_id=instance_id,
                 reply_text=reply,
-                now=now,
+                now=completed_at,
             )
             processed += 1
         return RoleBindingActionReport(
@@ -833,11 +841,11 @@ class RoleBindingReplyWorker:
         self.retry_max = retry_max
 
     def run_once(self) -> RoleBindingReplyReport:
-        now = self.clock()
+        claim_now = self.clock()
         claims = self.store.claim_role_binding_replies(
             self.tenant_id,
             worker_id=self.worker_id,
-            now=now,
+            now=claim_now,
             limit=self.claim_limit,
             claim_ttl=self.claim_ttl,
         )
@@ -882,15 +890,17 @@ class RoleBindingReplyWorker:
                 )
                 if not external_id.strip():
                     raise ValueError("Feishu role-binding reply returned no message_id")
+                completed_at = self.clock()
                 self.store.mark_role_binding_reply_sent(
                     self.tenant_id,
                     claim.action.id,
                     claim_token=claim.claim_token,
                     external_id=external_id,
-                    now=now,
+                    now=completed_at,
                 )
                 sent += 1
             except Exception as exc:
+                failed_at = self.clock()
                 failed += 1
                 error = f"{claim.action.id}: {type(exc).__name__}: {exc}"
                 errors.append(error)
@@ -899,7 +909,7 @@ class RoleBindingReplyWorker:
                     claim.action.id,
                     claim_token=claim.claim_token,
                     error=error,
-                    retry_at=now + _retry_delay(
+                    retry_at=failed_at + _retry_delay(
                         claim.attempt_count,
                         self.retry_base,
                         self.retry_max,

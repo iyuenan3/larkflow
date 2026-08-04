@@ -36,6 +36,11 @@ NOW = datetime(2026, 8, 2, 13, 0, tzinfo=timezone.utc)
 TENANT = "tenant_im"
 
 
+def sequence_clock(*offset_seconds):
+    values = iter(NOW + timedelta(seconds=value) for value in offset_seconds)
+    return lambda: next(values)
+
+
 def signal(
     text: str,
     *,
@@ -724,6 +729,89 @@ def test_verification_requires_matching_active_directory_person():
 
     assert report.verified == 1
     assert store.verified[0][1] == "event_1"
+
+
+def test_im_workers_timestamp_each_item_after_its_work():
+    class Directory:
+        def get_person(self, tenant_id, person_id):
+            assert tenant_id == TENANT
+            return DirectoryPerson(person_id=person_id, active=True)
+
+    verification_store = MemoryStore()
+    verification_store.verification_claims = [
+        IMCommandClaim(signal("/larkflow help", event_id="event_1"), "token-1", 1),
+        IMCommandClaim(signal("/larkflow help", event_id="event_2"), "token-2", 1),
+    ]
+    IMCommandVerificationWorker(
+        verification_store,
+        Directory(),
+        tenant_id=TENANT,
+        worker_id="verify_1",
+        clock=sequence_clock(0, 1, 2),
+    ).run_once()
+    assert [item[2]["now"] for item in verification_store.verified] == [
+        NOW + timedelta(seconds=1),
+        NOW + timedelta(seconds=2),
+    ]
+
+    class StubCommandWorker(IMCommandWorker):
+        def _apply(self, event):
+            return "help", None, f"handled {event.id}"
+
+    command_store = MemoryStore()
+    command_store.command_claims = [
+        IMCommandClaim(signal("/larkflow help", event_id="event_1"), "token-1", 1),
+        IMCommandClaim(signal("/larkflow help", event_id="event_2"), "token-2", 1),
+    ]
+    StubCommandWorker(
+        command_store,
+        None,
+        None,
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=sequence_clock(0, 3, 4),
+    ).run_once()
+    assert [item[2]["now"] for item in command_store.processed] == [
+        NOW + timedelta(seconds=3),
+        NOW + timedelta(seconds=4),
+    ]
+
+    class Sender:
+        def send_chat_message(self, **kwargs):
+            return f"external_{kwargs['idempotency_key']}"
+
+    reply_store = MemoryStore()
+    reply_store.reply_claims = [
+        IMReplyClaim(
+            event_id="event_1",
+            tenant_id=TENANT,
+            chat_id="chat_1",
+            text="first",
+            idempotency_key="reply-1",
+            claim_token="reply-token-1",
+            attempt_count=1,
+        ),
+        IMReplyClaim(
+            event_id="event_2",
+            tenant_id=TENANT,
+            chat_id="chat_1",
+            text="second",
+            idempotency_key="reply-2",
+            claim_token="reply-token-2",
+            attempt_count=1,
+        ),
+    ]
+    IMReplyWorker(
+        reply_store,
+        Sender(),
+        tenant_id=TENANT,
+        worker_id="reply_1",
+        clock=sequence_clock(0, 5, 6),
+    ).run_once()
+    assert [item[2]["now"] for item in reply_store.reply_sent] == [
+        NOW + timedelta(seconds=5),
+        NOW + timedelta(seconds=6),
+    ]
 
 
 def test_inactive_sender_is_rejected_before_domain_processing():

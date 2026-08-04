@@ -549,11 +549,11 @@ class IMCommandVerificationWorker:
         self.max_attempts = max_attempts
 
     def run_once(self) -> IMVerificationReport:
-        now = self.clock()
+        claim_now = self.clock()
         claims = self.store.claim_im_verification(
             self.tenant_id,
             worker_id=self.worker_id,
-            now=now,
+            now=claim_now,
             limit=self.claim_limit,
             claim_ttl=self.claim_ttl,
         )
@@ -569,26 +569,28 @@ class IMCommandVerificationWorker:
                     person.person_id != claim.event.sender_person_id
                     or not person.active
                 ):
+                    completed_at = self.clock()
                     self.store.mark_im_verification_rejected(
                         self.tenant_id,
                         claim.event.id,
                         claim_token=claim.claim_token,
                         outcome="rejected:inactive_sender",
                         reply_text="无法确认你的在职状态，流程命令未执行。",
-                        now=now,
+                        now=completed_at,
                     )
                     rejected += 1
                     continue
                 try:
                     owner_person_ids = _owner_person_ids_from_mentions(claim.event)
                 except IMCommandRejected:
+                    completed_at = self.clock()
                     self.store.mark_im_verification_rejected(
                         self.tenant_id,
                         claim.event.id,
                         claim_token=claim.claim_token,
                         outcome="rejected:invalid_owner_mention",
                         reply_text="无法确认角色绑定中的飞书成员，流程命令未执行。",
-                        now=now,
+                        now=completed_at,
                     )
                     rejected += 1
                     continue
@@ -601,24 +603,27 @@ class IMCommandVerificationWorker:
                         inactive_owner = True
                         break
                 if inactive_owner:
+                    completed_at = self.clock()
                     self.store.mark_im_verification_rejected(
                         self.tenant_id,
                         claim.event.id,
                         claim_token=claim.claim_token,
                         outcome="rejected:inactive_owner",
                         reply_text="无法确认角色负责人仍在当前企业，流程命令未执行。",
-                        now=now,
+                        now=completed_at,
                     )
                     rejected += 1
                     continue
+                completed_at = self.clock()
                 self.store.mark_im_verified(
                     self.tenant_id,
                     claim.event.id,
                     claim_token=claim.claim_token,
-                    now=now,
+                    now=completed_at,
                 )
                 verified += 1
             except Exception as exc:
+                failed_at = self.clock()
                 failed += 1
                 error = f"{claim.event.id}: {type(exc).__name__}: {exc}"
                 errors.append(error)
@@ -629,7 +634,7 @@ class IMCommandVerificationWorker:
                         claim_token=claim.claim_token,
                         outcome="exhausted:directory_verification",
                         reply_text="暂时无法验证企业成员状态，流程命令未执行。",
-                        now=now,
+                        now=failed_at,
                     )
                 else:
                     self.store.mark_im_verification_failed(
@@ -637,7 +642,7 @@ class IMCommandVerificationWorker:
                         claim.event.id,
                         claim_token=claim.claim_token,
                         error=error,
-                        retry_at=now + self._retry_delay(claim.attempt_count),
+                        retry_at=failed_at + self._retry_delay(claim.attempt_count),
                     )
         return IMVerificationReport(
             claimed=len(claims),
@@ -693,11 +698,11 @@ class IMCommandWorker:
         self.retry_max = retry_max
 
     def run_once(self) -> IMCommandReport:
-        now = self.clock()
+        claim_now = self.clock()
         claims = self.store.claim_im_commands(
             self.tenant_id,
             worker_id=self.worker_id,
-            now=now,
+            now=claim_now,
             limit=self.claim_limit,
             claim_ttl=self.claim_ttl,
         )
@@ -707,16 +712,18 @@ class IMCommandWorker:
             try:
                 outcome, instance_id, reply = self._apply(claim.event)
             except _RoleBindingRequired as required:
+                completed_at = self.clock()
                 self.store.mark_im_role_binding_requested(
                     self.tenant_id,
                     claim.event.id,
                     claim_token=claim.claim_token,
                     request=required.request,
-                    now=now,
+                    now=completed_at,
                 )
                 processed += 1
                 continue
             except IMCommandRejected as exc:
+                completed_at = self.clock()
                 rejected += 1
                 self.store.mark_im_processed(
                     self.tenant_id,
@@ -725,10 +732,11 @@ class IMCommandWorker:
                     outcome="rejected:command",
                     instance_id=None,
                     reply_text=f"命令未执行：{exc}",
-                    now=now,
+                    now=completed_at,
                 )
                 continue
             except Exception as exc:
+                failed_at = self.clock()
                 failed += 1
                 error = f"{claim.event.id}: {type(exc).__name__}: {exc}"
                 errors.append(error)
@@ -737,9 +745,10 @@ class IMCommandWorker:
                     claim.event.id,
                     claim_token=claim.claim_token,
                     error=error,
-                    retry_at=now + self._retry_delay(claim.attempt_count),
+                    retry_at=failed_at + self._retry_delay(claim.attempt_count),
                 )
                 continue
+            completed_at = self.clock()
             self.store.mark_im_processed(
                 self.tenant_id,
                 claim.event.id,
@@ -747,7 +756,7 @@ class IMCommandWorker:
                 outcome=outcome,
                 instance_id=instance_id,
                 reply_text=reply,
-                now=now,
+                now=completed_at,
             )
             processed += 1
         return IMCommandReport(
@@ -1153,11 +1162,11 @@ class IMReplyWorker:
         self.retry_max = retry_max
 
     def run_once(self) -> IMReplyReport:
-        now = self.clock()
+        claim_now = self.clock()
         claims = self.store.claim_im_replies(
             self.tenant_id,
             worker_id=self.worker_id,
-            now=now,
+            now=claim_now,
             limit=self.claim_limit,
             claim_ttl=self.claim_ttl,
         )
@@ -1179,15 +1188,17 @@ class IMReplyWorker:
                 )
                 if not external_id.strip():
                     raise ValueError("Feishu IM send returned no message_id")
+                completed_at = self.clock()
                 self.store.mark_im_reply_sent(
                     self.tenant_id,
                     claim.event_id,
                     claim_token=claim.claim_token,
                     external_id=external_id,
-                    now=now,
+                    now=completed_at,
                 )
                 sent += 1
             except Exception as exc:
+                failed_at = self.clock()
                 failed += 1
                 error = f"{claim.event_id}: {type(exc).__name__}: {exc}"
                 errors.append(error)
@@ -1196,7 +1207,7 @@ class IMReplyWorker:
                     claim.event_id,
                     claim_token=claim.claim_token,
                     error=error,
-                    retry_at=now + self._retry_delay(claim.attempt_count),
+                    retry_at=failed_at + self._retry_delay(claim.attempt_count),
                 )
         return IMReplyReport(
             claimed=len(claims),

@@ -2797,8 +2797,12 @@ class PostgresIMCommandStore:
             UPDATE workflow_role_binding_actions
             SET status = 'rejected', processed_at = %s, outcome = %s,
                 reply_text = %s,
-                reply_status = CASE WHEN %s IS NULL THEN NULL ELSE 'pending' END,
-                reply_available_at = CASE WHEN %s IS NULL THEN NULL ELSE %s END,
+                reply_status = CASE
+                    WHEN CAST(%s AS text) IS NULL THEN NULL ELSE 'pending'
+                END,
+                reply_available_at = CASE
+                    WHEN CAST(%s AS text) IS NULL THEN NULL ELSE %s
+                END,
                 claimed_by = NULL, claim_token = NULL,
                 claim_expires_at = NULL
             WHERE tenant_id = %s AND id = %s

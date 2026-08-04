@@ -37,6 +37,7 @@ from larkflow.workflow import (
     ProjectionRecord,
     RestartScope,
     RoleBindingActionSignal,
+    RoleBindingVerificationWorker,
     TaskCompletionSignal,
     TemplateService,
     TemplateStatus,
@@ -331,6 +332,62 @@ def test_postgres_unknown_role_card_can_settle_to_a_generic_rejection():
     assert reply.request is None
     assert reply.instance_id is None
     assert reply.text.startswith("人员分工未执行")
+
+
+def test_postgres_role_verification_records_each_item_completion_time():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_role_completion_{suffix}"
+    base = datetime(2026, 8, 4, 7, 0, tzinfo=timezone.utc)
+    values = iter((base, base + timedelta(seconds=1), base + timedelta(seconds=2)))
+    store = PostgresIMCommandStore(connection_factory)
+
+    class UnusedDirectory:
+        def get_person(self, tenant_id, person_id):
+            raise AssertionError("unknown-card rejection must not query the directory")
+
+    for index in (1, 2):
+        action = RoleBindingActionSignal(
+            id=f"event_{index}_{suffix}",
+            tenant_id=tenant_id,
+            message_id=f"message_{index}_{suffix}",
+            chat_id=f"chat_{suffix}",
+            operator_person_id="person_owner",
+            action_tag="button",
+            action_name="role_binding_submit",
+            form_value='{"role__reviewer":"person_owner"}',
+            update_token=f"token_{index}_{suffix}",
+            occurred_at=base,
+            received_at=base,
+        )
+        assert store.append_role_binding_action(action) is True
+
+    report = RoleBindingVerificationWorker(
+        store,
+        UnusedDirectory(),
+        tenant_id=tenant_id,
+        worker_id="verify_completion",
+        clock=lambda: next(values),
+    ).run_once()
+
+    assert report.claimed == 2
+    assert report.rejected == 2
+    with connection_factory() as connection:
+        rows = connection.execute(
+            """
+            SELECT status, processed_at
+            FROM workflow_role_binding_actions
+            WHERE tenant_id = %s
+            ORDER BY id
+            """,
+            (tenant_id,),
+        ).fetchall()
+    assert rows == [
+        {"status": "rejected", "processed_at": base + timedelta(seconds=1)},
+        {"status": "rejected", "processed_at": base + timedelta(seconds=2)},
+    ]
 
 
 def test_postgres_persists_template_lifecycle_and_frozen_instance_snapshot():

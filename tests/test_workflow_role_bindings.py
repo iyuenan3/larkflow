@@ -1,6 +1,7 @@
 """Person-selection card tests for multi-owner workflow drafts."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
 
@@ -196,6 +197,11 @@ class Sender:
     def send_chat_message(self, **kwargs):
         self.messages.append(kwargs)
         return "reply_message_1"
+
+
+def sequence_clock(*offset_seconds):
+    values = iter(NOW + timedelta(seconds=value) for value in offset_seconds)
+    return lambda: next(values)
 
 
 def template_document():
@@ -459,6 +465,105 @@ def test_verification_trusts_operator_envelope_and_revalidates_people():
     assert store.rejected[0][2]["reply_text"] == (
         "人员分工未执行。请重新发送流程启动命令后再试。"
     )
+
+
+def test_role_binding_workers_timestamp_each_item_after_its_work():
+    req = request(
+        candidates=("person_owner", "person_reviewer"),
+        card_message_id="card_message_1",
+    )
+    first_action = action()
+    second_action = replace(first_action, id="action_2")
+
+    verification_store = MemoryRoleStore()
+    verification_store.verification_claims = [
+        RoleBindingActionClaim(first_action, req, "verify-token-1", 1),
+        RoleBindingActionClaim(second_action, req, "verify-token-2", 1),
+    ]
+    RoleBindingVerificationWorker(
+        verification_store,
+        Directory(),
+        tenant_id=TENANT,
+        worker_id="verify_worker",
+        clock=sequence_clock(0, 1, 2),
+    ).run_once()
+    assert [item[2]["now"] for item in verification_store.verified] == [
+        NOW + timedelta(seconds=1),
+        NOW + timedelta(seconds=2),
+    ]
+
+    repository = InMemoryWorkflowRepository()
+    templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
+    templates.create_template(
+        tenant_id=TENANT,
+        actor_person_id="person_admin",
+        document=template_document(),
+    )
+    templates.enable(TENANT, "collaborative_review", actor_person_id="person_admin")
+    service = WorkflowService(repository, clock=lambda: NOW)
+    bindings = {"requester": "person_owner", "reviewer": "person_reviewer"}
+    action_store = MemoryRoleStore()
+    action_store.action_claims = [
+        RoleBindingActionClaim(
+            first_action,
+            req,
+            "action-token-1",
+            1,
+            owner_bindings=bindings,
+        ),
+        RoleBindingActionClaim(
+            second_action,
+            req,
+            "action-token-2",
+            1,
+            owner_bindings=bindings,
+        ),
+    ]
+    RoleBindingActionWorker(
+        action_store,
+        service,
+        templates,
+        tenant_id=TENANT,
+        worker_id="action_worker",
+        clock=sequence_clock(0, 3, 4),
+    ).run_once()
+    assert [item[2]["now"] for item in action_store.processed] == [
+        NOW + timedelta(seconds=3),
+        NOW + timedelta(seconds=4),
+    ]
+
+    reply_store = MemoryRoleStore()
+    reply_store.reply_claims = [
+        RoleBindingReplyClaim(
+            action=first_action,
+            request=req,
+            owner_bindings=bindings,
+            instance_id="im_instance",
+            text="draft ready",
+            claim_token="reply-token-1",
+            attempt_count=1,
+        ),
+        RoleBindingReplyClaim(
+            action=second_action,
+            request=req,
+            owner_bindings=bindings,
+            instance_id="im_instance",
+            text="draft ready",
+            claim_token="reply-token-2",
+            attempt_count=1,
+        ),
+    ]
+    RoleBindingReplyWorker(
+        reply_store,
+        Sender(),
+        tenant_id=TENANT,
+        worker_id="reply_worker",
+        clock=sequence_clock(0, 5, 6),
+    ).run_once()
+    assert [item[2]["now"] for item in reply_store.reply_sent] == [
+        NOW + timedelta(seconds=5),
+        NOW + timedelta(seconds=6),
+    ]
 
 
 def test_verified_binding_creates_one_frozen_draft_and_queues_reply():
