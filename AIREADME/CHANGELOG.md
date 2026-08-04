@@ -8,7 +8,8 @@
 - Verified：内容提交为 `5312f6c026453ac6d9e2e62679b755f271c114f3`；完整离线套件为 `796 passed, 17 skipped`。三组变异测试均捕获对应错误实现；一次性真实 PostgreSQL 竞争验证两个副本各领取一条不同记录；服务器实际 systemd 版本通过新模板校验。
 - Deployment：wheel SHA-256 为 `4f0ac761284da5e82ff52118da3b4ba5e273c4c8081b3f0170ccc65993d04ba2`，发布件与 `a506e7d` 回滚件保存在 `releases/20260804_205741_interactive_5312f6c/`。migration runner 返回空版本集，长期库保持十八份 migration。八服务均为 `active / NRestarts=0`，六条监听连接存在，安装文件哈希与本地提交一致。
 - Operations：Target 虚拟环境由 root 管理，服务账号强制重装在卸载旧包后因元数据权限失败；随后按既有 root 管理方式恢复安装并通过 `pip check`，三个 pip 临时目录已移动到发布目录备份。Projection 在切换前停止，没有旧 Projection 与新 Interactive 重叠消费。
-- Boundary：当前完成的是离线测试、真实 PostgreSQL 竞争和开发部署回读。真实飞书突发、隔离、共享 profile 与限流回归尚未完成，不据此声明生产容量。
+- Acceptance：三次真实飞书突发点击均只产生一个 canonical 动作和一个草稿，全部进入 `processed / draft_created / sent`。首反馈、凭据验证、领域处理和最终回复的 P50 / P95 分别为 1.015 / 1.196 秒、2.373 / 2.425 秒、2.586 / 2.677 秒和 4.793 / 5.498 秒。两个副本分别承担 2 / 1 条验证和 1 / 2 条回复，所有车道 `error_count=0`；应用 bot 从飞书服务端回读三张原卡片均为已更新、已冻结、不可再次提交的确认终态。
+- Boundary：当前完成的是离线测试、真实 PostgreSQL 竞争、开发部署回读和三次真实飞书突发验收。样本不包含客户端渲染，隔离与更高强度限流回归尚未完成，不据此声明生产容量。
 
 ## v0.33.1-draft · 2026-08-04 · 批次完成时间逐项结算
 

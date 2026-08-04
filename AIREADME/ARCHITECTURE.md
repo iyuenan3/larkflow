@@ -150,7 +150,7 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 - `edge_http.py` 与 `edge_gateway_cli.py`：提供私有 `/edge/v1` JSON 边界和运维入口。Gateway 默认且强制只监听 loopback；远程设备必须经独立 HTTPS 反向代理，仓库不把该接口描述为公网 API。
 - `edge_client.py` 与 `edge_cli.py`：用户设备只提供手工 `pair` 与 `run-once`。Codex adapter 固定显式工作区，使用只读、临时会话和忽略用户配置模式，清除 Edge、Target 与飞书凭据环境变量，并按进程组终止超时子进程。
 
-内容提交 `5312f6c026453ac6d9e2e62679b755f271c114f3` 已部署到 `alicloud-sh`。Runtime、Projection、两个 Interactive、凭据侧入站、领域侧入站和 Edge 共七个 Target 服务，加上 legacy 消费者共八个 Python 服务，均回读 `active / NRestarts=0`。六个队列 Worker 各持有一条 PostgreSQL 监听连接。两个 Interactive 副本的稳定身份、`claim_limit=1`、监听启动和安装文件哈希已回读；一次性真实 PostgreSQL 竞争证明两个副本各领取一条不同人员分工记录。真实飞书突发、隔离与限流回归尚未完成，因此不能把数据库并发证据解释为真实飞书容量。下段中的六服务与四条监听连接只保留为 `a506e7d` 时点的历史验证证据，不代表当前拓扑。
+内容提交 `5312f6c026453ac6d9e2e62679b755f271c114f3` 已部署到 `alicloud-sh`。Runtime、Projection、两个 Interactive、凭据侧入站、领域侧入站和 Edge 共七个 Target 服务，加上 legacy 消费者共八个 Python 服务，均回读 `active / NRestarts=0`。六个队列 Worker 各持有一条 PostgreSQL 监听连接。两个 Interactive 副本的稳定身份、`claim_limit=1`、监听启动和安装文件哈希已回读；一次性真实 PostgreSQL 竞争证明两个副本各领取一条不同人员分工记录。三次真实飞书突发点击进一步证明两个副本都实际承担凭据验证和最终回复，三条动作均唯一、成功且收口到服务端确认卡片；最终回复范围为 4.615 到 5.576 秒。该小样本只关闭真实突发链路的首轮风险，隔离与更高强度限流回归尚未完成，不能解释为生产容量。下段中的六服务与四条监听连接只保留为 `a506e7d` 时点的历史验证证据，不代表当前拓扑。
 
 领域状态、审计与 outbox 在同一事务提交。事务提交后，Human 节点与所有节点状态变化通过 outbox 请求投影同步；Agent 和 Tool 激活直接返回 NodeActivation，由 Runtime Worker 在提交后交给 executor，避免数据库事务跨越外部调用。自动执行是 at-least-once，executor 必须使用 tenant-scoped Attempt 幂等键消除重复副作用。Agent 装配还会检查所有显式故障切换线路的超时总和，加上安全余量后必须小于 claim 租期，避免正常慢调用在结果提交前失去租约。Edge Proof 不发明独立 Capability Lease，它把可撤销设备身份与一个明确 kind 映射到同一 Node claim，并用心跳延长当前租期；设备失联或本机执行器异常后，租约到期才允许接管。
 
