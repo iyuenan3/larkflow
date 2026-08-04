@@ -16,10 +16,20 @@ from .edge import PERSONAL_READONLY_CAPABILITY
 from .edge_agent import EdgeAgentLoop
 from .edge_client import (
     CodexReadonlyExecutor,
+    EdgeCredentialNotKeychainReferenceError,
     EdgeDeviceLock,
+    EdgeKeychainReference,
     EdgeWorker,
     HttpEdgeTransport,
+    StoredEdgeCredential,
+    delete_edge_keychain_credential,
+    edge_keychain_credential_exists,
+    load_edge_keychain_credential,
+    load_edge_keychain_reference,
     load_edge_credential,
+    replace_edge_credential_with_keychain_reference,
+    save_edge_keychain_credential,
+    save_edge_keychain_reference,
     save_edge_credential,
 )
 
@@ -36,6 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--credential-file",
         default=str(DEFAULT_CREDENTIAL_FILE),
     )
+    parser.add_argument(
+        "--credential-store",
+        choices=("auto", "keychain", "file"),
+        default="auto",
+        help="auto prefers macOS Keychain, then a legacy credential file",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
     pair = commands.add_parser("pair", help="pair this device with a one-time code")
@@ -44,6 +60,18 @@ def build_parser() -> argparse.ArgumentParser:
     pair.add_argument(
         "--code",
         help="one-time code; omit to read it without terminal echo",
+    )
+    migrate = commands.add_parser(
+        "credential-migrate",
+        help="copy a legacy credential file into macOS Keychain",
+    )
+    migrate.add_argument(
+        "--delete-source",
+        action="store_true",
+        help=(
+            "remove the verified plaintext secret and replace the source with "
+            "non-secret Keychain metadata"
+        ),
     )
 
     run_once = commands.add_parser(
@@ -107,14 +135,24 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _run(namespace: argparse.Namespace) -> int:
     credential_path = Path(namespace.credential_file).expanduser()
+    if namespace.command == "credential-migrate":
+        return _migrate_credential_file(
+            credential_path,
+            delete_source=namespace.delete_source,
+        )
+
     if namespace.command == "pair":
+        credential_store = _pair_credential_store(namespace, credential_path)
         if credential_path.exists() or credential_path.is_symlink():
             raise FileExistsError(
                 f"credential file already exists: {credential_path}"
             )
-        credential_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if not credential_path.parent.is_dir():
-            raise ValueError("credential parent must be a directory")
+        if credential_store == "file":
+            credential_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if not credential_path.parent.is_dir():
+                raise ValueError("credential parent must be a directory")
+        elif edge_keychain_credential_exists():
+            raise FileExistsError("Edge credential already exists in macOS Keychain")
         code = namespace.code or getpass.getpass("One-time pairing code: ")
         transport = HttpEdgeTransport(namespace.server)
         paired = transport.pair(
@@ -122,12 +160,27 @@ def _run(namespace: argparse.Namespace) -> int:
             name=_required(namespace.name, "device name"),
             capabilities=(PERSONAL_READONLY_CAPABILITY,),
         )
-        save_edge_credential(credential_path, paired)
+        if credential_store == "keychain":
+            keychain_created = False
+            try:
+                save_edge_keychain_credential(paired)
+                keychain_created = True
+                save_edge_keychain_reference(credential_path, paired)
+            except Exception as exc:
+                if keychain_created:
+                    delete_edge_keychain_credential()
+                raise RuntimeError(
+                    "pairing succeeded but Keychain storage failed; "
+                    "revoke the new device before retrying"
+                ) from exc
+        else:
+            save_edge_credential(credential_path, paired)
         _print(
             {
                 "event": "edge_device_paired",
                 "device_id": paired.device_id,
                 "server_url": paired.server_url,
+                "credential_store": credential_store,
                 "credential_file": str(credential_path),
                 "capabilities": [PERSONAL_READONLY_CAPABILITY],
             }
@@ -138,14 +191,16 @@ def _run(namespace: argparse.Namespace) -> int:
         raise ValueError("wait-seconds must be between 0 and 25")
     if namespace.timeout_seconds <= 0 or namespace.renew_seconds <= 0:
         raise ValueError("timeout-seconds and renew-seconds must be positive")
-    stored = load_edge_credential(credential_path)
+    stored, credential_store, lock_path, credential_source_path = (
+        _load_selected_credential(namespace, credential_path)
+    )
     transport = HttpEdgeTransport(
         stored.server_url,
         credential=stored.credential,
     )
     workspace_path = Path(namespace.workspace).expanduser().resolve(strict=True)
     if namespace.command == "serve":
-        _validate_serve_workspace(workspace_path, credential_path)
+        _validate_serve_workspace(workspace_path, credential_source_path)
     executor = CodexReadonlyExecutor(
         workspace_path,
         codex_binary=namespace.codex_binary,
@@ -167,7 +222,8 @@ def _run(namespace: argparse.Namespace) -> int:
             else None
         ),
     )
-    with EdgeDeviceLock(credential_path):
+    lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with EdgeDeviceLock(lock_path):
         if namespace.command == "run-once":
             report = worker.run_once(wait_seconds=namespace.wait_seconds)
             _print(
@@ -199,6 +255,7 @@ def _run(namespace: argparse.Namespace) -> int:
                     "event": "edge_agent_started",
                     "device_id": stored.device_id,
                     "server_url": stored.server_url,
+                    "credential_store": credential_store,
                     "workspace": str(workspace_path),
                     "capability": PERSONAL_READONLY_CAPABILITY,
                     "wait_seconds": namespace.wait_seconds,
@@ -220,16 +277,127 @@ def _run(namespace: argparse.Namespace) -> int:
         return 0 if summary.fatal_error is None else 3
 
 
+def _pair_credential_store(
+    namespace: argparse.Namespace,
+    credential_path: Path,
+) -> str:
+    if namespace.credential_store == "file":
+        return "file"
+    if namespace.credential_store == "keychain":
+        edge_keychain_credential_exists()
+        return "keychain"
+    if sys.platform != "darwin":
+        return "file"
+    if edge_keychain_credential_exists():
+        return "keychain"
+    if credential_path.exists() or credential_path.is_symlink():
+        raise FileExistsError(
+            "legacy credential file exists; run credential-migrate before pairing"
+        )
+    return "keychain"
+
+
+def _load_selected_credential(
+    namespace: argparse.Namespace,
+    credential_path: Path,
+) -> tuple[StoredEdgeCredential, str, Path, Path | None]:
+    if namespace.credential_store == "file":
+        return (
+            load_edge_credential(credential_path),
+            "file",
+            credential_path,
+            credential_path,
+        )
+    if namespace.credential_store == "keychain":
+        stored = _load_keychain_credential_from_metadata(credential_path)
+        return stored, "keychain", credential_path, credential_path
+    if sys.platform == "darwin" and edge_keychain_credential_exists():
+        stored = _load_keychain_credential_from_metadata(credential_path)
+        return stored, "keychain", credential_path, credential_path
+    if credential_path.exists() or credential_path.is_symlink():
+        if sys.platform == "darwin":
+            try:
+                reference = load_edge_keychain_reference(credential_path)
+            except EdgeCredentialNotKeychainReferenceError:
+                pass
+            else:
+                stored = load_edge_keychain_credential(reference)
+                return stored, "keychain", credential_path, credential_path
+        return (
+            load_edge_credential(credential_path),
+            "file",
+            credential_path,
+            credential_path,
+        )
+    raise FileNotFoundError(
+        f"Edge credential is not configured: {credential_path}; run pair first"
+    )
+
+
+def _load_keychain_credential_from_metadata(
+    credential_path: Path,
+) -> StoredEdgeCredential:
+    try:
+        reference = load_edge_keychain_reference(credential_path)
+    except EdgeCredentialNotKeychainReferenceError:
+        legacy = load_edge_credential(credential_path)
+        reference = EdgeKeychainReference(
+            server_url=legacy.server_url,
+            device_id=legacy.device_id,
+        )
+    return load_edge_keychain_credential(reference)
+
+
+def _migrate_credential_file(
+    credential_path: Path,
+    *,
+    delete_source: bool,
+) -> int:
+    if edge_keychain_credential_exists():
+        raise FileExistsError("Edge credential already exists in macOS Keychain")
+    stored = load_edge_credential(credential_path)
+    reference = EdgeKeychainReference(
+        server_url=stored.server_url,
+        device_id=stored.device_id,
+    )
+    save_edge_keychain_credential(stored)
+    try:
+        if load_edge_keychain_credential(reference) != stored:
+            raise ValueError("Keychain credential verification did not match")
+        if delete_source:
+            replace_edge_credential_with_keychain_reference(
+                credential_path,
+                stored,
+            )
+    except Exception:
+        delete_edge_keychain_credential()
+        raise
+    _print(
+        {
+            "event": "edge_credential_migrated",
+            "credential_store": "keychain",
+            "source_file": str(credential_path),
+            "source_secret_removed": delete_source,
+        }
+    )
+    return 0
+
+
 def _required(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{label} is required")
     return value.strip()
 
 
-def _validate_serve_workspace(workspace: Path, credential_path: Path) -> None:
+def _validate_serve_workspace(
+    workspace: Path,
+    credential_path: Path | None,
+) -> None:
     home = Path.home().resolve()
     if workspace == Path(workspace.anchor) or workspace == home:
         raise ValueError("serve workspace cannot be the filesystem root or user home")
+    if credential_path is None:
+        return
     credential = credential_path.expanduser().resolve(strict=True)
     if credential.is_relative_to(workspace):
         raise ValueError("Edge credential file cannot be inside the serve workspace")

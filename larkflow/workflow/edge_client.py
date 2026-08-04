@@ -8,12 +8,15 @@ import errno
 import json
 import os
 from pathlib import Path
+import select
 import secrets
 import shutil
 import signal
 import stat
 import subprocess
+import sys
 from threading import Event, Lock, Thread
+import time
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
@@ -26,12 +29,32 @@ try:
 except ImportError:  # pragma: no cover - current Edge agent supports POSIX only
     fcntl = None  # type: ignore[assignment]
 
+try:
+    import pty
+    import termios
+except ImportError:  # pragma: no cover - Keychain integration is macOS-only
+    pty = None  # type: ignore[assignment]
+    termios = None  # type: ignore[assignment]
+
+
+DEFAULT_EDGE_KEYCHAIN_SERVICE = "com.larkflow.edge.device"
+DEFAULT_EDGE_KEYCHAIN_ACCOUNT = "default"
+MACOS_SECURITY = Path("/usr/bin/security")
+_KEYCHAIN_ITEM_NOT_FOUND = 44
+_KEYCHAIN_PROMPT_MAX_BYTES = 120
+
 
 @dataclass(frozen=True)
 class StoredEdgeCredential:
     server_url: str
     device_id: str
     credential: str
+
+
+@dataclass(frozen=True)
+class EdgeKeychainReference:
+    server_url: str
+    device_id: str
 
 
 @dataclass(frozen=True)
@@ -101,6 +124,18 @@ class EdgeTransportError(RuntimeError):
 
 class EdgeExecutionCancelled(RuntimeError):
     """The local process was stopped before it could produce a result."""
+
+
+class EdgeKeychainError(RuntimeError):
+    """A macOS Keychain operation failed without exposing secret output."""
+
+
+class EdgeKeychainCredentialNotFoundError(FileNotFoundError):
+    """The requested Edge credential is not present in macOS Keychain."""
+
+
+class EdgeCredentialNotKeychainReferenceError(ValueError):
+    """The private file is a legacy credential instead of Keychain metadata."""
 
 
 class EdgeTransport(Protocol):
@@ -642,10 +677,284 @@ class EdgeDeviceLock:
             os.close(descriptor)
 
 
+def edge_keychain_credential_exists(
+    *,
+    service: str = DEFAULT_EDGE_KEYCHAIN_SERVICE,
+    account: str = DEFAULT_EDGE_KEYCHAIN_ACCOUNT,
+) -> bool:
+    """Return whether the current macOS user has this Edge Keychain item."""
+    _require_macos_keychain()
+    completed = subprocess.run(
+        _keychain_find_argv(service=service, account=account, reveal=False),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=10,
+    )
+    if completed.returncode == 0:
+        return True
+    if completed.returncode == _KEYCHAIN_ITEM_NOT_FOUND:
+        return False
+    raise EdgeKeychainError("failed to inspect the macOS Keychain item")
+
+
+def save_edge_keychain_credential(
+    credential: StoredEdgeCredential,
+    *,
+    service: str = DEFAULT_EDGE_KEYCHAIN_SERVICE,
+    account: str = DEFAULT_EDGE_KEYCHAIN_ACCOUNT,
+) -> None:
+    """Create one Keychain item without placing its secret in argv or env."""
+    _require_macos_keychain()
+    _stored_credential_from_payload(
+        _credential_payload(credential),
+        source="Edge credential",
+    )
+    if edge_keychain_credential_exists(service=service, account=account):
+        raise FileExistsError("Edge credential already exists in macOS Keychain")
+    _validate_keychain_secret(credential.credential)
+    argv = [
+        str(MACOS_SECURITY),
+        "add-generic-password",
+        "-a",
+        account,
+        "-s",
+        service,
+        "-D",
+        "application password",
+        "-l",
+        "larkflow Personal Agent Edge device",
+        "-w",
+    ]
+    _security_password_prompt(argv, credential.credential)
+
+
+def load_edge_keychain_credential(
+    reference: EdgeKeychainReference,
+    *,
+    service: str = DEFAULT_EDGE_KEYCHAIN_SERVICE,
+    account: str = DEFAULT_EDGE_KEYCHAIN_ACCOUNT,
+) -> StoredEdgeCredential:
+    """Load and validate one Edge credential from the current user Keychain."""
+    _require_macos_keychain()
+    completed = subprocess.run(
+        _keychain_find_argv(service=service, account=account, reveal=True),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode == _KEYCHAIN_ITEM_NOT_FOUND:
+        raise EdgeKeychainCredentialNotFoundError(
+            "Edge credential was not found in macOS Keychain"
+        )
+    if completed.returncode != 0:
+        raise EdgeKeychainError("failed to read the macOS Keychain item")
+    try:
+        credential = completed.stdout.decode("utf-8").rstrip("\r\n")
+    except UnicodeDecodeError as exc:
+        raise ValueError("macOS Keychain item is not a valid Edge credential") from exc
+    _validate_keychain_secret(credential)
+    return _stored_credential_from_payload(
+        {
+            "server_url": reference.server_url,
+            "device_id": reference.device_id,
+            "credential": credential,
+        },
+        source="macOS Keychain item",
+    )
+
+
+def delete_edge_keychain_credential(
+    *,
+    service: str = DEFAULT_EDGE_KEYCHAIN_SERVICE,
+    account: str = DEFAULT_EDGE_KEYCHAIN_ACCOUNT,
+) -> None:
+    """Delete one exact Edge Keychain item after explicit caller authorization."""
+    _require_macos_keychain()
+    completed = subprocess.run(
+        [
+            str(MACOS_SECURITY),
+            "delete-generic-password",
+            "-a",
+            account,
+            "-s",
+            service,
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode == _KEYCHAIN_ITEM_NOT_FOUND:
+        raise EdgeKeychainCredentialNotFoundError(
+            "Edge credential was not found in macOS Keychain"
+        )
+    if completed.returncode != 0:
+        raise EdgeKeychainError("failed to delete the macOS Keychain item")
+
+
+def _require_macos_keychain() -> None:
+    if sys.platform != "darwin" or not MACOS_SECURITY.is_file():
+        raise EdgeKeychainError("macOS Keychain is only available on macOS")
+
+
+def _validate_keychain_secret(credential: str) -> None:
+    encoded = credential.encode("utf-8")
+    if not encoded or any(value < 0x21 or value > 0x7E for value in encoded):
+        raise ValueError("Edge credential must contain only printable ASCII")
+    if len(encoded) > _KEYCHAIN_PROMPT_MAX_BYTES:
+        raise ValueError("Edge credential is too large for secure Keychain input")
+
+
+def _keychain_find_argv(
+    *,
+    service: str,
+    account: str,
+    reveal: bool,
+) -> list[str]:
+    argv = [
+        str(MACOS_SECURITY),
+        "find-generic-password",
+        "-a",
+        account,
+        "-s",
+        service,
+    ]
+    if reveal:
+        argv.append("-w")
+    return argv
+
+
+def _security_password_prompt(
+    argv: list[str],
+    password: str,
+    *,
+    timeout_seconds: float = 60,
+) -> None:
+    if not argv or argv[-1] != "-w":
+        raise ValueError("macOS security password prompt requires final -w")
+    if pty is None or termios is None:
+        raise EdgeKeychainError("macOS Keychain requires POSIX terminal support")
+    master, slave = pty.openpty()
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        try:
+            attributes = termios.tcgetattr(slave)
+            attributes[3] &= ~(termios.ECHO | termios.ECHONL)
+            termios.tcsetattr(slave, termios.TCSANOW, attributes)
+            process = subprocess.Popen(
+                argv,
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                close_fds=True,
+                start_new_session=True,
+                env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+            )
+        except Exception:
+            os.close(master)
+            raise
+    finally:
+        os.close(slave)
+    assert process is not None
+    try:
+        encoded = password.encode("utf-8") + b"\n"
+        prompts = (
+            b"password data for new item:",
+            b"retype password for new item:",
+        )
+        prompt_index = 0
+        output = b""
+        deadline = time.monotonic() + timeout_seconds
+        while process.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_process_group(process)
+                raise EdgeKeychainError("macOS Keychain write timed out")
+            readable, _, _ = select.select([master], [], [], min(0.1, remaining))
+            if master not in readable:
+                continue
+            try:
+                chunk = os.read(master, 4096)
+                if not chunk:
+                    break
+            except OSError as exc:
+                if exc.errno != errno.EIO:
+                    raise
+                break
+            output = (output + chunk)[-4096:]
+            if prompt_index < len(prompts) and prompts[prompt_index] in output:
+                remaining_input = memoryview(encoded)
+                while remaining_input:
+                    remaining_input = remaining_input[os.write(master, remaining_input):]
+                prompt_index += 1
+                output = b""
+        try:
+            returncode = process.wait(timeout=1)
+        except subprocess.TimeoutExpired as exc:
+            _terminate_process_group(process)
+            raise EdgeKeychainError(
+                "macOS Keychain write did not exit after input"
+            ) from exc
+    finally:
+        os.close(master)
+        if process.poll() is None:
+            _terminate_process_group(process)
+    if returncode != 0 or prompt_index != len(prompts):
+        raise EdgeKeychainError("failed to store the Edge credential in Keychain")
+
+
 def save_edge_credential(path: Path | str, credential: StoredEdgeCredential) -> None:
+    _save_private_json_once(Path(path).expanduser(), _credential_payload(credential))
+
+
+def save_edge_keychain_reference(
+    path: Path | str,
+    credential: StoredEdgeCredential,
+) -> None:
+    _save_private_json_once(
+        Path(path).expanduser(),
+        _keychain_reference_payload(credential),
+    )
+
+
+def replace_edge_credential_with_keychain_reference(
+    path: Path | str,
+    credential: StoredEdgeCredential,
+) -> None:
     target = Path(path).expanduser()
+    if load_edge_credential(target) != credential:
+        raise ValueError("credential source changed during Keychain migration")
+    if target.lstat().st_nlink != 1:
+        raise ValueError("credential source cannot have multiple hard links")
+    temporary = _write_private_json_temporary(
+        target,
+        _keychain_reference_payload(credential),
+    )
+    try:
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _save_private_json_once(target: Path, payload: Mapping[str, Any]) -> None:
     if target.exists() or target.is_symlink():
         raise FileExistsError(f"credential file already exists: {target}")
+    temporary = _write_private_json_temporary(target, payload)
+    try:
+        os.link(temporary, target, follow_symlinks=False)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_private_json_temporary(
+    target: Path,
+    payload: Mapping[str, Any],
+) -> Path:
     target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = target.with_name(
         f".{target.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
@@ -654,28 +963,45 @@ def save_edge_credential(path: Path | str, credential: StoredEdgeCredential) -> 
     descriptor = os.open(temporary, flags, 0o600)
     try:
         try:
-            payload = json.dumps(
-                {
-                    "server_url": credential.server_url,
-                    "device_id": credential.device_id,
-                    "credential": credential.credential,
-                },
+            encoded = json.dumps(
+                payload,
                 ensure_ascii=False,
                 indent=2,
             ).encode("utf-8")
             written = 0
-            while written < len(payload):
-                written += os.write(descriptor, payload[written:])
+            while written < len(encoded):
+                written += os.write(descriptor, encoded[written:])
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
-        os.link(temporary, target, follow_symlinks=False)
-    finally:
+    except Exception:
         temporary.unlink(missing_ok=True)
+        raise
+    return temporary
 
 
 def load_edge_credential(path: Path | str) -> StoredEdgeCredential:
-    target = Path(path).expanduser()
+    payload = _load_private_json(Path(path).expanduser())
+    return _stored_credential_from_payload(payload, source="credential file")
+
+
+def load_edge_keychain_reference(path: Path | str) -> EdgeKeychainReference:
+    payload = _load_private_json(Path(path).expanduser())
+    if not isinstance(payload, Mapping):
+        raise ValueError("credential metadata file must contain a JSON object")
+    if payload.get("credential_store") != "keychain":
+        raise EdgeCredentialNotKeychainReferenceError(
+            "credential metadata file does not reference Keychain"
+        )
+    if "credential" in payload:
+        raise ValueError("credential metadata file cannot contain a secret")
+    return EdgeKeychainReference(
+        server_url=validate_edge_server_url(_text(payload, "server_url")),
+        device_id=_text(payload, "device_id"),
+    )
+
+
+def _load_private_json(target: Path) -> Any:
     if target.is_symlink():
         raise ValueError("credential file cannot be a symlink")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -703,8 +1029,34 @@ def load_edge_credential(path: Path | str) -> StoredEdgeCredential:
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+    return payload
+
+
+def _credential_payload(credential: StoredEdgeCredential) -> dict[str, str]:
+    return {
+        "server_url": credential.server_url,
+        "device_id": credential.device_id,
+        "credential": credential.credential,
+    }
+
+
+def _keychain_reference_payload(
+    credential: StoredEdgeCredential,
+) -> dict[str, str]:
+    return {
+        "credential_store": "keychain",
+        "server_url": credential.server_url,
+        "device_id": credential.device_id,
+    }
+
+
+def _stored_credential_from_payload(
+    payload: Any,
+    *,
+    source: str,
+) -> StoredEdgeCredential:
     if not isinstance(payload, Mapping):
-        raise ValueError("credential file must contain a JSON object")
+        raise ValueError(f"{source} must contain a JSON object")
     stored = StoredEdgeCredential(
         server_url=validate_edge_server_url(_text(payload, "server_url")),
         device_id=_text(payload, "device_id"),

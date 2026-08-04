@@ -15,15 +15,23 @@ import larkflow.workflow.edge_client as edge_client
 from larkflow.workflow.edge_agent import EdgeAgentLoop
 from larkflow.workflow.edge_client import (
     CodexReadonlyExecutor,
+    EdgeCredentialNotKeychainReferenceError,
     EdgeDeviceLock,
     EdgeExecutionCancelled,
+    EdgeKeychainCredentialNotFoundError,
+    EdgeKeychainReference,
     EdgeLeasePayload,
     EdgeTransportError,
     EdgeWorker,
     EdgeWorkerReport,
     HttpEdgeTransport,
     StoredEdgeCredential,
+    load_edge_keychain_credential,
+    load_edge_keychain_reference,
     load_edge_credential,
+    replace_edge_credential_with_keychain_reference,
+    save_edge_keychain_credential,
+    save_edge_keychain_reference,
     save_edge_credential,
     validate_edge_server_url,
 )
@@ -126,6 +134,164 @@ def test_credential_loader_rejects_loose_permissions_and_symlinks(tmp_path: Path
     )
     with pytest.raises(ValueError, match="stored device id"):
         load_edge_credential(target)
+
+
+def test_keychain_writer_keeps_secret_out_of_process_argv(monkeypatch):
+    stored = StoredEdgeCredential(
+        server_url="https://edge.example.com",
+        device_id="device_1",
+        credential="device_1.secret",
+    )
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(edge_client, "_require_macos_keychain", lambda: None)
+    monkeypatch.setattr(
+        edge_client,
+        "edge_keychain_credential_exists",
+        lambda **_kwargs: False,
+    )
+
+    def write(argv: list[str], password: str) -> None:
+        captured["argv"] = argv
+        captured["password"] = password
+
+    monkeypatch.setattr(edge_client, "_security_password_prompt", write)
+
+    save_edge_keychain_credential(stored)
+
+    argv = captured["argv"]
+    assert argv[-1] == "-w"
+    assert stored.credential not in argv
+    assert captured["password"] == stored.credential
+
+    oversized = StoredEdgeCredential(
+        server_url=stored.server_url,
+        device_id="device_1",
+        credential=f"device_1.{('s' * 121)}",
+    )
+    with pytest.raises(ValueError, match="too large"):
+        save_edge_keychain_credential(oversized)
+
+    unsafe = StoredEdgeCredential(
+        server_url=stored.server_url,
+        device_id="device_1",
+        credential="device_1.secret\twith-control",
+    )
+    with pytest.raises(ValueError, match="printable ASCII"):
+        save_edge_keychain_credential(unsafe)
+
+
+def test_keychain_loader_validates_payload_and_maps_missing_item(monkeypatch):
+    stored = StoredEdgeCredential(
+        server_url="https://edge.example.com",
+        device_id="device_1",
+        credential="device_1.secret",
+    )
+    reference = EdgeKeychainReference(stored.server_url, stored.device_id)
+    monkeypatch.setattr(edge_client, "_require_macos_keychain", lambda: None)
+    calls: list[list[str]] = []
+
+    def found(argv: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=f"{stored.credential}\n".encode(),
+        )
+
+    monkeypatch.setattr(edge_client.subprocess, "run", found)
+    assert load_edge_keychain_credential(reference) == stored
+    assert calls[-1][-1] == "-w"
+
+    def missing(
+        argv: list[str],
+        **_kwargs: Any,
+    ) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(argv, 44, stdout=b"")
+
+    monkeypatch.setattr(edge_client.subprocess, "run", missing)
+    with pytest.raises(EdgeKeychainCredentialNotFoundError):
+        load_edge_keychain_credential(reference)
+
+
+def test_keychain_metadata_never_contains_the_secret(tmp_path: Path):
+    target = tmp_path / "device.json"
+    stored = StoredEdgeCredential(
+        server_url="https://edge.example.com",
+        device_id="device_1",
+        credential="device_1.secret",
+    )
+
+    save_edge_keychain_reference(target, stored)
+
+    contents = target.read_text(encoding="utf-8")
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert stored.credential not in contents
+    assert '"credential"' not in contents
+    assert load_edge_keychain_reference(target) == EdgeKeychainReference(
+        stored.server_url,
+        stored.device_id,
+    )
+
+    legacy = tmp_path / "legacy.json"
+    save_edge_credential(legacy, stored)
+    with pytest.raises(EdgeCredentialNotKeychainReferenceError):
+        load_edge_keychain_reference(legacy)
+
+    hybrid = tmp_path / "hybrid.json"
+    hybrid.write_text(
+        json.dumps(
+            {
+                "credential_store": "keychain",
+                "server_url": stored.server_url,
+                "device_id": stored.device_id,
+                "credential": stored.credential,
+            }
+        ),
+        encoding="utf-8",
+    )
+    hybrid.chmod(0o600)
+    with pytest.raises(ValueError, match="cannot contain a secret"):
+        load_edge_keychain_reference(hybrid)
+
+
+def test_verified_legacy_secret_can_be_replaced_with_keychain_metadata(
+    tmp_path: Path,
+):
+    target = tmp_path / "device.json"
+    stored = StoredEdgeCredential(
+        server_url="https://edge.example.com",
+        device_id="device_1",
+        credential="device_1.secret",
+    )
+    save_edge_credential(target, stored)
+
+    replace_edge_credential_with_keychain_reference(target, stored)
+
+    contents = target.read_text(encoding="utf-8")
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert stored.credential not in contents
+    assert load_edge_keychain_reference(target) == EdgeKeychainReference(
+        stored.server_url,
+        stored.device_id,
+    )
+
+
+def test_keychain_migration_rejects_a_hardlinked_plaintext_source(tmp_path: Path):
+    target = tmp_path / "device.json"
+    linked = tmp_path / "device-copy.json"
+    stored = StoredEdgeCredential(
+        server_url="https://edge.example.com",
+        device_id="device_1",
+        credential="device_1.secret",
+    )
+    save_edge_credential(target, stored)
+    linked.hardlink_to(target)
+
+    with pytest.raises(ValueError, match="multiple hard links"):
+        replace_edge_credential_with_keychain_reference(target, stored)
+
+    assert load_edge_credential(target) == stored
+    assert load_edge_credential(linked) == stored
 
 
 class FakeResponse:
