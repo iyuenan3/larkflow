@@ -1990,12 +1990,32 @@ class PostgresIMCommandStore:
                     event.text,
                     Jsonb([_mention_to_dict(item) for item in event.mentions]),
                     event.card_update_token,
-                    event.received_at,
+                    event.available_at or event.received_at,
                     event.occurred_at,
                     event.received_at,
                 ),
             ).fetchone()
         return row is not None
+
+    def release_im_command(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        available_at: datetime,
+    ) -> None:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                UPDATE workflow_im_commands
+                SET available_at = LEAST(available_at, %s)
+                WHERE tenant_id = %s AND id = %s AND status = 'pending'
+                RETURNING id
+                """,
+                (available_at, tenant_id, event_id),
+            ).fetchone()
+        if row is None:
+            raise InvalidIMCommandClaimError(event_id)
 
     def claim_im_verification(
         self,
@@ -2555,12 +2575,32 @@ class PostgresIMCommandStore:
                     event.action_name,
                     event.form_value,
                     event.update_token,
-                    event.received_at,
+                    event.available_at or event.received_at,
                     event.occurred_at,
                     event.received_at,
                 ),
             ).fetchone()
         return row is not None
+
+    def release_role_binding_action(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        available_at: datetime,
+    ) -> None:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                UPDATE workflow_role_binding_actions
+                SET available_at = LEAST(available_at, %s)
+                WHERE tenant_id = %s AND id = %s AND status = 'pending'
+                RETURNING id
+                """,
+                (available_at, tenant_id, event_id),
+            ).fetchone()
+        if row is None:
+            raise InvalidRoleBindingClaimError(event_id)
 
     def claim_role_binding_verification(
         self,
@@ -2912,7 +2952,7 @@ class PostgresIMCommandStore:
                            command.role_binding_candidates,
                            command.reply_external_id AS card_message_id
                     FROM updated
-                    JOIN workflow_im_commands AS command
+                    LEFT JOIN workflow_im_commands AS command
                       ON command.tenant_id = updated.tenant_id
                      AND command.reply_kind = 'role_binding_card'
                      AND command.reply_external_id = updated.message_id
@@ -2930,9 +2970,13 @@ class PostgresIMCommandStore:
         return tuple(
             RoleBindingReplyClaim(
                 action=_role_action_from_row(row),
-                request=_role_request_from_joined_row(row),
+                request=(
+                    None
+                    if row.get("command_id") is None
+                    else _role_request_from_joined_row(row)
+                ),
                 owner_bindings=_owner_bindings_from_row(row),
-                instance_id=str(row["instance_id"]),
+                instance_id=row.get("instance_id"),
                 text=str(row["reply_text"]),
                 claim_token=token,
                 attempt_count=int(row["reply_attempt_count"]),

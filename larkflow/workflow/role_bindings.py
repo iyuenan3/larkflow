@@ -8,6 +8,11 @@ import hashlib
 import json
 from typing import Any, Protocol
 
+from .card_feedback import (
+    CARD_FEEDBACK_FALLBACK,
+    processing_card,
+    rejected_card,
+)
 from .directory import CandidateDirectory, DirectoryValidationError
 from .event_time import feishu_event_time
 from .model import InstanceStatus, TemplateStatus
@@ -76,6 +81,7 @@ class RoleBindingActionSignal:
     update_token: str
     occurred_at: datetime
     received_at: datetime
+    available_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -92,9 +98,9 @@ class RoleBindingActionClaim:
 @dataclass(frozen=True)
 class RoleBindingReplyClaim:
     action: RoleBindingActionSignal
-    request: RoleBindingRequest
+    request: RoleBindingRequest | None
     owner_bindings: Mapping[str, str]
-    instance_id: str
+    instance_id: str | None
     text: str
     claim_token: str
     attempt_count: int
@@ -136,6 +142,15 @@ class RoleBindingStore(Protocol):
         ...
 
     def append_role_binding_action(self, event: RoleBindingActionSignal) -> bool:
+        ...
+
+    def release_role_binding_action(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        available_at: datetime,
+    ) -> None:
         ...
 
     def claim_role_binding_verification(
@@ -288,12 +303,14 @@ class RoleBindingActionInboxBridge:
         *,
         tenant_id: str,
         clock: Callable[[], datetime] | None = None,
+        card_updater: Callable[..., None] | None = None,
     ) -> None:
         if not tenant_id.strip():
             raise ValueError("Target tenant_id is required")
         self.store = store
         self.tenant_id = tenant_id
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.card_updater = card_updater
 
     def __call__(self, event_type: str, payload: Mapping[str, Any]) -> bool:
         if event_type != CARD_ACTION_EVENT:
@@ -317,8 +334,29 @@ class RoleBindingActionInboxBridge:
             update_token=_required_text(payload.get("token"), "token"),
             occurred_at=feishu_event_time(payload.get("timestamp"), fallback=now),
             received_at=now,
+            available_at=(
+                now + CARD_FEEDBACK_FALLBACK
+                if self.card_updater is not None
+                else None
+            ),
         )
-        return self.store.append_role_binding_action(signal)
+        appended = self.store.append_role_binding_action(signal)
+        if appended and self.card_updater is not None:
+            try:
+                self.card_updater(
+                    token=signal.update_token,
+                    card=processing_card(
+                        title="人员分工已提交",
+                        content="正在核验操作人、候选成员与模板状态。",
+                    ),
+                )
+            finally:
+                self.store.release_role_binding_action(
+                    self.tenant_id,
+                    signal.id,
+                    available_at=self.clock(),
+                )
+        return appended
 
 
 @dataclass(frozen=True)
@@ -490,7 +528,7 @@ class RoleBindingVerificationWorker:
                     claim.action.id,
                     claim_token=claim.claim_token,
                     outcome="rejected:role_binding",
-                    reply_text=None,
+                    reply_text="人员分工未执行。请重新发送流程启动命令后再试。",
                     now=now,
                 )
                 continue
@@ -782,14 +820,24 @@ class RoleBindingReplyWorker:
         for claim in claims:
             try:
                 try:
-                    self.sender.update_chat_card(
-                        token=claim.action.update_token,
-                        card=role_binding_card(
+                    if claim.request is not None and claim.instance_id is not None:
+                        card = role_binding_card(
                             claim.request,
                             claim.request.candidate_person_ids,
                             owner_bindings=claim.owner_bindings,
                             settled_instance_id=claim.instance_id,
-                        ),
+                        )
+                    else:
+                        card = rejected_card(
+                            title="人员分工未执行",
+                            content=(
+                                f"{claim.text}\n\n"
+                                "原选择已失效，请重新发送流程启动命令。"
+                            ),
+                        )
+                    self.sender.update_chat_card(
+                        token=claim.action.update_token,
+                        card=card,
                     )
                 except Exception as exc:
                     card_updates_failed += 1
@@ -798,7 +846,11 @@ class RoleBindingReplyWorker:
                         f"{type(exc).__name__}: {exc}"
                     )
                 external_id = self.sender.send_chat_message(
-                    chat_id=claim.request.chat_id,
+                    chat_id=(
+                        claim.request.chat_id
+                        if claim.request is not None
+                        else claim.action.chat_id
+                    ),
                     text=claim.text,
                     idempotency_key=_action_reply_key(claim.action.id),
                 )

@@ -98,6 +98,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0013_im_command_mentions",
         "0014_role_binding_cards",
         "0015_recovery_cards",
+        "0016_role_card_single_action",
     ]
     sql = migrations[0][1]
     for table in (
@@ -140,6 +141,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "ADD COLUMN card_update_token" in migrations[14][1]
     assert "CREATE TABLE workflow_role_binding_actions" in migrations[13][1]
     assert "reply_kind IN ('text', 'role_binding_card')" in migrations[13][1]
+    assert "workflow_role_binding_action_message_idx" in migrations[15][1]
 
 
 def test_in_memory_repository_is_tenant_scoped():

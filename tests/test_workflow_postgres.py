@@ -35,6 +35,7 @@ from larkflow.workflow import (
     PairingCodeUsedError,
     ProjectionRecord,
     RestartScope,
+    RoleBindingActionSignal,
     TaskCompletionSignal,
     TemplateService,
     TemplateStatus,
@@ -181,9 +182,22 @@ def test_postgres_im_command_round_trips_authenticated_mentions():
         occurred_at=now,
         received_at=now,
         mentions=(IMMention("@_user_1", "person_reviewer"),),
+        available_at=now + timedelta(seconds=10),
     )
 
     assert store.append_im_command(event) is True
+    assert store.claim_im_verification(
+        tenant_id,
+        worker_id="verify_mentions_early",
+        now=now,
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    ) == ()
+    store.release_im_command(
+        tenant_id,
+        event.id,
+        available_at=now,
+    )
     claims = store.claim_im_verification(
         tenant_id,
         worker_id="verify_mentions",
@@ -193,7 +207,77 @@ def test_postgres_im_command_round_trips_authenticated_mentions():
     )
 
     assert len(claims) == 1
-    assert claims[0].event == event
+    assert claims[0].event == replace(event, available_at=None)
+
+
+def test_postgres_unknown_role_card_can_settle_to_a_generic_rejection():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_role_reject_{suffix}"
+    now = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
+    store = PostgresIMCommandStore(connection_factory)
+    action = RoleBindingActionSignal(
+        id=f"event_{suffix}",
+        tenant_id=tenant_id,
+        message_id=f"message_{suffix}",
+        chat_id=f"chat_{suffix}",
+        operator_person_id="person_intruder",
+        action_tag="button",
+        action_name="role_binding_submit",
+        form_value='{"role__reviewer":"person_intruder"}',
+        update_token=f"token_{suffix}",
+        occurred_at=now,
+        received_at=now,
+        available_at=now + timedelta(seconds=10),
+    )
+
+    assert store.append_role_binding_action(action) is True
+    assert store.append_role_binding_action(
+        replace(action, id=f"event_second_{suffix}")
+    ) is False
+    assert store.claim_role_binding_verification(
+        tenant_id,
+        worker_id="verify_unknown_early",
+        now=now,
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    ) == ()
+    store.release_role_binding_action(
+        tenant_id,
+        action.id,
+        available_at=now,
+    )
+    verification = store.claim_role_binding_verification(
+        tenant_id,
+        worker_id="verify_unknown",
+        now=now,
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    )[0]
+    assert verification.request is None
+    store.mark_role_binding_rejected(
+        tenant_id,
+        action.id,
+        claim_token=verification.claim_token,
+        outcome="rejected:role_binding",
+        reply_text="人员分工未执行。请重新发送流程启动命令后再试。",
+        now=now,
+    )
+
+    reply = store.claim_role_binding_replies(
+        tenant_id,
+        worker_id="reply_unknown",
+        now=now,
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    )[0]
+
+    assert reply.action == replace(action, available_at=None)
+    assert reply.request is None
+    assert reply.instance_id is None
+    assert reply.text.startswith("人员分工未执行")
 
 
 def test_postgres_persists_template_lifecycle_and_frozen_instance_snapshot():

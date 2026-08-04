@@ -69,12 +69,19 @@ class MemoryStore:
         self.failed = []
         self.reply_sent = []
         self.reply_failed = []
+        self.released = []
 
     def append_im_command(self, event):
-        if any(item.id == event.id for item in self.appended):
+        if any(
+            item.id == event.id or item.message_id == event.message_id
+            for item in self.appended
+        ):
             return False
         self.appended.append(event)
         return True
+
+    def release_im_command(self, tenant_id, event_id, **kwargs):
+        self.released.append((tenant_id, event_id, kwargs))
 
     def claim_im_verification(self, *_args, **_kwargs):
         claims, self.verification_claims = self.verification_claims, []
@@ -255,7 +262,13 @@ def test_bridge_accepts_flattened_lark_cli_event_payload():
 
 def test_recovery_card_bridge_persists_a_verified_version_bound_command():
     store = MemoryStore()
-    bridge = RecoveryActionInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+    updates = []
+    bridge = RecoveryActionInboxBridge(
+        store,
+        tenant_id=TENANT,
+        clock=lambda: NOW,
+        card_updater=lambda **kwargs: updates.append(kwargs),
+    )
     payload = {
         "event_id": "event_recovery_1",
         "message_id": "message_failure_card_1",
@@ -278,6 +291,19 @@ def test_recovery_card_bridge_persists_a_verified_version_bound_command():
 
     assert bridge("card.action.trigger", payload) is True
     assert bridge("card.action.trigger", payload) is False
+    assert bridge(
+        "card.action.trigger",
+        {**payload, "event_id": "event_recovery_same_card_second_event"},
+    ) is False
+    assert len(updates) == 1
+    assert updates[0]["token"] == "card-update-token"
+    assert updates[0]["card"]["header"]["title"]["content"] == "恢复操作已收到"
+    assert "人工接管" in updates[0]["card"]["body"]["elements"][0]["content"]
+    assert "button" not in json.dumps(updates[0]["card"], ensure_ascii=False)
+    assert store.appended[0].available_at == NOW + timedelta(seconds=10)
+    assert store.released == [
+        (TENANT, "event_recovery_1", {"available_at": NOW})
+    ]
     event = store.appended[0]
     assert event.sender_person_id == "person_node_owner"
     assert event.card_update_token == "card-update-token"
@@ -294,6 +320,49 @@ def test_recovery_card_bridge_persists_a_verified_version_bound_command():
             "instance_version": 4,
         },
     )
+
+
+def test_recovery_card_bridge_persists_before_fast_feedback_failure():
+    store = MemoryStore()
+
+    def fail_update(**_kwargs):
+        raise RuntimeError("card update failed")
+
+    bridge = RecoveryActionInboxBridge(
+        store,
+        tenant_id=TENANT,
+        clock=lambda: NOW,
+        card_updater=fail_update,
+    )
+
+    with pytest.raises(RuntimeError, match="card update failed"):
+        bridge(
+            "card.action.trigger",
+            {
+                "event_id": "event_recovery_feedback_failure",
+                "message_id": "message_failure_card_1",
+                "chat_id": "chat_owner",
+                "operator_id": "person_node_owner",
+                "action_tag": "button",
+                "action_value": {
+                    "kind": "workflow_recovery",
+                    "action": "retry",
+                    "instance_id": "instance_1",
+                    "node_key": "draft",
+                    "attempt_no": 1,
+                    "node_version": 2,
+                    "instance_version": 4,
+                },
+                "token": "card-update-token",
+            },
+        )
+
+    assert [event.id for event in store.appended] == [
+        "event_recovery_feedback_failure"
+    ]
+    assert store.released == [
+        (TENANT, "event_recovery_feedback_failure", {"available_at": NOW})
+    ]
 
 
 def test_recovery_card_bridge_accepts_lark_cli_callback_without_action_name():

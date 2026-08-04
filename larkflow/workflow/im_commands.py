@@ -10,6 +10,7 @@ import json
 import re
 from typing import Any, Protocol
 
+from .card_feedback import CARD_FEEDBACK_FALLBACK, processing_card
 from .directory import PersonDirectory
 from .editing import (
     GraphEditConfirmation,
@@ -105,6 +106,7 @@ class IMCommandSignal:
     received_at: datetime
     mentions: tuple[IMMention, ...] = field(default_factory=tuple)
     card_update_token: str | None = None
+    available_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +138,15 @@ class IMReplyClaim:
 
 class IMCommandStore(Protocol):
     def append_im_command(self, event: IMCommandSignal) -> bool:
+        ...
+
+    def release_im_command(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        available_at: datetime,
+    ) -> None:
         ...
 
     def claim_im_verification(
@@ -368,12 +379,14 @@ class RecoveryActionInboxBridge:
         *,
         tenant_id: str,
         clock: Callable[[], datetime] | None = None,
+        card_updater: Callable[..., None] | None = None,
     ) -> None:
         if not tenant_id.strip():
             raise ValueError("Target tenant_id is required")
         self.store = store
         self.tenant_id = tenant_id
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.card_updater = card_updater
 
     def __call__(self, event_type: str, payload: Mapping[str, Any]) -> bool:
         if event_type != "card.action.trigger":
@@ -421,8 +434,33 @@ class RecoveryActionInboxBridge:
             occurred_at=feishu_event_time(payload.get("timestamp"), fallback=now),
             received_at=now,
             card_update_token=_required_text(payload.get("token"), "token"),
+            available_at=(
+                now + CARD_FEEDBACK_FALLBACK
+                if self.card_updater is not None
+                else None
+            ),
         )
-        return self.store.append_im_command(event)
+        appended = self.store.append_im_command(event)
+        if appended and self.card_updater is not None:
+            label = {
+                RecoveryAction.RETRY: "重新执行",
+                RecoveryAction.HUMAN_TAKEOVER: "人工接管",
+            }[RecoveryAction(command_payload["action"])]
+            try:
+                self.card_updater(
+                    token=event.card_update_token,
+                    card=processing_card(
+                        title="恢复操作已收到",
+                        content=f"已收到“{label}”，正在重新校验权限与流程状态。",
+                    ),
+                )
+            finally:
+                self.store.release_im_command(
+                    self.tenant_id,
+                    event.id,
+                    available_at=self.clock(),
+                )
+        return appended
 
 
 def _safe_callback_name(value: Any) -> str:

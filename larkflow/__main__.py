@@ -19,6 +19,7 @@ service 的 `_thread_lock` 只是进程内锁，故真栈一律走 `store.Instan
 from __future__ import annotations
 
 import argparse
+from functools import partial
 import json
 import sys
 from datetime import datetime, timedelta, timezone
@@ -419,13 +420,16 @@ def _cmd_serve(ns, factory, server_factory) -> int:
         server = server_factory(factory(ns),
                                 event_keys=event_keys,
                                 identity=ns.identity, profile=ns.profile,
-                                event_observers=_target_event_observers())
+                                event_observers=_target_event_observers(
+                                    identity=ns.identity,
+                                    profile=ns.profile,
+                                ))
         return server.serve_forever()
     finally:
         lock.release()
 
 
-def _target_event_observers():
+def _target_event_observers(*, identity: str = "bot", profile: str | None = None):
     dsn = env("LARKFLOW_TARGET_INBOX_DSN")
     tenant_id = env("LARKFLOW_TARGET_TENANT")
     if not dsn and not tenant_id:
@@ -439,6 +443,8 @@ def _target_event_observers():
     from .workflow.migrate import postgres_connection_factory
     from .workflow.postgres import PostgresIMCommandStore, PostgresWorkflowInbox
     from .workflow.role_bindings import RoleBindingActionInboxBridge
+    from .io import CliLarkIO
+    from .io.cli import run_cli
 
     connection_factory = postgres_connection_factory(dsn)
     observers = [
@@ -449,6 +455,11 @@ def _target_event_observers():
     ]
     if _target_im_commands_enabled():
         im_store = PostgresIMCommandStore(connection_factory)
+        card_io = CliLarkIO(
+            identity=identity,
+            profile=profile,
+            runner=partial(run_cli, timeout=3),
+        )
         observers.append(
             IMEventInboxBridge(
                 im_store,
@@ -459,12 +470,14 @@ def _target_event_observers():
             RoleBindingActionInboxBridge(
                 im_store,
                 tenant_id=tenant_id,
+                card_updater=card_io.update_card,
             )
         )
         observers.append(
             RecoveryActionInboxBridge(
                 im_store,
                 tenant_id=tenant_id,
+                card_updater=card_io.update_card,
             )
         )
     return tuple(observers)

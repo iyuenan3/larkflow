@@ -1,8 +1,10 @@
 """Person-selection card tests for multi-owner workflow drafts."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
+
+import pytest
 
 from larkflow.workflow import (
     DirectoryPerson,
@@ -85,6 +87,7 @@ class MemoryRoleStore:
         self.failed = []
         self.reply_sent = []
         self.reply_failed = []
+        self.released = []
 
     def claim_role_binding_cards(self, *_args, **_kwargs):
         claims, self.card_claims = self.card_claims, []
@@ -97,10 +100,16 @@ class MemoryRoleStore:
         self.card_failed.append((tenant_id, command_id, kwargs))
 
     def append_role_binding_action(self, event):
-        if any(existing.id == event.id for existing in self.appended):
+        if any(
+            existing.id == event.id or existing.message_id == event.message_id
+            for existing in self.appended
+        ):
             return False
         self.appended.append(event)
         return True
+
+    def release_role_binding_action(self, tenant_id, event_id, **kwargs):
+        self.released.append((tenant_id, event_id, kwargs))
 
     def claim_role_binding_verification(self, *_args, **_kwargs):
         claims, self.verification_claims = self.verification_claims, []
@@ -211,7 +220,13 @@ def template_document():
 
 def test_card_bridge_accepts_only_the_named_role_binding_form():
     store = MemoryRoleStore()
-    bridge = RoleBindingActionInboxBridge(store, tenant_id=TENANT, clock=lambda: NOW)
+    updates = []
+    bridge = RoleBindingActionInboxBridge(
+        store,
+        tenant_id=TENANT,
+        clock=lambda: NOW,
+        card_updater=lambda **kwargs: updates.append(kwargs),
+    )
     payload = {
         "event_id": "action_1",
         "message_id": "card_message_1",
@@ -226,11 +241,59 @@ def test_card_bridge_accepts_only_the_named_role_binding_form():
 
     assert bridge("card.action.trigger", payload) is True
     assert bridge("card.action.trigger", payload) is False
+    assert bridge(
+        "card.action.trigger",
+        {**payload, "event_id": "action_same_card_second_event"},
+    ) is False
     assert bridge("card.action.trigger", {**payload, "action_name": "other"}) is False
+    assert len(updates) == 1
+    assert updates[0]["token"] == "update_token"
+    assert updates[0]["card"]["header"]["title"]["content"] == "人员分工已提交"
+    assert "处理中" in updates[0]["card"]["body"]["elements"][0]["content"]
+    assert "button" not in json.dumps(updates[0]["card"], ensure_ascii=False)
+    assert store.appended[0].available_at == NOW + timedelta(seconds=10)
+    assert store.released == [
+        (TENANT, "action_1", {"available_at": NOW})
+    ]
     assert store.appended[0].operator_person_id == "person_owner"
     assert store.appended[0].occurred_at == datetime(
         2026, 8, 3, 6, 40, tzinfo=timezone.utc
     )
+
+
+def test_card_bridge_persists_before_fast_feedback_failure():
+    store = MemoryRoleStore()
+
+    def fail_update(**_kwargs):
+        raise RuntimeError("card update failed")
+
+    bridge = RoleBindingActionInboxBridge(
+        store,
+        tenant_id=TENANT,
+        clock=lambda: NOW,
+        card_updater=fail_update,
+    )
+
+    with pytest.raises(RuntimeError, match="card update failed"):
+        bridge(
+            "card.action.trigger",
+            {
+                "event_id": "action_feedback_failure",
+                "message_id": "card_message_1",
+                "chat_id": "chat_p2p",
+                "operator_id": "person_owner",
+                "action_tag": "button",
+                "action_name": "role_binding_submit",
+                "form_value": '{"role__requester":"person_owner"}',
+                "token": "update_token",
+                "timestamp": "1785739200000",
+            },
+        )
+
+    assert [event.id for event in store.appended] == ["action_feedback_failure"]
+    assert store.released == [
+        (TENANT, "action_feedback_failure", {"available_at": NOW})
+    ]
 
 
 def test_card_bridge_accepts_real_microsecond_callback_timestamp():
@@ -335,7 +398,9 @@ def test_verification_trusts_operator_envelope_and_revalidates_people():
         "requester": "person_owner",
         "reviewer": "person_reviewer",
     }
-    assert store.rejected[0][2]["reply_text"] is None
+    assert store.rejected[0][2]["reply_text"] == (
+        "人员分工未执行。请重新发送流程启动命令后再试。"
+    )
 
 
 def test_verified_binding_creates_one_frozen_draft_and_queues_reply():
@@ -460,6 +525,36 @@ def test_reply_worker_reports_card_update_error_without_losing_text_reply():
     )
     assert store.reply_sent[0][2]["external_id"] == "reply_message_1"
     assert store.reply_failed == []
+
+
+def test_reply_worker_replaces_rejected_unknown_card_with_retry_guidance():
+    store = MemoryRoleStore()
+    store.reply_claims = [
+        RoleBindingReplyClaim(
+            action=action(),
+            request=None,
+            owner_bindings={},
+            instance_id=None,
+            text="人员分工未执行。请重新发送流程启动命令后再试。",
+            claim_token="reply-token",
+            attempt_count=1,
+        )
+    ]
+    sender = Sender()
+
+    report = RoleBindingReplyWorker(
+        store,
+        sender,
+        tenant_id=TENANT,
+        worker_id="reply_worker",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.sent == 1
+    assert sender.updates[0]["card"]["header"]["template"] == "orange"
+    assert "原选择已失效" in sender.updates[0]["card"]["body"]["elements"][0]["content"]
+    assert "button" not in json.dumps(sender.updates[0]["card"], ensure_ascii=False)
+    assert sender.messages[0]["chat_id"] == "chat_p2p"
 
 
 def test_role_binding_card_requires_a_bounded_candidate_snapshot():
