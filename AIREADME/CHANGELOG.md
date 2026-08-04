@@ -1,5 +1,15 @@
 # CHANGELOG · larkflow
 
+## v0.32.0-draft · 2026-08-04 · 可操作卡片即时视觉反馈
+
+- Added：人员选择卡与失败恢复卡在动作耐久落库后，立即尝试把原卡片替换为蓝色无按钮“处理中”，最终再收口为无按钮的成功或拒绝。legacy 卡片沿用既有两阶段同步更新。
+- Ordering：直接卡片更新最长等待 3 秒；动作先延后 10 秒防止后台 Worker 抢先写入最终状态，更新结束后立即释放。桥接进程若在释放前崩溃，延后时间保证动作仍可恢复；视觉更新失败不回滚耐久动作。
+- Database：新增 migration `0016_role_card_single_action`。同一人员选择卡只有一个 canonical 动作；真实长期库原有一组五条历史回调，迁移保留 1 条 canonical 与 4 条非 canonical 审计，canonical 重复组为零，没有删除历史。
+- Verified：最终内容提交为 `dc77faad92e5d45f0271e45747bcbede3dd2ac02`；完整离线套件为 `779 passed, 14 skipped`。干净 wheel 安装确认包含即时反馈模块和第十六份 migration，SHA-256 为 `f4a830387ab058af19bc465789f050daca6d6f0d25ab139b427de9ebc04babbb`。
+- Deployment：发布件保存在 `releases/20260804_150033_card_feedback_dc77faa/`。升级前备份成功且为 122949 bytes、`0600 lf_target_dev:lf_target_dev`；长期库应用第十六份 migration 后，六个 Python 服务均回读 `active / running / NRestarts=0`。
+- Acceptance：测试组织中的新人员选择卡只接受 1 个 canonical 动作并创建 1 个草稿，领域处理在入站后 3.393 秒完成，最终回复在 5.793 秒完成。飞书服务端读回原消息为 `interactive / updated`，包含“人员分工已确认”，不含“处理中”或提交按钮标签。
+- Boundary：用户忘记记录瞬态蓝色状态的视觉耗时，因此本轮只证明即时反馈代码已部署、动作与最终卡片真栈闭环，不宣称已测得客户端即时变化时间。以上仅代表开发服务器和测试组织，不代表生产上线。
+
 ## v0.31.1-draft · 2026-08-04 · Agent 失败恢复开发真栈闭环
 
 - Fixed：Card 2.0 的两个操作使用唯一按钮名称；桥接层归一化 lark-cli 字符串化 `action_value`、可缺失 `action_name` 和微秒时间戳。若动作名称存在则必须与服务端动作值交叉一致，身份与授权仍完全由服务端事实决定。
