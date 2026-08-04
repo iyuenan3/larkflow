@@ -104,9 +104,11 @@
 
 ### Target CLI 与 Task 入站 as-built
 
-Target 使用独立 `larkflow-target` CLI，不复用上述 legacy 驱动层。控制面增加 `template-create / template-add-version / template-enable / template-disable / template-delete / template-list / template-show / create-from-template / preview / reconcile-projections / reconcile-completions / reconcile-instance-completion`，并保留 `migrate / create / confirm / show / submit-human` 和四类 Worker 的单步、常驻命令。这些是本机运维入口，不是公开网络 API。
+Target 使用独立 `larkflow-target` CLI，不复用上述 legacy 驱动层。控制面增加 `template-create / template-add-version / template-enable / template-disable / template-delete / template-list / template-show / create-from-template / preview / reconcile-projections / reconcile-completions / reconcile-instance-completion`，并保留 `migrate / create / confirm / show / submit-human` 和五类 Worker 的单步、常驻命令。`interact-once / interact` 专门处理凭据侧 IM 命令与人员分工交互；这些都是本机运维入口，不是公开网络 API。
 
-四类 Target 常驻 Worker 使用 PostgreSQL 通知缩短耐久阶段之间的空闲等待。服务启动时先建立专用监听连接，再执行首次队列扫描；`workflow_outbox_events`、`workflow_inbox_events`、`workflow_im_commands` 与 `workflow_role_binding_actions` 的可认领状态在事务提交后向固定 channel 发送空通知。通知不携带 tenant、人员、消息、Instance、Node 或任何业务状态，也不替代数据库 claim。连接、监听或等待失败时，Worker 继续按原有有界退避扫描，所以通知丢失只影响延迟，不影响最终处理。
+六条 Target Worker 连接使用 PostgreSQL 通知缩短耐久阶段之间的空闲等待。服务启动时先建立专用监听连接，再执行首次队列扫描；`workflow_outbox_events`、`workflow_inbox_events`、`workflow_im_commands` 与 `workflow_role_binding_actions` 的可认领状态在事务提交后向固定 channel 发送空通知。通知不携带 tenant、人员、消息、Instance、Node 或任何业务状态，也不替代数据库 claim。连接、监听或等待失败时，Worker 继续按原有有界退避扫描，所以通知丢失只影响延迟，不影响最终处理。
+
+Interactive Worker 依次访问 IM 命令验证、IM 回复、人员分工卡创建、人员分工回调验证与人员分工回复五条车道。配置契约要求 `LARKFLOW_TARGET_INTERACTIVE_CLAIM_LIMIT=1`，其他值拒绝启动；并行度只由独立进程副本数决定。开发拓扑固定两个副本，Projection 不再读取 `LARKFLOW_TARGET_ENABLE_IM_COMMANDS`，也不再认领上述五条车道。所有授权、幂等、租约、重试和数据库状态机保持原契约，双副本不能绕过服务端校验。
 
 Target 自动节点按工作契约 kind 路由。Agent 当前只接受 `work.agent.kind=llm.generate`。Tool 由 `ToolExecutorRouter` 按 `work.tool.kind` 选择 adapter；`content.check` 读取直接依赖正文，接受 `min_chars`、`max_chars` 与 `required_terms`，返回 `verdict`、`evidence`、`suggestion`、`char_count`、`missing_terms`、`source` 和稳定 `request_id`。配置或输入错误使当前 Attempt 显式失败，未知 kind 在 claim 前保持未认领。
 

@@ -134,7 +134,8 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 - `service.py`、`restart.py` 与 `editing.py`：提供只读草稿预览、节点及完整实例重启影响计算、未来区域编辑计划、短期预览与原子确认，并在仓储事务内协调草稿确认、调度、执行结果、授权、审计、outbox 与实例终态。节点重启若遗漏影响集合之外的失败节点会被拒绝；完整实例重启覆盖整个冻结图；未来区域编辑只跨越未开始区域，并用候选 Snapshot 哈希检测语义漂移。
 - `recovery.py`：为失败的自动节点实现显式 `retry / human_takeover` 领域命令。两条路径都只允许当前节点 Owner，并比较 Instance version、Node version 和 Attempt 编号；旧卡片失效，原失败 Attempt 保持只读。重试复用受控节点重启语义，人工接管创建新 `waiting_human` Attempt 并进入现有 Task 投影与入站链路。
 - `runtime.py`：单步 `WorkflowWorker` 与 `AutomatedExecutor` Port。每个 tick 最多认领一个自动节点，先提交 claim，再调用外部 executor；外部异常写回失败，进程级崩溃留下的认领由租约恢复。
-- `daemon.py`、`wakeup.py` 与 `config.py`：四类常驻循环、PostgreSQL 通知唤醒、可中断的有界空闲退避、瞬时 tick 故障隔离、Worker 身份和 Target env 配置。每个服务在首次扫描前用独立连接执行静态 `LISTEN larkflow_work_available`；触发器只发送空 payload，业务状态仍从队列表读取。监听建立或等待失败时，仅等待当前退避区间的剩余时间后继续扫描，不把通知可用性提升为可靠性前提。
+- `daemon.py`、`wakeup.py` 与 `config.py`：Target 常驻循环、PostgreSQL 通知唤醒、可中断的有界空闲退避、瞬时 tick 故障隔离、Worker 身份和 Target env 配置。每个服务在首次扫描前用独立连接执行静态 `LISTEN larkflow_work_available`；触发器只发送空 payload，业务状态仍从队列表读取。监听建立或等待失败时，仅等待当前退避区间的剩余时间后继续扫描，不把通知可用性提升为可靠性前提。
+- `interactive_daemon.py`：把 IM 命令验证与回复、人员分工卡创建、回调验证和回复五条凭据侧车道从 Projection 拆出。每个进程按固定顺序访问五条车道，但每条车道一次只领取一项；开发部署固定运行两个独立进程，共享受限 bot profile，不在线程间共享 lark-cli 或数据库状态。单条车道故障和日志故障不会阻塞其他车道，任何车道领取到工作后立即继续扫描。
 - `projection.py`、`projection_daemon.py` 与 `completion_poll.py`：只认领投影事件的 Outbox Worker、Feishu Task / IM / Doc Projection Port、稳定幂等键、Projection 记录和独立常驻循环。常驻循环在消费 Outbox 前，按 Instance ID 分页扫描 PostgreSQL 权威状态，为当前 `waiting_human` 节点补建缺失 Projection，只在飞书 Task v2 明确返回 `1470404` 时重建外部 Task，并用带 repair generation 的稳定幂等键原子换绑。权限、限流、网络或五百错误不得触发换绑；终态节点不补发历史 Task，但会收口已有 Projection 的完成状态。重启产生的旧 Attempt 同步事件按历史 Attempt 状态关闭旧 Human Task，新 Attempt 使用不同稳定幂等键创建新 Task；未来区域编辑删除未开始节点后，陈旧的节点创建事件按 no-op 收口。循环还会周期读取当前 Human Task，观察到完成后以稳定信号 ID 写入耐久 Inbox。Human Task 描述会带入节点明确声明的 Instance 输入和直接依赖中已提交的结果，Agent 正文优先展示并设置长度上限。自动节点完成后向 Owner 发送结果消息；Instance 完成后创建汇总文档并发送带链接的最终通知。首次完成沿用历史幂等键，重启后按当前终端 Attempt 分代，确保同一实例再次完成时创建新文档与最终通知，并保留旧轮次 Projection。单实例修复入口只补齐当前完成轮次缺失的投影，并保持幂等。
 - `inbound.py` 与 `inbound_daemon.py`：接受 Task 状态轮询或飞书事件产生的 PostgreSQL Inbox 信号，以及凭据侧校验与领域侧提交两阶段 Worker。两阶段分别 claim，失败后指数退避，过期 claim 可被其他 Worker 恢复。无论信号来源如何，凭据侧都重新读取 Task，默认最多验证 24 次；耗尽后写入带终止时间、阶段、结果和最后错误的 `exhausted` 终态，结构化日志暴露耗尽计数，且该信号不再被认领。
 - `feishu.py`：基于 lark-cli 的 Task、文本消息和 Docx adapter。Task 创建使用原生 Task API、稳定 client token、`mode=1`、唯一 Owner assignee 和稳定绑定字段；入站校验只读 Task 详情。消息与文档 adapter 只消费服务端生成的目标和正文，不信任客户端身份字段。
@@ -143,11 +144,13 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 - `role_bindings.py`：把需要跨人员分工但未显式 mention 的 `start` 转成 Card 2.0 人员选择表单。候选人快照、卡片发送、回调事件、目录再验证、领域创建、卡片回写和文本回复均耐久保存并独立认领；操作人、候选集合、角色集合和实例 ID 都由服务端重算。回调动作耐久插入后立即尝试把原卡片替换为无按钮“处理中”，成功后同一原卡片冻结为已确认状态。同一 message 只有一个 canonical 动作，重复回调不创建第二个草稿；迁移前的重复行保留为非 canonical 历史。
 - `im_commands.py` 中的 `RecoveryActionInboxBridge`：把飞书恢复卡片回调转换为耐久命令。桥接层归一化 lark-cli 字符串化 `action_value`、可缺失 `action_name` 和秒、毫秒、微秒时间戳；若 `action_name` 存在则必须与服务端动作交叉一致。操作人只从飞书顶层认证字段取值，卡片 payload 中的身份不参与授权；动作耐久插入后立即尝试把原卡片替换为无按钮“处理中”，最终再更新原卡片并发送耐久文本回执。`event_time.py` 为恢复与人员分工回调提供共享时间归一化，避免边界解析分叉。
 - `card_feedback.py`：统一生成蓝色处理中与橙色拒绝卡。Target 长连接入口使用最长 3 秒的 lark-cli 直接更新；动作先延后 10 秒防止后台 Worker 抢先写入最终状态，直接更新结束后立即释放，崩溃时由延后时间兜底。单调时钟从有效回调被接受开始覆盖动作插入和直接更新，释放动作时原子保存 `updated / failed`、非负毫秒数和完成时间；结构化日志只记录动作类型、结果和耗时，不记录人员、消息或卡片标识，日志报告失败也不能破坏回调。该顺序保证最终状态不会被迟到的处理中状态覆盖，也不让视觉回写失败撤销已持久化动作。
-- `cli.py`：独立 `larkflow-target` 运维入口，提供模板全生命周期、从模板创建草稿、预览、确认、状态、Human 提交，以及 Runtime、Projection、入站校验和领域入站的单步 / 常驻服务；`reconcile-instance-completion` 可显式修复一个已完成实例缺失的完成文档或最终通知。
+- `cli.py`：独立 `larkflow-target` 运维入口，提供模板全生命周期、从模板创建草稿、预览、确认、状态、Human 提交，以及 Runtime、Projection、Interactive、入站校验和领域入站的单步 / 常驻服务；`reconcile-instance-completion` 可显式修复一个已完成实例缺失的完成文档或最终通知。
 - `executors.py`：包含只接受 `work.agent.kind=llm.generate` 的 `LLMAgentExecutor`、按 `work.tool.kind` 路由内部 adapter 的 `ToolExecutorRouter`、确定性的 `content.check`，以及只用于开发验证的 `development.echo`。`content.check` 从直接依赖提取正文，执行长度与必需词检查，并返回 `pass / fail + evidence + suggestion`；Runtime 在 claim 前按 adapter 能力筛选具体节点，未接受的 kind 保持 ready，不会先认领后失败。
 - `edge.py`、`edge_postgres.py` 与 migration `0007_edge_devices`：一次性配对、设备哈希凭据、撤销、追加型 Edge 审计和 `personal.readonly` 能力过滤。Edge 复用当前 Attempt 的 Worker、token、版本与租期校验，不创建第二套任务真相。
 - `edge_http.py` 与 `edge_gateway_cli.py`：提供私有 `/edge/v1` JSON 边界和运维入口。Gateway 默认且强制只监听 loopback；远程设备必须经独立 HTTPS 反向代理，仓库不把该接口描述为公网 API。
 - `edge_client.py` 与 `edge_cli.py`：用户设备只提供手工 `pair` 与 `run-once`。Codex adapter 固定显式工作区，使用只读、临时会话和忽略用户配置模式，清除 Edge、Target 与飞书凭据环境变量，并按进程组终止超时子进程。
+
+内容提交 `5312f6c026453ac6d9e2e62679b755f271c114f3` 已部署到 `alicloud-sh`。Runtime、Projection、两个 Interactive、凭据侧入站、领域侧入站和 Edge 共七个 Target 服务，加上 legacy 消费者共八个 Python 服务，均回读 `active / NRestarts=0`。六个队列 Worker 各持有一条 PostgreSQL 监听连接。两个 Interactive 副本的稳定身份、`claim_limit=1`、监听启动和安装文件哈希已回读；一次性真实 PostgreSQL 竞争证明两个副本各领取一条不同人员分工记录。真实飞书突发、隔离与限流回归尚未完成，因此不能把数据库并发证据解释为真实飞书容量。下段中的六服务与四条监听连接只保留为 `a506e7d` 时点的历史验证证据，不代表当前拓扑。
 
 领域状态、审计与 outbox 在同一事务提交。事务提交后，Human 节点与所有节点状态变化通过 outbox 请求投影同步；Agent 和 Tool 激活直接返回 NodeActivation，由 Runtime Worker 在提交后交给 executor，避免数据库事务跨越外部调用。自动执行是 at-least-once，executor 必须使用 tenant-scoped Attempt 幂等键消除重复副作用。Agent 装配还会检查所有显式故障切换线路的超时总和，加上安全余量后必须小于 claim 租期，避免正常慢调用在结果提交前失去租约。Edge Proof 不发明独立 Capability Lease，它把可撤销设备身份与一个明确 kind 映射到同一 Node claim，并用心跳延长当前租期；设备失联或本机执行器异常后，租约到期才允许接管。
 
@@ -163,8 +166,8 @@ PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration �
 | 模板 | 简单生命周期、不可变版本、布尔锁 | Template Service、PostgreSQL 仓储、追加型审计、CLI 与 v0.2 示例已实现并真库验证 | 需要 importer 和模板管理界面 |
 | 责任 | 每节点唯一 Owner，执行器分离 | 新内核已强制 Owner 与 `human/agent/tool` 分离；IM mention 和 Card 2.0 人员选择均在凭据侧验证活跃成员，再由领域侧冻结角色绑定，已完成开发真栈正向验收；草稿 Owner 全量目录校验已落码但默认关闭 | 需要异常成员状态回归、管理入口和生产装配 |
 | 编辑与重启 | 预览确认、revision、下游 Attempt | 未来区域编辑及节点、完整实例重启都已实现耐久预览、Owner 重授权、版本与 revision 校验、历史保护和原子审计，并完成真库竞争与 Owner 飞书闭环；编辑拒绝矩阵覆盖冻结线、非法 DAG、陈旧预览与跨人员非 Owner | 需要图形化 diff、跨轮次浏览和生产装配 |
-| 飞书集成 | PostgreSQL outbox / Inbox、幂等、服务端授权、对账 | Human Task 创建 / 完成、可靠轮询、可选事件、服务端详情回读、两阶段授权、启动对账、受控 Task 重建、十个窄命令、人员选择卡、失败恢复卡、自动节点消息、两类重启、未来区域编辑、跨人员分工、完成 Docx 与最终通知已落码并完成开发真栈验收 | 需要更多业务命令、长期轮询唤醒优化和生产拓扑 |
-| 运行时 | 独立 Scheduler + Node Runner | 新内核已实现 Scheduler、Node Runner、持久化 runnable scan、`llm.generate`、`content.check`、Runtime / Projection / Inbound Worker、能力过滤、优雅停机、过期 claim 恢复，以及失败自动节点的 Owner 重试与人工接管 | 需要更多业务 Tool、自动重试策略配置、恢复运营视图和生产装配 |
+| 飞书集成 | PostgreSQL outbox / Inbox、幂等、服务端授权、对账 | Human Task 创建 / 完成、可靠轮询、可选事件、服务端详情回读、两阶段授权、启动对账、受控 Task 重建、十个窄命令、人员选择卡、失败恢复卡、自动节点消息、两类重启、未来区域编辑、跨人员分工、完成 Docx 与最终通知已落码并完成开发真栈验收；凭据侧交互已拆为两个单项领取副本 | 需要更多业务命令、双副本真实飞书突发与限流回归和生产拓扑 |
+| 运行时 | 独立 Scheduler + Node Runner | 新内核已实现 Scheduler、Node Runner、持久化 runnable scan、`llm.generate`、`content.check`、Runtime / Projection / Interactive / Inbound Worker、能力过滤、优雅停机、过期 claim 恢复，以及失败自动节点的 Owner 重试与人工接管 | 需要更多业务 Tool、自动重试策略配置、恢复运营视图和生产装配 |
 | Personal Agent Edge | 默认关闭、本人设备、窄 capability、中央真相 | Proof v0 已实现配对、撤销、私有 HTTP、手工 run-once、只读 Codex adapter、续租与迟到结果拒绝；离线、真实 PostgreSQL、loopback 常驻部署、SSH 隧道跨机 Codex、Caddy 与源站证书已验证 | 需要完成 ICP 接入备案或迁移合规地域，再做公网设备 E2E；凭据系统存储与安全评审仍缺，产品化仍为 Later |
 
 [SPEC.md](SPEC.md) 和 [DEPLOYMENT.md](DEPLOYMENT.md) 继续描述 As-built 原型，不作为目标产品已实现证据。

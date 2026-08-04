@@ -1,5 +1,15 @@
 # CHANGELOG · larkflow
 
+## v0.34.0-draft · 2026-08-04 · 独立 Interactive 双副本
+
+- Added：新增 `interact-once / interact` 凭据侧 Worker，顺序访问 IM 命令验证与回复、人员分工卡创建、回调验证和回复五条车道。每条车道一次只领取一项，配置拒绝任何不等于 1 的 claim limit。
+- Changed：Projection 不再认领凭据侧交互工作。开发 systemd 拓扑新增两个模板实例，使用稳定的主机名与副本号 Worker ID；统一重启脚本覆盖七个 Target 服务和一个 legacy 服务。
+- Reliability：车道异常不会阻塞其他车道，日志异常不能终止耐久处理。任何车道领取到工作后立即继续扫描；无工作时仍由 PostgreSQL 通知唤醒并以 1 秒有界轮询兜底。
+- Verified：内容提交为 `5312f6c026453ac6d9e2e62679b755f271c114f3`；完整离线套件为 `796 passed, 17 skipped`。三组变异测试均捕获对应错误实现；一次性真实 PostgreSQL 竞争验证两个副本各领取一条不同记录；服务器实际 systemd 版本通过新模板校验。
+- Deployment：wheel SHA-256 为 `4f0ac761284da5e82ff52118da3b4ba5e273c4c8081b3f0170ccc65993d04ba2`，发布件与 `a506e7d` 回滚件保存在 `releases/20260804_205741_interactive_5312f6c/`。migration runner 返回空版本集，长期库保持十八份 migration。八服务均为 `active / NRestarts=0`，六条监听连接存在，安装文件哈希与本地提交一致。
+- Operations：Target 虚拟环境由 root 管理，服务账号强制重装在卸载旧包后因元数据权限失败；随后按既有 root 管理方式恢复安装并通过 `pip check`，三个 pip 临时目录已移动到发布目录备份。Projection 在切换前停止，没有旧 Projection 与新 Interactive 重叠消费。
+- Boundary：当前完成的是离线测试、真实 PostgreSQL 竞争和开发部署回读。真实飞书突发、隔离、共享 profile 与限流回归尚未完成，不据此声明生产容量。
+
 ## v0.33.1-draft · 2026-08-04 · 批次完成时间逐项结算
 
 - Fixed：人员分工与 IM 命令 Worker 不再把批次开始时间写入所有工作的验证、领域处理和回复完成字段；每条工作实际完成后独立读取时钟。PostgreSQL 条件更新显式转换可空文本参数类型，兼容 psycopg 3.3.4 的类型推断。
