@@ -6,7 +6,9 @@
 - Safety：同一设备凭据通过 POSIX 非阻塞文件锁限制为一个 `serve` 或 `run-once`。文件系统根目录、用户主目录和包含设备凭据的工作区不能作为前台会话范围。SIGINT、SIGTERM 或续租失败都会取消在途 Codex 进程组，不回传可能失去租约的结果。
 - Reliability：网络请求异常统一为稳定 transport error；撤销或无效设备凭据立即停止，瞬时网络、执行器、陈旧租约和续租故障按上限退避。应用续租可观测，但日志不包含设备 secret、人员 ID、Instance ID 或 Node ID。本机执行器基础设施异常仍不调用领域失败命令。
 - Verified：内容提交为 `fd6933a186bf115fe83adc5ac7d3a3b6153b0436`；Edge 聚焦测试为 `39 passed`，完整离线套件为 `807 passed, 17 skipped`。两项定向变异均捕获对应错误实现。wheel 共 103 个条目并包含新模块，安装态 `serve` CLI 与模块导入已通过。
-- Boundary：本条只证明代码、离线故障路径和安装包形状。尚未部署到员工电脑或 `alicloud-sh`，没有真实设备凭据、真实租约、真实 Codex、操作系统后台服务或公网 Edge 验收；开发服务器仍运行内容提交 `5312f6c` 的 Gateway 与其他 Target 服务。
+- Deployment：内容提交 `fd6933a` 构建的 wheel SHA-256 为 `e4c0a60588969202ffacf57b660f39e7811d2cdb564016756584ddc0ecc2ea13`，发布件与 `5312f6c` 回滚件保存在 `releases/20260805_003605_edge_serve_fd6933a/`。升级前即时 PostgreSQL 备份为 139942 bytes、权限 `0600`；migration runner 返回空版本集，长期库保持十八份 migration。八服务均回读 `active / running / NRestarts=0`，部署窗口 warning 级日志为 0；Gateway 与 PostgreSQL 继续只监听 loopback，Caddy 保持 `disabled / inactive`。
+- Acceptance：同一候选 wheel 以临时安装态在员工 Mac 上通过 SSH 隧道运行前台 `serve`。设备先产生 37 次无任务心跳，再领取合成单节点实例 `edge_serve_acceptance_20260805_0043`；真实 Codex 执行写入 18 条 `node.claim_renewed` 后把 Instance、Node 与 Attempt 完成为 `done`，结果适配器为 `codex.readonly`。同凭据第二个 Worker 以退出码 1 被锁拒绝；空闲 Worker 收到 SIGTERM 后记录停止请求并以退出码 0 收口；设备撤销后再次启动收到 403 `device_revoked` 并以 fatal 状态退出。一次性配对码文件、设备凭据、SSH 隧道与服务器临时输出均已删除。
+- Boundary：本条证明开发服务器部署与受控员工 Mac 前台真机链路，不代表正式员工安装包、后台服务、系统凭据存储、安全评审、持续采用或生产上线。公网 Edge 仍受 ICP 接入备案阻断，本轮没有恢复 Caddy，也没有绕过公网限制。
 - Product：交互延迟继续由既有耐久指标在真实功能验收中自然采集，不再把反复人工点击计时作为独立发布门槛；既有小样本仍不得外推为生产容量。
 
 ## v0.34.0-draft · 2026-08-04 · 独立 Interactive 双副本

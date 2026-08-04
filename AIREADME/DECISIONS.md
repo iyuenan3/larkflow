@@ -679,10 +679,10 @@
 
 ## ADR-081 · 2026-08-05 · Personal Agent Edge 使用用户启动的前台持续会话
 
-- **Status：Accepted · Code implemented，device deployment pending。**
+- **Status：Accepted · Development deployment and controlled device validation。**
 - Problem：`run-once` 每次只能领取一个节点，需要用户反复启动，无法表达“我现在允许这台电脑在这个工作区为我处理匹配的只读 Agent 节点”。直接注册系统 daemon 会把一次明确授权扩大为隐藏、跨重启的长期权限，也会在凭据撤销、工作区范围、升级和健康状态尚未产品化时过早增加风险。
 - Constraint：中央 PostgreSQL、Node Attempt、Owner 与 `personal.readonly` 继续是唯一授权和状态边界；Human gate 不可领取；一个会话只能固定一个明确工作区；设备凭据不得进入 Codex 环境；续租失败、服务停止或凭据撤销后不得回传结果；本机执行器故障不能直接把业务节点判失败；首版不注册操作系统服务，不自动启动，不增加写能力或通用 capability。
 - Decision：新增 `larkflow-edge serve --workspace <path>`，把用户启动并保持可见的进程视为会话级授权。客户端使用有界长轮询持续领取，瞬时故障采用带抖动的有界指数退避，撤销与无效凭据立即停止；结构化日志输出启动、应用心跳、续租、单任务结果、故障与停止摘要。同一设备凭据通过 POSIX 非阻塞文件锁限制为一个 `serve` 或 `run-once`。SIGINT、SIGTERM 和续租失败都会向执行器传递停止信号并终止整个 Codex 进程组，失去租约的结果不得完成。启动时拒绝文件系统根目录、用户主目录以及包含设备凭据的工作区。
 - Alternatives(否决)：继续要求每个节点手动 `run-once`；直接安装 launchd 或 systemd 用户服务；把设备在线状态提升为中央调度真相；每种 Agent 工具各建一套租约协议；续租失败后允许本地执行完成并尝试迟到回传；允许同一凭据并行启动多个 Worker。
 - Tradeoff：前台进程仍要求用户主动保持终端会话，最长长轮询会让无在途任务的停止存在有限等待；POSIX 文件锁暂不支持 Windows；普通 `0600` 文件仍不等于系统安全存储。Codex 只读沙箱继续只证明写入受限，不能证明目录级读取隔离或无模型外发。会话持续领取减少了重复操作，但不证明员工采用、企业政策接受或生产安全已经成立。
-- Evidence：内容提交 `fd6933a186bf115fe83adc5ac7d3a3b6153b0436` 已发布。Edge 聚焦测试 `39 passed`，完整离线套件 `807 passed, 17 skipped`。两项变异分别移除续租失败取消与设备单例锁，新增回归均按预期失败并在恢复实现后通过。wheel 共 103 个条目，包含 `edge_agent.py`、客户端与 CLI，安装态 `larkflow-edge serve --help` 和模块导入已验证。当前证据不包含员工设备部署、真实租约、真实 Codex 或公网 HTTPS。
+- Evidence：内容提交 `fd6933a186bf115fe83adc5ac7d3a3b6153b0436` 已发布。Edge 聚焦测试 `39 passed`，完整离线套件 `807 passed, 17 skipped`。两项变异分别移除续租失败取消与设备单例锁，新增回归均按预期失败并在恢复实现后通过。wheel 共 103 个条目，包含 `edge_agent.py`、客户端与 CLI，安装态 `larkflow-edge serve --help` 和模块导入已验证。该 wheel 已部署到开发服务器，并以临时安装态在员工 Mac 上通过 SSH 隧道完成前台验收：37 次空闲心跳后领取一个合成节点，真实 Codex 执行产生 18 次续租并完成；同凭据第二进程被拒绝，SIGTERM 安全退出，撤销设备后再次领取返回 403。临时凭据和隧道均已删除。当前证据仍不包含正式员工分发、系统凭据存储、安全评审或公网 HTTPS。
