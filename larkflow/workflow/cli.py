@@ -22,6 +22,7 @@ from larkflow.llm.client import OpenAICompatLLM
 from .completion_poll import TaskCompletionPoller
 from .config import (
     TargetInboundSettings,
+    TargetInteractiveSettings,
     TargetProjectionSettings,
     TargetRuntimeSettings,
 )
@@ -46,6 +47,7 @@ from .im_commands import (
 )
 from .inbound import TaskVerificationWorker, WorkflowInboundWorker
 from .inbound_daemon import InboundWorkerLoop, VerificationWorkerLoop
+from .interactive_daemon import InteractiveWorker, InteractiveWorkerLoop
 from .migrate import apply_migrations, postgres_connection_factory, verify_migrations
 from .model import ExecutorKind, QualityResult, QualityVerdict
 from .postgres import (
@@ -95,6 +97,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--inbound-worker-id",
         default=os.environ.get("LARKFLOW_TARGET_INBOUND_WORKER_ID"),
+    )
+    parser.add_argument(
+        "--interactive-worker-id",
+        default=os.environ.get("LARKFLOW_TARGET_INTERACTIVE_WORKER_ID"),
     )
     parser.add_argument(
         "--lark-profile",
@@ -221,6 +227,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="poll current Human Tasks and enqueue observed completions",
     )
     commands.add_parser("project", help="project to Feishu until SIGINT or SIGTERM")
+    commands.add_parser(
+        "interact-once",
+        help="run one isolated credential-side interaction tick",
+    )
+    commands.add_parser(
+        "interact",
+        help="run isolated credential-side interactions until stopped",
+    )
     commands.add_parser("inbound-once", help="run one Feishu inbound event tick")
     commands.add_parser("inbound", help="consume durable Feishu events until stopped")
     commands.add_parser(
@@ -278,11 +292,17 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
         "project",
     }
     inbound_command = namespace.command in {"inbound-once", "inbound"}
+    interactive_command = namespace.command in {"interact-once", "interact"}
     verification_command = namespace.command in {
         "verify-inbound-once",
         "verify-inbound",
     }
-    if projection_command or inbound_command or verification_command:
+    if (
+        projection_command
+        or inbound_command
+        or interactive_command
+        or verification_command
+    ):
         verify_migrations(connection_factory)
         applied = ()
     else:
@@ -575,6 +595,110 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             ).run(stop_event)
         return 0
 
+    if interactive_command:
+        settings = TargetInteractiveSettings.from_environ(
+            dsn=dsn,
+            tenant_id=tenant_id,
+            worker_id=namespace.interactive_worker_id,
+        )
+        lark_profile = _required(
+            namespace.lark_profile,
+            "--lark-profile or LARKFLOW_TARGET_LARK_PROFILE",
+        )
+        im_store = PostgresIMCommandStore(connection_factory)
+        directory_adapter = CliFeishuDirectory(
+            profile=lark_profile,
+            identity=namespace.lark_identity,
+        )
+        message_adapter = CliFeishuMessageProjection(
+            profile=lark_profile,
+            identity=namespace.lark_identity,
+        )
+        worker = InteractiveWorker(
+            im_verification_worker=IMCommandVerificationWorker(
+                im_store,
+                directory_adapter,
+                tenant_id=settings.tenant_id,
+                worker_id=f"{settings.worker_id}:im-verify",
+                claim_limit=settings.claim_limit,
+                claim_ttl=settings.claim_ttl,
+                retry_base=settings.retry_base,
+                retry_max=settings.retry_max,
+            ),
+            im_reply_worker=IMReplyWorker(
+                im_store,
+                message_adapter,
+                tenant_id=settings.tenant_id,
+                worker_id=f"{settings.worker_id}:im-reply",
+                claim_limit=settings.claim_limit,
+                claim_ttl=settings.claim_ttl,
+                retry_base=settings.retry_base,
+                retry_max=settings.retry_max,
+            ),
+            role_binding_card_worker=RoleBindingCardWorker(
+                im_store,
+                directory_adapter,
+                message_adapter,
+                tenant_id=settings.tenant_id,
+                worker_id=f"{settings.worker_id}:role-card",
+                claim_limit=settings.claim_limit,
+                claim_ttl=settings.claim_ttl,
+                retry_base=settings.retry_base,
+                retry_max=settings.retry_max,
+            ),
+            role_binding_verification_worker=RoleBindingVerificationWorker(
+                im_store,
+                directory_adapter,
+                tenant_id=settings.tenant_id,
+                worker_id=f"{settings.worker_id}:role-verify",
+                claim_limit=settings.claim_limit,
+                claim_ttl=settings.claim_ttl,
+                retry_base=settings.retry_base,
+                retry_max=settings.retry_max,
+            ),
+            role_binding_reply_worker=RoleBindingReplyWorker(
+                im_store,
+                message_adapter,
+                tenant_id=settings.tenant_id,
+                worker_id=f"{settings.worker_id}:role-reply",
+                claim_limit=settings.claim_limit,
+                claim_ttl=settings.claim_ttl,
+                retry_base=settings.retry_base,
+                retry_max=settings.retry_max,
+            ),
+            log=log,
+        )
+        if namespace.command == "interact-once":
+            report = worker.run_once()
+            log("interactive_tick", InteractiveWorkerLoop._report_fields(report))
+            return int(bool(report.errors) or report.lane_errors)
+
+        stop_event = Event()
+        _install_signal_handlers(stop_event, log, prefix="interactive")
+        log(
+            "interactive_started",
+            {
+                "tenant_id": settings.tenant_id,
+                "worker_id": settings.worker_id,
+                "claim_ttl_seconds": settings.claim_ttl.total_seconds(),
+                "claim_limit": settings.claim_limit,
+                "retry_base_seconds": settings.retry_base.total_seconds(),
+                "retry_max_seconds": settings.retry_max.total_seconds(),
+                "idle_min_seconds": settings.loop.idle_min_seconds,
+                "idle_max_seconds": settings.loop.idle_max_seconds,
+                "lark_profile": namespace.lark_profile,
+                "lark_identity": namespace.lark_identity,
+            },
+        )
+        with _postgres_worker_wakeup(connection_factory, log) as wait_for_work:
+            InteractiveWorkerLoop(
+                worker,
+                settings=settings.loop,
+                wait_for_work=wait_for_work,
+                log=log,
+            ).run(stop_event)
+        return 0
+
     if projection_command:
         settings = TargetProjectionSettings.from_environ(
             dsn=dsn,
@@ -593,7 +717,6 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             profile=lark_profile,
             identity=namespace.lark_identity,
         )
-        enable_im_commands = _env_boolean("LARKFLOW_TARGET_ENABLE_IM_COMMANDS")
         enable_im_projection = _env_boolean(
             "LARKFLOW_TARGET_ENABLE_IM_PROJECTION"
         )
@@ -605,7 +728,7 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 profile=lark_profile,
                 identity=namespace.lark_identity,
             )
-            if enable_im_commands or enable_im_projection
+            if enable_im_projection
             else None
         )
         document_adapter = (
@@ -614,88 +737,6 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 identity=namespace.lark_identity,
             )
             if enable_doc_projection
-            else None
-        )
-        im_store = PostgresIMCommandStore(connection_factory)
-        directory_adapter = (
-            CliFeishuDirectory(
-                profile=lark_profile,
-                identity=namespace.lark_identity,
-            )
-            if enable_im_commands
-            else None
-        )
-        im_verification_worker = (
-            IMCommandVerificationWorker(
-                im_store,
-                directory_adapter,
-                tenant_id=settings.tenant_id,
-                worker_id=f"{settings.worker_id}:im-verify",
-                claim_limit=settings.claim_limit,
-                claim_ttl=settings.claim_ttl,
-                retry_base=settings.retry_base,
-                retry_max=settings.retry_max,
-            )
-            if enable_im_commands
-            else None
-        )
-        role_binding_card_worker = (
-            RoleBindingCardWorker(
-                im_store,
-                directory_adapter,
-                message_adapter,
-                tenant_id=settings.tenant_id,
-                worker_id=f"{settings.worker_id}:role-card",
-                claim_limit=settings.claim_limit,
-                claim_ttl=settings.claim_ttl,
-                retry_base=settings.retry_base,
-                retry_max=settings.retry_max,
-            )
-            if enable_im_commands
-            and directory_adapter is not None
-            and message_adapter is not None
-            else None
-        )
-        role_binding_verification_worker = (
-            RoleBindingVerificationWorker(
-                im_store,
-                directory_adapter,
-                tenant_id=settings.tenant_id,
-                worker_id=f"{settings.worker_id}:role-verify",
-                claim_limit=settings.claim_limit,
-                claim_ttl=settings.claim_ttl,
-                retry_base=settings.retry_base,
-                retry_max=settings.retry_max,
-            )
-            if enable_im_commands and directory_adapter is not None
-            else None
-        )
-        role_binding_reply_worker = (
-            RoleBindingReplyWorker(
-                im_store,
-                message_adapter,
-                tenant_id=settings.tenant_id,
-                worker_id=f"{settings.worker_id}:role-reply",
-                claim_limit=settings.claim_limit,
-                claim_ttl=settings.claim_ttl,
-                retry_base=settings.retry_base,
-                retry_max=settings.retry_max,
-            )
-            if enable_im_commands and message_adapter is not None
-            else None
-        )
-        im_reply_worker = (
-            IMReplyWorker(
-                im_store,
-                message_adapter,
-                tenant_id=settings.tenant_id,
-                worker_id=f"{settings.worker_id}:im-reply",
-                claim_limit=settings.claim_limit,
-                claim_ttl=settings.claim_ttl,
-                retry_base=settings.retry_base,
-                retry_max=settings.retry_max,
-            )
-            if enable_im_commands and message_adapter is not None
             else None
         )
         completion_poller = TaskCompletionPoller(
@@ -721,68 +762,8 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             retry_max=settings.retry_max,
         )
         if namespace.command == "project-once":
-            if im_verification_worker is not None:
-                verification = im_verification_worker.run_once()
-                log(
-                    "im_verification_tick",
-                    {
-                        "claimed": verification.claimed,
-                        "verified": verification.verified,
-                        "rejected": verification.rejected,
-                        "failed": verification.failed,
-                        "errors": list(verification.errors),
-                    },
-                )
-            if role_binding_card_worker is not None:
-                cards = role_binding_card_worker.run_once()
-                log(
-                    "role_binding_card_tick",
-                    {
-                        "claimed": cards.claimed,
-                        "sent": cards.sent,
-                        "failed": cards.failed,
-                        "errors": list(cards.errors),
-                    },
-                )
-            if role_binding_verification_worker is not None:
-                bindings = role_binding_verification_worker.run_once()
-                log(
-                    "role_binding_verification_tick",
-                    {
-                        "claimed": bindings.claimed,
-                        "verified": bindings.verified,
-                        "rejected": bindings.rejected,
-                        "failed": bindings.failed,
-                        "errors": list(bindings.errors),
-                    },
-                )
             report = worker.run_once()
             log("projection_tick", ProjectionWorkerLoop._report_fields(report))
-            if im_reply_worker is not None:
-                replies = im_reply_worker.run_once()
-                log(
-                    "im_reply_tick",
-                    {
-                        "claimed": replies.claimed,
-                        "sent": replies.sent,
-                        "failed": replies.failed,
-                        "errors": list(replies.errors),
-                    },
-                )
-            if role_binding_reply_worker is not None:
-                binding_replies = role_binding_reply_worker.run_once()
-                log(
-                    "role_binding_reply_tick",
-                    {
-                        "claimed": binding_replies.claimed,
-                        "sent": binding_replies.sent,
-                        "card_updates_failed": (
-                            binding_replies.card_updates_failed
-                        ),
-                        "failed": binding_replies.failed,
-                        "errors": list(binding_replies.errors),
-                    },
-                )
             return int(bool(report.errors))
         if namespace.command == "reconcile-projections":
             report = worker.reconcile_all(
@@ -828,7 +809,6 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 "idle_max_seconds": settings.loop.idle_max_seconds,
                 "lark_profile": namespace.lark_profile,
                 "lark_identity": namespace.lark_identity,
-                "im_commands_enabled": enable_im_commands,
                 "im_projection_enabled": enable_im_projection,
                 "doc_projection_enabled": enable_doc_projection,
             },
@@ -839,13 +819,6 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 settings=settings.loop,
                 reconcile_batch_size=settings.reconcile_batch_size,
                 completion_poller=completion_poller,
-                im_verification_worker=im_verification_worker,
-                im_reply_worker=im_reply_worker,
-                role_binding_card_worker=role_binding_card_worker,
-                role_binding_verification_worker=(
-                    role_binding_verification_worker
-                ),
-                role_binding_reply_worker=role_binding_reply_worker,
                 completion_poll_seconds=settings.completion_poll_seconds,
                 wait_for_work=wait_for_work,
                 log=log,

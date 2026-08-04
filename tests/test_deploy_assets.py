@@ -24,6 +24,8 @@ def test_development_restart_asset_covers_all_python_services():
     expected = {
         "larkflow-target.service",
         "larkflow-target-projection.service",
+        "larkflow-target-interactive@1.service",
+        "larkflow-target-interactive@2.service",
         "larkflow-target-inbound-adapter.service",
         "larkflow-target-inbound.service",
         "larkflow-target-edge.service",
@@ -67,8 +69,28 @@ def test_development_interactive_worker_idle_caps_are_one_second():
     projection = _env_values(
         ROOT / "deploy" / "larkflow-target-projection.env.example"
     )
+    interactive = _env_values(
+        ROOT / "deploy" / "larkflow-target-interactive.env.example"
+    )
 
     assert float(runtime["LARKFLOW_TARGET_IDLE_MIN_SECONDS"]) > 0
     assert float(runtime["LARKFLOW_TARGET_IDLE_MAX_SECONDS"]) == 1
+    assert "LARKFLOW_TARGET_ENABLE_IM_COMMANDS" not in projection
     assert float(projection["LARKFLOW_TARGET_PROJECTION_IDLE_MIN_SECONDS"]) > 0
     assert float(projection["LARKFLOW_TARGET_PROJECTION_IDLE_MAX_SECONDS"]) == 1
+    assert int(interactive["LARKFLOW_TARGET_INTERACTIVE_CLAIM_LIMIT"]) == 1
+    assert float(interactive["LARKFLOW_TARGET_INTERACTIVE_IDLE_MIN_SECONDS"]) > 0
+    assert float(interactive["LARKFLOW_TARGET_INTERACTIVE_IDLE_MAX_SECONDS"]) == 1
+
+
+def test_interactive_systemd_template_runs_the_isolated_credential_lane():
+    unit = (
+        ROOT / "deploy" / "larkflow-target-interactive@.service"
+    ).read_text(encoding="utf-8")
+
+    assert "User=lf-dev" in unit
+    assert "--env-file /etc/larkflow-target-interactive.env" in unit
+    assert "--interactive-worker-id interactive-%H-%i" in unit
+    assert "interactive-%H-%i interact" in unit
+    assert "KillMode=control-group" in unit
+    assert "ReadWritePaths=/srv/larkflow/dev/.lark-cli" in unit

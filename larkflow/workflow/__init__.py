@@ -42,6 +42,7 @@ from .wakeup import (
 )
 from .config import (
     TargetInboundSettings,
+    TargetInteractiveSettings,
     TargetProjectionSettings,
     TargetRuntimeSettings,
 )
@@ -136,6 +137,12 @@ from .inbound_daemon import (
     InboundWorkerLoop,
     VerificationLoopSummary,
     VerificationWorkerLoop,
+)
+from .interactive_daemon import (
+    InteractiveLoopSummary,
+    InteractiveWorker,
+    InteractiveWorkerLoop,
+    InteractiveWorkerReport,
 )
 from .model import (
     AttemptStatus,

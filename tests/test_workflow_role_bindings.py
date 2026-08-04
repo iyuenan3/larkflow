@@ -1,9 +1,11 @@
 """Person-selection card tests for multi-owner workflow drafts."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
+from threading import Barrier, Lock, get_ident
 
 import pytest
 
@@ -165,6 +167,23 @@ class MemoryRoleStore:
         self.reply_failed.append((tenant_id, event_id, kwargs))
 
 
+class ConcurrentRoleStore(MemoryRoleStore):
+    def __init__(self):
+        super().__init__()
+        self.lock = Lock()
+
+    def claim_role_binding_verification(self, *_args, **kwargs):
+        limit = kwargs["limit"]
+        with self.lock:
+            claims = tuple(self.verification_claims[:limit])
+            del self.verification_claims[:limit]
+        return claims
+
+    def mark_role_binding_verified(self, tenant_id, event_id, **kwargs):
+        with self.lock:
+            super().mark_role_binding_verified(tenant_id, event_id, **kwargs)
+
+
 class Directory:
     def __init__(self, people=("person_owner", "person_reviewer")):
         self.people = tuple(people)
@@ -179,6 +198,23 @@ class Directory:
         assert tenant_id == TENANT
         self.get_calls.append(person_id)
         return DirectoryPerson(person_id=person_id, active=person_id in self.people)
+
+
+class ConcurrentDirectory(Directory):
+    def __init__(self, barrier):
+        super().__init__()
+        self.barrier = barrier
+        self.lock = Lock()
+        self.entered_threads = set()
+
+    def get_person(self, tenant_id, person_id):
+        thread_id = get_ident()
+        with self.lock:
+            first_call = thread_id not in self.entered_threads
+            self.entered_threads.add(thread_id)
+        if first_call:
+            self.barrier.wait(timeout=5)
+        return super().get_person(tenant_id, person_id)
 
 
 class Sender:
@@ -564,6 +600,51 @@ def test_role_binding_workers_timestamp_each_item_after_its_work():
         NOW + timedelta(seconds=5),
         NOW + timedelta(seconds=6),
     ]
+
+
+def test_two_single_claim_replicas_overlap_directory_verification():
+    req = request(
+        candidates=("person_owner", "person_reviewer"),
+        card_message_id="card_message_1",
+    )
+    store = ConcurrentRoleStore()
+    store.verification_claims = [
+        RoleBindingActionClaim(action(), req, "verify-token-1", 1),
+        RoleBindingActionClaim(
+            replace(action(), id="action_2", message_id="card_message_2"),
+            replace(req, card_message_id="card_message_2"),
+            "verify-token-2",
+            1,
+        ),
+    ]
+    directory = ConcurrentDirectory(Barrier(2))
+    workers = (
+        RoleBindingVerificationWorker(
+            store,
+            directory,
+            tenant_id=TENANT,
+            worker_id="interactive_1",
+            claim_limit=1,
+            clock=lambda: NOW,
+        ),
+        RoleBindingVerificationWorker(
+            store,
+            directory,
+            tenant_id=TENANT,
+            worker_id="interactive_2",
+            claim_limit=1,
+            clock=lambda: NOW,
+        ),
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(worker.run_once) for worker in workers]
+        reports = [future.result(timeout=10) for future in futures]
+
+    assert [report.claimed for report in reports] == [1, 1]
+    assert [report.verified for report in reports] == [1, 1]
+    assert {item[1] for item in store.verified} == {"action_1", "action_2"}
+    assert len(directory.entered_threads) == 2
 
 
 def test_verified_binding_creates_one_frozen_draft_and_queues_reply():

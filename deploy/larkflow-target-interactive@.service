@@ -1,0 +1,45 @@
+[Unit]
+Description=larkflow Target credential-side interactive worker %i
+Documentation=https://github.com/iyuenan3/larkflow
+After=network-online.target postgresql.service larkflow-target.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=lf-dev
+Group=lf-dev
+WorkingDirectory=/
+Environment=HOME=/srv/larkflow/dev
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1
+Environment=LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1
+ExecStart=/srv/larkflow/target/venv/bin/larkflow-target --env-file /etc/larkflow-target-interactive.env --interactive-worker-id interactive-%H-%i interact
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=150
+KillMode=control-group
+UMask=0077
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/srv/larkflow/dev/.lark-cli
+ReadWritePaths=/srv/larkflow/dev/.local/share/lark-cli
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

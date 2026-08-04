@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,10 +12,14 @@ from larkflow.workflow import (
     ExecutionRequest,
     InboundWorkerLoop,
     InboundWorkerReport,
+    InteractiveWorker,
+    InteractiveWorkerLoop,
+    InteractiveWorkerReport,
     ProjectionWorkerLoop,
     ProjectionReconciliationReport,
     ProjectionWorkerReport,
     TargetInboundSettings,
+    TargetInteractiveSettings,
     TargetProjectionSettings,
     TargetRuntimeSettings,
     VerificationWorkerLoop,
@@ -275,6 +280,10 @@ def test_all_persistent_loops_accept_notification_driven_waits():
             VerificationWorkerLoop,
             ScriptedWorker([VerificationWorkerReport()]),
         ),
+        (
+            InteractiveWorkerLoop,
+            ScriptedWorker([InteractiveWorkerReport()]),
+        ),
     )
 
     for loop_type, worker in cases:
@@ -286,6 +295,129 @@ def test_all_persistent_loops_accept_notification_driven_waits():
         assert wakeup.waits == [0.25]
         assert stop.waits == []
         assert summary.ticks == 1
+
+
+def test_interactive_loop_keeps_draining_after_any_lane_claims_work():
+    worker = ScriptedWorker(
+        [
+            InteractiveWorkerReport(
+                claimed=1,
+                role_bindings_verified=1,
+            ),
+            InteractiveWorkerReport(),
+        ]
+    )
+    stop = RecordingStop(stop_after_waits=1)
+
+    summary = InteractiveWorkerLoop(
+        worker,
+        settings=WorkerLoopSettings(0.25, 1.0),
+    ).run(stop)
+
+    assert worker.calls == 2
+    assert stop.waits == [0.25]
+    assert summary.ticks == 2
+    assert summary.claimed == 1
+    assert summary.role_bindings_verified == 1
+
+
+def test_interactive_worker_isolates_lanes_and_records_service_time():
+    class Lane:
+        def __init__(self, outcome):
+            self.outcome = outcome
+
+        def run_once(self):
+            if isinstance(self.outcome, Exception):
+                raise self.outcome
+            return self.outcome
+
+    events = []
+    worker = InteractiveWorker(
+        im_verification_worker=Lane(RuntimeError("directory unavailable")),
+        role_binding_verification_worker=Lane(
+            SimpleNamespace(
+                claimed=1,
+                verified=1,
+                rejected=0,
+                failed=0,
+                errors=(),
+            )
+        ),
+        monotonic=ScriptedMonotonic([0, 0.125, 1, 1.375]),
+        log=lambda event, fields: events.append((event, fields)),
+    )
+
+    report = worker.run_once()
+
+    assert report.claimed == 1
+    assert report.role_bindings_verified == 1
+    assert report.lane_errors == 1
+    assert report.errors == (
+        "im_verification: RuntimeError: directory unavailable",
+    )
+    assert events == [
+        (
+            "interactive_lane_failed",
+            {
+                "lane": "im_verification",
+                "elapsed_ms": 125,
+                "error_type": "RuntimeError",
+            },
+        ),
+        (
+            "interactive_lane_tick",
+            {
+                "lane": "role_verification",
+                "claimed": 1,
+                "elapsed_ms": 375,
+                "error_count": 0,
+            },
+        ),
+    ]
+
+
+def test_interactive_lane_metrics_cannot_break_durable_processing():
+    class Lane:
+        def run_once(self):
+            return SimpleNamespace(
+                claimed=1,
+                sent=1,
+                failed=0,
+                errors=(),
+            )
+
+    def fail_log(_event, _fields):
+        raise RuntimeError("metrics sink unavailable")
+
+    report = InteractiveWorker(
+        im_reply_worker=Lane(),
+        monotonic=ScriptedMonotonic([0, 0.1]),
+        log=fail_log,
+    ).run_once()
+
+    assert report.claimed == 1
+    assert report.im_replies_sent == 1
+    assert report.lane_errors == 0
+
+
+def test_interactive_loop_metrics_cannot_stop_queue_draining():
+    worker = ScriptedWorker(
+        [
+            InteractiveWorkerReport(claimed=1, im_replies_sent=1),
+            InteractiveWorkerReport(),
+        ]
+    )
+    stop = RecordingStop(stop_after_waits=1)
+
+    def fail_log(_event, _fields):
+        raise RuntimeError("metrics sink unavailable")
+
+    summary = InteractiveWorkerLoop(worker, log=fail_log).run(stop)
+
+    assert worker.calls == 2
+    assert summary.ticks == 2
+    assert summary.claimed == 1
+    assert summary.im_replies_sent == 1
 
 
 def request(*, kind="development.echo", args=None, executor="tool"):
@@ -388,6 +520,40 @@ def test_projection_settings_have_independent_claim_and_retry_controls(monkeypat
     assert settings.completion_poll_seconds == 17.5
     assert settings.completion_poll_batch_size == 13
     assert settings.loop == WorkerLoopSettings(0.5, 2.0)
+
+
+def test_interactive_settings_enforce_one_claim_per_replica(monkeypatch):
+    monkeypatch.setattr("larkflow.workflow.config.socket.gethostname", lambda: "host-a")
+    monkeypatch.setattr("larkflow.workflow.config.os.getpid", lambda: 123)
+
+    settings = TargetInteractiveSettings.from_environ(
+        {
+            "LARKFLOW_TARGET_DSN": "postgresql:///larkflow_target_dev",
+            "LARKFLOW_TARGET_TENANT": "dev",
+            "LARKFLOW_TARGET_INTERACTIVE_CLAIM_TTL_SECONDS": "60",
+            "LARKFLOW_TARGET_INTERACTIVE_CLAIM_LIMIT": "1",
+            "LARKFLOW_TARGET_INTERACTIVE_RETRY_BASE_SECONDS": "2",
+            "LARKFLOW_TARGET_INTERACTIVE_RETRY_MAX_SECONDS": "30",
+            "LARKFLOW_TARGET_INTERACTIVE_IDLE_MIN_SECONDS": "0.5",
+            "LARKFLOW_TARGET_INTERACTIVE_IDLE_MAX_SECONDS": "2",
+        }
+    )
+
+    assert settings.worker_id == "host-a:123:interactive"
+    assert settings.claim_ttl == timedelta(seconds=60)
+    assert settings.claim_limit == 1
+    assert settings.retry_base == timedelta(seconds=2)
+    assert settings.retry_max == timedelta(seconds=30)
+    assert settings.loop == WorkerLoopSettings(0.5, 2.0)
+
+    with pytest.raises(ValueError, match="claim_limit must be 1"):
+        TargetInteractiveSettings.from_environ(
+            {
+                "LARKFLOW_TARGET_DSN": "postgresql:///larkflow_target_dev",
+                "LARKFLOW_TARGET_TENANT": "dev",
+                "LARKFLOW_TARGET_INTERACTIVE_CLAIM_LIMIT": "2",
+            }
+        )
 
 
 def test_inbound_settings_have_independent_claim_and_retry_controls(monkeypatch):

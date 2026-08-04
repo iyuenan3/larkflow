@@ -89,6 +89,16 @@ def test_cli_exposes_one_instance_completion_repair():
     assert parsed.instance_id == "instance_1"
 
 
+def test_cli_exposes_isolated_interactive_worker_commands():
+    parser = build_parser()
+
+    once = parser.parse_args(["interact-once"])
+    persistent = parser.parse_args(["interact"])
+
+    assert once.command == "interact-once"
+    assert persistent.command == "interact"
+
+
 def test_status_projection_never_exposes_claim_token():
     repository = InMemoryWorkflowRepository()
     service = WorkflowService(

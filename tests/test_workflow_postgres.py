@@ -390,6 +390,72 @@ def test_postgres_role_verification_records_each_item_completion_time():
     ]
 
 
+def test_postgres_two_interactive_replicas_claim_distinct_single_items():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_interactive_competition_{suffix}"
+    now = datetime(2026, 8, 4, 8, 0, tzinfo=timezone.utc)
+    store = PostgresIMCommandStore(connection_factory)
+    for index in (1, 2):
+        assert store.append_role_binding_action(
+            RoleBindingActionSignal(
+                id=f"event_{index}_{suffix}",
+                tenant_id=tenant_id,
+                message_id=f"message_{index}_{suffix}",
+                chat_id=f"chat_{suffix}",
+                operator_person_id="person_owner",
+                action_tag="button",
+                action_name="role_binding_submit",
+                form_value='{"role__reviewer":"person_owner"}',
+                update_token=f"token_{index}_{suffix}",
+                occurred_at=now,
+                received_at=now,
+            )
+        ) is True
+
+    barrier = Barrier(2)
+
+    def claim_one(worker_id: str):
+        barrier.wait(timeout=5)
+        claims = PostgresIMCommandStore(
+            connection_factory
+        ).claim_role_binding_verification(
+            tenant_id,
+            worker_id=worker_id,
+            now=now,
+            limit=1,
+            claim_ttl=timedelta(minutes=1),
+        )
+        assert len(claims) == 1
+        return claims[0]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(claim_one, "interactive_1")
+        second = pool.submit(claim_one, "interactive_2")
+        claims = (first.result(timeout=10), second.result(timeout=10))
+
+    assert {claim.action.id for claim in claims} == {
+        f"event_1_{suffix}",
+        f"event_2_{suffix}",
+    }
+    with connection_factory() as connection:
+        workers = connection.execute(
+            """
+            SELECT claimed_by
+            FROM workflow_role_binding_actions
+            WHERE tenant_id = %s
+            ORDER BY claimed_by
+            """,
+            (tenant_id,),
+        ).fetchall()
+    assert [row["claimed_by"] for row in workers] == [
+        "interactive_1",
+        "interactive_2",
+    ]
+
+
 def test_postgres_persists_template_lifecycle_and_frozen_instance_snapshot():
     assert POSTGRES_DSN is not None
     connection_factory = postgres_connection_factory(POSTGRES_DSN)

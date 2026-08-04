@@ -4,6 +4,8 @@ set -euo pipefail
 services=(
   larkflow-target.service
   larkflow-target-projection.service
+  larkflow-target-interactive@1.service
+  larkflow-target-interactive@2.service
   larkflow-target-inbound-adapter.service
   larkflow-target-inbound.service
   larkflow-target-edge.service
