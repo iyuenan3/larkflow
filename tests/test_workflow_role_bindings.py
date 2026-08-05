@@ -636,7 +636,8 @@ def test_card_worker_freezes_candidates_and_projects_card_2():
     assert card["schema"] == "2.0"
     form = card["body"]["elements"][1]
     assert form["tag"] == "form"
-    assert form["elements"][-1]["form_action_type"] == "submit"
+    assert form["elements"][-1]["action_type"] == "form_submit"
+    assert "form_action_type" not in form["elements"][-1]
     assert "behaviors" not in form["elements"][-1]
 
 
@@ -660,7 +661,8 @@ def test_card_worker_projects_the_natural_language_draft_form():
     names = {element.get("name") for element in form["elements"]}
     assert {"draft_brief", "draft_context", "role__collaborator"} <= names
     assert form["elements"][-1]["name"] == DRAFT_WIZARD_SUBMIT_NAME
-    assert form["elements"][-1]["form_action_type"] == "submit"
+    assert form["elements"][-1]["action_type"] == "form_submit"
+    assert "form_action_type" not in form["elements"][-1]
     assert "不会自动运行" in card["body"]["elements"][0]["content"]
 
 

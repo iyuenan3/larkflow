@@ -1146,7 +1146,7 @@ def role_binding_card(
             },
             "type": "primary_filled",
             "width": "fill",
-            "form_action_type": "submit",
+            "action_type": "form_submit",
             "disabled": settled,
         }
     )
@@ -1277,7 +1277,7 @@ def draft_wizard_card(
                             "text": {"tag": "plain_text", "content": "生成候选流程"},
                             "type": "primary_filled",
                             "width": "fill",
-                            "form_action_type": "submit",
+                            "action_type": "form_submit",
                         },
                     ],
                 },
