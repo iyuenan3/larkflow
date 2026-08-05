@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 import json
 from typing import Any
+from urllib.parse import quote
 
 from larkflow.io.cli import LarkCliError, run_cli
 
@@ -279,6 +280,48 @@ class CliFeishuMessageProjection:
                 "--data",
                 json.dumps(
                     {"token": token, "card": dict(card)},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                "--as",
+                self.identity,
+                "--json",
+            ]
+        )
+
+    def update_chat_card_message(
+        self,
+        *,
+        message_id: str,
+        card: Mapping[str, Any],
+    ) -> None:
+        message_id = message_id.strip()
+        config = card.get("config")
+        if (
+            not message_id
+            or card.get("schema") != "2.0"
+            or not isinstance(config, Mapping)
+            or config.get("update_multi") is not True
+        ):
+            raise ValueError(
+                "Feishu message_id and multi-update Card 2.0 body are required"
+            )
+        content = json.dumps(
+            dict(card),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        self.runner(
+            [
+                self.executable,
+                "--profile",
+                self.profile,
+                "api",
+                "PATCH",
+                f"/open-apis/im/v1/messages/{quote(message_id, safe='')}",
+                "--data",
+                json.dumps(
+                    {"content": content},
                     ensure_ascii=False,
                     separators=(",", ":"),
                 ),

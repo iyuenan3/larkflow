@@ -385,6 +385,7 @@ class Sender:
     def __init__(self):
         self.cards = []
         self.updates = []
+        self.token_updates = []
         self.messages = []
 
     def send_chat_card(self, **kwargs):
@@ -392,6 +393,10 @@ class Sender:
         return "card_message_1"
 
     def update_chat_card(self, **kwargs):
+        self.token_updates.append(kwargs)
+        self.updates.append(kwargs)
+
+    def update_chat_card_message(self, **kwargs):
         self.updates.append(kwargs)
 
     def send_chat_message(self, **kwargs):
@@ -1066,6 +1071,8 @@ def test_progress_worker_replaces_the_card_without_live_controls():
     ).run_once()
 
     assert report.sent == 1
+    assert sender.updates[0]["message_id"] == "card_message_1"
+    assert sender.token_updates == []
     card = sender.updates[0]["card"]
     assert card["header"]["title"]["content"] == "正在修复候选图"
     assert card["header"]["template"] == "orange"
@@ -1161,6 +1168,8 @@ def test_reply_worker_settles_card_and_sends_stable_text_reply():
     ).run_once()
 
     assert report.sent == 1
+    assert sender.updates[0]["message_id"] == "card_message_1"
+    assert sender.token_updates == []
     assert sender.updates[0]["card"]["header"]["template"] == "green"
     assert sender.updates[0]["card"]["config"]["update_multi"] is True
     assert sender.messages[0]["text"] == "draft ready"
@@ -1200,6 +1209,8 @@ def test_draft_wizard_reply_replaces_inputs_with_a_no_button_graph_preview():
     ).run_once()
 
     assert report.sent == 1
+    assert sender.updates[0]["message_id"] == "card_message_1"
+    assert sender.token_updates == []
     card = sender.updates[0]["card"]
     assert card["header"]["title"]["content"] == "流程草稿已生成"
     assert "节点预览" in card["body"]["elements"][0]["content"]
@@ -1210,7 +1221,7 @@ def test_draft_wizard_reply_replaces_inputs_with_a_no_button_graph_preview():
 
 def test_reply_worker_reports_card_update_error_without_losing_text_reply():
     class FailingCardSender(Sender):
-        def update_chat_card(self, **kwargs):
+        def update_chat_card_message(self, **kwargs):
             self.updates.append(kwargs)
             raise RuntimeError("Feishu card update rejected")
 

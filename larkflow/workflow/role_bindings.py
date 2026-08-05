@@ -363,6 +363,14 @@ class RoleBindingCardSender(Protocol):
     ) -> None:
         ...
 
+    def update_chat_card_message(
+        self,
+        *,
+        message_id: str,
+        card: Mapping[str, Any],
+    ) -> None:
+        ...
+
     def send_chat_message(
         self,
         *,
@@ -1095,8 +1103,8 @@ class RoleBindingProgressWorker:
         errors: list[str] = []
         for claim in claims:
             try:
-                self.sender.update_chat_card(
-                    token=claim.action.update_token,
+                self.sender.update_chat_card_message(
+                    message_id=claim.action.message_id,
                     card=draft_wizard_progress_card(claim.stage),
                 )
                 self.store.mark_role_binding_progress_sent(
@@ -1215,8 +1223,8 @@ class RoleBindingReplyWorker:
                                 f"{retry_guidance}"
                             ),
                         )
-                    self.sender.update_chat_card(
-                        token=claim.action.update_token,
+                    self.sender.update_chat_card_message(
+                        message_id=claim.action.message_id,
                         card=card,
                     )
                 except Exception as exc:
