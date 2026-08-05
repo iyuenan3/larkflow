@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.41.0-draft · 2026-08-05 · 独立草稿生成与阶段进度
+
+- Added：新增无飞书凭据的 Draft Generation Worker、`generate-drafts-once / generate-drafts` CLI、systemd unit 与独立 env 模板。migration `0019_draft_generation_progress` 为自然语言草稿动作保存生成 claim、`generating / repairing` 进度 revision、独立进度 claim 和最终回复栅栏。
+- Security：模型进程不加载 lark-cli profile；普通人员分工 Worker 显式排除 `draft_wizard` 动作。身份验证、目录再验证、卡片更新和最终回复仍只在凭据侧执行，模型结果继续经过同一确定性 Snapshot 校验。
+- Reliability：生成租约覆盖两次完整 LLM 路由预算加安全余量；首次候选被拒绝时，在第二次调用前持久化修复阶段。最终回复等待当前进度 revision 结算，迟到的旧进度不能覆盖成功或拒绝终态。通知只唤醒 Worker，耐久队列和轮询仍是可靠性基础。
+- Verified：内容提交 `1a80b4035d0a5ad5c634af7be957f4b7d1ee37d7` 已推送；完整离线套件为 `884 passed, 18 skipped`。四个隔离变异均被测试捕获，候选 wheel 已确认包含 `draft_generation_daemon.py` 与 `0019_draft_generation_progress.sql`。
+- Boundary：本条文档提交时，开发服务器仍是八服务、十八份 migration 和六条监听连接。第九服务、migration 19、真实 PostgreSQL 竞争与飞书卡片阶段变化验收尚未执行，不构成开发部署或生产上线证据。
+
 ## v0.40.0-draft · 2026-08-05 · 自然语言流程草稿引导
 
 - Added：裸 `/larkflow draft` 现在创建 Card 2.0 引导，收集必填目标、可选背景和一名协作者。回调通过中央 Agent 生成最多八个 Human / Agent 节点，只创建无模板 Snapshot 草稿；同一原卡片最终显示节点、Owner、依赖和独立 `/larkflow confirm` 命令。带 JSON 的结构化高级入口保持兼容。

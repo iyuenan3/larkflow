@@ -736,3 +736,13 @@
 - Alternatives(否决)：继续只显示 JSON 用法；收到自然语言后直接启动；让模型返回人员 ID、provider 或 Tool；新建第二套生成草稿表和回调 Worker；把自然语言描述直接塞入现有模板而不展示候选图；首版支持任意人数和任意角色。
 - Tradeoff：首版只支持发起人与一名协作者，不提供图形化编辑、手工修改、主动重新生成或多候选比较。生成调用复用当前 MVP Runtime 进程模型，真实验收中的两次模型调用约耗时两分钟，期间原卡片保持“处理中”；该证据不能外推模型质量或容量。复用人员分工表的 `kind` 避免第二套状态真相，但表名不完全表达自然语言生成语义。
 - Evidence：内容提交 `244fb0c25b67c789ed42f23a290438b86e1a7e18` 实现引导，`6ff0af211280cbeeb8b35cca04308a88c2c67184` 修正 Card 2.0 表单提交，`282ea515aeb463896133b4b3a60d9d42733d555c` 增加一次有界重生成；完整离线套件为 `877 passed, 17 skipped`。最终 wheel SHA-256 为 `e8b82659cb03a42892480164ef0541ed512b4dde4dbf259b0892e32d02e8d78e`，已安装到 Target Runtime 与 legacy 飞书事件桥接虚拟环境。真实点击的首反馈为 1056 ms，首个非法依赖候选被拒绝，第二个候选创建实例 `im_69af9ebdf241017341e5fee4`；PostgreSQL 回读为 `draft / template_version_id IS NULL / 3 nodes / 0 NodeInstance / 0 Attempt`，同卡只有一个 `processed / draft_created / sent` canonical 动作。飞书服务端回读原卡片为无操作控件终态；验收未确认或运行草稿。
+
+## ADR-087 · 2026-08-05 · 慢草稿生成与飞书凭据车道隔离
+
+- **Status：Accepted · Local implementation, development deployment pending。**
+- Problem：自然语言草稿可能连续执行两次长模型调用。若它与卡片更新、IM 回复和其他凭据侧工作共享 Interactive 主循环，一次生成会造成明显队头阻塞；只有“处理中”这一种长时间状态也无法告诉用户系统是在首次生成还是确定性修复。
+- Constraint：模型进程不能持有飞书 profile；卡片更新仍须由凭据侧执行；同一动作只能有一个 canonical 生成者；崩溃恢复不得让两个 Worker 同时生成，也不得让迟到进度覆盖最终图预览；生成租约必须覆盖首轮与修复轮的完整路由预算；PostgreSQL 仍是状态权威，通知只负责唤醒。
+- Decision：新增无凭据 Draft Generation Worker，只认领 `draft_wizard` canonical 动作；普通人员分工 Worker 显式排除该类型。migration 19 保存生成 claim、阶段进度 revision、独立进度 claim 和完成栅栏。生成开始排队 `generating`，确定性校验拒绝首个候选时排队 `repairing`；两个 Interactive 副本继续负责更新原卡片。最终回复在当前进度 revision 结算后才可认领。生成租约下限为两次完整 LLM 路由预算加安全余量。
+- Alternatives(否决)：继续在 Interactive 进程同步调用模型；用线程池共享 lark-cli profile；只延长原动作租约而不拆进程；直接从无凭据进程调用飞书；使用瞬时内存进度；允许最终回复与进度更新竞争覆盖卡片。
+- Tradeoff：开发拓扑增加一个常驻进程和一条 PostgreSQL 监听连接，migration 与运维面更复杂；阶段文字是服务端卡片状态，不代表客户端渲染时延。生成与凭据操作隔离后仍受模型 provider 延迟和飞书更新限流影响。
+- Evidence：内容提交 `1a80b4035d0a5ad5c634af7be957f4b7d1ee37d7`；完整离线套件 `884 passed, 18 skipped`。四个隔离变异分别删除修复进度、缩短为单次模型预算、让生成 Worker 走普通 claim、反转交互车道顺序，均被定向测试捕获。候选 wheel 已确认包含新增 daemon、CLI 与 migration；开发部署和真实飞书验收仍待完成。

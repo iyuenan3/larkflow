@@ -4,6 +4,11 @@
 >
 > 除修正事实错误外，不再给这套部署增加新的产品领域能力。个人端不得复用下文的企业 bot 全局凭证；中央端和个人端必须使用不同身份、权限与生命周期。
 
+## 候选发布状态 · 2026-08-05
+
+- 内容提交 `1a80b4035d0a5ad5c634af7be957f4b7d1ee37d7` 已推送，新增 `larkflow-target-draft-generator.service`、独立 env 模板、`generate-drafts-once / generate-drafts` 和 migration `0019_draft_generation_progress`。本地完整离线套件为 `884 passed, 18 skipped`，四个隔离变异分别证明修复阶段进度、双模型调用租约预算、生成车道隔离和交互车道优先级不是假绿；候选 wheel 已检查包含新增 daemon 与 migration。
+- 本节以下现状在候选部署前仍为八个 Python 服务、十八份 migration 和六条 PostgreSQL 监听连接。候选部署成功后应为九个 Python 服务、十九份 migration 和七条监听连接；必须先备份、安装同一 wheel、验证 systemd 解析状态，再执行 migration、统一重启、真实 PostgreSQL 竞争和飞书卡片回归。部署与外部验收未完成前，不得把候选状态写成 As-built。
+
 ## Target PostgreSQL 开发验证状态（2026-08-05）
 
 - 当前开发发布件对应内容提交 `282ea515aeb463896133b4b3a60d9d42733d555c`，包含裸 `/larkflow draft` 的 Card 2.0 自然语言引导、官方 `form_submit` 动作和未通过确定性校验时的一次有界重生成，并保留内容提交 `5312f6c026453ac6d9e2e62679b755f271c114f3` 的双 Interactive 副本拓扑与既有 Edge Gateway。完整离线套件为 `877 passed, 17 skipped`；长期库保持十八份 migration，八服务全部回读 `active / running / NRestarts=0`，部署窗口 warning 级日志为 0。
