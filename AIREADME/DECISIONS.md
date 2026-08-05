@@ -726,3 +726,13 @@
 - Alternatives(否决)：先把每个临时定义注册为隐藏模板；收到 JSON 后立即启动；信任正文中的 open_id；允许用户传任意模型 base URL 或 key；允许无模板定义创建 Personal Edge 节点；为无模板实例单独建立存储与调度器。
 - Tradeoff：用户现在可以脱离模板完成真实闭环，但首版仍要求手写结构化 JSON，没有图形化编辑和 schema 辅助；100 节点是入口保护上限，不是系统容量承诺。拒绝 Personal Edge 会限制某些个人 Agent 场景，但保留了中央与员工设备之间的 capability 授权边界。
 - Evidence：内容提交 `5113a59aacc8b0a97481411e581b9d52f6462073`；完整离线套件 `858 passed, 17 skipped`，四组定向变异均捕获错误实现。候选 wheel SHA-256 为 `d5b0964ce3bcb817a6ec22c3346bb4ff47aaae64bffdd0b0cd67027ee3dd4d2a`，长期库 migration 仍为十八份，八服务全部 active。真实实例 `im_a9a43d1d4db354b31b798bb1` 已完成 Human-Agent-Tool-Human 4/4，飞书终态与 PostgreSQL `done / template_version_id IS NULL / 四节点 done` 一致。
+
+## ADR-086 · 2026-08-05 · 裸 draft 使用受限中央 Agent 生成候选图
+
+- **Status：Accepted · Development deployment and real Feishu validation。**
+- Problem：结构化无模板入口要求用户手写完整 JSON，裸 `/larkflow draft` 因缺少定义只返回用法错误。这暴露的是产品入口缺口，而不是运行时能力缺口。用户需要从目标描述进入草稿，但自然语言生成不能绕过草稿确认、Owner 授权或服务端图校验。
+- Constraint：生成结果只能是候选，不能自动运行；每个节点仍需唯一人类 Owner；操作人和协作者必须由服务端凭据验证；原始输入不能被模型改写；中央 Agent 不能选择 provider、密钥、Tool 或 Personal Edge capability；带 JSON 的高级入口必须保持兼容；点击后要尽快得到原卡片视觉反馈。
+- Decision：裸 `/larkflow draft` 打开 Card 2.0，引导用户填写目标、可选背景并从冻结活跃成员快照中选择一名协作者。回调复用人员分工卡的耐久动作状态机，先保存 canonical 动作并更新为无按钮“处理中”，再由与中央 Agent executor 同源的定义生成器产生最多八个 Human / Agent 节点。Owner 角色只允许 `requester / collaborator`，Agent 节点后必须直接有人类复核。模型输出严格解码后，服务端覆盖 `schema_version` 与原始输入，再通过既有无模板 Snapshot 校验和实例化路径创建 `draft`。最终原卡片显示图预览，用户仍须单独执行 `/larkflow confirm`。
+- Alternatives(否决)：继续只显示 JSON 用法；收到自然语言后直接启动；让模型返回人员 ID、provider 或 Tool；新建第二套生成草稿表和回调 Worker；把自然语言描述直接塞入现有模板而不展示候选图；首版支持任意人数和任意角色。
+- Tradeoff：首版只支持发起人与一名协作者，不提供图形化编辑、手工修改、主动重新生成或多候选比较。生成调用复用当前 MVP Runtime 进程模型，真实验收中的两次模型调用约耗时两分钟，期间原卡片保持“处理中”；该证据不能外推模型质量或容量。复用人员分工表的 `kind` 避免第二套状态真相，但表名不完全表达自然语言生成语义。
+- Evidence：内容提交 `244fb0c25b67c789ed42f23a290438b86e1a7e18` 实现引导，`6ff0af211280cbeeb8b35cca04308a88c2c67184` 修正 Card 2.0 表单提交，`282ea515aeb463896133b4b3a60d9d42733d555c` 增加一次有界重生成；完整离线套件为 `877 passed, 17 skipped`。最终 wheel SHA-256 为 `e8b82659cb03a42892480164ef0541ed512b4dde4dbf259b0892e32d02e8d78e`，已安装到 Target Runtime 与 legacy 飞书事件桥接虚拟环境。真实点击的首反馈为 1056 ms，首个非法依赖候选被拒绝，第二个候选创建实例 `im_69af9ebdf241017341e5fee4`；PostgreSQL 回读为 `draft / template_version_id IS NULL / 3 nodes / 0 NodeInstance / 0 Attempt`，同卡只有一个 `processed / draft_created / sent` canonical 动作。飞书服务端回读原卡片为无操作控件终态；验收未确认或运行草稿。

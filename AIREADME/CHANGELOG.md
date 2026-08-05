@@ -1,5 +1,15 @@
 # CHANGELOG · larkflow
 
+## v0.40.0-draft · 2026-08-05 · 自然语言流程草稿引导
+
+- Added：裸 `/larkflow draft` 现在创建 Card 2.0 引导，收集必填目标、可选背景和一名协作者。回调通过中央 Agent 生成最多八个 Human / Agent 节点，只创建无模板 Snapshot 草稿；同一原卡片最终显示节点、Owner、依赖和独立 `/larkflow confirm` 命令。带 JSON 的结构化高级入口保持兼容。
+- Security：只接受原发起人、原消息和原卡片的认证回调，协作者必须来自冻结的活跃候选快照并在处理前重新验证。模型输出按严格 JSON 解析，Owner 角色限制为 `requester / collaborator`；服务端覆盖 `schema_version` 与用户原始输入，并拒绝 Tool、模型服务配置和 Personal Edge capability。
+- Reliability：复用人员分工卡的耐久动作、canonical 去重、即时“处理中”、最终卡片更新和文本回复链路。重复回调只回读首次创建的草稿，不再次调用模型；可选背景字段在飞书省略时按空值处理。中央 Agent 的首个候选未通过确定性校验时最多重生成一次，第二次失败仍拒绝，旧候选、错误和安全边界不会被当成授权事实。
+- Fixed：Card JSON 2.0 提交按钮改为官方 `action_type=form_submit`；开发部署同时更新 Target Runtime 与 legacy 飞书事件桥接虚拟环境，避免旧桥接包静默忽略新增动作名。
+- Verified：内容提交依次为 `244fb0c25b67c789ed42f23a290438b86e1a7e18`、`6ff0af211280cbeeb8b35cca04308a88c2c67184` 和 `282ea515aeb463896133b4b3a60d9d42733d555c`。当前完整离线套件为 `877 passed, 17 skipped`；三组既有隔离变异和新增两项有界重生成回归均通过。真实点击在 1056 ms 内把原卡片更新为“处理中”；首个非法依赖候选被服务端拒绝并有界重生成，实例 `im_69af9ebdf241017341e5fee4` 最终为 `draft / template_version_id IS NULL / 3 nodes / 0 NodeInstance / 0 Attempt`。同卡只有一个 canonical 动作，状态为 `processed / draft_created / sent`；应用 bot 从飞书服务端回读原卡片为无操作控件的“流程草稿已生成”。
+- Deployment：最终 wheel SHA-256 为 `e8b82659cb03a42892480164ef0541ed512b4dde4dbf259b0892e32d02e8d78e`，保存在 `releases/20260805_191842_draftretry_282ea51/` 并安装到 Target 与 legacy 两个虚拟环境。升级前备份 `larkflow_target_dev-20260805T191903+0800.dump` 为 150907 bytes；长期库仍为十八份 migration，八服务均回读 `active / running / NRestarts=0`，部署窗口 warning 级日志为 0。
+- Boundary：本条只证明开发环境与测试组织中的草稿生成链路，不代表生产上线、模型输出质量稳定、客户端渲染延迟或并发容量。验收草稿未执行 `/larkflow confirm`。
+
 ## v0.39.0-draft · 2026-08-05 · 结构化无模板飞书草稿入口
 
 - Added：新增 `/larkflow draft <JSON定义> [role=@成员 ...]`。命令不查找模板版本，直接生成 `template_version_id=NULL`、`locked=false` 的 Instance Snapshot 草稿；草稿仍需独立 `/larkflow confirm` 才启动，并进入既有 Human、Agent、Tool、Attempt、Projection 与审计运行时。

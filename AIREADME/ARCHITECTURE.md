@@ -87,8 +87,8 @@ pending | ready | running | waiting_human -> canceled
 
 ### 创建与启动
 
-1. 用户选择启用模板，或提交结构化无模板定义。
-2. 服务端校验 DAG、责任人和验收字段，创建 `draft`。
+1. 用户选择启用模板，或通过自然语言引导、结构化高级入口提交无模板定义。
+2. 服务端保留原始输入并校验 DAG、责任人和验收字段，创建 `draft`。
 3. 用户查看预览并确认或丢弃。
 4. 确认事务冻结快照、创建节点和初始 Attempt，并写入 outbox。
 5. 投影服务创建飞书责任入口，Scheduler 解锁根节点。
@@ -139,9 +139,10 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 - `projection.py`、`projection_daemon.py` 与 `completion_poll.py`：只认领投影事件的 Outbox Worker、Feishu Task / IM / Doc Projection Port、稳定幂等键、Projection 记录和独立常驻循环。常驻循环在消费 Outbox 前，按 Instance ID 分页扫描 PostgreSQL 权威状态，为当前 `waiting_human` 节点补建缺失 Projection，只在飞书 Task v2 明确返回 `1470404` 时重建外部 Task，并用带 repair generation 的稳定幂等键原子换绑。权限、限流、网络或五百错误不得触发换绑；终态节点不补发历史 Task，但会收口已有 Projection 的完成状态。重启产生的旧 Attempt 同步事件按历史 Attempt 状态关闭旧 Human Task，新 Attempt 使用不同稳定幂等键创建新 Task；未来区域编辑删除未开始节点后，陈旧的节点创建事件按 no-op 收口。循环还会周期读取当前 Human Task，观察到完成后以稳定信号 ID 写入耐久 Inbox。Human Task 描述会带入节点明确声明的 Instance 输入和直接依赖中已提交的结果，Agent 正文优先展示并设置长度上限。自动节点完成后向 Owner 发送结果消息；Instance 完成后创建汇总文档并发送带链接的最终通知。首次完成沿用历史幂等键，重启后按当前终端 Attempt 分代，确保同一实例再次完成时创建新文档与最终通知，并保留旧轮次 Projection。单实例修复入口只补齐当前完成轮次缺失的投影，并保持幂等。
 - `inbound.py` 与 `inbound_daemon.py`：接受 Task 状态轮询或飞书事件产生的 PostgreSQL Inbox 信号，以及凭据侧校验与领域侧提交两阶段 Worker。两阶段分别 claim，失败后指数退避，过期 claim 可被其他 Worker 恢复。无论信号来源如何，凭据侧都重新读取 Task，默认最多验证 24 次；耗尽后写入带终止时间、阶段、结果和最后错误的 `exhausted` 终态，结构化日志暴露耗尽计数，且该信号不再被认领。
 - `feishu.py`：基于 lark-cli 的 Task、文本消息和 Docx adapter。Task 创建使用原生 Task API、稳定 client token、`mode=1`、唯一 Owner assignee 和稳定绑定字段；入站校验只读 Task 详情。消息与文档 adapter 只消费服务端生成的目标和正文，不信任客户端身份字段。
-- `im_commands.py`：把 `im.message.receive_v1` 的原始 V2 信封和 lark-cli 拍平事件归一为耐久命令信号，按 message / event 去重，并保存 mention key 与 open_id。凭据侧先验证发送者以及 `start` 引用的全部角色人员均为当前企业活跃成员；领域侧只接受 `/larkflow help`、`/larkflow start`、`/larkflow confirm`、`/larkflow status`、`/larkflow list`、`/larkflow restart`、`/larkflow restart-all`、`/larkflow restart-confirm`、`/larkflow edit` 与 `/larkflow edit-confirm`，并通过耐久回复队列发送结果。`start` 创建草稿但不自动确认，发送者成为 Instance Owner，未显式绑定的角色归发送者；`role=@成员` 只能引用同一条消息的认证 mention key，文本中的 open_id 和显示名称无效。`status` 与 `list` 只返回有界 Owner 读模型；restart 与 edit 命令只返回服务端预览，对应 confirm 命令才消费并执行。不存在、无权限和不可操作使用合并错误，避免实例与预览枚举。
+- `im_commands.py`：把 `im.message.receive_v1` 的原始 V2 信封和 lark-cli 拍平事件归一为耐久命令信号，按 message / event 去重，并保存 mention key 与 open_id。凭据侧先验证发送者以及 `start` 或结构化 `draft` 引用的全部角色人员均为当前企业活跃成员；领域侧只接受 `/larkflow help`、`/larkflow start`、`/larkflow draft`、`/larkflow confirm`、`/larkflow status`、`/larkflow list`、`/larkflow restart`、`/larkflow restart-all`、`/larkflow restart-confirm`、`/larkflow edit` 与 `/larkflow edit-confirm`，并通过耐久回复队列发送结果。`start` 与两种 `draft` 都创建草稿但不自动确认。裸 `draft` 转成自然语言引导请求，带 JSON 的 `draft` 保留结构化高级入口。发送者成为 Instance Owner；`role=@成员` 只能引用同一条消息的认证 mention key，文本中的 open_id 和显示名称无效。`status` 与 `list` 只返回有界 Owner 读模型；restart 与 edit 命令只返回服务端预览，对应 confirm 命令才消费并执行。不存在、无权限和不可操作使用合并错误，避免实例与预览枚举。
 - `directory.py`：可选企业目录 Port 与 lark-cli bot adapter。草稿写入前去重校验 Instance Owner 和全部节点 Owner 的 open_id、激活状态与离职、冻结标志；缺字段、ID 不匹配或非活跃状态均 fail closed。
-- `role_bindings.py`：把需要跨人员分工但未显式 mention 的 `start` 转成 Card 2.0 人员选择表单。候选人快照、卡片发送、回调事件、目录再验证、领域创建、卡片回写和文本回复均耐久保存并独立认领；操作人、候选集合、角色集合和实例 ID 都由服务端重算。回调动作耐久插入后立即尝试把原卡片替换为无按钮“处理中”，成功后同一原卡片冻结为已确认状态。同一 message 只有一个 canonical 动作，重复回调不创建第二个草稿；迁移前的重复行保留为非 canonical 历史。
+- `role_bindings.py`：把需要跨人员分工但未显式 mention 的 `start` 转成人员选择卡，也承载裸 `draft` 的自然语言引导卡。两者复用候选人快照、卡片发送、回调事件、目录再验证、领域创建、卡片回写和文本回复的耐久链路，并用请求 `kind` 区分语义。操作人、候选集合、角色集合、表单字段和实例 ID 都由服务端重算；自然语言路径只允许一名协作者，并调用 `draft_generation.py` 中受限的中央定义生成器。回调动作耐久插入后立即尝试把原卡片替换为无按钮“处理中”，成功后同一原卡片冻结为人员确认结果或图预览。同一 message 只有一个 canonical 动作，重复回调不创建第二个草稿，也不重复调用模型；迁移前的重复行保留为非 canonical 历史。
+- `draft_generation.py`：把中央 LLM 输出视为不可信候选。提示词限制图规模、执行器、依赖方向和逻辑 Owner，严格 JSON parser 拒绝重复键、非有限数和包装文本；服务端覆盖模型返回的 `schema_version` 与用户输入，再复用无模板 Snapshot 的完整校验和实例化路径。首个候选未通过确定性校验时，把错误和无效候选作为不可信修复数据交回同一中央 Agent，最多重生成一次；第二个候选仍不合法就拒绝，不降低校验标准。该模块不接受 provider、密钥、Tool 或 Personal Edge capability。
 - `im_commands.py` 中的 `RecoveryActionInboxBridge`：把飞书恢复卡片回调转换为耐久命令。桥接层归一化 lark-cli 字符串化 `action_value`、可缺失 `action_name` 和秒、毫秒、微秒时间戳；若 `action_name` 存在则必须与服务端动作交叉一致。操作人只从飞书顶层认证字段取值，卡片 payload 中的身份不参与授权；动作耐久插入后立即尝试把原卡片替换为无按钮“处理中”，最终再更新原卡片并发送耐久文本回执。`event_time.py` 为恢复与人员分工回调提供共享时间归一化，避免边界解析分叉。
 - `card_feedback.py`：统一生成蓝色处理中与橙色拒绝卡。Target 长连接入口使用最长 3 秒的 lark-cli 直接更新；动作先延后 10 秒防止后台 Worker 抢先写入最终状态，直接更新结束后立即释放，崩溃时由延后时间兜底。单调时钟从有效回调被接受开始覆盖动作插入和直接更新，释放动作时原子保存 `updated / failed`、非负毫秒数和完成时间；结构化日志只记录动作类型、结果和耗时，不记录人员、消息或卡片标识，日志报告失败也不能破坏回调。该顺序保证最终状态不会被迟到的处理中状态覆盖，也不让视觉回写失败撤销已持久化动作。
 - `cli.py`：独立 `larkflow-target` 运维入口，提供模板全生命周期、从模板创建草稿、预览、确认、状态、Human 提交，以及 Runtime、Projection、Interactive、入站校验和领域入站的单步 / 常驻服务；`reconcile-instance-completion` 可显式修复一个已完成实例缺失的完成文档或最终通知。
@@ -163,7 +164,7 @@ PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration �
 |---|---|---|---|
 | 业务真相 | PostgreSQL 领域模型 | Template 与 Instance aggregate、PostgreSQL adapter、独立 CLI、Runtime、Agent、首个 Tool、Task 入站和窄 IM 命令已落码；legacy 仍用 checkpointer | 需要更多飞书命令、更多业务 Tool 与生产装配 |
 | 持久化 | Instance、Node、Attempt、Audit、Outbox、Inbox | PostgreSQL 14 schema、事务仓储、追加型 Audit、带租约 Outbox 和事件去重 Inbox 已实现并真库验证；长期开发库与本地每日备份已建立 | 需要异机备份、PITR、升级、容量告警和生产装配 |
-| 草稿与模板可选 | 草稿预览、确认、模板或无模板实例 | 新内核支持直接 Snapshot 草稿，以及模板参数和角色绑定生成的冻结草稿；Owner 可只读预览并独立确认；飞书 IM 已提供模板 `start` 和结构化无模板 `draft` 两条草稿入口，均经过服务端 Owner 授权与独立确认，并完成开发真栈闭环 | 需要更完整的模板管理入口和图形化无模板编辑体验 |
+| 草稿与模板可选 | 草稿预览、确认、模板或无模板实例 | 新内核支持直接 Snapshot 草稿，以及模板参数和角色绑定生成的冻结草稿；Owner 可只读预览并独立确认；飞书 IM 已提供模板 `start`、自然语言引导 `draft` 和结构化高级 `draft`，三条路径均已完成开发真栈闭环。自然语言验收还覆盖即时处理中、非法首候选的有界修复、唯一未启动草稿和最终无控件卡片 | 需要更完整的模板管理入口和图形化无模板编辑体验 |
 | 模板 | 简单生命周期、不可变版本、布尔锁 | Template Service、PostgreSQL 仓储、追加型审计、CLI 与 v0.2 示例已实现并真库验证 | 需要 importer 和模板管理界面 |
 | 责任 | 每节点唯一 Owner，执行器分离 | 新内核已强制 Owner 与 `human/agent/tool` 分离；IM mention 和 Card 2.0 人员选择均在凭据侧验证活跃成员，再由领域侧冻结角色绑定，已完成开发真栈正向验收；草稿 Owner 全量目录校验已落码但默认关闭 | 需要异常成员状态回归、管理入口和生产装配 |
 | 编辑与重启 | 预览确认、revision、下游 Attempt | 未来区域编辑及节点、完整实例重启都已实现耐久预览、Owner 重授权、版本与 revision 校验、历史保护和原子审计，并完成真库竞争与 Owner 飞书闭环；编辑拒绝矩阵覆盖冻结线、非法 DAG、陈旧预览与跨人员非 Owner | 需要图形化 diff、跨轮次浏览和生产装配 |
