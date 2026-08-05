@@ -201,6 +201,51 @@ def collaborative_template_document():
     return document
 
 
+def inline_definition(*, collaborative: bool = False):
+    requester_role = "requester" if collaborative else "owner"
+    reviewer_role = "reviewer" if collaborative else "owner"
+    return {
+        "goal": "Review a real larkflow product change",
+        "inputs": {
+            "brief": "Freeze Edge work and close the central MVP",
+        },
+        "nodes": [
+            {
+                "id": "confirm_scope",
+                "title": "Confirm product change scope",
+                "owner_role": requester_role,
+                "executor": "human",
+                "deps": [],
+                "work": {
+                    "objective": "Confirm the submitted product change",
+                    "inputs": ["instance_inputs.brief"],
+                    "outputs": [{"id": "confirmation", "type": "data"}],
+                    "acceptance": ["The scope is explicitly confirmed"],
+                },
+            },
+            {
+                "id": "review_change",
+                "title": "Review product change",
+                "owner_role": reviewer_role,
+                "executor": "human",
+                "deps": ["confirm_scope"],
+                "work": {
+                    "objective": "Review the confirmed product change",
+                    "inputs": ["dependencies.confirm_scope"],
+                    "outputs": [{"id": "decision", "type": "data"}],
+                    "acceptance": ["A decision is recorded"],
+                },
+            },
+        ],
+    }
+
+
+def inline_draft_command(definition, *, bindings: str = ""):
+    payload = json.dumps(definition, ensure_ascii=False, separators=(",", ":"))
+    suffix = f" {bindings}" if bindings else ""
+    return f"/larkflow draft {payload}{suffix}"
+
+
 def event_payload(text: str, *, mentions=None):
     return {
         "header": {"event_id": "event_1", "create_time": "1785656400000"},
@@ -863,6 +908,38 @@ def test_verification_checks_every_referenced_role_owner():
     ]
 
 
+def test_verification_checks_inline_draft_role_mentions_before_processing():
+    store = MemoryStore()
+    event = signal(
+        inline_draft_command(
+            inline_definition(collaborative=True),
+            bindings="reviewer=@_user_1",
+        ),
+        mentions=(IMMention("@_user_1", "person_reviewer"),),
+    )
+    store.verification_claims = [IMCommandClaim(event, "token", 1)]
+    calls = []
+
+    class Directory:
+        def get_person(self, tenant_id, person_id):
+            calls.append((tenant_id, person_id))
+            return DirectoryPerson(person_id=person_id, active=True)
+
+    report = IMCommandVerificationWorker(
+        store,
+        Directory(),
+        tenant_id=TENANT,
+        worker_id="verify_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.verified == 1
+    assert calls == [
+        (TENANT, "person_owner"),
+        (TENANT, "person_reviewer"),
+    ]
+
+
 def test_verification_rejects_role_binding_without_matching_mention_metadata():
     store = MemoryStore()
     event = signal(
@@ -980,6 +1057,106 @@ def test_start_then_confirm_uses_sender_as_every_owner_and_keeps_preview_gate():
 
     assert confirm_report.processed == 1
     assert service.get(TENANT, instance_id).status == InstanceStatus.RUNNING
+
+
+def test_inline_draft_creates_a_non_template_snapshot_and_keeps_preview_gate():
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=lambda: NOW)
+    store = MemoryStore()
+    event = signal(inline_draft_command(inline_definition()))
+    store.command_claims = [IMCommandClaim(event, "draft-token", 1)]
+    worker = IMCommandWorker(
+        store,
+        service,
+        TemplateService(InMemoryTemplateStore(), clock=lambda: NOW),
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    )
+
+    report = worker.run_once()
+
+    assert report.processed == 1
+    assert report.failed == 0
+    instance_id = store.processed[0][2]["instance_id"]
+    draft = service.get(TENANT, instance_id)
+    assert draft.status == InstanceStatus.DRAFT
+    assert draft.snapshot.template_version_id is None
+    assert draft.snapshot.locked is False
+    assert {node.owner_person_id for node in draft.snapshot.nodes} == {
+        "person_owner"
+    }
+    assert store.processed[0][2]["outcome"] == "inline_draft_created"
+    assert "已创建无模板流程草稿" in store.processed[0][2]["reply_text"]
+    assert f"/larkflow confirm {instance_id}" in store.processed[0][2]["reply_text"]
+
+    store.command_claims = [
+        IMCommandClaim(
+            signal(
+                f"/larkflow confirm {instance_id}",
+                event_id="event_inline_confirm",
+            ),
+            "confirm-token",
+            1,
+        )
+    ]
+    assert worker.run_once().processed == 1
+    assert service.get(TENANT, instance_id).status == InstanceStatus.RUNNING
+
+
+def test_inline_draft_binds_only_authenticated_mentions_to_other_roles():
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=lambda: NOW)
+    store = MemoryStore()
+    event = signal(
+        inline_draft_command(
+            inline_definition(collaborative=True),
+            bindings="reviewer=@_user_1",
+        ),
+        mentions=(IMMention("@_user_1", "person_reviewer"),),
+    )
+    store.command_claims = [IMCommandClaim(event, "draft-token", 1)]
+
+    report = IMCommandWorker(
+        store,
+        service,
+        TemplateService(InMemoryTemplateStore(), clock=lambda: NOW),
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.processed == 1
+    instance = service.get(TENANT, store.processed[0][2]["instance_id"])
+    assert instance.snapshot.node("confirm_scope").owner_person_id == "person_owner"
+    assert instance.snapshot.node("review_change").owner_person_id == (
+        "person_reviewer"
+    )
+    assert "绑定给其他成员的角色：1" in store.processed[0][2]["reply_text"]
+
+
+def test_inline_multi_role_draft_requires_explicit_mentions():
+    store = MemoryStore()
+    store.command_claims = [
+        IMCommandClaim(
+            signal(inline_draft_command(inline_definition(collaborative=True))),
+            "draft-token",
+            1,
+        )
+    ]
+
+    report = IMCommandWorker(
+        store,
+        WorkflowService(InMemoryWorkflowRepository(), clock=lambda: NOW),
+        TemplateService(InMemoryTemplateStore(), clock=lambda: NOW),
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.rejected == 1
+    assert report.failed == 0
+    assert "无模板多角色草稿必须" in store.processed[0][2]["reply_text"]
 
 
 def test_recovery_command_applies_the_version_bound_human_takeover():
@@ -1748,6 +1925,10 @@ def test_help_lists_status_command():
 
     assert report.processed == 1
     assert (
+        "/larkflow draft <JSON定义> [role=@成员 ...]"
+        in store.processed[-1][2]["reply_text"]
+    )
+    assert (
         "/larkflow start <template_id> [JSON输入] [role=@成员 ...]"
         in store.processed[-1][2]["reply_text"]
     )
@@ -1871,7 +2052,14 @@ def test_non_owner_confirm_is_rejected_without_retrying_forever():
         "/larkflow edit instance_1 {}",
         "/larkflow edit-confirm",
         "/larkflow edit-confirm preview extra",
+        "/larkflow draft",
+        "/larkflow draft []",
+        "/larkflow draft {} reviewer=person_open_id",
+        "/larkflow draft {} reviewer=@_user_1 reviewer=@_user_2",
+        '/larkflow draft {"goal":"one","goal":"two","nodes":[]}',
+        '/larkflow draft {"goal":"one","inputs":{"score":NaN},"nodes":[]}',
         "/larkflow start quick_review []",
+        '/larkflow start quick_review {"brief":NaN}',
         "/larkflow start quick_review reviewer=@_user_1 reviewer=@_user_2",
         "/larkflow start quick_review Reviewer=@_user_1",
         "/larkflow start quick_review reviewer=person_open_id",
@@ -1888,6 +2076,17 @@ def test_command_parser_accepts_status():
         "status",
         "instance_1",
         {},
+    )
+
+
+def test_command_parser_accepts_inline_definition_and_role_mentions():
+    definition = inline_definition(collaborative=True)
+    text = inline_draft_command(definition, bindings="reviewer=@_user_1")
+
+    assert parse_im_command(text) == (
+        "draft",
+        None,
+        {"definition": definition},
     )
 
 

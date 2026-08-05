@@ -55,6 +55,8 @@ from .template_service import (
     InvalidTemplateTransitionError,
     TemplateService,
     TemplateValidationError,
+    inline_owner_roles,
+    instantiate_inline_definition,
 )
 from .transitions import TransitionError
 
@@ -67,6 +69,25 @@ MAX_LIST_INSTANCES = 10
 MAX_OWNER_BINDINGS = 100
 ROLE_BINDING_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 MENTION_KEY_RE = re.compile(r"^@_user_[1-9][0-9]*$")
+
+
+def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON field: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_non_json_constant(value: str) -> None:
+    raise ValueError(f"non-standard JSON constant: {value}")
+
+
+STRICT_JSON_DECODER = json.JSONDecoder(
+    object_pairs_hook=_strict_json_object,
+    parse_constant=_reject_non_json_constant,
+)
 
 
 class IMCommandStatus(str, Enum):
@@ -777,8 +798,10 @@ class IMCommandWorker:
                 "helped",
                 None,
                 "可用命令：\n"
+                "/larkflow draft <JSON定义> [role=@成员 ...]\n"
                 "/larkflow start <template_id> [JSON输入] [role=@成员 ...]\n"
-                "多角色流程在单聊中会发送人员选择卡片。\n"
+                "模板多角色流程在单聊中会发送人员选择卡片；"
+                "无模板多角色草稿必须显式 @成员。\n"
                 "/larkflow confirm <instance_id>\n"
                 "/larkflow status <instance_id>\n"
                 "/larkflow list\n"
@@ -832,6 +855,64 @@ class IMCommandWorker:
                 )
                 outcome = "human_takeover_started"
             return outcome, instance.id, reply
+        if command == "draft":
+            definition = inputs.get("definition")
+            if not isinstance(definition, Mapping):
+                raise IMCommandRejected("无模板定义必须是 JSON 对象")
+            try:
+                roles = set(inline_owner_roles(definition))
+                if len(roles) > 1 and not parsed.owner_mentions:
+                    raise IMCommandRejected(
+                        "无模板多角色草稿必须在同一条消息中使用 role=@成员；"
+                        "如由一人负责全部节点，请统一使用一个 owner_role"
+                    )
+                owner_bindings = {
+                    role: event.sender_person_id for role in roles
+                }
+                mentions_by_key = {
+                    mention.key: mention.person_id for mention in event.mentions
+                }
+                for role, mention_key in parsed.owner_mentions.items():
+                    person_id = mentions_by_key.get(mention_key)
+                    if person_id is None:
+                        raise IMCommandRejected(
+                            "角色绑定必须引用本条消息中的真实 @成员"
+                        )
+                    owner_bindings[role] = person_id
+                snapshot = instantiate_inline_definition(
+                    definition,
+                    owner_bindings=owner_bindings,
+                )
+            except TemplateValidationError as exc:
+                raise IMCommandRejected(str(exc)) from exc
+            instance_id = _instance_id(self.tenant_id, event.message_id)
+            try:
+                instance = self.service.create_draft(
+                    instance_id=instance_id,
+                    tenant_id=self.tenant_id,
+                    owner_person_id=event.sender_person_id,
+                    actor_person_id=event.sender_person_id,
+                    snapshot=snapshot,
+                    correlation_id=event.message_id,
+                )
+            except InstanceAlreadyExistsError:
+                instance = self.service.get(self.tenant_id, instance_id)
+                if instance.owner_person_id != event.sender_person_id:
+                    raise IMCommandRejected("同一消息对应了其他 Owner 的实例")
+            if instance.status != InstanceStatus.DRAFT:
+                raise IMCommandRejected("该消息对应的实例已不再是草稿")
+            return (
+                "inline_draft_created",
+                instance.id,
+                "已创建无模板流程草稿。\n"
+                f"实例：{instance.id}\n"
+                f"目标：{instance.snapshot.goal}\n"
+                f"节点数：{len(instance.snapshot.nodes)}\n"
+                f"角色数：{len(roles)}，绑定给其他成员的角色："
+                f"{sum(person_id != event.sender_person_id for person_id in owner_bindings.values())}\n"
+                "请核对后回复：\n"
+                f"/larkflow confirm {instance.id}",
+            )
         if command == "start":
             template_id = argument or ""
             try:
@@ -1254,6 +1335,23 @@ def _parse_im_command(text: str) -> _ParsedIMCommand:
             str(normalized.pop("instance_id")),
             inputs=normalized,
         )
+    if parts[1] == "draft":
+        prefix = f"{COMMAND_PREFIX} draft"
+        tail = text.strip()[len(prefix) :].strip()
+        if not tail:
+            raise IMCommandRejected(
+                "用法：/larkflow draft <JSON定义> [role=@成员 ...]"
+            )
+        definition, owner_mentions = _parse_json_object_and_bindings(
+            tail,
+            field="无模板定义",
+        )
+        return _ParsedIMCommand(
+            "draft",
+            None,
+            inputs={"definition": definition},
+            owner_mentions=owner_mentions,
+        )
     if parts[1] == "edit":
         if len(parts) != 4:
             raise IMCommandRejected(
@@ -1308,7 +1406,7 @@ def _parse_im_command(text: str) -> _ParsedIMCommand:
         return _ParsedIMCommand(parts[1], parts[2])
     if parts[1] != "start" or len(parts) < 3:
         raise IMCommandRejected(
-            "仅支持 start、confirm、status、list、edit、edit-confirm、restart、"
+            "仅支持 draft、start、confirm、status、list、edit、edit-confirm、restart、"
             "restart-all、restart-confirm 和 help"
         )
     inputs, owner_mentions = _parse_start_tail(parts[3] if len(parts) == 4 else "")
@@ -1321,19 +1419,29 @@ def _parse_im_command(text: str) -> _ParsedIMCommand:
 
 
 def _parse_start_tail(tail: str) -> tuple[dict[str, Any], dict[str, str]]:
+    return _parse_json_object_and_bindings(tail, field="模板输入")
+
+
+def _parse_json_object_and_bindings(
+    tail: str,
+    *,
+    field: str,
+) -> tuple[dict[str, Any], dict[str, str]]:
     remaining = tail.strip()
     inputs: dict[str, Any] = {}
     if remaining.startswith("{"):
         try:
-            parsed, end = json.JSONDecoder().raw_decode(remaining)
-        except json.JSONDecodeError as exc:
-            raise IMCommandRejected("模板输入必须是 JSON 对象") from exc
+            parsed, end = STRICT_JSON_DECODER.raw_decode(remaining)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise IMCommandRejected(f"{field}必须是 JSON 对象") from exc
         if not isinstance(parsed, Mapping):
-            raise IMCommandRejected("模板输入必须是 JSON 对象")
+            raise IMCommandRejected(f"{field}必须是 JSON 对象")
         inputs = {str(key): value for key, value in parsed.items()}
         remaining = remaining[end:].strip()
     elif remaining.startswith("["):
-        raise IMCommandRejected("模板输入必须是 JSON 对象")
+        raise IMCommandRejected(f"{field}必须是 JSON 对象")
+    elif field == "无模板定义":
+        raise IMCommandRejected(f"{field}必须是 JSON 对象")
 
     owner_mentions: dict[str, str] = {}
     for token in remaining.split():
@@ -1496,7 +1604,7 @@ def _owner_person_ids_from_mentions(event: IMCommandSignal) -> tuple[str, ...]:
         parsed = _parse_im_command(event.text)
     except IMCommandRejected:
         return ()
-    if parsed.command != "start" or not parsed.owner_mentions:
+    if parsed.command not in {"draft", "start"} or not parsed.owner_mentions:
         return ()
     mentions_by_key = {
         mention.key: mention.person_id for mention in event.mentions

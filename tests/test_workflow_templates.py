@@ -20,6 +20,8 @@ from larkflow.workflow import (
     TemplateValidationError,
     TransitionError,
     WorkflowService,
+    inline_owner_roles,
+    instantiate_inline_definition,
     parse_template_document,
 )
 
@@ -76,6 +78,123 @@ def service() -> tuple[TemplateService, InMemoryTemplateStore]:
         ),
         store,
     )
+
+
+def inline_document() -> dict:
+    return {
+        "goal": "Review one real product change",
+        "inputs": {
+            "brief": "Stop Edge expansion and close the central workflow MVP",
+            "urgent": False,
+        },
+        "nodes": [
+            {
+                "id": "confirm_scope",
+                "title": "Confirm change scope",
+                "owner_role": "requester",
+                "executor": "human",
+                "deps": [],
+                "work": {
+                    "objective": "Confirm the proposed product change",
+                    "inputs": ["instance_inputs.brief"],
+                    "outputs": [{"id": "confirmation", "type": "data"}],
+                    "acceptance": ["The scope is explicitly confirmed"],
+                },
+            },
+            {
+                "id": "review_change",
+                "title": "Review product change",
+                "owner_role": "reviewer",
+                "executor": "agent",
+                "deps": ["confirm_scope"],
+                "work": {
+                    "objective": "Summarize the product change and its risks",
+                    "inputs": [
+                        "instance_inputs.brief",
+                        "dependencies.confirm_scope",
+                    ],
+                    "outputs": [{"id": "content", "type": "text"}],
+                    "acceptance": ["The summary includes risks and next steps"],
+                    "agent": {
+                        "kind": "llm.generate",
+                        "model_role": "default",
+                        "instructions": "Summarize the confirmed change.",
+                    },
+                },
+            },
+        ],
+    }
+
+
+def test_inline_definition_materializes_a_non_template_snapshot():
+    definition = inline_document()
+
+    assert inline_owner_roles(definition) == ("requester", "reviewer")
+    snapshot = instantiate_inline_definition(
+        definition,
+        owner_bindings={
+            "requester": "person_owner",
+            "reviewer": "person_reviewer",
+        },
+    )
+
+    assert snapshot.template_version_id is None
+    assert snapshot.locked is False
+    assert snapshot.goal == "Review one real product change"
+    assert dict(snapshot.inputs) == {
+        "brief": "Stop Edge expansion and close the central workflow MVP",
+        "urgent": False,
+    }
+    assert snapshot.node("confirm_scope").owner_person_id == "person_owner"
+    assert snapshot.node("review_change").owner_person_id == "person_reviewer"
+
+
+@pytest.mark.parametrize(
+    "mutation, bindings, message",
+    [
+        (
+            lambda value: value["nodes"][1]["work"]["agent"].__setitem__(
+                "api_key", "secret"
+            ),
+            {"requester": "person_owner", "reviewer": "person_reviewer"},
+            "provider configuration",
+        ),
+        (
+            lambda value: value["inputs"].__setitem__("unsupported", None),
+            {"requester": "person_owner", "reviewer": "person_reviewer"},
+            "unsupported JSON value",
+        ),
+        (
+            lambda value: None,
+            {"requester": "person_owner"},
+            "missing owner bindings",
+        ),
+        (
+            lambda value: value["nodes"].extend(
+                deepcopy(value["nodes"][0]) for _ in range(99)
+            ),
+            {"requester": "person_owner", "reviewer": "person_reviewer"},
+            "exceeds 100 nodes",
+        ),
+        (
+            lambda value: value["nodes"][1]["work"]["agent"].__setitem__(
+                "kind", "personal.readonly"
+            ),
+            {"requester": "person_owner", "reviewer": "person_reviewer"},
+            "cannot request Personal Agent Edge",
+        ),
+    ],
+)
+def test_inline_definition_rejects_unsafe_or_incomplete_values(
+    mutation,
+    bindings,
+    message,
+):
+    definition = inline_document()
+    mutation(definition)
+
+    with pytest.raises(TemplateValidationError, match=message):
+        instantiate_inline_definition(definition, owner_bindings=bindings)
 
 
 def test_template_lifecycle_materializes_a_frozen_snapshot_and_audit_log():

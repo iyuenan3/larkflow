@@ -34,6 +34,7 @@ PARAMETER_TYPES = {
     "string",
     "text",
 }
+MAX_INLINE_NODES = 100
 
 
 class TemplateValidationError(ValueError):
@@ -585,6 +586,132 @@ def instantiate_template_version(
     )
     validate_snapshot(snapshot)
     return snapshot
+
+
+def inline_owner_roles(document: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return validated owner roles from one non-template workflow definition."""
+
+    definition, _ = _parse_inline_definition(document)
+    return tuple(
+        sorted({str(node["owner_role"]) for node in definition["nodes"]})
+    )
+
+
+def instantiate_inline_definition(
+    document: Mapping[str, Any],
+    *,
+    owner_bindings: Mapping[str, str],
+) -> InstanceSnapshot:
+    """Materialize a validated one-off definition without persisting a template."""
+
+    definition, resolved_inputs = _parse_inline_definition(document)
+    nodes = definition["nodes"]
+    required_roles = {str(node["owner_role"]) for node in nodes}
+    unknown_roles = sorted(set(owner_bindings) - required_roles)
+    missing_roles = sorted(required_roles - set(owner_bindings))
+    if unknown_roles:
+        raise TemplateValidationError(
+            "unknown owner bindings: " + ", ".join(unknown_roles)
+        )
+    if missing_roles:
+        raise TemplateValidationError(
+            "missing owner bindings: " + ", ".join(missing_roles)
+        )
+    for role, person_id in owner_bindings.items():
+        _required_text(person_id, f"owner binding {role}")
+
+    snapshot = InstanceSnapshot(
+        schema_version="0.2",
+        goal=str(definition["goal"]),
+        template_version_id=None,
+        locked=False,
+        inputs=resolved_inputs,
+        nodes=tuple(
+            NodeSpec(
+                key=str(node["id"]),
+                title=str(node["title"]),
+                owner_person_id=owner_bindings[str(node["owner_role"])],
+                executor=str(node["executor"]),
+                deps=tuple(node.get("deps") or ()),
+                work=to_json_value(node.get("work") or {}),
+            )
+            for node in nodes
+        ),
+    )
+    validate_snapshot(snapshot)
+    return snapshot
+
+
+def _parse_inline_definition(
+    document: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    _reject_unknown_fields(
+        document,
+        {"schema_version", "goal", "inputs", "nodes"},
+        "inline workflow definition",
+    )
+    if str(document.get("schema_version", "0.2")) != "0.2":
+        raise TemplateValidationError("unsupported inline workflow schema version")
+    goal = _required_text(document.get("goal"), "inline workflow goal")
+    inputs = document.get("inputs") or {}
+    if not isinstance(inputs, Mapping):
+        raise TemplateValidationError("inline workflow inputs must be an object")
+    nodes = document.get("nodes")
+    if (
+        not isinstance(nodes, Sequence)
+        or isinstance(nodes, (str, bytes))
+        or not nodes
+    ):
+        raise TemplateValidationError("inline workflow must contain at least one node")
+    if len(nodes) > MAX_INLINE_NODES:
+        raise TemplateValidationError(
+            f"inline workflow exceeds {MAX_INLINE_NODES} nodes"
+        )
+
+    resolved_inputs: dict[str, Any] = {}
+    parameters: dict[str, dict[str, Any]] = {}
+    for raw_key, value in inputs.items():
+        if not isinstance(raw_key, str) or not TEMPLATE_ID_RE.fullmatch(raw_key):
+            raise TemplateValidationError(
+                "inline workflow input ids must be lower snake_case"
+            )
+        parameters[raw_key] = {
+            "type": _inline_parameter_type(raw_key, value),
+            "required": True,
+        }
+        resolved_inputs[raw_key] = to_json_value(value)
+
+    definition = {
+        "goal": goal,
+        "parameters": parameters,
+        "nodes": to_json_value(nodes),
+    }
+    validate_template_definition(definition)
+    for node in definition["nodes"]:
+        agent = node.get("work", {}).get("agent")
+        if isinstance(agent, Mapping) and agent.get("kind") == "personal.readonly":
+            raise TemplateValidationError(
+                "inline workflows cannot request Personal Agent Edge capabilities"
+            )
+    return definition, resolved_inputs
+
+
+def _inline_parameter_type(key: str, value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "text"
+    if isinstance(value, Mapping):
+        return "object"
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return "array"
+    raise TemplateValidationError(
+        f"inline workflow input {key} has an unsupported JSON value"
+    )
 
 
 def template_document(
