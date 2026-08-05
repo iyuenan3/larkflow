@@ -134,8 +134,9 @@ Target Task 完成发现以周期状态轮询为可靠路径。`project` 启动�
 
 Target 订阅 `im.message.receive_v1`，处理以 `/larkflow` 开头的文本，也接受群聊中只有认证 mention token 位于命令前的 `@机器人 /larkflow ...` 形式。桥接层同时接受飞书原始 V2 信封和 lark-cli 拍平输出：原始事件的 `content` 是 JSON 字符串，拍平输出的 `content` 是普通文本，两者必须归一为同一个命令信号。桥接层只保存 mention 的 `key` 与 `open_id`，不保存显示名称；其他消息不进入 Target 命令 Inbox。
 
-- `/larkflow help`：返回当前十个命令的用法。
+- `/larkflow help`：返回当前十一个命令的用法。
 - `/larkflow start <template_id> [JSON对象] [role=@成员 ...]`：以 tenant 和 message ID 派生稳定 Instance ID，验证发送者属于当前企业且状态活跃，再把发送者绑定为 Instance Owner。显式角色绑定使用 lower snake case 角色名和本条消息的 mention key；凭据侧通过企业目录验证每名被引用人员仍在当前 tenant 且状态活跃，领域侧再把 mention key 映射到冻结 Snapshot。原始文本中的 open_id、显示名称或不存在于 mention 元数据的 token 均不能授权。未显式绑定的模板角色继续归发送者。命令只创建草稿并返回确认命令，不自动启动。
+- `/larkflow draft <JSON定义> [role=@成员 ...]`：不查找模板版本，直接把 `schema_version / goal / inputs / nodes` 物化为 `template_version_id=NULL`、`locked=false` 的 Instance Snapshot 草稿。JSON 使用拒绝重复键、`NaN` 和 `Infinity` 的严格解析；最多 100 个节点。每个节点仍需 lower snake case ID、唯一逻辑 Owner 角色、`human / agent / tool` executor 和完整 work 契约。发送者与 mention 成员使用和 `start` 相同的两阶段验证；一个角色时可默认归发送者，多角色定义没有显式 mention 绑定时拒绝。定义不能携带模型 provider、base URL、密钥等服务配置，也不能请求 `personal.readonly` Edge capability。命令只创建草稿，仍需独立 `confirm` 才启动。
 - `/larkflow confirm <instance_id>`：重新校验发送者与草稿 Owner，确认并启动实例。
 - `/larkflow status <instance_id>`：重新校验发送者后，仅允许 Instance Owner 读取流程状态。实例不存在与非 Owner 统一返回“实例不存在或你无权查看”，避免枚举。回复最多列出 20 个节点，每个可变字段最多 120 个字符；只包含状态、进度、节点、executor 和相对责任人，不包含结果正文或人员 ID。该命令只读，不追加领域审计，也不改变 aggregate version。
 - `/larkflow list`：重新校验发送者后，只查询该发送者作为 Instance Owner 的最近实例。仓储按 `created_at DESC, id DESC` 排序，命令最多展示十条，并额外查询一条用于提示仍有更多结果。每条只包含 Instance ID、目标摘要、实例状态和完成节点数，不读取完整聚合，不包含节点结果或人员 ID。该命令只读，不追加领域审计，也不改变 aggregate version。

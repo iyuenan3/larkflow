@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.39.0-draft · 2026-08-05 · 结构化无模板飞书草稿入口
+
+- Added：新增 `/larkflow draft <JSON定义> [role=@成员 ...]`。命令不查找模板版本，直接生成 `template_version_id=NULL`、`locked=false` 的 Instance Snapshot 草稿；草稿仍需独立 `/larkflow confirm` 才启动，并进入既有 Human、Agent、Tool、Attempt、Projection 与审计运行时。
+- Security：命令继续只信服务端验证的发送者和本条消息 mention。单角色可默认绑定发送者，多角色没有显式 mention 时拒绝。严格 JSON decoder 拒绝重复键、`NaN` 和 `Infinity`；定义最多 100 个节点，不能携带模型 provider、base URL 或密钥等服务配置，也不能请求 `personal.readonly` Edge capability。
+- Verified：内容提交为 `5113a59aacc8b0a97481411e581b9d52f6462073`。完整离线套件为 `858 passed, 17 skipped`。四组变异分别证明严格 JSON、Edge capability 拒绝、mention Owner 验证和多角色显式绑定门禁不是假绿。
+- Deployment：候选 wheel `larkflow-0.0.2-py3-none-any.whl` SHA-256 为 `d5b0964ce3bcb817a6ec22c3346bb4ff47aaae64bffdd0b0cd67027ee3dd4d2a`，已部署到 `releases/20260805_162906_inline_5113a59/`。即时 PostgreSQL 备份为 143443 bytes，migration 仍为十八份；八服务均回读 `active / running / NRestarts=0`，部署窗口 warning 为 0。
+- Acceptance：真实飞书实例 `im_a9a43d1d4db354b31b798bb1` 从无模板草稿创建、确认启动到 Human-Agent-Tool-Human 4/4 全部完成。最终飞书状态和 PostgreSQL 终态一致；数据库额外确认 `template_version_id IS NULL`、四个节点全部 `done`。
+- Boundary：本条关闭开发环境中的无模板用户入口缺口，不提供任意模型 provider、Personal Agent Edge capability、图形化编辑器或生产装配，也不构成市场验证和生产上线证据。
+
 ## v0.38.0-draft · 2026-08-05 · macOS Edge 哈希锁定离线 bundle 与安全评审
 
 - Added：新增 `deploy/build-larkflow-edge-bundle.py`。发布方为明确的 macOS 架构与 Python 次版本下载 binary-only wheelhouse，manifest 记录 source commit、目标、主 artifact、manager、全部文件 SHA-256、大小和 wheel 包名版本清单。

@@ -258,3 +258,9 @@
 - 现象（真实隔离安装）：应用及其依赖全部来自哈希锁定的本地 wheelhouse，`pip check` 也通过，但 `pip-audit 2.10.1` 仍发现 venv 自带的 pip 26.1 命中 `CVE-2026-8643`。漏洞涉及恶意 entry point 越界安装，正好发生在安装边界；仅锁应用依赖没有覆盖安装工具本身。
 - 根因（已确认）：`python -m venv` 从基础 Python 的 ensurepip 复制 pip。项目 wheelhouse 原先不包含 pip，manager 因而使用未审计的 bootstrap 版本处理全部 wheel。扫描器把同一公告重复输出两次，但唯一漏洞 ID 只有一个。
 - 结论：离线 bundle 必须把安装工具纳入 manifest 与 wheel 清单。先仅从已验证的本地 pip wheel 升级并回读版本，再安装应用；最终隔离 site-packages 重新跑漏洞审计。哈希锁定解决候选件漂移，不解决依赖面过宽、构建来源、签名公证或未知漏洞，正式分发仍需独立门禁。
+
+## 2026-08-05 · 仓库顶层 build 目录会遮蔽 Python build 包
+
+- 现象（本机发布）：虚拟环境已安装 `build`，但在仓库根目录运行 `python -m build` 报 `No module named build.__main__`，解释器实际导入了仓库顶层的 `build/` 目录。
+- 根因（已确认）：Python 把当前工作目录置于导入路径前部，同名本地目录遮蔽了已安装的 PyPI `build` 包。错误不是缺少依赖，也不能通过重复安装解决。
+- 结论：在该仓库构建候选 wheel 时使用 `pip wheel . --no-deps --no-build-isolation`，或从不含同名目录的工作目录调用构建模块。发布前必须检查 wheel 条目、关键源码标记和完整 SHA-256，不能只以构建命令退出码判断候选件正确。

@@ -716,3 +716,13 @@
 - Alternatives(否决)：继续让员工 pip 在线解析；只为主 wheel 提供哈希；允许额外文件留在 bundle；使用 requirements 文本但不锁 wheel 文件；把同目录摘要视为独立信任；自动下载最新版；在没有 Developer ID 身份时自签并描述为正式签名。
 - Tradeoff：候选件在安装时可完全复验，但构建阶段仍由开放版本范围解析，source commit 也是调用者声明。当前完整 `larkflow` 包形成 45-wheel bundle，把 LangGraph、OpenAI SDK 和 PostgreSQL 驱动带到员工端，攻击面不符合正式最小客户端。目录 bundle 与 manager 仍未纳入 Apple 系统信任链。
 - Evidence：内容提交 `81bd43983598ff319150344e779223cd03731eba`；聚焦测试 `61 passed`，完整离线套件 `840 passed, 17 skipped`。第一版隔离安装的 pip 26.1 被 `pip-audit 2.10.1` 报告 `CVE-2026-8643`，实现随后固定先升级至 26.2.1，复扫无已知漏洞，私有 larkflow 包明确跳过。故意设置无效索引与代理后，macOS arm64、CPython 3.12 的 45-wheel bundle 仍完成离线安装、`pip check` 和 CLI 启动校验。本机 `notarytool`、pkg 工具和 stapler 可用，但 Developer ID Application 与 Installer 身份均为 0，因此正式分发继续 No-Go。
+
+## ADR-085 · 2026-08-05 · 无模板飞书入口只创建受限 Snapshot 草稿
+
+- **Status：Accepted · Development implementation and real Feishu validation。**
+- Problem：领域内核已经能从直接 Snapshot 创建无模板实例，但真实用户只能通过模板 `start` 进入飞书链路。把任意 JSON 直接当运行实例又会绕过草稿确认、Owner 绑定、服务端身份验证和自动执行器能力边界。
+- Constraint：模板必须继续可选；无模板入口不能引入第二套运行时或状态真相；发送者和角色成员必须由凭据侧验证，客户端 open_id 不能授权；所有节点仍有唯一人类 Owner；草稿必须明确确认后才运行；调用方不能选择模型服务、注入密钥或借此扩大 Personal Edge capability；异常大图和非标准 JSON 必须 fail closed。
+- Decision：新增 `/larkflow draft <JSON定义> [role=@成员 ...]`。命令把受限 `schema_version / goal / inputs / nodes` 直接物化为 `template_version_id=NULL`、`locked=false` 的 Snapshot 草稿，并复用现有 IM command、Owner binding、confirm、Runtime、Projection 与审计。严格 JSON 拒绝重复键和非有限数，节点上限为 100；模型 provider 配置和 `personal.readonly` 明确禁止。单角色可默认归发送者，多角色必须显式使用本条消息的已验证 mention 绑定。
+- Alternatives(否决)：先把每个临时定义注册为隐藏模板；收到 JSON 后立即启动；信任正文中的 open_id；允许用户传任意模型 base URL 或 key；允许无模板定义创建 Personal Edge 节点；为无模板实例单独建立存储与调度器。
+- Tradeoff：用户现在可以脱离模板完成真实闭环，但首版仍要求手写结构化 JSON，没有图形化编辑和 schema 辅助；100 节点是入口保护上限，不是系统容量承诺。拒绝 Personal Edge 会限制某些个人 Agent 场景，但保留了中央与员工设备之间的 capability 授权边界。
+- Evidence：内容提交 `5113a59aacc8b0a97481411e581b9d52f6462073`；完整离线套件 `858 passed, 17 skipped`，四组定向变异均捕获错误实现。候选 wheel SHA-256 为 `d5b0964ce3bcb817a6ec22c3346bb4ff47aaae64bffdd0b0cd67027ee3dd4d2a`，长期库 migration 仍为十八份，八服务全部 active。真实实例 `im_a9a43d1d4db354b31b798bb1` 已完成 Human-Agent-Tool-Human 4/4，飞书终态与 PostgreSQL `done / template_version_id IS NULL / 四节点 done` 一致。
