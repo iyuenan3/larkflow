@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.45.0-draft · 2026-08-06 · 来源约束型材料复核真实接受闭环
+
+- Deployment：内容提交 `b7e589ba4af0398573ec995254dd61e9b1a4508c` 的 wheel SHA-256 为 `0dcccb7f674135dde8b44ab08d437ba397b92397b8456ede8a064f66f1eb2af1`，安装于 `/srv/larkflow/target/releases/20260805_233701_source_review_b7e589b/`，并同时更新 Target 与 legacy 虚拟环境。升级前 PostgreSQL 备份为 169991 bytes、`0600`，可由 `pg_restore --list` 读取 125 个 TOC 条目；长期库保持十九份 migration。
+- Readback：八个 Target 服务与一个 legacy 消费者均为 `active / running / NRestarts=0`，部署窗口 warning 为 0；`source_grounded_review:1` 已导入并启用。
+- Acceptance：真实飞书实例 `source_grounded_20260805_234517` 使用公开软件需求材料完成 Human-Agent-Tool-Human 4/4。Agent 输出为 `source_claims.v1`，确定性 Tool 回读 4/4 条事实、3/3 个开放问题、零违规和 `quality=pass`。Owner 明确点击“接受”后，决定命令进入 `processed / human_decision_accepted / sent / updated`，卡片反馈写入耗时 1098 ms，Instance 最终为 `done / version 9 / graph_revision 1`。
+- Evidence：四个节点均为 Attempt 1 完成；Task、Agent 消息、Tool 消息、决定卡、完成文档和最终通知均有外部投影绑定。追加型审计包含四次节点激活、两次自动完成、一次 Human 提交、一次明确接受和一次 Instance 完成。
+- Boundary：本次只验证开发测试组织中的单份公开材料与接受路径。确定性 Tool 不验证外部事实真伪；证据不证明模型质量规模化、市场价值、生产容量或生产上线。真实退回后从 Agent 节点重启形成新 Attempt，以及第二份材料复测，仍是下一门槛。
+
 ## v0.44.0-draft · 2026-08-05 · 来源约束型材料复核与人类明确决定
 
 - Added：新增 `source_grounded_review` 模板。输入以 `source_url`、稳定 `F` 事实和 `Q` 开放问题形成来源登记；Agent 的 `source_claims.v1` 结果区分来源事实、推断和开放问题，并携带引用。

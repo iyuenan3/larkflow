@@ -2,7 +2,7 @@
 
 > 飞书原生的企业协作 DAG：把多人流程拆成有依赖、有唯一责任人、可验收和可追溯的节点。
 >
-> 文档状态：2026-08-05 Phase 1 中央工作流基础实现。飞书 IM 窄命令、Human-Agent-Tool-Human、完成投影、Owner 查询、两类重启、未来区域编辑、失败恢复、跨人员分工和自然语言草稿均已在开发环境闭环。八个 Target 服务与一个 legacy 事件消费者组成九个 Python 服务；十九份 migration 和七条 PostgreSQL 通知连接已回读。自然语言草稿生成已隔离到无飞书 profile 的 Draft Generation Worker，回调首次反馈使用延时 token，后续阶段与终态按原消息 ID 更新。Personal Agent Edge 已完成员工 Mac 前台、Keychain 与离线安装机制验证，但正式签名分发、全新员工 Mac 和可持续公网链路仍未完成。公网设备链路受 ICP 接入备案阻断，Caddy 已停止。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+> 文档状态：2026-08-06 Phase 1 中央工作流基础实现。飞书 IM 窄命令、Human-Agent-Tool-Human、完成投影、Owner 查询、两类重启、未来区域编辑、失败恢复、跨人员分工、自然语言草稿和来源约束型材料复核均已在开发环境闭环。八个 Target 服务与一个 legacy 事件消费者组成九个 Python 服务；十九份 migration 和七条 PostgreSQL 通知连接已回读。自然语言草稿生成已隔离到无飞书 profile 的 Draft Generation Worker，回调首次反馈使用延时 token，后续阶段与终态按原消息 ID 更新。Personal Agent Edge 已完成员工 Mac 前台、Keychain 与离线安装机制验证，但正式签名分发、全新员工 Mac 和可持续公网链路仍未完成。公网设备链路受 ICP 接入备案阻断，Caddy 已停止。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
 > 内容提交 `5113a59aacc8b0a97481411e581b9d52f6462073` 已增加 `/larkflow draft <JSON定义>`，结构化无模板定义现在直接生成 `template_version_id=NULL` 的未锁定 Snapshot 草稿，并沿用发送者验证、mention 角色绑定、独立确认和中央运行时。严格 JSON、100 节点上限、模型服务配置拒绝和 `personal.readonly` Edge capability 拒绝共同限制该入口。真实实例 `im_a9a43d1d4db354b31b798bb1` 已在测试组织完成 Human-Agent-Tool-Human 4/4，PostgreSQL 终态回读为 `done` 且四个节点全部完成。
 >
@@ -16,9 +16,9 @@
 >
 > 内容提交 `81bd43983598ff319150344e779223cd03731eba` 新增哈希锁定离线 bundle、精确 wheel 清单、目标 Mac 与 Python 绑定、修复版 bootstrap pip 和安装时强制断网。故意注入无效索引与代理后，45-wheel 测试 bundle 仍完成安装与 `pip check`；pip 26.1 的 `CVE-2026-8643` 已通过先离线升级至 26.2.1 缓解，复扫无已知漏洞。正式分发安全评审结论仍为 No-Go：员工端依赖面尚未最小化，本机没有 Developer ID 身份或公证凭据，构建来源证明与目录级读取隔离也未完成。代码签名、公证和全新员工 Mac 验收尚未执行。
 >
-> 内容提交 `b7e589ba4af0398573ec995254dd61e9b1a4508c` 新增来源约束型材料复核：`source_claims.v1` 区分来源事实、推断和开放问题，`source_claims.check` 只校验确定性来源契约，最终 Human Owner 通过版本绑定 Card 2.0 明确接受或退回。完整离线套件为 `898 passed, 18 skipped`。代码已推送，开发部署、真实 PostgreSQL migration 回读和真实飞书业务材料验收待执行。
+> 内容提交 `b7e589ba4af0398573ec995254dd61e9b1a4508c` 新增来源约束型材料复核：`source_claims.v1` 区分来源事实、推断和开放问题，`source_claims.check` 只校验确定性来源契约，最终 Human Owner 通过版本绑定 Card 2.0 明确接受或退回。完整离线套件为 `898 passed, 18 skipped`。该提交现已部署；候选 wheel SHA-256 为 `0dcccb7f674135dde8b44ab08d437ba397b92397b8456ede8a064f66f1eb2af1`，长期库保持十九份 migration，九个 Python 服务回读 `active / running / NRestarts=0`。公开软件需求材料实例 `source_grounded_20260805_234517` 已完成 4/4，确定性检查通过且 Human 明确接受；证据仅覆盖开发测试组织中的单次窄业务材料闭环。
 >
-> last-synced: b7e589ba4af0398573ec995254dd61e9b1a4508c · 2026-08-05
+> last-synced: b7e589ba4af0398573ec995254dd61e9b1a4508c · 2026-08-06
 
 ## 阅读顺序
 
@@ -40,12 +40,12 @@
 | DAG_TEMPLATE_SPEC | ✅ | v0.2 模板、mention 角色绑定、草稿预览、未来区域编辑和两类重启已实现 |
 | ARCHITECTURE | ✅ | Target 模块化单体、独立凭据侧 Interactive 双副本、无凭据 Draft Generation Worker、来源契约检查、人类决定卡、PostgreSQL 通知唤醒与轮询兜底、飞书投影、失败恢复、Edge Proof、macOS 版本化安装与剩余差距 |
 | RELATIONS | ✅ | Target 飞书、mention 与人员选择卡身份边界、中央 lark-cli、Edge HTTPS、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | Phase 1 已完成员工 Mac 前台 Edge、Keychain、真实设备配对、最小安装升级和离线 bundle 验证，正式分发仍受最小依赖、签名、公证与数据隔离门禁阻断 |
+| ROADMAP | ✅ | Phase 1 已完成来源约束型材料复核接受路径与员工 Mac Edge 开发验证，下一门槛为真实退回后重启、第二份材料复测及 Edge 正式分发门禁 |
 | SPEC | ✅ | legacy 契约、Target CLI、独立 interact 与 draft generation Worker、数据库通知唤醒、来源声明与确定性检查、人类决定卡、十一个飞书窄命令、模板与无模板草稿、Task 入站、受控变化、完成投影与私有 Edge v1 HTTP、前台客户端、doctor 及 macOS manager |
-| DEPLOYMENT | ✅ | Legacy ECS 与当前 Target 八服务、十九份 migration、七条监听连接、双 Interactive 副本、独立草稿生成、Edge serve、macOS 版本化安装、PostgreSQL、备份与回滚实录 |
+| DEPLOYMENT | ✅ | Legacy ECS 与当前 Target 八服务、十九份 migration、七条监听连接、来源约束型真实接受、独立草稿生成、Edge serve、macOS 版本化安装、PostgreSQL、备份与回滚实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
 | DECISIONS | ✅ | Append-only ADR 历史，最新记录来源约束结果、确定性检查与 Human 明确裁决边界 |
-| CHANGELOG | ✅ | Append-only 已实现变更，最新为来源约束型材料复核的本地实现与待验收边界 |
+| CHANGELOG | ✅ | Append-only 已实现变更，最新为来源约束型材料复核的开发部署与真实接受路径 |
 | MEMORY | ⚑ | Append-only 经验，仍含语义占位，已记录回调漂移、通知边界、批次计时、虚拟环境、Keychain 上下文、bootstrap pip 与构建模块遮蔽风险 |
 
 ## 按任务读取

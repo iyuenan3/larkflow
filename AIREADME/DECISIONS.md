@@ -756,3 +756,4 @@
 - Alternatives(否决)：继续让 Agent 输出无来源自由文本；让 Tool 联网判断事实真伪；Tool 通过后自动完成流程；用普通 Task 完成表示接受；退回后原地覆盖 Agent 结果；为决定卡建立第二套即时状态真相。
 - Tradeoff：稳定 ID 与结构化输出增加模板和提示词成本，确定性检查只能证明来源契约一致，不能证明事实真实、需求合理或建议有价值。退回先进入失败终态，再由 Owner 重启目标节点，操作多一步，但保留了明确责任、历史与并发边界。
 - Evidence：内容提交 `b7e589ba4af0398573ec995254dd61e9b1a4508c` 已推送；完整离线套件 `898 passed, 18 skipped`，wheel 已确认包含 `source_grounded_review.yaml`。本 ADR 写入时开发部署、真实 PostgreSQL migration 回读和真实飞书业务材料验收仍待执行。
+- Status addendum · 2026-08-06：该内容提交已部署到开发服务器。真实飞书实例 `source_grounded_20260805_234517` 使用公开软件需求材料完成四节点 Attempt 1，`source_claims.check` 回读 4/4 条事实、3/3 个开放问题与零违规；唯一 Owner 明确接受后，决定卡更新、完成文档、最终通知、Instance `done` 和追加型审计均已从 PostgreSQL 或飞书投影回读。当前关闭的是开发环境接受路径，真实退回后重启与第二份材料仍待验证。
