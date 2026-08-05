@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.42.0-draft · 2026-08-05 · 多阶段卡片稳定收口
+
+- Fixed：自然语言草稿卡片不再把回调延时更新 token 用于首次反馈、生成进度和最终结果三次写入。首次无按钮反馈保留 token 路径，后续阶段与终态改按原消息 ID 更新，避免第三次调用返回 `300040` 后卡片停在“正在生成”。
+- Reliability：消息 ID 更新要求 Card 2.0 在更新前后保持 `config.update_multi=true`；进度与回复 Worker 只读取动作中服务端保存的原消息 ID，不信任卡片动作 payload 提供的新目标。
+- Verified：内容提交 `2ed644e640f3c3834f82c464e05fe0b4c3a241cc` 的完整离线套件为 `886 passed, 18 skipped`。两个隔离破坏测试分别恢复旧 token 路径和移除 `update_multi` 门禁，均被新增回归捕获。
+- Deployment：wheel SHA-256 为 `56787f1f3e8298a831c80dc65d60e3a116d34f0c1aef9324c50448e4d15ee4b7`，安装于 `releases/20260805_214200_cardsettle_2ed644e/`。升级前 PostgreSQL 备份为 155532 bytes、`0600`；九个 Python 服务为 `active / running / NRestarts=0`，十九份 migration 与七条监听连接保持成立。
+- Acceptance：旧实例卡片已按消息 ID 修复。新实例 `im_74e775110afbd80aa598d3ae` 从输入表单进入生成进度并收口为最终图预览，动作状态为 `processed / draft_created / reply sent`；飞书服务端读回同一卡片 `updated=true` 且没有按钮或输入框，回归窗口 warning 为 0。
+- Boundary：本条只关闭开发环境中的 Card 2.0 多阶段更新缺陷，不代表生产上线、并发容量或客户端渲染时延得到验证。验收草稿未执行 `/larkflow confirm`。
+
 ## v0.41.0-draft · 2026-08-05 · 独立草稿生成与阶段进度
 
 - Added：新增无飞书凭据的 Draft Generation Worker、`generate-drafts-once / generate-drafts` CLI、systemd unit 与独立 env 模板。migration `0019_draft_generation_progress` 为自然语言草稿动作保存生成 claim、`generating / repairing` 进度 revision、独立进度 claim 和最终回复栅栏。
