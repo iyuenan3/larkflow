@@ -157,6 +157,26 @@ larkflow-target --env-file /etc/larkflow-target.env serve
 
 Edge Proof v0 有两个独立入口。开发服务器已把 Gateway 作为仅监听 loopback 的 systemd 服务部署，并完成独立 Caddy HTTPS 反向代理的源站验证。本机 Edge 默认只接受 HTTPS，只有 loopback 可以使用明文 HTTP。当前 ECS 位于阿里云中国内地，专用域名尚未完成 ICP 接入备案，因此公网 TLS 会被接入侧阻断；Caddy 已停止并禁用开机启动。完成备案或迁移到合规的非中国内地环境前，下面的 HTTPS 入口只是配置形状，不能作为已通过的公网验收：
 
+macOS 开发试用版使用 `deploy/larkflow-edge-manager.py` 管理独立版本目录，不修改 Homebrew 或系统 Python。管理员把 manager、wheel 和通过独立渠道发布的 wheel SHA-256 一起交给员工。首次安装与后续升级使用同一命令；新版本只有在独立 venv 完成安装、`pip check` 和 CLI 启动校验后才切换，旧版本保存在 `previous`。默认命令链接位于 `~/.local/bin`，安装器不读取或迁移 Keychain，也不注册 launchd 或其他后台服务：
+
+```bash
+# 首次安装，manager 会自动寻找 Python 3.10+
+python3 larkflow-edge-manager.py install \
+  --wheel larkflow-0.0.2-py3-none-any.whl \
+  --sha256 <管理员提供的六十四位 SHA-256>
+
+# 非敏感安装状态与本机离线诊断
+~/.local/bin/larkflow-edge-manager status
+~/.local/bin/larkflow-edge doctor
+
+# 后续升级继续使用已安装的 manager；需要时切回 previous
+~/.local/bin/larkflow-edge-manager install \
+  --wheel <新 wheel> --sha256 <新 wheel SHA-256>
+~/.local/bin/larkflow-edge-manager rollback
+```
+
+默认版本目录是 `~/Library/Application Support/larkflow-edge/releases/`。安装器按包版本与 wheel SHA 建立不可混淆的 release ID，拒绝不匹配的 wheel、符号链接目录和已有的无关同名命令。当前 manager 与 wheel 还没有代码签名、公证、离线依赖包或自动更新通道，因此只用于明确批准的开发试用分发。
+
 ```bash
 # 中央节点，数据库已执行 larkflow-target migrate
 larkflow-edge-gateway --env-file /etc/larkflow-target-edge.env pairing-create \

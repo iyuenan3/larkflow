@@ -27,7 +27,7 @@ from larkflow.workflow.edge_gateway_cli import (
 )
 
 
-def test_edge_cli_exposes_pair_run_once_and_foreground_serve_commands():
+def test_edge_cli_exposes_pair_doctor_run_once_and_foreground_serve_commands():
     parser = build_parser()
     paired = parser.parse_args(
         ["pair", "--server", "https://edge.example.com", "--name", "Mac"]
@@ -35,17 +35,89 @@ def test_edge_cli_exposes_pair_run_once_and_foreground_serve_commands():
     run = parser.parse_args(["run-once", "--workspace", "/workspace"])
     serve = parser.parse_args(["serve", "--workspace", "/workspace"])
     migrate = parser.parse_args(["credential-migrate", "--delete-source"])
+    doctor = parser.parse_args(["doctor"])
 
     assert paired.command == "pair"
     assert run.command == "run-once"
     assert serve.command == "serve"
     assert migrate.command == "credential-migrate"
+    assert doctor.command == "doctor"
+    assert doctor.codex_binary == "codex"
     assert migrate.delete_source is True
     assert serve.wait_seconds == 20
     assert serve.heartbeat_seconds == 60
     assert serve.max_tasks == 0
     assert paired.credential_store == "auto"
     assert Path(paired.credential_file) == DEFAULT_CREDENTIAL_FILE
+
+
+def test_doctor_validates_local_keychain_and_codex_without_exposing_identity(
+    tmp_path: Path,
+    monkeypatch,
+):
+    stored = StoredEdgeCredential(
+        server_url="http://127.0.0.1:18765",
+        device_id="private-device-id",
+        credential="private-device-id.private-secret",
+    )
+    messages: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        edge_cli,
+        "_load_selected_credential",
+        lambda _namespace, path: (stored, "keychain", path, path),
+    )
+    monkeypatch.setattr(edge_cli.shutil, "which", lambda _name: "/usr/bin/codex")
+    monkeypatch.setattr(edge_cli, "_print", lambda value: messages.append(value))
+    namespace = build_parser().parse_args(
+        ["--credential-file", str(tmp_path / "metadata.json"), "doctor"]
+    )
+
+    assert _run(namespace) == 0
+
+    assert messages == [
+        {
+            "event": "edge_doctor",
+            "status": "ready",
+            "credential": {
+                "status": "ok",
+                "store": "keychain",
+                "secret_in_metadata": False,
+            },
+            "codex": {"status": "ok"},
+            "network": {
+                "status": "not_checked",
+                "mode": "loopback_tunnel_required",
+            },
+            "background_service": "not_installed",
+        }
+    ]
+    rendered = repr(messages)
+    assert stored.device_id not in rendered
+    assert stored.credential not in rendered
+    assert stored.server_url not in rendered
+
+
+def test_doctor_reports_missing_codex_as_blocked(tmp_path: Path, monkeypatch):
+    stored = StoredEdgeCredential(
+        server_url="https://edge.example.com",
+        device_id="device_1",
+        credential="device_1.secret",
+    )
+    messages: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        edge_cli,
+        "_load_selected_credential",
+        lambda _namespace, path: (stored, "file", path, path),
+    )
+    monkeypatch.setattr(edge_cli.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(edge_cli, "_print", lambda value: messages.append(value))
+    namespace = build_parser().parse_args(
+        ["--credential-file", str(tmp_path / "device.json"), "doctor"]
+    )
+
+    assert _run(namespace) == 2
+    assert messages[0]["status"] == "blocked"
+    assert messages[0]["codex"] == {"status": "missing"}
 
 
 def test_serve_workspace_cannot_contain_the_device_credential(tmp_path: Path):

@@ -5,7 +5,9 @@ import argparse
 from collections.abc import Sequence
 import getpass
 import json
+import os
 from pathlib import Path
+import shutil
 import signal
 import socket
 import sys
@@ -73,6 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
             "non-secret Keychain metadata"
         ),
     )
+    doctor = commands.add_parser(
+        "doctor",
+        help="validate local credentials and Codex without contacting the server",
+    )
+    doctor.add_argument("--codex-binary", default="codex")
 
     run_once = commands.add_parser(
         "run-once",
@@ -186,6 +193,9 @@ def _run(namespace: argparse.Namespace) -> int:
             }
         )
         return 0
+
+    if namespace.command == "doctor":
+        return _doctor(namespace, credential_path)
 
     if namespace.wait_seconds < 0 or namespace.wait_seconds > 25:
         raise ValueError("wait-seconds must be between 0 and 25")
@@ -381,6 +391,47 @@ def _migrate_credential_file(
         }
     )
     return 0
+
+
+def _doctor(namespace: argparse.Namespace, credential_path: Path) -> int:
+    stored, credential_store, _lock_path, _source_path = _load_selected_credential(
+        namespace,
+        credential_path,
+    )
+    codex_binary = _required(namespace.codex_binary, "codex binary")
+    if os.path.sep in codex_binary:
+        candidate = Path(codex_binary).expanduser()
+        codex_available = (
+            candidate.is_file() and os.access(candidate, os.X_OK)
+        )
+    else:
+        codex_available = shutil.which(codex_binary) is not None
+    connection_mode = (
+        "loopback_tunnel_required"
+        if stored.server_url.startswith("http://")
+        else "private_https"
+    )
+    local_ready = codex_available
+    _print(
+        {
+            "event": "edge_doctor",
+            "status": "ready" if local_ready else "blocked",
+            "credential": {
+                "status": "ok",
+                "store": credential_store,
+                "secret_in_metadata": False if credential_store == "keychain" else None,
+            },
+            "codex": {
+                "status": "ok" if codex_available else "missing",
+            },
+            "network": {
+                "status": "not_checked",
+                "mode": connection_mode,
+            },
+            "background_service": "not_installed",
+        }
+    )
+    return 0 if local_ready else 2
 
 
 def _required(value: Any, label: str) -> str:

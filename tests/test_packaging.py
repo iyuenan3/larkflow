@@ -16,9 +16,18 @@ import fnmatch
 import re
 from pathlib import Path
 
+from larkflow import __version__
+
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = ROOT / "larkflow" / "templates"
 WORKFLOW_MIGRATIONS = ROOT / "larkflow" / "workflow" / "migrations"
+
+
+def test_runtime_version_matches_pyproject():
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"$', text, re.M)
+    assert match, "pyproject.toml 里没有项目 version"
+    assert match.group(1) == __version__
 
 
 def declared_patterns(package: str = "larkflow.templates") -> list[str]:
