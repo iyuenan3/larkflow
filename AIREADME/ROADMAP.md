@@ -41,14 +41,14 @@
 - 已完成运行中未来区域安全编辑：`add_node / update_node / remove_node` 只触及没有执行痕迹的 `pending / ready` 节点；耐久预览绑定 actor、aggregate version、`graph_revision` 与候选 Snapshot SHA-256，确认事务只递增一次 revision 并保留已执行历史。完整离线套件、一次性 PostgreSQL 14 双连接竞争、十四份 migration、开发服务器部署和 Owner 真实飞书闭环均已通过；真实命令还拒绝了冻结线修改、成环依赖和陈旧预览。
 - 已完成自动节点失败恢复闭环：向节点 Owner 发送恢复卡，卡片回调进入耐久命令，领域侧重新校验 Owner 与精确 Instance / Node / Attempt 版本。重试和人工接管都创建新 Attempt，失败历史不覆盖。当前完整离线套件为 `816 passed, 17 skipped`；长期 PostgreSQL 十八份 migration、两个连续真实重试、人工接管、Human Task 完成、最终投影，以及恢复卡 0.990 秒首个服务端反馈均已在开发环境验收。
 - 从 legacy 原型提炼 adapter、事件韧性和 Mock 测试资产。
-- 已完成 Personal Agent Edge Proof v0 的代码扩展与受控员工 Mac 前台真机验收：一次性配对、哈希凭据、设备撤销、Owner 与 capability 双重过滤、现有 Attempt claim 续租、迟到结果拒绝、loopback Gateway、手工 `run-once`、前台 `serve` 和 Codex 只读适配器。内容提交 `fd6933a186bf115fe83adc5ac7d3a3b6153b0436` 已部署到开发服务器；同一候选 wheel 通过 SSH 隧道完成空闲心跳、连续领取、真实 Codex、18 次续租、单设备锁、SIGTERM 安全停止与撤销后拒绝。该临时测试设备、凭据和隧道已删除。macOS 默认 Keychain 密钥存储、非敏感元数据引用和旧明文文件校验迁移已落码，并先通过合成登录钥匙串创建、回读和删除，再以真实流程 Owner 身份完成员工 Mac 默认槽位的一次性配对。`run-once` 认证返回 `no_work`，服务器设备保持 active，配对审计和认证后时间戳均已回读；持久凭据与元数据保留，临时隧道已关闭。公网设备链路仍受 ICP 接入备案阻断，Caddy 保持停止；正式员工安装、升级和安全评审尚未完成。
+- 已完成 Personal Agent Edge Proof v0 的代码扩展与受控员工 Mac 前台真机验收：一次性配对、哈希凭据、设备撤销、Owner 与 capability 双重过滤、现有 Attempt claim 续租、迟到结果拒绝、loopback Gateway、手工 `run-once`、前台 `serve` 和 Codex 只读适配器。内容提交 `fd6933a186bf115fe83adc5ac7d3a3b6153b0436` 已部署到开发服务器；同一候选 wheel 通过 SSH 隧道完成空闲心跳、连续领取、真实 Codex、18 次续租、单设备锁、SIGTERM 安全停止与撤销后拒绝。该临时测试设备、凭据和隧道已删除。macOS 默认 Keychain 密钥存储、非敏感元数据引用和旧明文文件校验迁移已落码，并先通过合成登录钥匙串创建、回读和删除，再以真实流程 Owner 身份完成员工 Mac 默认槽位的一次性配对。内容提交 `5b0c79b4d946441063d92970e8f0e9cac31b2ab3` 又实现独立 manager、wheel SHA-256 校验、版本化 venv、原子 `current / previous` 切换、回滚和离线 `doctor`；员工 Mac 已真实完成 `0.0.1 -> 0.0.2 -> rollback -> 0.0.2`。现有 Keychain 凭据没有被安装器读取或修改，真实用户上下文中的 `doctor` 为 ready；临时隧道中的 `run-once` 返回 `no_work`，服务器设备保持 active 且认证时间推进。公网设备链路仍受 ICP 接入备案阻断，Caddy 保持停止；正式签名分发、安全评审和可持续公网连接尚未完成。
 
 **Demo：** 已从真实飞书消息创建并确认模板草稿，在测试组织完成 Human-Agent-Tool-Human，最终 Docx 包含四个节点结果，Owner 收到带链接的完成通知；重复修复为 no-op。另一个 Human-Agent-Human 实例先完成最终节点重启，再完成全图实例重启；第二轮从根节点重新调度，三个新 Attempt 均完成，新旧 Task、结果、文档和最终通知均保留，重复确认 no-op。未来区域编辑实例在首个 Human 节点等待时修改最终 Human 节点标题，幂等确认后完成 Agent、更新标题 Task、Docx 与最终通知；独立负向实例拒绝冻结线、成环依赖和陈旧预览。失败恢复实例连续重试两次后由 Owner 人工接管，真实 Task 完成后第四个 Attempt 和 Instance 进入 `done`，前三次失败历史与全部投影仍可追溯。测试成员持有的合成实例还验证了当前登录用户的真实跨人员编辑命令被拒绝，且图修订、预览和审计保持不变。跨人员正向分工分别通过群聊 mention 和单聊人员选择卡创建冻结草稿；卡片成功后回写为已确认状态。该证据仅覆盖开发环境，无模板定义的同等真栈入口仍待补充。
 
 ## Next · Phase 2 受控变化与恢复
 
 - 针对五次卡片验收暴露的队头阻塞，已部署两个独立 Interactive 副本，并把每条车道的单次 claim 固定为 1。三次真实飞书突发点击已确认共享 bot profile、租约、幂等、双副本分流和卡片终态均正常。后续只在真实业务或功能验收自然产生点击时继续采集耐久指标，不再把反复人工点击计时设为独立门槛；现有小样本仍不得外推生产容量。
-- 下一项 Edge 工程工作是设计最小员工安装与升级体验，并在不增加隐藏后台常驻的前提下完成安全评审准备。当前持久设备通过受控 SSH 隧道使用，公网入口仍不是安装体验验证的前置条件；若要形成可持续远程连接，仍需完成 ICP 接入备案或迁移合规地域。
+- Edge 的 macOS 开发试用最小安装与升级体验已经落地，且没有增加隐藏后台常驻。下一步是安全评审准备：定义签名与公证流程、固定并离线交付依赖、发布可信 SHA 渠道、验证全新员工 Mac 的首装与故障回滚。当前持久设备通过受控 SSH 隧道使用；若要形成可持续远程连接，仍需完成 ICP 接入备案或迁移合规地域。
 
 目标：让运行中流程可以安全修改、重做和运营，而不覆盖历史。
 

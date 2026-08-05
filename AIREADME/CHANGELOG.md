@@ -1,5 +1,15 @@
 # CHANGELOG · larkflow
 
+## v0.37.0-draft · 2026-08-05 · macOS Edge 最小安装升级体验
+
+- Added：新增独立 `deploy/larkflow-edge-manager.py`。macOS 当前用户可以用同一条 `install --wheel --sha256` 命令完成首装或升级；manager 自动寻找 Python 3.10 或更高版本，在版本化 release 中建立独立 venv，并提供非敏感 `status` 与单步 `rollback`。
+- Added：`larkflow-edge doctor` 离线校验本机凭据、Codex 命令和传输形状，不连接中央节点、不领取工作，也不输出 server URL、device ID 或 secret。包版本从 `0.0.1` 提升为 `0.0.2`，项目元数据与运行时版本由回归保持一致。
+- Safety：wheel 必须是非符号链接普通文件，包名、版本和完整 SHA-256 必须匹配。新 release 只有在最终路径完成安装、`pip check` 和 CLI 启动验证后才切换；manager 拒绝 root、符号链接目录和已有的无关同名命令，不修改系统 Python、Keychain 或 launchd。
+- Fixed：最初把已创建的 venv 从临时目录移动到 release 后，console script 的 shebang 仍指向旧目录，稳定命令无法执行。实现改为先读取 wheel metadata，再直接在最终 release 路径创建 venv；新增回归固定该约束。另修复已安装 manager 由 macOS 系统 Python 3.9 启动时误用自身解释器创建 3.10+ venv的问题。
+- Verified：内容提交为 `5b0c79b4d946441063d92970e8f0e9cac31b2ab3`。manager、打包、Edge CLI 与客户端聚焦套件为 `49 passed`，完整离线套件为 `828 passed, 17 skipped`；禁止旧文案扫描和 `git diff --check` 均通过。候选 wheel SHA-256 为 `f513a61c18a6fdd0c60d34c57dcb2f0121d814870ec8f2bcea8218986bd054d2`。
+- Acceptance：员工 Mac 已真实执行 `0.0.1 -> 0.0.2 -> rollback -> 0.0.2`。最终 current 为 `0.0.2-f513a61c18a6`，previous 为 `0.0.1-d33241ba7328`，两个稳定命令可解析；manager 源码与托管副本 SHA-256 均为 `2020ee85660f8623ca9f0b68caf7dde8f96555d9dd67c7c8894ffe7100bd548d`。真实用户上下文中的 `doctor` 为 ready，临时 SSH 隧道中的 `run-once` 返回 `no_work`，服务器设备保持 active 且认证时间推进；隧道已关闭。
+- Boundary：本轮没有修改中央 Gateway 协议、数据库 migration 或服务器服务，也没有替换开发服务器 wheel。manager 与候选 wheel 尚未签名或公证，依赖仍从包索引解析，没有离线 wheelhouse、自动更新或正式分发通道；验收不等于生产安全或员工规模采用。
+
 ## v0.36.0-draft · 2026-08-05 · macOS Keychain 设备凭据
 
 - Added：macOS 上 `larkflow-edge --credential-store auto` 默认把设备密钥保存到当前用户登录 Keychain。`0600` 元数据文件只保留 server URL、device ID 和 Keychain store 标识，并继续作为单设备锁定位。

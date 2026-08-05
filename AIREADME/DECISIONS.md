@@ -696,3 +696,13 @@
 - Alternatives(否决)：继续只用 `0600` 明文文件；把密钥放入 argv 或环境变量调用系统工具；把整个 JSON 作为 Keychain password；配对成功后只存 Keychain 而不保留连接元数据；迁移先删旧文件再验证；立即增加 launchd、硬件密钥或跨平台抽象层。
 - Tradeoff：Keychain 后端是 macOS 专用，非 macOS 仍有明文文件兼容风险。固定 service/account 暂不支持同一 OS 用户并列多个中央节点；登录钥匙串不可用时 Edge 会 fail closed。伪终端路径增加实现复杂度，且设备密钥必须满足安全交互输入上限。该变化降低静态凭据暴露，不证明受恶意本机进程控制时仍安全，也不替代正式安全评审。
 - Evidence：实现内容提交为 `4d9cef0836859bb0a6772eb08640b9e6b29030c8`。Edge 客户端与 CLI 聚焦测试 `34 passed`，完整离线套件 `816 passed, 17 skipped`。wheel SHA-256 为 `7be7c47a7b076585e0ed2133ae034dc5d3f58bf59d801de09a8fd56d2287164a`，独立安装目录已解析迁移命令。隔离合成 Keychain 项已用真实登录钥匙串完成创建、回读一致和删除。随后员工 Mac 通过临时 SSH 隧道，以既有真实流程 Owner 身份消费一次性配对码；默认 Keychain 项和 `0600` 非敏感元数据均创建并回读一致，`run-once` 返回 `no_work`，服务器设备为 active、凭据 hash 存在、配对审计唯一且认证后的 `last_seen_at` 晚于创建时间。持久设备保留，隧道已关闭。仍未完成员工安装分发、升级、安全评审或可持续公网连接。
+
+## ADR-083 · 2026-08-05 · macOS Edge 使用版本化 venv 与原子入口切换
+
+- **Status：Accepted · Local implementation and controlled device validation。**
+- Problem：员工直接从源码树或共享 Python 环境运行 Edge，无法可靠判断当前版本、升级是否完整，也没有可恢复的回滚点。原地覆盖 venv 会在依赖安装、入口生成或进程中断失败时留下半安装状态；直接增加 launchd 又会把安装便利扩大为隐藏常驻权限。
+- Constraint：不修改 Homebrew 或系统 Python；安装必须验证独立发布的 wheel SHA-256；失败版本不能替换可用入口；旧版本、Keychain 凭据与非敏感连接元数据必须保留；稳定命令不能被符号链接目录或已有无关文件劫持；首版只面向 macOS 当前用户，不注册后台服务、不联网自动更新，也不改变中央协议。
+- Decision：独立 manager 按 `<package-version>-<sha12>` 创建 release，并先从 wheel metadata 验证包名与版本。每个 venv 直接创建在最终 release 路径，完成 wheel 安装、`pip check` 和安装态 CLI 启动校验后，才用原子符号链接替换 `current`；升级前的 current 保存为 `previous`，rollback 只交换这两个受管入口。稳定命令位于 `~/.local/bin`，manager 自身复制到受管 bin。重复安装同一 release 只重新验证并报告 `operation=verify`。
+- Alternatives(否决)：在系统或 Homebrew Python 中直接 pip install；原地强制重装同一个 venv；在临时目录创建 venv 后移动；只保存 wheel 不保留可执行 release；首次安装即注册 launchd；自动从网络获取未签名最新版；让安装器读取、迁移或删除 Keychain 凭据。
+- Tradeoff：每个 release 保留完整 venv，会占用更多磁盘；`previous` 只有一个直接回滚点，旧 release 仍需后续定义清理策略。当前完整性依赖管理员通过独立渠道提供 SHA-256，但 manager 与 wheel 尚无代码签名或公证，依赖也未固定为离线 wheelhouse。该设计完成开发试用安装，不等于正式企业分发与安全评审。
+- Evidence：内容提交 `5b0c79b4d946441063d92970e8f0e9cac31b2ab3`；完整离线套件 `828 passed, 17 skipped`。候选 wheel SHA-256 为 `f513a61c18a6fdd0c60d34c57dcb2f0121d814870ec8f2bcea8218986bd054d2`。员工 Mac 已执行 `0.0.1 -> 0.0.2 -> rollback -> 0.0.2`，current 与 previous、稳定命令和 manager 源码副本哈希均已回读。安装器没有触碰既有 Keychain 项；真实用户上下文 `doctor` 为 ready，临时隧道 `run-once` 返回 `no_work`，服务器设备 active 且认证时间推进，隧道随后关闭。

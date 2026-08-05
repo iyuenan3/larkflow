@@ -240,3 +240,15 @@
 - 现象（真实部署）：Target 虚拟环境可以被 `lf_target_dev` 执行，但包元数据由 root 所有。用服务账号执行 `pip install --force-reinstall` 时，pip 先卸载旧包，再因无法写入 `direct_url.json` 中止，并留下三个临时改名目录。
 - 根因（已确认）：可执行权限不代表包管理写权限。该虚拟环境历史上由 root 管理，服务账号只负责运行；部署命令错误地根据运行身份推断了安装身份。
 - 结论：部署前同时检查虚拟环境、包目录和 dist-info 所有权；现有开发环境继续用 root 安装 Wheel，再以受限服务账号执行导入、CLI 与服务。失败安装留下的目录先移动到发布目录保留，再运行 `pip check`，不要直接删除历史。若未来要改为服务账号管理，必须单独迁移整个虚拟环境所有权并验证回滚，不能在一次业务发布中顺手混改。
+
+## 2026-08-05 · venv 创建后不能通过移动目录完成原子发布
+
+- 现象（本机真实安装）：候选 release 在临时目录成功完成 venv 创建、wheel 安装和 CLI 校验，随后整体移动到最终版本目录。最终目录内 console script 文件存在，但稳定命令执行时报解释器不存在。
+- 根因（已确认）：venv 与 pip 生成的 console script 包含创建时的绝对解释器路径。移动目录不会重写 shebang；测试在移动前执行，因而没有覆盖最终路径的真实入口。
+- 结论：先读取 wheel metadata 得到不可混淆的 release ID，再直接在最终 release 路径创建 venv。只有该最终路径中的 `pip check` 与安装态 CLI 均成功后才原子切换 `current`。回归必须从 release 最终路径执行 console script，不能只检查文件存在或在 staging 目录运行。
+
+## 2026-08-05 · 受限工具上下文的 Keychain 未找到不能直接触发重新配对
+
+- 现象（本机验收）：受限命令上下文运行 `security find-generic-password` 和 `larkflow-edge doctor` 返回 Keychain item-not-found，看似此前保留的持久设备密钥已丢失；非敏感元数据和中央 active 设备仍在。
+- 根因（已确认）：同一精确 Keychain 查询在真实 macOS 用户上下文返回存在，`doctor` 随即为 ready。缺失结果来自工具沙箱不能访问登录钥匙串，不代表系统真实状态。
+- 结论：Keychain 缺失会诱发不可逆的新设备配对和旧设备撤销，必须先在真实用户上下文做只读存在性预检。若条目存在，立即停止重配；再通过离线 `doctor`、受控隧道 `run-once` 和服务器 `last_seen_at` 完成三层回读。不得从单个受限上下文的 item-not-found 推断密钥已丢失。

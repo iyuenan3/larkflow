@@ -6,7 +6,9 @@
 >
 > Personal Agent Edge 的 macOS 默认凭据后端已切换为登录 Keychain，磁盘只留 `0600` 非敏感引用；旧明文文件支持回读校验后迁移。合成 Keychain 项的真实创建、回读和删除已通过。默认槽位现绑定员工 Mac 的真实 Owner 设备，`run-once` 认证返回 `no_work`，服务器回读 active、配对审计和认证后时间戳均成立。凭据与元数据继续保留，当前隧道已关闭。该证据不包含员工安装分发、安全评审或可持续公网连接。
 >
-> last-synced: de3a4e0454f099a4e6c4a4db2774a71702d74b28 · 2026-08-05
+> 内容提交 `5b0c79b4d946441063d92970e8f0e9cac31b2ab3` 已完成 macOS 开发试用的最小安装升级体验：独立 manager 验证 wheel SHA-256，在最终版本目录创建 venv 并完成 `pip check` 与 CLI 启动校验后，原子切换 `current / previous`；`doctor` 只做本机离线诊断，不连接中央节点。员工 Mac 已真实完成 `0.0.1 -> 0.0.2 -> rollback -> 0.0.2`，现有 Keychain 凭据未迁移或覆盖；真实用户上下文中的 `doctor` 为 ready，经临时 SSH 隧道执行 `run-once` 返回 `no_work`，服务器设备保持 active 且认证时间推进。隧道已关闭。代码签名、公证、离线依赖包、自动更新、安全评审和正式分发仍未完成。
+>
+> last-synced: 5b0c79b4d946441063d92970e8f0e9cac31b2ab3 · 2026-08-05
 
 ## 阅读顺序
 
@@ -26,15 +28,15 @@
 | PRODUCT_STRATEGY | ✅ | 范围收敛取舍、窄 Edge 实验，明确未做市场验证 |
 | PRD | ✅ | Target 单层 DAG MVP 与 Edge Proof 功能契约 |
 | DAG_TEMPLATE_SPEC | ✅ | v0.2 模板、mention 角色绑定、草稿预览、未来区域编辑和两类重启已实现 |
-| ARCHITECTURE | ✅ | Target 模块化单体、独立凭据侧 Interactive 双副本、PostgreSQL 通知唤醒与轮询兜底、飞书投影、失败恢复、Agent / Tool adapter、Edge Proof 和剩余差距 |
+| ARCHITECTURE | ✅ | Target 模块化单体、独立凭据侧 Interactive 双副本、PostgreSQL 通知唤醒与轮询兜底、飞书投影、失败恢复、Agent / Tool adapter、Edge Proof、macOS 版本化安装与剩余差距 |
 | RELATIONS | ✅ | Target 飞书、mention 与人员选择卡身份边界、中央 lark-cli、Edge HTTPS、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | Phase 1 已完成员工 Mac 前台 Edge serve、合成 Keychain 与真实设备配对验收，下一步是最小安装升级体验和安全评审 |
-| SPEC | ✅ | legacy 契约、Target CLI、独立 interact Worker、数据库通知唤醒、十个飞书窄命令、人员选择与失败恢复卡、Task 入站、受控变化、完成投影与私有 Edge v1 HTTP 及前台客户端 |
-| DEPLOYMENT | ✅ | Legacy ECS 与 Target 八服务、十八份 migration、六条监听连接、双 Interactive 副本、Edge serve 部署、PostgreSQL、备份与回滚实录 |
+| ROADMAP | ✅ | Phase 1 已完成员工 Mac 前台 Edge、Keychain、真实设备配对和最小安装升级验收，下一步是签名、公证、离线依赖与安全评审 |
+| SPEC | ✅ | legacy 契约、Target CLI、独立 interact Worker、数据库通知唤醒、十个飞书窄命令、人员选择与失败恢复卡、Task 入站、受控变化、完成投影与私有 Edge v1 HTTP、前台客户端、doctor 及 macOS manager |
+| DEPLOYMENT | ✅ | Legacy ECS 与 Target 八服务、十八份 migration、六条监听连接、双 Interactive 副本、Edge serve 部署、macOS 版本化安装、PostgreSQL、备份与回滚实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
-| DECISIONS | ✅ | Append-only ADR 历史，最新记录 Edge 的 macOS Keychain 凭据边界 |
-| CHANGELOG | ✅ | Append-only 已实现变更，最新为 macOS Keychain 凭据存储 |
-| MEMORY | ⚑ | Append-only 经验，仍含语义占位，已记录回调漂移、通知边界、批次计时与虚拟环境所有权 |
+| DECISIONS | ✅ | Append-only ADR 历史，最新记录 Edge 的 macOS 版本化安装与原子切换边界 |
+| CHANGELOG | ✅ | Append-only 已实现变更，最新为 macOS Edge 最小安装升级体验 |
+| MEMORY | ⚑ | Append-only 经验，仍含语义占位，已记录回调漂移、通知边界、批次计时、虚拟环境所有权与不可迁移 venv |
 
 ## 按任务读取
 
