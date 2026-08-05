@@ -9,7 +9,7 @@
 - 内容提交 `1a80b4035d0a5ad5c634af7be957f4b7d1ee37d7` 已部署 Draft Generation Worker、独立 env、`generate-drafts-once / generate-drafts` 和 migration `0019_draft_generation_progress`。第九个 Python 服务、十九份 migration、七条 PostgreSQL 通知连接和真实双副本竞争均已回读。
 - 内容提交 `2ed644e640f3c3834f82c464e05fe0b4c3a241cc` 修正自然语言草稿卡片的终态更新。首次无按钮反馈继续使用回调 token，阶段进度与最终结果改为 `PATCH /im/v1/messages/:message_id`；完整离线套件为 `886 passed, 18 skipped`，两个隔离破坏测试均被捕获。
 - 当前 wheel SHA-256 为 `56787f1f3e8298a831c80dc65d60e3a116d34f0c1aef9324c50448e4d15ee4b7`，位于 `/srv/larkflow/target/releases/20260805_214200_cardsettle_2ed644e/`。升级前备份 `larkflow_target_dev-20260805T214140+0800.dump` 为 155532 bytes、`0600 lf_target_dev:lf_target_dev`。Target 八服务和 legacy 服务均为 `active / running / NRestarts=0`，部署窗口 warning 为 0。
-- 旧实例 `im_c6db91e671597dad5fbd8a16` 的卡住卡片已按消息 ID 修复。新实例 `im_74e775110afbd80aa598d3ae` 真实经过输入、生成进度和最终图预览，动作终态为 `processed / draft_created / reply sent`；飞书服务端回读同一卡片 `updated=true` 且没有按钮或输入框。本轮没有确认或运行该草稿。
+- 旧实例 `im_c6db91e671597dad5fbd8a16` 的卡住卡片已按消息 ID 修复。新实例 `im_74e775110afbd80aa598d3ae` 真实经过输入、生成进度和最终图预览，动作终态为 `processed / draft_created / reply sent`；飞书服务端回读同一卡片 `updated=true` 且没有按钮或输入框。该草稿随后由真实用户确认启动，Agent Attempt 1 经 86.0 秒模型调用完成，Human Task 经周期读回、耐久 Inbox 和领域重授权推进；实例于北京时间 22:12:40 进入 `done / template_version_id IS NULL / 2 nodes done`。数据库保存 Agent 消息、Human Task、完成 Docx 和最终通知四类外部投影，后两项均已从飞书服务端读回；九个 Python 服务继续保持 `active / running / NRestarts=0`。输入没有真实业务材料，因此本条只验证开发技术闭环。
 
 ## Target PostgreSQL 开发验证状态（2026-08-05）
 

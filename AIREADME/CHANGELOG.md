@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.43.0-draft · 2026-08-05 · 自然语言流程执行闭环
+
+- Acceptance：自然语言实例 `im_74e775110afbd80aa598d3ae` 在最终图预览后由真实用户独立确认启动。Agent Attempt 1 经真实模型调用完成，随后创建飞书 Human Task；任务完成状态经周期读回写入耐久 Inbox，并由领域侧重新授权后提交 Human Attempt 1。
+- Verified：PostgreSQL 终态为 `done / template_version_id IS NULL / graph_revision 1 / 2 nodes done`，审计链包含草稿创建、实例确认、两个节点激活、Agent 完成、Human 提交和实例完成。Agent 消息、Human Task、完成 Docx 和最终通知四类外部投影均已落库，后两项又从飞书服务端读取正文和消息确认真实存在。九个 Python 服务保持 `active / running / NRestarts=0`。
+- Reliability：Task 完成事件仍未由 bot 长连接接收，周期状态读回在飞书任务完成后写入 `feishu_task_poll / larkflow.task.completion_reconciled_v1` 耐久信号，Inbox 终态为 `processed / submitted:human_node`。本次推进没有绕过凭据侧资源读取、当前 Projection、Attempt、Owner 与完成者重授权。
+- Documentation：README 事实修正提交为 `3b3ce7ab11856b1bccecb477e6ab3ecf1f4a68d6`；本条只记录既有发布件上的真实验收，不替换服务器 wheel 或修改 migration。
+- Boundary：本次目标和背景没有真实业务材料，Agent 正文明确报告缺少可汇总数据。该证据关闭开发环境中从自然语言候选草稿到中央执行、Human Task、完成 Docx 与最终通知的技术链路，不证明模型内容质量、业务价值、并发容量或生产上线。
+
 ## v0.42.0-draft · 2026-08-05 · 多阶段卡片稳定收口
 
 - Fixed：自然语言草稿卡片不再把回调延时更新 token 用于首次反馈、生成进度和最终结果三次写入。首次无按钮反馈保留 token 路径，后续阶段与终态改按原消息 ID 更新，避免第三次调用返回 `300040` 后卡片停在“正在生成”。
