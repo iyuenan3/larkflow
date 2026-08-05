@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import zipfile
 
@@ -36,8 +37,19 @@ def wheel(path: Path, content: bytes, *, version: str = "0.0.1") -> tuple[Path, 
 
 
 def fake_prepare(module, version: str):
-    def prepare(target, *, wheel, wheel_sha256, python):
-        del python
+    def prepare(
+        target,
+        *,
+        wheel,
+        wheel_sha256,
+        python,
+        wheelhouse=None,
+        bundle_manifest_sha256=None,
+        source_commit=None,
+        bootstrap_pip=None,
+        bootstrap_pip_version=None,
+    ):
+        del python, wheelhouse, bootstrap_pip
         command = target / "venv" / "bin" / "larkflow-edge"
         command.parent.mkdir(parents=True)
         command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -45,17 +57,91 @@ def fake_prepare(module, version: str):
         module._write_json_once(
             target / "manifest.json",
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "package": "larkflow",
                 "package_version": version,
                 "wheel_filename": wheel.name,
                 "wheel_sha256": wheel_sha256,
+                "offline_bundle": bundle_manifest_sha256 is not None,
+                "bundle_manifest_sha256": bundle_manifest_sha256,
+                "source_commit": source_commit,
+                "bootstrap_pip_version": bootstrap_pip_version,
                 "installed_at": "2026-08-05T00:00:00+00:00",
             },
         )
         return version
 
     return prepare
+
+
+def offline_bundle(module, root: Path, artifact: Path, digest: str) -> tuple[Path, str]:
+    bundle = root / "bundle"
+    wheelhouse = bundle / "wheelhouse"
+    wheelhouse.mkdir(parents=True)
+    bundled_artifact = wheelhouse / artifact.name
+    shutil.copyfile(artifact, bundled_artifact)
+    dependency = wheelhouse / "dependency-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(dependency, "w") as archive:
+        archive.writestr(
+            "dependency-1.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: dependency\nVersion: 1.0\n",
+        )
+    pip_artifact = wheelhouse / "pip-26.2.1-py3-none-any.whl"
+    with zipfile.ZipFile(pip_artifact, "w") as archive:
+        archive.writestr(
+            "pip-26.2.1.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: pip\nVersion: 26.2.1\n",
+        )
+    manager = bundle / "larkflow-edge-manager"
+    shutil.copyfile(INSTALLER, manager)
+    manager.chmod(0o700)
+    files = [manager, bundled_artifact, dependency, pip_artifact]
+    manifest = {
+        "schema_version": 1,
+        "package": "larkflow",
+        "package_version": "0.0.2",
+        "source_commit": "a" * 40,
+        "target": module._python_target(Path(sys.executable).resolve()),
+        "artifact": {
+            "path": f"wheelhouse/{artifact.name}",
+            "sha256": digest,
+        },
+        "wheels": [
+            {
+                "name": name,
+                "version": version,
+                "path": item.relative_to(bundle).as_posix(),
+                "sha256": hashlib.sha256(item.read_bytes()).hexdigest(),
+            }
+            for item, name, version in (
+                (bundled_artifact, "larkflow", "0.0.2"),
+                (dependency, "dependency", "1.0"),
+                (pip_artifact, "pip", "26.2.1"),
+            )
+        ],
+        "bootstrap": {
+            "pip": {
+                "name": "pip",
+                "version": "26.2.1",
+                "path": pip_artifact.relative_to(bundle).as_posix(),
+                "sha256": hashlib.sha256(pip_artifact.read_bytes()).hexdigest(),
+            }
+        },
+        "files": [
+            {
+                "path": item.relative_to(bundle).as_posix(),
+                "sha256": hashlib.sha256(item.read_bytes()).hexdigest(),
+                "size": item.stat().st_size,
+            }
+            for item in files
+        ],
+    }
+    manifest_path = bundle / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True),
+        encoding="utf-8",
+    )
+    return bundle, hashlib.sha256(manifest_path.read_bytes()).hexdigest()
 
 
 def test_install_upgrade_and_rollback_preserve_external_credentials(
@@ -148,6 +234,44 @@ def test_reinstalling_the_current_release_is_idempotent(
     assert second["operation"] == "verify"
     assert second["previous_release"] is None
     assert len(list((prefix / "releases").iterdir())) == 1
+
+
+def test_offline_bundle_does_not_reuse_a_direct_install_with_the_same_wheel(
+    tmp_path: Path,
+    monkeypatch,
+):
+    module = load_installer()
+    prefix = tmp_path / "prefix"
+    link_dir = tmp_path / "bin"
+    artifact, digest = wheel(
+        tmp_path / "larkflow-0.0.2-py3-none-any.whl",
+        b"same-wheel",
+        version="0.0.2",
+    )
+    monkeypatch.setattr(module, "_prepare_release", fake_prepare(module, "0.0.2"))
+
+    direct = module.install(
+        prefix=prefix,
+        link_dir=link_dir,
+        wheel=artifact,
+        expected_sha256=digest,
+        python=sys.executable,
+    )
+    bundle, manifest_sha256 = offline_bundle(module, tmp_path, artifact, digest)
+    offline = module.install(
+        prefix=prefix,
+        link_dir=link_dir,
+        wheel=None,
+        expected_sha256=None,
+        python=sys.executable,
+        bundle=bundle,
+        expected_manifest_sha256=manifest_sha256,
+    )
+
+    assert direct["release"].endswith(digest[:12])
+    assert offline["release"].endswith(manifest_sha256[:12])
+    assert offline["release"] != direct["release"]
+    assert offline["previous_release"] == direct["release"]
 
 
 def test_release_is_built_at_its_final_path_to_keep_venv_scripts_valid(
@@ -281,3 +405,180 @@ def test_explicit_unsupported_python_fails_without_fallback(monkeypatch):
 
     with pytest.raises(module.EdgeInstallError, match="selected Python"):
         module._python_executable(str(selected))
+
+
+def test_offline_bundle_install_verifies_all_files_before_switching(
+    tmp_path: Path,
+    monkeypatch,
+):
+    module = load_installer()
+    artifact, digest = wheel(
+        tmp_path / "larkflow-0.0.2-py3-none-any.whl",
+        b"offline-wheel",
+        version="0.0.2",
+    )
+    bundle, manifest_sha256 = offline_bundle(module, tmp_path, artifact, digest)
+    prepared: list[dict[str, object]] = []
+    base_prepare = fake_prepare(module, "0.0.2")
+
+    def record_prepare(target, **kwargs):
+        prepared.append(kwargs)
+        return base_prepare(target, **kwargs)
+
+    monkeypatch.setattr(module, "_prepare_release", record_prepare)
+
+    report = module.install(
+        prefix=tmp_path / "prefix",
+        link_dir=tmp_path / "bin",
+        wheel=None,
+        expected_sha256=None,
+        python=sys.executable,
+        bundle=bundle,
+        expected_manifest_sha256=manifest_sha256,
+    )
+
+    assert report["offline_bundle"] is True
+    assert report["bundle_manifest_sha256"] == manifest_sha256
+    assert prepared[0]["wheelhouse"] == bundle / "wheelhouse"
+    assert prepared[0]["source_commit"] == "a" * 40
+    assert (tmp_path / "prefix" / "bin" / "larkflow-edge-manager").read_bytes() == (
+        bundle / "larkflow-edge-manager"
+    ).read_bytes()
+
+
+def test_offline_bundle_tamper_fails_before_installation(tmp_path: Path):
+    module = load_installer()
+    artifact, digest = wheel(
+        tmp_path / "larkflow-0.0.2-py3-none-any.whl",
+        b"offline-wheel",
+        version="0.0.2",
+    )
+    bundle, manifest_sha256 = offline_bundle(module, tmp_path, artifact, digest)
+    (bundle / "wheelhouse" / "dependency-1.0-py3-none-any.whl").write_bytes(
+        b"tampered"
+    )
+
+    with pytest.raises(module.EdgeInstallError, match="verification failed"):
+        module.install(
+            prefix=tmp_path / "prefix",
+            link_dir=tmp_path / "bin",
+            wheel=None,
+            expected_sha256=None,
+            python=sys.executable,
+            bundle=bundle,
+            expected_manifest_sha256=manifest_sha256,
+        )
+
+    assert not (tmp_path / "prefix").exists()
+
+
+def test_offline_bundle_rejects_unlisted_files(tmp_path: Path):
+    module = load_installer()
+    artifact, digest = wheel(
+        tmp_path / "larkflow-0.0.2-py3-none-any.whl",
+        b"offline-wheel",
+        version="0.0.2",
+    )
+    bundle, manifest_sha256 = offline_bundle(module, tmp_path, artifact, digest)
+    (bundle / "wheelhouse" / "unlisted.whl").write_bytes(b"unlisted")
+
+    with pytest.raises(module.EdgeInstallError, match="exactly match"):
+        module._verified_bundle(
+            bundle,
+            expected_manifest_sha256=manifest_sha256,
+            python=Path(sys.executable).resolve(),
+        )
+
+
+def test_offline_bundle_rejects_wrong_python_target(tmp_path: Path):
+    module = load_installer()
+    artifact, digest = wheel(
+        tmp_path / "larkflow-0.0.2-py3-none-any.whl",
+        b"offline-wheel",
+        version="0.0.2",
+    )
+    bundle, _manifest_sha256 = offline_bundle(module, tmp_path, artifact, digest)
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["target"]["python_version"] = "9.9"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    new_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+    with pytest.raises(module.EdgeInstallError, match="python_version"):
+        module._verified_bundle(
+            bundle,
+            expected_manifest_sha256=new_digest,
+            python=Path(sys.executable).resolve(),
+        )
+
+
+def test_offline_prepare_forces_no_index_and_binary_wheels(
+    tmp_path: Path,
+    monkeypatch,
+):
+    module = load_installer()
+    calls: list[tuple[list[str], bool]] = []
+    venv_python = tmp_path / "release" / "venv" / "bin" / "python"
+
+    def fake_run(argv, *, stdout=None, label, offline=False):
+        del stdout, label
+        calls.append((argv, offline))
+        if argv[:3] == [sys.executable, "-m", "venv"]:
+            venv_python.parent.mkdir(parents=True)
+            venv_python.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(module, "_run", fake_run)
+    def fake_capture(argv, *, label=None, offline=False):
+        del label, offline
+        return "26.2.1" if "version('pip')" in argv[-1] else "0.0.2"
+
+    monkeypatch.setattr(module, "_capture", fake_capture)
+    monkeypatch.setattr(module, "_verify_edge_command", lambda _command: None)
+    wheel_path = tmp_path / "larkflow.whl"
+    wheel_path.write_bytes(b"wheel")
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    bootstrap_pip = wheelhouse / "pip-26.2.1-py3-none-any.whl"
+    bootstrap_pip.write_bytes(b"pip")
+
+    module._prepare_release(
+        tmp_path / "release",
+        wheel=wheel_path,
+        wheel_sha256="1" * 64,
+        python=Path(sys.executable),
+        wheelhouse=wheelhouse,
+        bundle_manifest_sha256="2" * 64,
+        source_commit="a" * 40,
+        bootstrap_pip=bootstrap_pip,
+        bootstrap_pip_version="26.2.1",
+    )
+
+    pip_install = next(
+        argv for argv, _offline in calls if "install" in argv and "--find-links" in argv
+    )
+    install_calls = [argv for argv, _offline in calls if "install" in argv]
+    assert install_calls[0][-1] == str(bootstrap_pip)
+    assert "--no-index" in install_calls[0]
+    assert install_calls[1] == pip_install
+    assert "--no-index" in pip_install
+    assert "--only-binary=:all:" in pip_install
+    assert pip_install[pip_install.index("--find-links") + 1] == str(wheelhouse)
+    assert all(offline for _argv, offline in calls)
+
+
+def test_offline_subprocess_environment_removes_network_and_python_injection(
+    monkeypatch,
+):
+    module = load_installer()
+    monkeypatch.setenv("PIP_INDEX_URL", "https://example.invalid/simple")
+    monkeypatch.setenv("PYTHONPATH", "/tmp/injected")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9999")
+
+    env = module._subprocess_env(offline=True)
+
+    assert env["PIP_NO_INDEX"] == "1"
+    assert env["PIP_NO_CACHE_DIR"] == "1"
+    assert env["PIP_CONFIG_FILE"] == os.devnull
+    assert "PIP_INDEX_URL" not in env
+    assert "PYTHONPATH" not in env
+    assert "HTTPS_PROXY" not in env

@@ -14,7 +14,7 @@ Personal Agent Edge 的 macOS 客户端现已接入登录 Keychain：设备密�
 - **失败恢复 as-built**：自动 Agent / Tool 节点失败会向节点 Owner 投影 Card 2.0，可选择“重新执行”或“人工接管”。卡片回调先进入耐久 IM 命令队列，并立即尝试撤下按钮、显示“处理中”；凭据侧随后重新校验当前企业成员，领域侧精确校验 Owner、Instance version、Node version 与 Attempt 编号，最终卡片显示成功或拒绝。重试创建新自动 Attempt；人工接管创建 `waiting_human` Attempt 和飞书 Task；原失败 Attempt、结果与审计均保留。该能力已在开发服务器与测试组织完成真实闭环：两个不同失败卡片分别创建 Attempt 2 和 3，人工接管创建 Attempt 4 与真实飞书 Task，完成 Task 后 Instance 与 Attempt 4 进入 `done`，前三次失败历史、审计和投影全部保留。新一轮恢复卡真实点击的首个服务端反馈耗时为 0.990 秒，飞书服务端读回终态标题为“恢复操作已处理”且不再包含按钮。
 - **legacy 原型**：LangGraph + SQLite + lark-cli 路径继续保留，用于回归已验证的飞书投影、打回、幂等和恢复机制。
 - **飞书入口 as-built**：已实现 `/larkflow help`、`/larkflow start`、`/larkflow confirm`、`/larkflow status`、`/larkflow list`、`/larkflow restart`、`/larkflow restart-all`、`/larkflow restart-confirm`、`/larkflow edit`、`/larkflow edit-confirm` 十个窄命令，以及命令回执、Agent / Tool 结果消息、完成文档和最终通知。`start` 支持 `[role=@成员 ...]`，角色只引用本条飞书消息的 mention 元数据；在单聊中省略跨人员绑定时，系统会发 Card 2.0 人员选择表单。两条路径都由凭据侧验证发送者和被绑定成员是当前企业活跃人员，再由领域侧冻结角色绑定；未显式绑定的角色仍归发送者。人员选择卡与失败恢复卡在动作耐久落库后立即尝试显示无按钮的“处理中”，最终再替换为成功或拒绝状态；服务端用单调时钟记录有效回调被接受到直接更新返回的耗时，不把它误写为客户端渲染耗时。`start` 只创建草稿，`confirm` 才启动实例，`status` 只向 Instance Owner 返回单实例有界状态摘要，`list` 只返回本人拥有的最近十个实例摘要，restart 和 edit 命令只创建短期影响预览，对应 confirm 命令才执行原子变更。以上入口和跨人员正向分工均已在开发测试组织完成真实闭环。
-- **尚未实现**：上述十类命令之外的通用飞书控制面、更多业务 Tool adapter、图形化编辑体验和生产装配。企业目录草稿 Owner 全量校验已落码并部署但默认关闭；IM 命令发送者、mention 角色成员和 Card 2.0 候选人的活跃成员校验已完成开发真栈验证。Edge 仍缺正式员工安装与升级体验、安全评审和产品化体验；当前设计也不提供操作系统级守护或隐藏后台常驻。可持续使用的公网 HTTPS 入口还必须先完成 ICP 接入备案，或迁移到合规的非中国内地环境。真实 Agent、确定性内容检查、模板入口和飞书 IM / Card / Doc 投影只在开发环境和测试组织验证，不能据此描述为生产上线。
+- **尚未实现**：上述十类命令之外的通用飞书控制面、更多业务 Tool adapter、图形化编辑体验和生产装配。企业目录草稿 Owner 全量校验已落码并部署但默认关闭；IM 命令发送者、mention 角色成员和 Card 2.0 候选人的活跃成员校验已完成开发真栈验证。Edge 已具备版本化开发安装、回滚、Keychain、哈希锁定离线 bundle 与依赖清单，但正式员工分发仍为 No-Go：当前没有 Apple Developer ID 身份与公证凭据，员工端仍携带完整中央依赖栈，目录级读取隔离和可复现构建证明也未完成。当前设计不提供操作系统级守护或隐藏后台常驻。可持续使用的公网 HTTPS 入口还必须先完成 ICP 接入备案，或迁移到合规的非中国内地环境。真实 Agent、确定性内容检查、模板入口和飞书 IM / Card / Doc 投影只在开发环境和测试组织验证，不能据此描述为生产上线。
 - **证据边界**：本轮完成的是既有设计简化与一致性核验，不是访谈、市场或商业验证。
 - **重要边界**：`alicloud-sh` 已运行 Target Runtime、Projection、两个凭据侧 Interactive、凭据侧入站校验、领域侧入站和 loopback Edge Gateway 七个独立服务，并保留一个 legacy 事件消费者，共八个 Python 服务。Caddy 配置是唯一规划的 Edge 公网入口，只反向代理到 `127.0.0.1:8765`；当前因备案阻断处于 disabled / inactive，服务器已恢复为只有 SSH 对公网监听。Projection 周期读取当前 Human Task，观察到完成后只写耐久 Inbox，不再处理 IM 命令、人员分工卡片或对应回复。两个 Interactive 副本共享同一受限 bot profile，每个副本在五条交互车道中一次只领取一项；Task 事件可降低延迟，但不是可靠性前提。凭据侧仍会重新读取飞书资源并写入已验证 Inbox，领域侧不能读取 lark-cli profile，只在校验绑定、Owner、当前 Attempt 和操作人后提交领域命令。云端 Target 已在明确授权下启用开发用真实 Agent、`content.check` Tool、窄 IM 命令和完成文档 / 通知投影。legacy 服务继续使用 SQLite，并仅作为事件桥接时写入 Target Inbox，不能把 checkpointer 或全局 LangGraph state 扩展为新产品领域模型。
 
@@ -157,25 +157,32 @@ larkflow-target --env-file /etc/larkflow-target.env serve
 
 Edge Proof v0 有两个独立入口。开发服务器已把 Gateway 作为仅监听 loopback 的 systemd 服务部署，并完成独立 Caddy HTTPS 反向代理的源站验证。本机 Edge 默认只接受 HTTPS，只有 loopback 可以使用明文 HTTP。当前 ECS 位于阿里云中国内地，专用域名尚未完成 ICP 接入备案，因此公网 TLS 会被接入侧阻断；Caddy 已停止并禁用开机启动。完成备案或迁移到合规的非中国内地环境前，下面的 HTTPS 入口只是配置形状，不能作为已通过的公网验收：
 
-macOS 开发试用版使用 `deploy/larkflow-edge-manager.py` 管理独立版本目录，不修改 Homebrew 或系统 Python。管理员把 manager、wheel 和通过独立渠道发布的 wheel SHA-256 一起交给员工。首次安装与后续升级使用同一命令；新版本只有在独立 venv 完成安装、`pip check` 和 CLI 启动校验后才切换，旧版本保存在 `previous`。默认命令链接位于 `~/.local/bin`，安装器不读取或迁移 Keychain，也不注册 launchd 或其他后台服务：
+macOS 开发试用版使用 `deploy/larkflow-edge-manager.py` 管理独立版本目录，不修改 Homebrew 或系统 Python。推荐由发布方先构建哈希锁定的离线 bundle。构建时需要联网，员工安装时不联网；manifest 固定目标 Mac 与 Python、完整 source commit、主 wheel、manager、全部 wheel 的包名、版本、大小和 SHA-256。员工必须从独立可信渠道取得 manifest SHA-256：
 
 ```bash
-# 首次安装，manager 会自动寻找 Python 3.10+
-python3 larkflow-edge-manager.py install \
-  --wheel larkflow-0.0.2-py3-none-any.whl \
-  --sha256 <管理员提供的六十四位 SHA-256>
+# 发布方，在 clean commit 上构建 wheel 后生成 macOS 离线 bundle
+python deploy/build-larkflow-edge-bundle.py \
+  --wheel <larkflow wheel> \
+  --output <绝对路径>/larkflow-edge-bundle \
+  --source-commit <完整四十位 Git SHA> \
+  --python <员工 Mac 对应的 Python 3.10+>
+
+# 员工首次安装或升级，manager 会验证 bundle 后再修改安装目录
+python3 larkflow-edge-bundle/larkflow-edge-manager install \
+  --bundle larkflow-edge-bundle \
+  --manifest-sha256 <独立可信渠道提供的六十四位 SHA-256>
 
 # 非敏感安装状态与本机离线诊断
 ~/.local/bin/larkflow-edge-manager status
 ~/.local/bin/larkflow-edge doctor
 
-# 后续升级继续使用已安装的 manager；需要时切回 previous
-~/.local/bin/larkflow-edge-manager install \
-  --wheel <新 wheel> --sha256 <新 wheel SHA-256>
+# 需要时切回 previous
 ~/.local/bin/larkflow-edge-manager rollback
 ```
 
-默认版本目录是 `~/Library/Application Support/larkflow-edge/releases/`。安装器按包版本与 wheel SHA 建立不可混淆的 release ID，拒绝不匹配的 wheel、符号链接目录和已有的无关同名命令。当前 manager 与 wheel 还没有代码签名、公证、离线依赖包或自动更新通道，因此只用于明确批准的开发试用分发。
+默认版本目录是 `~/Library/Application Support/larkflow-edge/releases/`。直接 wheel 安装以 wheel 摘要标识 release，离线安装以覆盖全部依赖和 manager 的 manifest 摘要标识 release，因此相同主 wheel 的不同依赖集合不会误用旧环境。安装器先离线安装 bundle 内哈希锁定且已修复 `CVE-2026-8643` 的 pip，再强制 `--no-index --only-binary=:all:` 安装应用与依赖；只有 `pip check` 和 CLI 启动校验通过才原子切换，旧版本保存在 `previous`。安装器拒绝不匹配目标、文件、wheel 元数据、符号链接目录、额外文件和已有的无关同名命令，也不读取或迁移 Keychain，不注册后台服务。
+
+当前 bundle 仍未代码签名或公证，而且完整应用包会携带中央节点依赖。它只适合明确批准的开发试用，不能作为正式员工分发。详细结论和放行门禁见 [`research/edge-distribution-security-review.md`](research/edge-distribution-security-review.md)。直接 `--wheel <path> --sha256 <hex>` 的旧开发入口仍保留，但可能联网解析依赖，不属于推荐的离线交付路径。
 
 ```bash
 # 中央节点，数据库已执行 larkflow-target migrate

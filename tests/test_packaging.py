@@ -13,14 +13,20 @@
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 from pathlib import Path
+import subprocess
 
 from larkflow import __version__
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = ROOT / "larkflow" / "templates"
 WORKFLOW_MIGRATIONS = ROOT / "larkflow" / "workflow" / "migrations"
+EDGE_DISTRIBUTION_SCRIPTS = (
+    ROOT / "deploy" / "larkflow-edge-manager.py",
+    ROOT / "deploy" / "build-larkflow-edge-bundle.py",
+)
 
 
 def test_runtime_version_matches_pyproject():
@@ -28,6 +34,24 @@ def test_runtime_version_matches_pyproject():
     match = re.search(r'^version\s*=\s*"([^"]+)"$', text, re.M)
     assert match, "pyproject.toml 里没有项目 version"
     assert match.group(1) == __version__
+
+
+def test_edge_distribution_scripts_are_executable_and_parse_with_system_python():
+    system_python = Path("/usr/bin/python3")
+    for script in EDGE_DISTRIBUTION_SCRIPTS:
+        assert os.access(script, os.X_OK), script
+        if system_python.exists():
+            completed = subprocess.run(
+                [str(system_python), str(script), "--help"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=10,
+            )
+            assert completed.returncode == 0, completed.stderr.decode(
+                "utf-8", errors="replace"
+            )
 
 
 def declared_patterns(package: str = "larkflow.templates") -> list[str]:
