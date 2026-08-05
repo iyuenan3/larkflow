@@ -110,7 +110,7 @@ Target 使用独立 `larkflow-target` CLI，不复用上述 legacy 驱动层。�
 
 Interactive Worker 依次访问 IM 命令验证、IM 回复、人员分工卡创建、人员分工回调验证与人员分工回复五条车道。配置契约要求 `LARKFLOW_TARGET_INTERACTIVE_CLAIM_LIMIT=1`，其他值拒绝启动；并行度只由独立进程副本数决定。开发拓扑固定两个副本，Projection 不再读取 `LARKFLOW_TARGET_ENABLE_IM_COMMANDS`，也不再认领上述五条车道。所有授权、幂等、租约、重试和数据库状态机保持原契约，双副本不能绕过服务端校验。
 
-Target 自动节点按工作契约 kind 路由。Agent 当前只接受 `work.agent.kind=llm.generate`。Tool 由 `ToolExecutorRouter` 按 `work.tool.kind` 选择 adapter；`content.check` 读取直接依赖正文，接受 `min_chars`、`max_chars` 与 `required_terms`，返回 `verdict`、`evidence`、`suggestion`、`char_count`、`missing_terms`、`source` 和稳定 `request_id`。配置或输入错误使当前 Attempt 显式失败，未知 kind 在 claim 前保持未认领。
+Target 自动节点按工作契约 kind 路由。Agent 当前只接受 `work.agent.kind=llm.generate`。默认结果是正文；可选 `work.agent.result_format=source_claims.v1` 要求模型返回 `problem / target_users / functional_requirements / acceptance_criteria / risks / open_questions / source_url`，其中声明必须标记为 `source_fact / inference / open_question` 并引用服务端登记的稳定 `F` 或 `Q` ID。Tool 由 `ToolExecutorRouter` 按 `work.tool.kind` 选择 adapter；`content.check` 读取直接依赖正文并执行长度与必需词检查，`source_claims.check` 对结构、声明类型、事实与问题引用覆盖、来源 URL 一致性执行确定性检查。检查器不访问网页，也不声称验证事实真伪。配置或输入错误使当前 Attempt 显式失败，未知 kind 在 claim 前保持未认领。
 
 `create-from-template` 只接受 enabled 模板，以最新不可变版本解析参数和 `owner_role -> person_id` 绑定，生成含 `template_version_id` 与 `locked` 的完整 Snapshot。`preview` 仅允许 Instance Owner 读取并重新校验 draft，不写审计、不改变状态；`confirm` 仍需显式调用。
 
@@ -127,6 +127,8 @@ Target Task 完成发现以周期状态轮询为可靠路径。`project` 启动�
 - Node 仍是 `waiting_human`，Attempt 仍是当前轮次。
 
 通过后以 Owner 作为经服务端核验的 actor 调用同一 Human 提交领域命令，入口信号 ID 同时作为 Inbox 幂等键与审计关联。旧的无绑定任务、`mode=2` 任务、非当前 Attempt 或非 Owner 完成均不能推进领域状态。
+
+Human 节点可声明 `work.decision.kind=accept_reject`，并用 `reject_target` 指向直接依赖的待复核节点。该节点不创建可被“完成”绕过的飞书 Task，而是投影 Card 2.0 决定入口。回调先耐久落入既有 IM 命令队列并尽快把原卡片更新为无按钮“处理中”；凭据侧从飞书顶层字段取得操作人并重新验证活跃成员，领域侧再校验 Instance、Node、Attempt 版本和唯一 Owner。`accept` 正常完成 Human Attempt；`reject` 使当前 Human Attempt 与 Instance 失败，保留全部旧 Attempt、结果和审计，并提示 Owner 使用既有节点重启修订目标节点。重复操作、旧版本卡片、非 Owner 和 legacy Task 完成信号均不能提交决定。
 
 凭据侧详情读取失败或完成状态暂不可见时，按 `LARKFLOW_TARGET_INBOUND_RETRY_BASE_SECONDS` 到 `LARKFLOW_TARGET_INBOUND_RETRY_MAX_SECONDS` 做指数退避。`LARKFLOW_TARGET_INBOUND_VERIFICATION_MAX_ATTEMPTS` 默认 24；达到预算仍无法验证时，Inbox 进入 `exhausted` 终态，写入 `processed_at`、`outcome=exhausted:verification_attempts`、`failure_stage=verification` 与最后错误，不生成 verified payload，也不允许领域 Worker 认领。验证日志包含 `exhausted` 计数，运维必须对非零值告警并人工调查，不能静默丢弃。
 

@@ -746,3 +746,13 @@
 - Alternatives(否决)：继续在 Interactive 进程同步调用模型；用线程池共享 lark-cli profile；只延长原动作租约而不拆进程；直接从无凭据进程调用飞书；使用瞬时内存进度；允许最终回复与进度更新竞争覆盖卡片。
 - Tradeoff：开发拓扑增加一个常驻进程和一条 PostgreSQL 监听连接，migration 与运维面更复杂；阶段文字是服务端卡片状态，不代表客户端渲染时延。生成与凭据操作隔离后仍受模型 provider 延迟和飞书更新限流影响。
 - Evidence：内容提交 `1a80b4035d0a5ad5c634af7be957f4b7d1ee37d7`；完整离线套件 `884 passed, 18 skipped`。四个隔离变异分别删除修复进度、缩短为单次模型预算、让生成 Worker 走普通 claim、反转交互车道顺序，均被定向测试捕获。候选 wheel 已确认包含新增 daemon、CLI 与 migration；开发部署和真实飞书验收仍待完成。
+
+## ADR-088 · 2026-08-05 · 来源约束型 Agent 结果由确定性契约检查与 Human 明确裁决
+
+- **Status：Accepted · Local implementation, development deployment pending。**
+- Problem：现有真实闭环只证明 Agent 能运行和投影结果。没有业务材料时无法判断内容质量；即便提供材料，自由文本也会混淆来源事实、模型推断与未决问题。把确定性 Tool 的通过直接等同于业务接受，又会让结构检查越权代替人类判断。
+- Constraint：来源必须由服务端输入登记，模型不能自行扩大来源集合；确定性检查必须离线、可复现且不声称理解事实语义；每个节点仍有唯一人类 Owner；接受与退回必须是显式决定，不能由普通 Task 完成状态推断；旧卡片、非 Owner、重复动作和状态漂移都必须 fail closed；退回不能覆盖既有 Attempt、结果或审计。
+- Decision：`source_claims.v1` 把 Agent 结果拆为问题、目标用户、功能需求、验收标准、风险与开放问题，单条声明标记 `source_fact / inference / open_question` 并引用稳定 `F / Q` ID。`source_claims.check` 只校验结构、类别、引用覆盖与来源 URL 一致性。最终 Human 节点声明 `accept_reject`，投影 Card 2.0 而非可直接完成的 Task；`accept` 完成节点，`reject` 使当前 Human Attempt 与 Instance 失败，并指向既有节点重启形成新 Attempt 的修订路径。
+- Alternatives(否决)：继续让 Agent 输出无来源自由文本；让 Tool 联网判断事实真伪；Tool 通过后自动完成流程；用普通 Task 完成表示接受；退回后原地覆盖 Agent 结果；为决定卡建立第二套即时状态真相。
+- Tradeoff：稳定 ID 与结构化输出增加模板和提示词成本，确定性检查只能证明来源契约一致，不能证明事实真实、需求合理或建议有价值。退回先进入失败终态，再由 Owner 重启目标节点，操作多一步，但保留了明确责任、历史与并发边界。
+- Evidence：内容提交 `b7e589ba4af0398573ec995254dd61e9b1a4508c` 已推送；完整离线套件 `898 passed, 18 skipped`，wheel 已确认包含 `source_grounded_review.yaml`。本 ADR 写入时开发部署、真实 PostgreSQL migration 回读和真实飞书业务材料验收仍待执行。

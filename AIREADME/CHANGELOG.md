@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.44.0-draft · 2026-08-05 · 来源约束型材料复核与人类明确决定
+
+- Added：新增 `source_grounded_review` 模板。输入以 `source_url`、稳定 `F` 事实和 `Q` 开放问题形成来源登记；Agent 的 `source_claims.v1` 结果区分来源事实、推断和开放问题，并携带引用。
+- Validation：新增确定性 `source_claims.check`，只校验结构、声明类型、引用覆盖和来源 URL 一致性，不访问网页，也不把契约检查描述为事实核验。
+- Decision：Human 节点可声明 `accept_reject` 决定。该节点投影版本绑定 Card 2.0，接受正常完成，退回使 Human Attempt 与 Instance 失败并保留历史；普通 Task 完成、非 Owner、旧版本卡片和重复动作不能绕过决定。
+- Security：决定回调复用耐久 IM 命令队列和即时“处理中”反馈，操作人只取飞书顶层认证字段；凭据侧重验活跃成员，领域侧重验 Owner、Instance、Node 与 Attempt 版本。
+- Verified：内容提交 `b7e589ba4af0398573ec995254dd61e9b1a4508c` 已推送；完整离线套件为 `898 passed, 18 skipped`，候选 wheel 已确认包含新模板与实现。
+- Boundary：本条记录本地实现与远端代码事实。开发服务器部署、真实 PostgreSQL migration 回读、模板启用和真实飞书业务材料验收尚未执行，不构成生产上线或业务价值证明。
+
 ## v0.43.0-draft · 2026-08-05 · 自然语言流程执行闭环
 
 - Acceptance：自然语言实例 `im_74e775110afbd80aa598d3ae` 在最终图预览后由真实用户独立确认启动。Agent Attempt 1 经真实模型调用完成，随后创建飞书 Human Task；任务完成状态经周期读回写入耐久 Inbox，并由领域侧重新授权后提交 Human Attempt 1。
