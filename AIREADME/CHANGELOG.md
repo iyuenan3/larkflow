@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.38.0-draft · 2026-08-05 · macOS Edge 哈希锁定离线 bundle 与安全评审
+
+- Added：新增 `deploy/build-larkflow-edge-bundle.py`。发布方为明确的 macOS 架构与 Python 次版本下载 binary-only wheelhouse，manifest 记录 source commit、目标、主 artifact、manager、全部文件 SHA-256、大小和 wheel 包名版本清单。
+- Security：manager 新增 `install --bundle --manifest-sha256`，在创建安装前验证 manifest 摘要、精确文件集、符号链接、目标、wheel metadata 与重复包；离线子进程清除 pip 配置、Python 注入变量和代理，强制 `--no-index --only-binary=:all:`。离线 release 使用 manifest 摘要而不是只用主 wheel 摘要，避免不同依赖集合误用旧环境。稳定 manager 在 current 切换前安装，避免 release 已激活而 manager 更新失败。
+- Fixed：`pip-audit 2.10.1` 在第一版隔离候选中发现 pip 26.1 命中 `CVE-2026-8643`。bundle 现在额外携带哈希锁定的 pip 26.1.2 或更高且低于 27，manager 在安装应用 wheel 前先离线升级并验证版本。使用 pip 26.2.1 的隔离 venv 复扫为无已知漏洞；私有 `larkflow 0.0.2` 不在 PyPI 审计范围。
+- Verified：内容提交为 `81bd43983598ff319150344e779223cd03731eba`。manager、builder、Edge 客户端与打包聚焦测试为 `61 passed`，真实 macOS 进程权限上下文中的完整离线套件为 `840 passed, 17 skipped`。测试 bundle 为 macOS arm64、CPython 3.12，共 45 个 wheel；在故意注入无效索引与代理时仍只从本地 wheelhouse 安装，`pip check` 无 broken requirements，安装态 CLI 可启动。
+- Review：新增 `research/edge-distribution-security-review.md`，正式员工分发结论为 No-Go。P0 包括最小 Edge 独立分发、固定 lock 与构建证明、Developer ID 签名与公证、可信摘要渠道、目录级读取和数据外发治理、全新员工 Mac 验收。
+- Boundary：本轮测试候选来自未提交工作树，manifest 中的既有 HEAD 只是调用者声明，不能作为正式来源证明。当前本机 Developer ID Application 与 Installer 身份均为 0，没有执行签名、公证或正式分发。
+
 ## v0.37.0-draft · 2026-08-05 · macOS Edge 最小安装升级体验
 
 - Added：新增独立 `deploy/larkflow-edge-manager.py`。macOS 当前用户可以用同一条 `install --wheel --sha256` 命令完成首装或升级；manager 自动寻找 Python 3.10 或更高版本，在版本化 release 中建立独立 venv，并提供非敏感 `status` 与单步 `rollback`。

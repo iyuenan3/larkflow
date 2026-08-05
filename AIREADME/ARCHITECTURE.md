@@ -149,7 +149,7 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 - `edge.py`、`edge_postgres.py` 与 migration `0007_edge_devices`：一次性配对、设备哈希凭据、撤销、追加型 Edge 审计和 `personal.readonly` 能力过滤。Edge 复用当前 Attempt 的 Worker、token、版本与租期校验，不创建第二套任务真相。
 - `edge_http.py` 与 `edge_gateway_cli.py`：提供私有 `/edge/v1` JSON 边界和运维入口。Gateway 默认且强制只监听 loopback；远程设备必须经独立 HTTPS 反向代理，仓库不把该接口描述为公网 API。
 - `edge_client.py`、`edge_agent.py` 与 `edge_cli.py`：用户设备提供 `pair`、离线 `doctor`、单次 `run-once` 和用户主动保持的前台 `serve`。`doctor` 只校验本机凭据、Codex 命令和传输形状，不连接中央节点或领取工作。常驻循环固定显式单工作区，使用有界长轮询、退避、应用心跳和结构化日志；同一凭据只能由一个本机 Worker 使用。Codex adapter 使用只读、临时会话和忽略用户配置模式，清除 Edge、Target 与飞书凭据环境变量，并在超时、服务停止或租约续期失败时按进程组终止子进程。
-- `deploy/larkflow-edge-manager.py`：macOS 当前用户的独立安装控制面。manager 验证标准 wheel 文件名、包名、包版本和独立提供的完整 SHA-256，在最终 `releases/<version>-<sha12>/venv` 路径创建虚拟环境，完成安装、`pip check` 与已安装 CLI 启动校验后才原子切换 `current`，并保留一个 `previous` 回滚点。`~/.local/bin` 只链接到稳定入口；manager 不修改系统 Python、Keychain 或 launchd，也不连接中央节点。
+- `deploy/larkflow-edge-manager.py` 与 `deploy/build-larkflow-edge-bundle.py`：macOS 当前用户的独立安装控制面和发布方离线构建器。builder 为一个明确的 Mac 架构与 Python 次版本下载 binary-only wheelhouse，记录 source commit、目标、主 artifact、全部文件哈希和 wheel 包清单，并加入已修复的 bootstrap pip。manager 先验证独立 manifest SHA-256、精确文件集、目标和 wheel metadata，再断网安装；它在最终 `releases/<version>-<sha12>/venv` 路径创建虚拟环境，完成 `pip check` 与已安装 CLI 启动校验后才原子切换 `current`，并保留一个 `previous` 回滚点。`~/.local/bin` 只链接到稳定入口；manager 不修改系统 Python、Keychain 或 launchd，也不连接中央节点。
 
 内容提交 `5312f6c026453ac6d9e2e62679b755f271c114f3` 已部署到 `alicloud-sh`。Runtime、Projection、两个 Interactive、凭据侧入站、领域侧入站和 Edge 共七个 Target 服务，加上 legacy 消费者共八个 Python 服务，均回读 `active / NRestarts=0`。六个队列 Worker 各持有一条 PostgreSQL 监听连接。两个 Interactive 副本的稳定身份、`claim_limit=1`、监听启动和安装文件哈希已回读；一次性真实 PostgreSQL 竞争证明两个副本各领取一条不同人员分工记录。三次真实飞书突发点击进一步证明两个副本都实际承担凭据验证和最终回复，三条动作均唯一、成功且收口到服务端确认卡片；最终回复范围为 4.615 到 5.576 秒。该小样本只关闭真实突发链路的首轮风险，隔离与更高强度限流回归尚未完成，不能解释为生产容量。下段中的六服务与四条监听连接只保留为 `a506e7d` 时点的历史验证证据，不代表当前拓扑。
 
@@ -169,7 +169,7 @@ PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration �
 | 编辑与重启 | 预览确认、revision、下游 Attempt | 未来区域编辑及节点、完整实例重启都已实现耐久预览、Owner 重授权、版本与 revision 校验、历史保护和原子审计，并完成真库竞争与 Owner 飞书闭环；编辑拒绝矩阵覆盖冻结线、非法 DAG、陈旧预览与跨人员非 Owner | 需要图形化 diff、跨轮次浏览和生产装配 |
 | 飞书集成 | PostgreSQL outbox / Inbox、幂等、服务端授权、对账 | Human Task 创建 / 完成、可靠轮询、可选事件、服务端详情回读、两阶段授权、启动对账、受控 Task 重建、十个窄命令、人员选择卡、失败恢复卡、自动节点消息、两类重启、未来区域编辑、跨人员分工、完成 Docx 与最终通知已落码并完成开发真栈验收；凭据侧交互已拆为两个单项领取副本 | 需要更多业务命令、双副本真实飞书突发与限流回归和生产拓扑 |
 | 运行时 | 独立 Scheduler + Node Runner | 新内核已实现 Scheduler、Node Runner、持久化 runnable scan、`llm.generate`、`content.check`、Runtime / Projection / Interactive / Inbound Worker、能力过滤、优雅停机、过期 claim 恢复，以及失败自动节点的 Owner 重试与人工接管 | 需要更多业务 Tool、自动重试策略配置、恢复运营视图和生产装配 |
-| Personal Agent Edge | 默认关闭、本人设备、窄 capability、中央真相 | Proof v0 已实现配对、撤销、私有 HTTP、手工 run-once、前台 serve、只读 Codex adapter、续租失败取消、单设备锁与迟到结果拒绝；员工 Mac 前台 serve 已通过受控真机验收。macOS 默认 Keychain 密钥存储、非敏感元数据引用和旧明文文件校验迁移已落码，合成登录钥匙串验收与真实 Owner 设备默认槽位配对、认证、服务端 active 回读均已通过。开发试用 manager 已完成真实安装、升级、回滚和离线诊断验收 | 仍缺代码签名、公证、离线依赖包、可信更新渠道、安全评审与正式员工分发；当前持久设备需受控 SSH 隧道，公网设备 E2E 仍要求 ICP 接入备案或迁移合规地域；产品化仍为 Later |
+| Personal Agent Edge | 默认关闭、本人设备、窄 capability、中央真相 | Proof v0 已实现配对、撤销、私有 HTTP、手工 run-once、前台 serve、只读 Codex adapter、续租失败取消、单设备锁与迟到结果拒绝；员工 Mac 前台 serve 已通过受控真机验收。macOS Keychain、开发试用 manager、安装、升级、回滚、离线诊断、哈希锁定 wheelhouse、bootstrap pip 修复和真实断网安装均已验证 | 安全评审结论为正式分发 No-Go。仍缺最小 Edge 独立包、可复现 lock 与构建证明、Developer ID 签名、公证、可信摘要渠道、目录级读取与数据外发治理、全新员工 Mac 验收；当前持久设备需受控 SSH 隧道，公网 E2E 仍要求 ICP 接入备案或迁移合规地域；产品化仍为 Later |
 
 [SPEC.md](SPEC.md) 和 [DEPLOYMENT.md](DEPLOYMENT.md) 继续描述 As-built 原型，不作为目标产品已实现证据。
 

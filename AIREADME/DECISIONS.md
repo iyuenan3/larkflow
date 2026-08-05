@@ -706,3 +706,13 @@
 - Alternatives(否决)：在系统或 Homebrew Python 中直接 pip install；原地强制重装同一个 venv；在临时目录创建 venv 后移动；只保存 wheel 不保留可执行 release；首次安装即注册 launchd；自动从网络获取未签名最新版；让安装器读取、迁移或删除 Keychain 凭据。
 - Tradeoff：每个 release 保留完整 venv，会占用更多磁盘；`previous` 只有一个直接回滚点，旧 release 仍需后续定义清理策略。当前完整性依赖管理员通过独立渠道提供 SHA-256，但 manager 与 wheel 尚无代码签名或公证，依赖也未固定为离线 wheelhouse。该设计完成开发试用安装，不等于正式企业分发与安全评审。
 - Evidence：内容提交 `5b0c79b4d946441063d92970e8f0e9cac31b2ab3`；完整离线套件 `828 passed, 17 skipped`。候选 wheel SHA-256 为 `f513a61c18a6fdd0c60d34c57dcb2f0121d814870ec8f2bcea8218986bd054d2`。员工 Mac 已执行 `0.0.1 -> 0.0.2 -> rollback -> 0.0.2`，current 与 previous、稳定命令和 manager 源码副本哈希均已回读。安装器没有触碰既有 Keychain 项；真实用户上下文 `doctor` 为 ready，临时隧道 `run-once` 返回 `no_work`，服务器设备 active 且认证时间推进，隧道随后关闭。
+
+## ADR-084 · 2026-08-05 · Edge 开发分发使用目标绑定的哈希锁定离线 bundle
+
+- **Status：Accepted · Local implementation, formal distribution No-Go。**
+- Problem：单 wheel SHA 只能验证主包，pip 仍会在员工 Mac 上联网解析开放版本范围。网络索引、代理、依赖更新和 bootstrap pip 都不在同一候选件完整性边界内，无法回答员工实际安装了什么，也不能在离线环境复验。
+- Constraint：员工安装必须不联网；所有文件与包身份在修改安装目录前校验；目标 Mac 架构、Python 实现和次版本必须匹配；兼容开发入口可以保留，但不能冒充推荐分发路径；安装器继续不接触 Keychain、不注册后台服务、不自动更新；签名和公证缺失时不能声称正式分发安全。
+- Decision：发布方 builder 从一个完整 source commit 和主 wheel 生成目录 bundle。manifest 记录目标、artifact、manager、全部文件哈希与大小，以及每个 wheel 的标准化包名、版本、路径和哈希。员工通过独立渠道取得 manifest SHA-256；manager 验证精确文件集、元数据和目标后，清除 pip、Python 与代理注入，使用本地 wheelhouse 安装。bundle 固定包含 pip 26.1.2 或更高且低于 27，manager 先离线升级并验证 bootstrap pip，再安装应用。离线 release ID 使用 manifest 摘要，直接 wheel 入口继续使用 wheel 摘要，确保依赖集合变化一定创建新 venv。
+- Alternatives(否决)：继续让员工 pip 在线解析；只为主 wheel 提供哈希；允许额外文件留在 bundle；使用 requirements 文本但不锁 wheel 文件；把同目录摘要视为独立信任；自动下载最新版；在没有 Developer ID 身份时自签并描述为正式签名。
+- Tradeoff：候选件在安装时可完全复验，但构建阶段仍由开放版本范围解析，source commit 也是调用者声明。当前完整 `larkflow` 包形成 45-wheel bundle，把 LangGraph、OpenAI SDK 和 PostgreSQL 驱动带到员工端，攻击面不符合正式最小客户端。目录 bundle 与 manager 仍未纳入 Apple 系统信任链。
+- Evidence：内容提交 `81bd43983598ff319150344e779223cd03731eba`；聚焦测试 `61 passed`，完整离线套件 `840 passed, 17 skipped`。第一版隔离安装的 pip 26.1 被 `pip-audit 2.10.1` 报告 `CVE-2026-8643`，实现随后固定先升级至 26.2.1，复扫无已知漏洞，私有 larkflow 包明确跳过。故意设置无效索引与代理后，macOS arm64、CPython 3.12 的 45-wheel bundle 仍完成离线安装、`pip check` 和 CLI 启动校验。本机 `notarytool`、pkg 工具和 stapler 可用，但 Developer ID Application 与 Installer 身份均为 0，因此正式分发继续 No-Go。

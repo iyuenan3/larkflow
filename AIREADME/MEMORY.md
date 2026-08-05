@@ -252,3 +252,9 @@
 - 现象（本机验收）：受限命令上下文运行 `security find-generic-password` 和 `larkflow-edge doctor` 返回 Keychain item-not-found，看似此前保留的持久设备密钥已丢失；非敏感元数据和中央 active 设备仍在。
 - 根因（已确认）：同一精确 Keychain 查询在真实 macOS 用户上下文返回存在，`doctor` 随即为 ready。缺失结果来自工具沙箱不能访问登录钥匙串，不代表系统真实状态。
 - 结论：Keychain 缺失会诱发不可逆的新设备配对和旧设备撤销，必须先在真实用户上下文做只读存在性预检。若条目存在，立即停止重配；再通过离线 `doctor`、受控隧道 `run-once` 和服务器 `last_seen_at` 完成三层回读。不得从单个受限上下文的 item-not-found 推断密钥已丢失。
+
+## 2026-08-05 · 离线 wheelhouse 仍必须先修复 bootstrap pip
+
+- 现象（真实隔离安装）：应用及其依赖全部来自哈希锁定的本地 wheelhouse，`pip check` 也通过，但 `pip-audit 2.10.1` 仍发现 venv 自带的 pip 26.1 命中 `CVE-2026-8643`。漏洞涉及恶意 entry point 越界安装，正好发生在安装边界；仅锁应用依赖没有覆盖安装工具本身。
+- 根因（已确认）：`python -m venv` 从基础 Python 的 ensurepip 复制 pip。项目 wheelhouse 原先不包含 pip，manager 因而使用未审计的 bootstrap 版本处理全部 wheel。扫描器把同一公告重复输出两次，但唯一漏洞 ID 只有一个。
+- 结论：离线 bundle 必须把安装工具纳入 manifest 与 wheel 清单。先仅从已验证的本地 pip wheel 升级并回读版本，再安装应用；最终隔离 site-packages 重新跑漏洞审计。哈希锁定解决候选件漂移，不解决依赖面过宽、构建来源、签名公证或未知漏洞，正式分发仍需独立门禁。
