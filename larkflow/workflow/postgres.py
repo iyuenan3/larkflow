@@ -3119,6 +3119,7 @@ class PostgresIMCommandStore:
 
 def _role_request_to_dict(request: RoleBindingRequest) -> dict[str, Any]:
     return {
+        "kind": request.kind,
         "template_id": request.template_id,
         "template_version": request.template_version,
         "goal": request.goal,
@@ -3175,6 +3176,7 @@ def _role_request_from_values(
         raise ValueError("persisted role-binding request identity is incomplete")
     if not isinstance(raw_request, Mapping):
         raise ValueError("persisted role-binding request must be an object")
+    kind = raw_request.get("kind", "template")
     template_id = raw_request.get("template_id")
     template_version = raw_request.get("template_version")
     goal = raw_request.get("goal")
@@ -3182,6 +3184,8 @@ def _role_request_from_values(
     roles = raw_request.get("roles")
     if not isinstance(template_id, str) or not template_id:
         raise ValueError("persisted role-binding template_id is invalid")
+    if kind not in {"template", "draft_wizard"}:
+        raise ValueError("persisted role-binding request kind is invalid")
     if isinstance(template_version, bool) or not isinstance(template_version, int):
         raise ValueError("persisted role-binding template_version is invalid")
     if not isinstance(goal, str) or not isinstance(inputs, Mapping):
@@ -3208,6 +3212,7 @@ def _role_request_from_values(
         goal=goal,
         inputs=dict(inputs),
         roles=tuple(roles),
+        kind=kind,
         candidate_person_ids=tuple(candidates),
         card_message_id=card_message_id,
     )

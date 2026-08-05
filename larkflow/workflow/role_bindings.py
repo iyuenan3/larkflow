@@ -16,6 +16,12 @@ from .card_feedback import (
     report_card_feedback,
 )
 from .directory import CandidateDirectory, DirectoryValidationError
+from .draft_generation import (
+    DraftDefinitionGenerator,
+    DraftGenerationRejected,
+    MAX_WIZARD_TEXT_CHARS,
+    draft_wizard_form,
+)
 from .event_time import feishu_event_time
 from .model import InstanceStatus, TemplateStatus
 from .repository import (
@@ -28,6 +34,8 @@ from .template_service import (
     InvalidTemplateTransitionError,
     TemplateService,
     TemplateValidationError,
+    inline_owner_roles,
+    instantiate_inline_definition,
     instantiate_template_version,
 )
 
@@ -36,6 +44,8 @@ CARD_ACTION_EVENT = "card.action.trigger"
 ROLE_FIELD_PREFIX = "role__"
 ROLE_FORM_NAME = "role_binding_form"
 ROLE_SUBMIT_NAME = "role_binding_submit"
+DRAFT_WIZARD_KIND = "draft_wizard"
+DRAFT_WIZARD_SUBMIT_NAME = "draft_wizard_submit"
 MAX_CARD_CANDIDATES = 100
 
 
@@ -59,6 +69,7 @@ class RoleBindingRequest:
     goal: str
     inputs: Mapping[str, Any]
     roles: tuple[str, ...]
+    kind: str = "template"
     candidate_person_ids: tuple[str, ...] = field(default_factory=tuple)
     card_message_id: str | None = None
 
@@ -324,7 +335,7 @@ class RoleBindingActionInboxBridge:
         if event_type != CARD_ACTION_EVENT:
             return False
         action_name = _optional_text(payload.get("action_name"))
-        if action_name != ROLE_SUBMIT_NAME:
+        if action_name not in {ROLE_SUBMIT_NAME, DRAFT_WIZARD_SUBMIT_NAME}:
             return False
         feedback_started = self.monotonic()
         now = self.clock()
@@ -356,8 +367,16 @@ class RoleBindingActionInboxBridge:
                 self.card_updater(
                     token=signal.update_token,
                     card=processing_card(
-                        title="人员分工已提交",
-                        content="正在核验操作人、候选成员与模板状态。",
+                        title=(
+                            "草稿需求已提交"
+                            if action_name == DRAFT_WIZARD_SUBMIT_NAME
+                            else "人员分工已提交"
+                        ),
+                        content=(
+                            "正在核验身份和输入，随后由中央 Agent 生成候选流程。"
+                            if action_name == DRAFT_WIZARD_SUBMIT_NAME
+                            else "正在核验操作人、候选成员与模板状态。"
+                        ),
                     ),
                 )
             except Exception:
@@ -378,7 +397,11 @@ class RoleBindingActionInboxBridge:
                 )
                 report_card_feedback(
                     self.feedback_reporter,
-                    card_kind="role_binding",
+                    card_kind=(
+                        "draft_wizard"
+                        if action_name == DRAFT_WIZARD_SUBMIT_NAME
+                        else "role_binding"
+                    ),
                     status=feedback_status,
                     elapsed_ms=elapsed_ms,
                 )
@@ -552,12 +575,20 @@ class RoleBindingVerificationWorker:
             except RoleBindingRejected as exc:
                 completed_at = self.clock()
                 rejected += 1
+                wizard = (
+                    claim.request is not None
+                    and claim.request.kind == DRAFT_WIZARD_KIND
+                )
                 self.store.mark_role_binding_rejected(
                     self.tenant_id,
                     claim.action.id,
                     claim_token=claim.claim_token,
                     outcome="rejected:role_binding",
-                    reply_text="人员分工未执行。请重新发送流程启动命令后再试。",
+                    reply_text=(
+                        "流程草稿未生成。请重新发送 /larkflow draft 后再试。"
+                        if wizard
+                        else "人员分工未执行。请重新发送流程启动命令后再试。"
+                    ),
                     now=completed_at,
                 )
                 continue
@@ -600,14 +631,21 @@ class RoleBindingVerificationWorker:
         action = claim.action
         if request is None:
             raise RoleBindingRejected("callback does not reference a known card")
-        if action.action_tag != "button" or action.action_name != ROLE_SUBMIT_NAME:
-            raise RoleBindingRejected("callback is not a role-binding form submit")
+        expected_action = (
+            DRAFT_WIZARD_SUBMIT_NAME
+            if request.kind == DRAFT_WIZARD_KIND
+            else ROLE_SUBMIT_NAME
+        )
+        if action.action_tag != "button" or action.action_name != expected_action:
+            raise RoleBindingRejected("callback is not the expected form submit")
         if action.operator_person_id != request.initiator_person_id:
             raise RoleBindingRejected("only the workflow initiator may bind roles")
         if action.message_id != request.card_message_id:
             raise RoleBindingRejected("callback message does not match the request")
         if action.chat_id != request.chat_id:
             raise RoleBindingRejected("callback chat does not match the request")
+        if request.kind == DRAFT_WIZARD_KIND:
+            return self._verify_draft_wizard(request, action)
         try:
             raw_form = json.loads(action.form_value)
         except json.JSONDecodeError as exc:
@@ -632,6 +670,24 @@ class RoleBindingVerificationWorker:
                 raise RoleBindingRejected("selected person is not an active tenant member")
         return bindings
 
+    def _verify_draft_wizard(
+        self,
+        request: RoleBindingRequest,
+        action: RoleBindingActionSignal,
+    ) -> dict[str, str]:
+        try:
+            _brief, _context, collaborator = draft_wizard_form(action.form_value)
+        except DraftGenerationRejected as exc:
+            raise RoleBindingRejected(str(exc)) from exc
+        candidates = set(request.candidate_person_ids)
+        if collaborator not in candidates:
+            raise RoleBindingRejected("selected person is outside the frozen candidates")
+        for person_id in sorted({action.operator_person_id, collaborator}):
+            person = self.directory.get_person(self.tenant_id, person_id)
+            if person.person_id != person_id or not person.active:
+                raise RoleBindingRejected("selected person is not an active tenant member")
+        return {"collaborator": collaborator}
+
 
 @dataclass(frozen=True)
 class RoleBindingActionReport:
@@ -653,6 +709,7 @@ class RoleBindingActionWorker:
         *,
         tenant_id: str,
         worker_id: str,
+        draft_generator: DraftDefinitionGenerator | None = None,
         clock: Callable[[], datetime] | None = None,
         claim_limit: int = 20,
         claim_ttl: timedelta = timedelta(minutes=2),
@@ -665,6 +722,7 @@ class RoleBindingActionWorker:
         self.templates = templates
         self.tenant_id = tenant_id
         self.worker_id = worker_id
+        self.draft_generator = draft_generator
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.claim_limit = claim_limit
         self.claim_ttl = claim_ttl
@@ -688,12 +746,20 @@ class RoleBindingActionWorker:
             except RoleBindingRejected as exc:
                 completed_at = self.clock()
                 rejected += 1
+                wizard = (
+                    claim.request is not None
+                    and claim.request.kind == DRAFT_WIZARD_KIND
+                )
                 self.store.mark_role_binding_rejected(
                     self.tenant_id,
                     claim.action.id,
                     claim_token=claim.claim_token,
                     outcome="rejected:role_binding_domain",
-                    reply_text=f"人员分工未应用：{exc}",
+                    reply_text=(
+                        f"流程草稿未生成：{exc}\n请重新发送 /larkflow draft 后再试。"
+                        if wizard
+                        else f"人员分工未应用：{exc}"
+                    ),
                     now=completed_at,
                 )
                 continue
@@ -736,6 +802,8 @@ class RoleBindingActionWorker:
         request = claim.request
         if request is None:
             raise RoleBindingRejected("role-binding request no longer exists")
+        if request.kind == DRAFT_WIZARD_KIND:
+            return self._apply_draft_wizard(claim, request)
         if set(claim.owner_bindings) != set(request.roles):
             raise RoleBindingRejected("verified role bindings do not match the request")
         try:
@@ -803,6 +871,92 @@ class RoleBindingActionWorker:
         )
         return instance.id, reply
 
+    def _apply_draft_wizard(
+        self,
+        claim: RoleBindingActionClaim,
+        request: RoleBindingRequest,
+    ) -> tuple[str, str]:
+        if self.draft_generator is None:
+            raise RoleBindingRejected("中央 Agent 尚未配置，暂时不能根据描述生成草稿")
+        if set(claim.owner_bindings) != {"collaborator"}:
+            raise RoleBindingRejected("verified draft participants do not match the request")
+        try:
+            brief, context, collaborator = draft_wizard_form(claim.action.form_value)
+        except DraftGenerationRejected as exc:
+            raise RoleBindingRejected(str(exc)) from exc
+        if collaborator != claim.owner_bindings["collaborator"]:
+            raise RoleBindingRejected("verified draft participant changed before processing")
+        instance_id = role_binding_instance_id(
+            self.tenant_id,
+            request.message_id,
+        )
+        try:
+            instance = self.service.get(self.tenant_id, instance_id)
+        except InstanceNotFoundError:
+            try:
+                definition = self.draft_generator.generate(
+                    brief=brief,
+                    context=context,
+                )
+                roles = set(inline_owner_roles(definition))
+                available_bindings = {
+                    "requester": request.initiator_person_id,
+                    "collaborator": collaborator,
+                }
+                snapshot = instantiate_inline_definition(
+                    definition,
+                    owner_bindings={
+                        role: available_bindings[role] for role in roles
+                    },
+                )
+            except (DraftGenerationRejected, TemplateValidationError) as exc:
+                raise RoleBindingRejected(str(exc)) from exc
+            try:
+                instance = self.service.create_draft(
+                    instance_id=instance_id,
+                    tenant_id=self.tenant_id,
+                    owner_person_id=request.initiator_person_id,
+                    actor_person_id=request.initiator_person_id,
+                    snapshot=snapshot,
+                    correlation_id=request.message_id,
+                )
+            except InstanceAlreadyExistsError:
+                instance = self.service.get(self.tenant_id, instance_id)
+        if instance.owner_person_id != request.initiator_person_id:
+            raise RoleBindingRejected("message id is already bound to another draft")
+        if instance.status != InstanceStatus.DRAFT:
+            raise RoleBindingRejected("该消息对应的实例已不再是草稿")
+        labels = {
+            request.initiator_person_id: "发起人",
+            collaborator: (
+                "发起人" if collaborator == request.initiator_person_id else "协作成员"
+            ),
+        }
+        lines = [
+            "中央 Agent 已生成流程草稿。",
+            f"实例：{instance.id}",
+            f"目标：{instance.snapshot.goal}",
+            f"节点数：{len(instance.snapshot.nodes)}",
+            "",
+            "节点预览：",
+        ]
+        executor_labels = {"human": "Human", "agent": "Agent", "tool": "Tool"}
+        for index, node in enumerate(instance.snapshot.nodes, start=1):
+            deps = "、".join(node.deps) if node.deps else "无"
+            lines.append(
+                f"{index}. {node.title} ({node.key})｜"
+                f"{executor_labels[node.executor.value]}｜"
+                f"Owner：{labels.get(node.owner_person_id, '协作成员')}｜依赖：{deps}"
+            )
+        lines.extend(
+            [
+                "",
+                "该草稿尚未运行。请核对后回复：",
+                f"/larkflow confirm {instance.id}",
+            ]
+        )
+        return instance.id, "\n".join(lines)
+
 
 @dataclass(frozen=True)
 class RoleBindingReplyReport:
@@ -854,7 +1008,16 @@ class RoleBindingReplyWorker:
         for claim in claims:
             try:
                 try:
-                    if claim.request is not None and claim.instance_id is not None:
+                    if (
+                        claim.request is not None
+                        and claim.request.kind == DRAFT_WIZARD_KIND
+                        and claim.instance_id is not None
+                    ):
+                        card = draft_wizard_result_card(
+                            claim.text,
+                            instance_id=claim.instance_id,
+                        )
+                    elif claim.request is not None and claim.instance_id is not None:
                         card = role_binding_card(
                             claim.request,
                             claim.request.candidate_person_ids,
@@ -862,11 +1025,22 @@ class RoleBindingReplyWorker:
                             settled_instance_id=claim.instance_id,
                         )
                     else:
+                        retry_guidance = (
+                            "请重新发送 /larkflow draft 后再试。"
+                            if claim.request is not None
+                            and claim.request.kind == DRAFT_WIZARD_KIND
+                            else "原选择已失效，请重新发送流程启动命令。"
+                        )
                         card = rejected_card(
-                            title="人员分工未执行",
+                            title=(
+                                "流程草稿未生成"
+                                if claim.request is not None
+                                and claim.request.kind == DRAFT_WIZARD_KIND
+                                else "人员分工未执行"
+                            ),
                             content=(
                                 f"{claim.text}\n\n"
-                                "原选择已失效，请重新发送流程启动命令。"
+                                f"{retry_guidance}"
                             ),
                         )
                     self.sender.update_chat_card(
@@ -933,6 +1107,10 @@ def role_binding_card(
 ) -> dict[str, Any]:
     if not candidate_person_ids:
         raise ValueError("role-binding card requires candidates")
+    if request.kind == DRAFT_WIZARD_KIND:
+        if owner_bindings is not None or settled_instance_id is not None:
+            raise ValueError("draft wizard result requires draft_wizard_result_card")
+        return draft_wizard_card(request, candidate_person_ids)
     bindings = dict(owner_bindings or {})
     settled = settled_instance_id is not None
     options = [{"value": person_id} for person_id in candidate_person_ids]
@@ -1011,6 +1189,129 @@ def role_binding_card(
     }
 
 
+def draft_wizard_card(
+    request: RoleBindingRequest,
+    candidate_person_ids: tuple[str, ...],
+) -> dict[str, Any]:
+    if request.kind != DRAFT_WIZARD_KIND or not candidate_person_ids:
+        raise ValueError("draft wizard card requires a wizard request and candidates")
+    options = [{"value": person_id} for person_id in candidate_person_ids]
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "default", "update_multi": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": "生成流程草稿"},
+            "subtitle": {"tag": "plain_text", "content": "自然语言引导"},
+            "template": "blue",
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": (
+                        "描述你想完成的事情。中央 Agent 会生成候选流程，"
+                        "服务端校验后只保存为草稿，不会自动运行。\n"
+                        "请勿填写密码、Token、密钥或其他敏感凭据。"
+                    ),
+                },
+                {
+                    "tag": "form",
+                    "name": "draft_wizard_form",
+                    "direction": "vertical",
+                    "vertical_spacing": "medium",
+                    "elements": [
+                        {
+                            "tag": "input",
+                            "element_id": "draft_brief",
+                            "name": "draft_brief",
+                            "required": True,
+                            "input_type": "multiline_text",
+                            "rows": 4,
+                            "auto_resize": True,
+                            "max_rows": 8,
+                            "max_length": MAX_WIZARD_TEXT_CHARS,
+                            "width": "fill",
+                            "label": {"tag": "plain_text", "content": "想完成什么"},
+                            "placeholder": {
+                                "tag": "plain_text",
+                                "content": "例如：确认需求，Agent 生成摘要，再由同事复核",
+                            },
+                        },
+                        {
+                            "tag": "input",
+                            "element_id": "draft_context",
+                            "name": "draft_context",
+                            "required": False,
+                            "input_type": "multiline_text",
+                            "rows": 2,
+                            "auto_resize": True,
+                            "max_rows": 6,
+                            "max_length": MAX_WIZARD_TEXT_CHARS,
+                            "width": "fill",
+                            "label": {"tag": "plain_text", "content": "补充背景（选填）"},
+                            "placeholder": {
+                                "tag": "plain_text",
+                                "content": "材料、限制、验收要求或期望产出",
+                            },
+                        },
+                        {
+                            "tag": "markdown",
+                            "content": "**协作成员**",
+                        },
+                        {
+                            "tag": "select_person",
+                            "element_id": "draft_collab",
+                            "name": "role__collaborator",
+                            "required": True,
+                            "width": "fill",
+                            "placeholder": {
+                                "tag": "plain_text",
+                                "content": "默认由自己负责，可选择一名协作成员",
+                            },
+                            "options": options,
+                            "initial_option": request.initiator_person_id,
+                        },
+                        {
+                            "tag": "button",
+                            "name": DRAFT_WIZARD_SUBMIT_NAME,
+                            "text": {"tag": "plain_text", "content": "生成候选流程"},
+                            "type": "primary_filled",
+                            "width": "fill",
+                            "form_action_type": "submit",
+                        },
+                    ],
+                },
+            ]
+        },
+    }
+
+
+def draft_wizard_result_card(
+    text: str,
+    *,
+    instance_id: str,
+) -> dict[str, Any]:
+    if not text.strip() or not instance_id.strip():
+        raise ValueError("draft wizard result requires text and instance_id")
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "default", "update_multi": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": "流程草稿已生成"},
+            "subtitle": {"tag": "plain_text", "content": instance_id},
+            "template": "green",
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": _escape_markdown(text),
+                }
+            ]
+        },
+    }
+
+
 def role_binding_instance_id(tenant_id: str, message_id: str) -> str:
     digest = hashlib.sha256(
         f"{tenant_id}:{message_id}".encode("utf-8")
@@ -1071,6 +1372,8 @@ def _optional_text(value: Any) -> str | None:
 
 __all__ = [
     "CARD_ACTION_EVENT",
+    "DRAFT_WIZARD_KIND",
+    "DRAFT_WIZARD_SUBMIT_NAME",
     "InvalidRoleBindingClaimError",
     "MAX_CARD_CANDIDATES",
     "ROLE_FIELD_PREFIX",
@@ -1091,6 +1394,8 @@ __all__ = [
     "RoleBindingRequest",
     "RoleBindingVerificationReport",
     "RoleBindingVerificationWorker",
+    "draft_wizard_card",
+    "draft_wizard_result_card",
     "role_binding_card",
     "role_binding_instance_id",
 ]

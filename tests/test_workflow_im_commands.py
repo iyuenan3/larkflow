@@ -2052,7 +2052,6 @@ def test_non_owner_confirm_is_rejected_without_retrying_forever():
         "/larkflow edit instance_1 {}",
         "/larkflow edit-confirm",
         "/larkflow edit-confirm preview extra",
-        "/larkflow draft",
         "/larkflow draft []",
         "/larkflow draft {} reviewer=person_open_id",
         "/larkflow draft {} reviewer=@_user_1 reviewer=@_user_2",
@@ -2088,6 +2087,42 @@ def test_command_parser_accepts_inline_definition_and_role_mentions():
         None,
         {"definition": definition},
     )
+
+
+def test_command_parser_accepts_bare_draft_as_a_guided_request():
+    assert parse_im_command("/larkflow draft") == (
+        "draft",
+        None,
+        {"wizard": True},
+    )
+
+
+def test_bare_draft_requests_a_natural_language_card_without_creating_instance():
+    repository = InMemoryWorkflowRepository()
+    store = MemoryStore()
+    event = signal("/larkflow draft")
+    store.command_claims = [IMCommandClaim(event, "draft-token", 1)]
+
+    report = IMCommandWorker(
+        store,
+        WorkflowService(repository, clock=lambda: NOW),
+        TemplateService(InMemoryTemplateStore(), clock=lambda: NOW),
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    ).run_once()
+
+    assert report.processed == 1
+    assert store.processed == []
+    request = store.role_binding_requested[0][2]["request"]
+    assert request.kind == "draft_wizard"
+    assert request.roles == ("collaborator",)
+    assert request.initiator_person_id == "person_owner"
+    assert repository.list_for_owner(
+        TENANT,
+        owner_person_id="person_owner",
+        limit=10,
+    ) == ()
 
 
 def test_command_parser_accepts_list():

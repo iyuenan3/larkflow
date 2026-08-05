@@ -40,7 +40,7 @@ from .recovery import (
     recovery_action_name,
 )
 from .runner import AuthorizationError
-from .role_bindings import RoleBindingRequest
+from .role_bindings import DRAFT_WIZARD_KIND, RoleBindingRequest
 from .restart import (
     RestartConfirmation,
     RestartNotAllowedError,
@@ -798,7 +798,8 @@ class IMCommandWorker:
                 "helped",
                 None,
                 "可用命令：\n"
-                "/larkflow draft <JSON定义> [role=@成员 ...]\n"
+                "/larkflow draft（打开自然语言草稿引导卡）\n"
+                "/larkflow draft <JSON定义> [role=@成员 ...]（高级入口）\n"
                 "/larkflow start <template_id> [JSON输入] [role=@成员 ...]\n"
                 "模板多角色流程在单聊中会发送人员选择卡片；"
                 "无模板多角色草稿必须显式 @成员。\n"
@@ -857,6 +858,22 @@ class IMCommandWorker:
             return outcome, instance.id, reply
         if command == "draft":
             definition = inputs.get("definition")
+            if inputs.get("wizard") is True:
+                raise _RoleBindingRequired(
+                    RoleBindingRequest(
+                        command_id=event.id,
+                        tenant_id=self.tenant_id,
+                        message_id=event.message_id,
+                        chat_id=event.chat_id,
+                        initiator_person_id=event.sender_person_id,
+                        template_id="generated_inline",
+                        template_version=0,
+                        goal="根据描述生成一次性流程草稿",
+                        inputs={},
+                        roles=("collaborator",),
+                        kind=DRAFT_WIZARD_KIND,
+                    )
+                )
             if not isinstance(definition, Mapping):
                 raise IMCommandRejected("无模板定义必须是 JSON 对象")
             try:
@@ -1339,8 +1356,10 @@ def _parse_im_command(text: str) -> _ParsedIMCommand:
         prefix = f"{COMMAND_PREFIX} draft"
         tail = text.strip()[len(prefix) :].strip()
         if not tail:
-            raise IMCommandRejected(
-                "用法：/larkflow draft <JSON定义> [role=@成员 ...]"
+            return _ParsedIMCommand(
+                "draft",
+                None,
+                inputs={"wizard": True},
             )
         definition, owner_mentions = _parse_json_object_and_bindings(
             tail,

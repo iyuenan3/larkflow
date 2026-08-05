@@ -71,6 +71,13 @@ from .directory import (
     PersonDirectory,
     validate_snapshot_owners,
 )
+from .draft_generation import (
+    DraftDefinitionGenerator,
+    DraftGenerationRejected,
+    MAX_GENERATED_NODES,
+    MAX_WIZARD_TEXT_CHARS,
+    draft_wizard_form,
+)
 from .edge import (
     DEFAULT_EDGE_CAPABILITIES,
     PERSONAL_READONLY_CAPABILITY,
@@ -225,6 +232,8 @@ from .projection import (
 from .projection_daemon import ProjectionLoopSummary, ProjectionWorkerLoop
 from .role_bindings import (
     CARD_ACTION_EVENT,
+    DRAFT_WIZARD_KIND,
+    DRAFT_WIZARD_SUBMIT_NAME,
     ROLE_FIELD_PREFIX,
     ROLE_FORM_NAME,
     ROLE_SUBMIT_NAME,
@@ -244,6 +253,8 @@ from .role_bindings import (
     RoleBindingRequest,
     RoleBindingVerificationReport,
     RoleBindingVerificationWorker,
+    draft_wizard_card,
+    draft_wizard_result_card,
     role_binding_card,
     role_binding_instance_id,
 )
@@ -298,6 +309,8 @@ __all__ = [
     "DevelopmentToolExecutor",
     "DirectoryPerson",
     "DirectoryValidationError",
+    "DraftDefinitionGenerator",
+    "DraftGenerationRejected",
     "DocumentProjectionRequest",
     "DEFAULT_EDGE_CAPABILITIES",
     "DeviceRevokedError",
@@ -372,6 +385,8 @@ __all__ = [
     "InvalidOutboxClaimError",
     "InvalidPairingCodeError",
     "LLMAgentExecutor",
+    "MAX_GENERATED_NODES",
+    "MAX_WIZARD_TEXT_CHARS",
     "NodeActivation",
     "NodeAttempt",
     "NodeInstance",
@@ -402,6 +417,8 @@ __all__ = [
     "QualityResult",
     "QualityVerdict",
     "CARD_ACTION_EVENT",
+    "DRAFT_WIZARD_KIND",
+    "DRAFT_WIZARD_SUBMIT_NAME",
     "ROLE_FIELD_PREFIX",
     "ROLE_FORM_NAME",
     "ROLE_SUBMIT_NAME",
@@ -468,6 +485,9 @@ __all__ = [
     "apply_failed_node_recovery",
     "apply_future_graph_edit",
     "available_migrations",
+    "draft_wizard_card",
+    "draft_wizard_form",
+    "draft_wizard_result_card",
     "inline_owner_roles",
     "instantiate_inline_definition",
     "instantiate_template_version",

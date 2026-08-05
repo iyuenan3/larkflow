@@ -28,6 +28,7 @@ from .config import (
 )
 from .daemon import WorkflowWorkerLoop
 from .directory import CliFeishuDirectory
+from .draft_generation import DraftDefinitionGenerator
 from .executors import (
     ContentCheckToolExecutor,
     DevelopmentToolExecutor,
@@ -841,6 +842,12 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
         runner=NodeRunner(claim_ttl=settings.claim_ttl),
     )
     executor_registry = _executors(settings, environ=os.environ, log=log)
+    agent_executor = executor_registry.get(ExecutorKind.AGENT)
+    draft_generator = (
+        DraftDefinitionGenerator(agent_executor.client)
+        if isinstance(agent_executor, LLMAgentExecutor)
+        else None
+    )
     worker = WorkflowWorker(
         service,
         repository,
@@ -869,6 +876,7 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             templates,
             tenant_id=settings.tenant_id,
             worker_id=f"{settings.worker_id}:role-binding",
+            draft_generator=draft_generator,
             claim_limit=settings.candidate_limit,
             claim_ttl=settings.claim_ttl,
         )
