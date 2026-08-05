@@ -17,6 +17,13 @@ from .card_feedback import (
     report_card_feedback,
 )
 from .directory import PersonDirectory
+from .decision import (
+    HUMAN_DECISION_ACTION_NAME,
+    HumanDecision,
+    HumanDecisionNotAllowedError,
+    StaleHumanDecisionError,
+    human_decision_action_name,
+)
 from .editing import (
     GraphEditConfirmation,
     GraphEditNotAllowedError,
@@ -160,6 +167,7 @@ class IMReplyClaim:
     claim_token: str
     attempt_count: int
     card_update_token: str | None = None
+    command_text: str | None = None
 
 
 class IMCommandStore(Protocol):
@@ -513,6 +521,120 @@ class RecoveryActionInboxBridge:
         return appended
 
 
+class HumanDecisionActionInboxBridge:
+    """Turn trusted Human decision-card callbacks into durable commands."""
+
+    def __init__(
+        self,
+        store: IMCommandStore,
+        *,
+        tenant_id: str,
+        clock: Callable[[], datetime] | None = None,
+        monotonic: Callable[[], float] | None = None,
+        card_updater: Callable[..., None] | None = None,
+        feedback_reporter: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> None:
+        if not tenant_id.strip():
+            raise ValueError("Target tenant_id is required")
+        self.store = store
+        self.tenant_id = tenant_id
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.monotonic = monotonic or time.monotonic
+        self.card_updater = card_updater
+        self.feedback_reporter = feedback_reporter
+
+    def __call__(self, event_type: str, payload: Mapping[str, Any]) -> bool:
+        if event_type != "card.action.trigger":
+            return False
+        action_name = payload.get("action_name")
+        if action_name not in {
+            human_decision_action_name(decision) for decision in HumanDecision
+        }:
+            value = payload.get("action_value")
+            if not (
+                isinstance(value, Mapping)
+                and value.get("kind") == HUMAN_DECISION_ACTION_NAME
+            ):
+                return False
+            if action_name is not None:
+                raise ValueError(
+                    "unexpected Human decision action name: "
+                    f"{_safe_callback_name(action_name)}"
+                )
+        if payload.get("action_tag") != "button":
+            raise ValueError("Human decision must come from a button")
+        value = payload.get("action_value")
+        if not isinstance(value, Mapping):
+            raise ValueError("Human decision action_value must be an object")
+        command_payload = _validated_human_decision_payload(value)
+        decision = HumanDecision(command_payload["decision"])
+        if (
+            action_name is not None
+            and action_name != human_decision_action_name(decision)
+        ):
+            raise ValueError("Human decision action name does not match its value")
+
+        feedback_started = self.monotonic()
+        now = self.clock()
+        event = IMCommandSignal(
+            id=_required_text(payload.get("event_id"), "event_id"),
+            tenant_id=self.tenant_id,
+            message_id=_required_text(payload.get("message_id"), "message_id"),
+            chat_id=_required_text(payload.get("chat_id"), "chat_id"),
+            sender_person_id=_required_text(payload.get("operator_id"), "operator_id"),
+            text=(
+                f"{COMMAND_PREFIX} decide "
+                + json.dumps(command_payload, separators=(",", ":"))
+            ),
+            occurred_at=feishu_event_time(payload.get("timestamp"), fallback=now),
+            received_at=now,
+            card_update_token=_required_text(payload.get("token"), "token"),
+            available_at=(
+                now + CARD_FEEDBACK_FALLBACK
+                if self.card_updater is not None
+                else None
+            ),
+        )
+        appended = self.store.append_im_command(event)
+        if appended and self.card_updater is not None:
+            label = {
+                HumanDecision.ACCEPT: "接受",
+                HumanDecision.REJECT: "退回",
+            }[decision]
+            feedback_status = "updated"
+            try:
+                self.card_updater(
+                    token=event.card_update_token,
+                    card=processing_card(
+                        title="复核决定已收到",
+                        content=f"已收到“{label}”，正在重新校验身份与流程状态。",
+                    ),
+                )
+            except Exception:
+                feedback_status = "failed"
+                raise
+            finally:
+                completed_at = self.clock()
+                elapsed_ms = max(
+                    0,
+                    int((self.monotonic() - feedback_started) * 1000 + 0.5),
+                )
+                self.store.release_im_command(
+                    self.tenant_id,
+                    event.id,
+                    available_at=completed_at,
+                    feedback_status=feedback_status,
+                    feedback_elapsed_ms=elapsed_ms,
+                )
+                report_card_feedback(
+                    self.feedback_reporter,
+                    card_kind="human_decision",
+                    status=feedback_status,
+                    elapsed_ms=elapsed_ms,
+                )
+        return appended
+
+
 def _safe_callback_name(value: Any) -> str:
     """Bound callback diagnostics to a non-sensitive, log-safe token."""
 
@@ -856,6 +978,53 @@ class IMCommandWorker:
                 )
                 outcome = "human_takeover_started"
             return outcome, instance.id, reply
+        if command == "decide":
+            decision = HumanDecision(str(inputs["decision"]))
+            node_key = str(inputs["node_key"])
+            try:
+                instance = self.service.submit_human_decision(
+                    self.tenant_id,
+                    argument or "",
+                    node_key,
+                    decision,
+                    actor_person_id=event.sender_person_id,
+                    attempt_no=int(inputs["attempt_no"]),
+                    expected_instance_version=int(inputs["instance_version"]),
+                    expected_node_version=int(inputs["node_version"]),
+                    correlation_id=event.message_id,
+                )
+            except StaleHumanDecisionError:
+                raise IMCommandRejected(
+                    "复核卡片已失效，流程或节点已有新的状态"
+                ) from None
+            except (
+                AuthorizationError,
+                HumanDecisionNotAllowedError,
+                InstanceNotFoundError,
+                TransitionError,
+            ):
+                raise IMCommandRejected(
+                    "实例或节点不存在、你不是节点负责人，或该复核已不可操作"
+                ) from None
+            if decision == HumanDecision.ACCEPT:
+                return (
+                    "human_decision_accepted",
+                    instance.id,
+                    "已接受节点结果。\n"
+                    f"实例：{instance.id}\n节点：{node_key}\n"
+                    f"Attempt：{inputs['attempt_no']}\n状态：{instance.status.value}",
+                )
+            config = instance.snapshot.node(node_key).work["decision"]
+            reject_target = str(config["reject_target"])
+            return (
+                "human_decision_rejected",
+                instance.id,
+                "已退回节点结果，流程已进入失败状态，旧结果与审计均已保留。\n"
+                f"实例：{instance.id}\n节点：{node_key}\n"
+                f"Attempt：{inputs['attempt_no']}\n"
+                "请由 Instance Owner 预览返工范围：\n"
+                f"/larkflow restart {instance.id} {reject_target}",
+            )
         if command == "draft":
             definition = inputs.get("definition")
             if inputs.get("wizard") is True:
@@ -1273,11 +1442,23 @@ class IMReplyWorker:
         for claim in claims:
             try:
                 if claim.card_update_token is not None:
-                    from .projection import recovery_result_card
+                    from .projection import (
+                        human_decision_result_card,
+                        recovery_result_card,
+                    )
+
+                    result_card = (
+                        human_decision_result_card(claim.text)
+                        if isinstance(claim.command_text, str)
+                        and claim.command_text.startswith(
+                            f"{COMMAND_PREFIX} decide "
+                        )
+                        else recovery_result_card(claim.text)
+                    )
 
                     self.sender.update_chat_card(
                         token=claim.card_update_token,
-                        card=recovery_result_card(claim.text),
+                        card=result_card,
                     )
                 external_id = self.sender.send_chat_message(
                     chat_id=claim.chat_id,
@@ -1349,6 +1530,21 @@ def _parse_im_command(text: str) -> _ParsedIMCommand:
         normalized = _validated_recovery_payload(payload)
         return _ParsedIMCommand(
             "recover",
+            str(normalized.pop("instance_id")),
+            inputs=normalized,
+        )
+    if parts[1] == "decide":
+        if len(parts) < 3:
+            raise IMCommandRejected("复核决定缺少服务端卡片参数")
+        try:
+            payload = json.loads(" ".join(parts[2:]))
+        except json.JSONDecodeError as exc:
+            raise IMCommandRejected("复核决定参数无效") from exc
+        if not isinstance(payload, Mapping):
+            raise IMCommandRejected("复核决定参数必须是对象")
+        normalized = _validated_human_decision_payload(payload)
+        return _ParsedIMCommand(
+            "decide",
             str(normalized.pop("instance_id")),
             inputs=normalized,
         )
@@ -1509,6 +1705,41 @@ def _validated_recovery_payload(value: Mapping[str, Any]) -> dict[str, Any]:
             raise IMCommandRejected(f"恢复卡片 {field_name} 无效")
         if field_name == "attempt_no" and raw < 1:
             raise IMCommandRejected("恢复卡片 attempt_no 无效")
+        normalized[field_name] = raw
+    return normalized
+
+
+def _validated_human_decision_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    expected_keys = {
+        "kind",
+        "decision",
+        "instance_id",
+        "node_key",
+        "attempt_no",
+        "node_version",
+        "instance_version",
+    }
+    if (
+        set(value) != expected_keys
+        or value.get("kind") != HUMAN_DECISION_ACTION_NAME
+    ):
+        raise IMCommandRejected("复核卡片参数不完整")
+    try:
+        decision = HumanDecision(str(value["decision"]))
+    except ValueError as exc:
+        raise IMCommandRejected("复核决定无效") from exc
+    normalized: dict[str, Any] = {
+        "kind": HUMAN_DECISION_ACTION_NAME,
+        "decision": decision.value,
+        "instance_id": _required_text(value.get("instance_id"), "instance_id"),
+        "node_key": _required_text(value.get("node_key"), "node_key"),
+    }
+    for field_name in ("attempt_no", "node_version", "instance_version"):
+        raw = value.get(field_name)
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+            raise IMCommandRejected(f"复核卡片 {field_name} 无效")
+        if field_name == "attempt_no" and raw < 1:
+            raise IMCommandRejected("复核卡片 attempt_no 无效")
         normalized[field_name] = raw
     return normalized
 
@@ -1916,6 +2147,7 @@ __all__ = [
     "IMReplyWorker",
     "IMVerificationReport",
     "InvalidIMCommandClaimError",
+    "HumanDecisionActionInboxBridge",
     "RecoveryActionInboxBridge",
     "parse_im_command",
 ]

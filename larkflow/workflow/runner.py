@@ -180,6 +180,38 @@ class NodeRunner:
         attempt.quality_result = quality_result
         attempt.submitted_by_person_id = actor_person_id
 
+    def reject_human(
+        self,
+        instance: WorkflowInstance,
+        node_key: str,
+        *,
+        actor_person_id: str,
+        attempt_no: int,
+        expected_node_version: int,
+        result: Mapping[str, Any],
+        quality_result: QualityResult,
+        now: datetime,
+    ) -> None:
+        """Record an explicit Human rejection without rewriting prior work."""
+
+        node = instance.nodes[node_key]
+        if actor_person_id != node.owner_person_id:
+            raise AuthorizationError(f"only the node owner may reject: {node_key}")
+        attempt = self._current_attempt(instance, node_key, attempt_no)
+        self._expect_node(node_key, node.version, expected_node_version)
+        if node.status != NodeStatus.WAITING_HUMAN:
+            raise TransitionError(f"node is not waiting for a human: {node_key}")
+        if quality_result.verdict.value != "fail":
+            raise ValueError("Human rejection requires failed quality evidence")
+
+        transition_node(node, NodeStatus.FAILED, now=now)
+        transition_attempt(attempt, AttemptStatus.FAILED, now=now)
+        attempt.result = FrozenDict(result)
+        attempt.quality_result = quality_result
+        attempt.submitted_by_person_id = actor_person_id
+        attempt.error_code = "human_rejected"
+        attempt.error_message = "Node Owner rejected the submitted result"
+
     def complete_automated(
         self,
         instance: WorkflowInstance,

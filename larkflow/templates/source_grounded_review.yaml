@@ -1,0 +1,105 @@
+schema_version: "0.2"
+template:
+  id: source_grounded_review
+  version: 1
+  name: 来源约束型业务材料复核
+  status: draft
+  locked: false
+goal: 人工确认来源，Agent 生成带归因的需求简报，Tool 检查归因契约，人工接受或退回
+parameters:
+  source_registry:
+    type: object
+    required: true
+nodes:
+  - id: confirm_source
+    title: 确认来源登记
+    owner_role: project_owner
+    executor: human
+    deps: []
+    work:
+      objective: 确认来源事实与待确认问题的编号登记可以交给 Agent 分析
+      inputs:
+        - instance_inputs.source_registry
+      outputs:
+        - id: confirmation
+          type: data
+      acceptance:
+        - 已核对来源 URL
+        - 已确认 F 编号是来源事实，Q 编号是分析阶段的待确认问题
+
+  - id: draft_engineering_brief
+    title: 生成带归因的研发需求简报
+    owner_role: project_owner
+    executor: agent
+    deps:
+      - confirm_source
+    work:
+      objective: 依据来源登记生成事实、推断和待确认问题边界清晰的研发需求简报
+      inputs:
+        - instance_inputs.source_registry
+        - dependencies.confirm_source
+      outputs:
+        - id: source_claims
+          type: data
+        - id: content
+          type: text
+      acceptance:
+        - 每条原文事实只引用 F 编号
+        - 每条待确认问题只引用 Q 编号
+        - 分析推断明确标记为 inference
+      agent:
+        kind: llm.generate
+        model_role: default
+        result_format: source_claims.v1
+        instructions: 只依据 source_registry 生成研发需求简报。不得把 Q 编号写成原文事实，不得把推断写成既定事实，不得虚构实施状态或承诺。完整覆盖全部 F 和 Q 编号，source_url 必须原样返回。
+
+  - id: check_source_claims
+    title: 检查来源归因契约
+    owner_role: project_owner
+    executor: tool
+    deps:
+      - draft_engineering_brief
+    work:
+      objective: 确定性检查来源编号、事实与问题类别、覆盖率及来源 URL
+      inputs:
+        - instance_inputs.source_registry
+        - dependencies.draft_engineering_brief
+      outputs:
+        - id: verdict
+          type: data
+        - id: evidence
+          type: text
+        - id: suggestion
+          type: text
+      acceptance:
+        - 返回 pass 或 fail
+        - 返回事实和待确认问题的编号覆盖证据
+        - 不把结构通过解释为语义事实已经证明
+      tool:
+        kind: source_claims.check
+        args:
+          document: dependencies.draft_engineering_brief.source_claims
+          source_registry: instance_inputs.source_registry
+
+  - id: review_engineering_brief
+    title: 复核需求简报准确性
+    owner_role: project_owner
+    executor: human
+    deps:
+      - draft_engineering_brief
+      - check_source_claims
+    work:
+      objective: 结合来源登记、Agent 简报和 Tool 证据，明确接受或退回当前结果
+      inputs:
+        - instance_inputs.source_registry
+        - dependencies.draft_engineering_brief
+        - dependencies.check_source_claims
+      outputs:
+        - id: decision
+          type: data
+      acceptance:
+        - 已核对事实与推断的语义是否忠于来源
+        - 已明确选择接受或退回
+      decision:
+        kind: accept_reject
+        reject_target: draft_engineering_brief

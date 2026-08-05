@@ -10,6 +10,7 @@ from threading import Lock
 from typing import Any, Protocol
 
 from .model import ExecutorKind, NodeStatus
+from .decision import human_decision_config
 from .projection import FEISHU_TASK_KIND, ProjectionRecord
 from .repository import ConcurrentUpdateError, WorkflowRepository
 from .service import WorkflowService
@@ -749,6 +750,8 @@ class WorkflowInboundWorker:
         )
         if not human_work or node.status != NodeStatus.WAITING_HUMAN:
             return "rejected:node_not_waiting_human"
+        if human_decision_config(instance.snapshot.node(node.node_key).work) is not None:
+            return "rejected:decision_requires_card"
 
         rejected = self._validate_task(task, projection, node.owner_person_id)
         if rejected is not None:

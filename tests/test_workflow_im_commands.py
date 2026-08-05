@@ -10,6 +10,7 @@ import pytest
 from larkflow.workflow import (
     DirectoryPerson,
     ExternalMessage,
+    HumanDecisionActionInboxBridge,
     IMCommandClaim,
     IMCommandRejected,
     IMCommandSignal,
@@ -392,6 +393,72 @@ def test_recovery_card_bridge_persists_a_verified_version_bound_command():
             "instance_version": 4,
         },
     )
+
+
+def test_human_decision_bridge_uses_trusted_operator_and_immediate_feedback():
+    store = MemoryStore()
+    updates = []
+    reports = []
+    monotonic_values = iter((50.0, 50.12, 51.0))
+    bridge = HumanDecisionActionInboxBridge(
+        store,
+        tenant_id=TENANT,
+        clock=lambda: NOW,
+        monotonic=lambda: next(monotonic_values),
+        card_updater=lambda **kwargs: updates.append(kwargs),
+        feedback_reporter=lambda event, fields: reports.append((event, fields)),
+    )
+    payload = {
+        "event_id": "event_decision_1",
+        "message_id": "message_decision_1",
+        "chat_id": "chat_reviewer",
+        "operator_id": "person_reviewer",
+        "action_tag": "button",
+        "action_name": "human_decision_reject",
+        "action_value": {
+            "kind": "human_decision",
+            "decision": "reject",
+            "instance_id": "instance_1",
+            "node_key": "review",
+            "attempt_no": 2,
+            "node_version": 5,
+            "instance_version": 8,
+        },
+        "token": "decision-card-token",
+        "timestamp": "1785830400000",
+    }
+
+    assert bridge("card.action.trigger", payload) is True
+    assert bridge("card.action.trigger", payload) is False
+
+    event = store.appended[0]
+    assert event.sender_person_id == "person_reviewer"
+    assert parse_im_command(event.text) == (
+        "decide",
+        "instance_1",
+        {
+            "kind": "human_decision",
+            "decision": "reject",
+            "node_key": "review",
+            "attempt_no": 2,
+            "node_version": 5,
+            "instance_version": 8,
+        },
+    )
+    assert updates[0]["token"] == "decision-card-token"
+    assert updates[0]["card"]["header"]["title"]["content"] == "复核决定已收到"
+    assert "button" not in json.dumps(updates[0]["card"], ensure_ascii=False)
+    assert store.released[0][2]["feedback_elapsed_ms"] == 120
+    assert reports == [
+        (
+            "card_feedback",
+            {
+                "card_kind": "human_decision",
+                "status": "updated",
+                "elapsed_ms": 120,
+            },
+        )
+    ]
 
 
 def test_recovery_card_bridge_persists_before_fast_feedback_failure():

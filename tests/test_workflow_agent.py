@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from larkflow.workflow import (
     validate_snapshot,
 )
 from larkflow.workflow.cli import _draft_generator, _executors
+from larkflow.workflow.serde import to_json_value
 
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
@@ -33,7 +35,19 @@ class RecordingCompletion:
         return self.content
 
 
-def request(*, kind: str = "llm.generate", instructions: str = "生成摘要"):
+def request(
+    *,
+    kind: str = "llm.generate",
+    instructions: str = "生成摘要",
+    result_format: str | None = None,
+):
+    agent = {
+        "kind": kind,
+        "model_role": "writer",
+        "instructions": instructions,
+    }
+    if result_format is not None:
+        agent["result_format"] = result_format
     return ExecutionRequest(
         tenant_id="tenant_agent",
         instance_id="instance_agent",
@@ -47,14 +61,17 @@ def request(*, kind: str = "llm.generate", instructions: str = "生成摘要"):
             "inputs": ["instance_inputs.brief"],
             "outputs": [{"id": "content", "type": "text"}],
             "acceptance": ["包含明确结论"],
-            "agent": {
-                "kind": kind,
-                "model_role": "writer",
-                "instructions": instructions,
-            },
+            "agent": agent,
         },
         input_snapshot={
-            "instance_inputs": {"brief": "发布检查"},
+            "instance_inputs": {
+                "brief": "发布检查",
+                "source_registry": {
+                    "source_url": "https://example.invalid/work-item/1",
+                    "facts": [{"id": "F1", "text": "创建时校验"}],
+                    "open_questions": [{"id": "Q1", "text": "谁可以绕过"}],
+                },
+            },
             "dependencies": {"confirm": {"approved": True}},
         },
         expected_node_version=2,
@@ -135,6 +152,77 @@ def test_agent_executor_keeps_unrecognized_json_as_text():
     result = LLMAgentExecutor(RecordingCompletion(content)).execute(request())
 
     assert result.result["content"] == content
+
+
+def test_agent_executor_preserves_structured_source_claims_and_visible_labels():
+    document = {
+        "problem": [
+            {
+                "text": "创建时缺少主动校验",
+                "claim_type": "source_fact",
+                "source_ids": ["F1"],
+            }
+        ],
+        "target_users": [
+            {
+                "text": "流程管理员可能需要配置规则",
+                "claim_type": "inference",
+                "source_ids": ["F1"],
+            }
+        ],
+        "functional_requirements": [
+            {
+                "text": "创建时执行校验",
+                "claim_type": "source_fact",
+                "source_ids": ["F1"],
+            }
+        ],
+        "acceptance_criteria": [
+            {
+                "text": "不合规提交被拦截",
+                "claim_type": "inference",
+                "source_ids": ["F1"],
+            }
+        ],
+        "risks": [
+            {
+                "text": "规则可能误判",
+                "claim_type": "inference",
+                "source_ids": ["F1"],
+            }
+        ],
+        "open_questions": [
+            {
+                "text": "谁可以绕过",
+                "claim_type": "open_question",
+                "source_ids": ["Q1"],
+            }
+        ],
+        "source_url": "https://example.invalid/work-item/1",
+    }
+    completion = RecordingCompletion(json.dumps(document, ensure_ascii=False))
+
+    result = LLMAgentExecutor(completion).execute(
+        request(result_format="source_claims.v1")
+    )
+
+    assert to_json_value(result.result["source_claims"]) == document
+    assert result.result["result_format"] == "source_claims.v1"
+    assert "[原文事实 F1]" in result.result["content"]
+    assert "[分析推断，依据 F1]" in result.result["content"]
+    assert "[待确认 Q1]" in result.result["content"]
+    assert "请只返回一个 JSON 对象" in completion.calls[0]["prompt"]
+
+
+def test_agent_executor_rejects_non_json_and_duplicate_source_claims():
+    structured_request = request(result_format="source_claims.v1")
+
+    with pytest.raises(ValueError, match="must be valid JSON"):
+        LLMAgentExecutor(RecordingCompletion("普通正文")).execute(structured_request)
+    with pytest.raises(ValueError, match="must be valid JSON"):
+        LLMAgentExecutor(
+            RecordingCompletion('{"problem":[],"problem":[]}')
+        ).execute(structured_request)
 
 
 def test_runtime_assembles_agent_only_with_a_safe_lease_budget():

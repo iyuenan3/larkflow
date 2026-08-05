@@ -35,6 +35,7 @@ from .executors import (
     ContentCheckToolExecutor,
     DevelopmentToolExecutor,
     LLMAgentExecutor,
+    SourceClaimsCheckToolExecutor,
     ToolExecutorRouter,
 )
 from .feishu import (
@@ -1073,6 +1074,11 @@ def _executors(
     if settings.enable_content_check_executor:
         tool_adapters.append(
             ContentCheckToolExecutor(
+                max_source_chars=settings.content_check_max_chars,
+            )
+        )
+        tool_adapters.append(
+            SourceClaimsCheckToolExecutor(
                 max_source_chars=settings.content_check_max_chars,
             )
         )

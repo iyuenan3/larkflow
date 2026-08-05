@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 import json
+import re
 import time
 from typing import Protocol
 
@@ -22,6 +23,7 @@ class LLMAgentExecutor:
     """Run the explicit ``llm.generate`` Agent contract."""
 
     KIND = "llm.generate"
+    SOURCE_CLAIMS_FORMAT = "source_claims.v1"
 
     def __init__(
         self,
@@ -49,6 +51,9 @@ class LLMAgentExecutor:
         instructions = agent.get("instructions")
         if not isinstance(instructions, str) or not instructions.strip():
             raise ValueError("Agent instructions are required")
+        result_format = agent.get("result_format", "plain_text")
+        if result_format not in {"plain_text", self.SOURCE_CLAIMS_FORMAT}:
+            raise ValueError(f"unsupported Agent result_format: {result_format!r}")
 
         prompt = self._prompt(
             request,
@@ -71,14 +76,18 @@ class LLMAgentExecutor:
             raise ValueError(
                 f"Agent result exceeds {self.max_result_chars} characters"
             )
-        return ExecutionResult(
-            result={
-                "content": content,
-                "agent_kind": self.KIND,
-                "model_role": model_role.strip(),
-                "request_id": request.idempotency_key,
-            }
-        )
+        result = {
+            "content": content,
+            "agent_kind": self.KIND,
+            "model_role": model_role.strip(),
+            "request_id": request.idempotency_key,
+        }
+        if result_format == self.SOURCE_CLAIMS_FORMAT:
+            claims = self._source_claims(content)
+            result["content"] = render_source_claims(claims)
+            result["source_claims"] = claims
+            result["result_format"] = result_format
+        return ExecutionResult(result=result)
 
     def accepts(self, *, executor: ExecutorKind, work: Mapping[str, object]) -> bool:
         agent = work.get("agent")
@@ -108,6 +117,17 @@ class LLMAgentExecutor:
         acceptance = "\n".join(
             f"- {item}" for item in request.work.get("acceptance", ())
         )
+        final_instruction = (
+            "请只返回一个 JSON 对象，不要返回 Markdown 代码块或其他文字。JSON 必须包含 "
+            "problem、target_users、functional_requirements、acceptance_criteria、"
+            "risks、open_questions、source_url。前六项是数组，每项只含 text、"
+            "claim_type、source_ids。claim_type 只能是 source_fact、inference、"
+            "open_question。source_fact 与 inference 只能引用输入 source_registry "
+            "中的 F 编号；open_question 只能放在 open_questions 并引用 Q 编号。"
+            if request.work.get("agent", {}).get("result_format")
+            == LLMAgentExecutor.SOURCE_CLAIMS_FORMAT
+            else "请直接给出可供下一人工节点审阅的正文，不要返回 JSON、代码块或字段包装。"
+        )
         return (
             "你是企业协作工作流中的 Agent 节点。只完成当前节点，不执行外部操作，"
             "不虚构未提供的事实。\n\n"
@@ -116,7 +136,7 @@ class LLMAgentExecutor:
             f"预期输出：\n{outputs}\n\n"
             f"验收条件：\n{acceptance}\n\n"
             f"已提交的输入与上游结果：\n{context}\n\n"
-            "请直接给出可供下一人工节点审阅的正文，不要返回 JSON、代码块或字段包装。"
+            f"{final_instruction}"
         )
 
     @staticmethod
@@ -151,6 +171,32 @@ class LLMAgentExecutor:
             if parts:
                 return "\n\n".join(parts)
         return content.strip()
+
+    @staticmethod
+    def _source_claims(content: str) -> Mapping[str, object]:
+        def strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+            value: dict[str, object] = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError(
+                        f"Agent source claims contain duplicate field: {key}"
+                    )
+                value[key] = item
+            return value
+
+        try:
+            value = json.loads(
+                content,
+                object_pairs_hook=strict_object,
+                parse_constant=lambda item: (_ for _ in ()).throw(
+                    ValueError(f"invalid JSON constant: {item}")
+                ),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Agent source claims must be valid JSON") from exc
+        if not isinstance(value, Mapping):
+            raise ValueError("Agent source claims must be a JSON object")
+        return to_json_value(value)
 
 
 class ToolExecutorRouter:
@@ -331,6 +377,300 @@ class ContentCheckToolExecutor:
                 f"content.check {field_name} must be between {minimum} and {maximum}"
             )
         return value
+
+
+SOURCE_CLAIM_SECTIONS = (
+    "problem",
+    "target_users",
+    "functional_requirements",
+    "acceptance_criteria",
+    "risks",
+    "open_questions",
+)
+SOURCE_CLAIM_LABELS = {
+    "problem": "问题",
+    "target_users": "目标用户",
+    "functional_requirements": "功能需求",
+    "acceptance_criteria": "验收条件",
+    "risks": "风险",
+    "open_questions": "待确认",
+}
+SOURCE_ID_RE = re.compile(r"^[FQ][1-9][0-9]{0,2}$")
+
+
+def render_source_claims(document: Mapping[str, object]) -> str:
+    """Render structured claims without erasing their provenance labels."""
+
+    sections: list[str] = []
+    for section in SOURCE_CLAIM_SECTIONS:
+        lines = [SOURCE_CLAIM_LABELS[section]]
+        raw_items = document.get(section)
+        if not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes)):
+            lines.append("- [结构无效] 该章节不是数组")
+            sections.append("\n".join(lines))
+            continue
+        for raw_item in raw_items:
+            if not isinstance(raw_item, Mapping):
+                lines.append("- [结构无效] 该条目不是对象")
+                continue
+            text = raw_item.get("text")
+            claim_type = raw_item.get("claim_type")
+            source_ids = raw_item.get("source_ids")
+            ids = (
+                ", ".join(str(item) for item in source_ids)
+                if isinstance(source_ids, Sequence)
+                and not isinstance(source_ids, (str, bytes))
+                else "?"
+            )
+            label = {
+                "source_fact": f"原文事实 {ids}",
+                "inference": f"分析推断，依据 {ids}",
+                "open_question": f"待确认 {ids}",
+            }.get(str(claim_type), "结构无效")
+            rendered = text.strip() if isinstance(text, str) else str(text)
+            lines.append(f"- [{label}] {rendered}")
+        sections.append("\n".join(lines))
+    source_url = document.get("source_url")
+    sections.append(
+        "来源\n" + (source_url.strip() if isinstance(source_url, str) else "[结构无效]")
+    )
+    return "\n\n".join(sections)
+
+
+class SourceClaimsCheckToolExecutor:
+    """Check claim IDs, categories, coverage, and source URL deterministically."""
+
+    KIND = "source_claims.check"
+
+    def __init__(self, *, max_source_chars: int = 50_000) -> None:
+        if max_source_chars < 1:
+            raise ValueError("max_source_chars must be positive")
+        self.max_source_chars = max_source_chars
+
+    def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        tool = request.work.get("tool")
+        if not self.accepts(executor=request.executor, work=request.work):
+            raise ValueError(f"unsupported source claims contract: {tool!r}")
+        assert isinstance(tool, Mapping)
+        args = tool.get("args") or {}
+        if not isinstance(args, Mapping):
+            raise ValueError("source_claims.check args must be an object")
+        if set(args) != {"document", "source_registry"}:
+            raise ValueError(
+                "source_claims.check args require only document and source_registry"
+            )
+        document = self._resolved_mapping(
+            request.input_snapshot,
+            args.get("document"),
+            "document",
+        )
+        registry = self._resolved_mapping(
+            request.input_snapshot,
+            args.get("source_registry"),
+            "source_registry",
+        )
+        violations, fact_ids, question_ids, used_facts, used_questions = (
+            self._violations(document, registry)
+        )
+        passed = not violations
+        evidence = (
+            f"来源事实 {len(used_facts)}/{len(fact_ids)}、待确认问题 "
+            f"{len(used_questions)}/{len(question_ids)} 均已按类别引用"
+            if passed
+            else "；".join(violations[:20])
+        )
+        suggestion = (
+            ""
+            if passed
+            else "修正结构、来源编号或事实与推断分类后，再交由节点 Owner 做语义复核。"
+        )
+        verdict = QualityVerdict.PASS if passed else QualityVerdict.FAIL
+        return ExecutionResult(
+            result={
+                "verdict": verdict.value,
+                "evidence": evidence,
+                "suggestion": suggestion,
+                "fact_coverage": {
+                    "used": len(used_facts),
+                    "total": len(fact_ids),
+                    "missing": sorted(fact_ids - used_facts),
+                },
+                "question_coverage": {
+                    "used": len(used_questions),
+                    "total": len(question_ids),
+                    "missing": sorted(question_ids - used_questions),
+                },
+                "violations": violations[:20],
+                "request_id": request.idempotency_key,
+            },
+            quality_result=QualityResult(
+                verdict=verdict,
+                evidence=evidence,
+                suggestion=suggestion,
+            ),
+        )
+
+    def accepts(self, *, executor: ExecutorKind, work: Mapping[str, object]) -> bool:
+        tool = work.get("tool")
+        return (
+            executor == ExecutorKind.TOOL
+            and isinstance(tool, Mapping)
+            and tool.get("kind") == self.KIND
+        )
+
+    def _resolved_mapping(
+        self,
+        root: Mapping[str, object],
+        path: object,
+        field_name: str,
+    ) -> Mapping[str, object]:
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError(f"source_claims.check {field_name} path is required")
+        found, value = ContentCheckToolExecutor._lookup(root, path.strip())
+        if not found:
+            raise ValueError(f"source_claims.check {field_name} was not found: {path}")
+        if not isinstance(value, Mapping):
+            raise ValueError(f"source_claims.check {field_name} must resolve to an object")
+        length = len(json.dumps(to_json_value(value), ensure_ascii=False))
+        if length > self.max_source_chars:
+            raise ValueError(
+                f"source_claims.check {field_name} exceeds {self.max_source_chars} characters"
+            )
+        return value
+
+    @staticmethod
+    def _registry_ids(
+        registry: Mapping[str, object],
+        field_name: str,
+        prefix: str,
+        minimum: int,
+        violations: list[str],
+    ) -> set[str]:
+        raw_items = registry.get(field_name)
+        if not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes)):
+            violations.append(f"source_registry.{field_name} 必须是数组")
+            return set()
+        if not minimum <= len(raw_items) <= 50:
+            violations.append(
+                f"source_registry.{field_name} 必须包含 {minimum} 到 50 项"
+            )
+        ids: set[str] = set()
+        for index, item in enumerate(raw_items):
+            if not isinstance(item, Mapping) or set(item) != {"id", "text"}:
+                violations.append(f"source_registry.{field_name}[{index}] 结构无效")
+                continue
+            item_id = item.get("id")
+            text = item.get("text")
+            if (
+                not isinstance(item_id, str)
+                or not SOURCE_ID_RE.fullmatch(item_id)
+                or not item_id.startswith(prefix)
+            ):
+                violations.append(f"source_registry.{field_name}[{index}] 编号无效")
+                continue
+            if item_id in ids:
+                violations.append(f"source_registry 编号重复：{item_id}")
+            ids.add(item_id)
+            if not isinstance(text, str) or not text.strip() or len(text) > 1000:
+                violations.append(f"source_registry {item_id} 文本无效")
+        return ids
+
+    @classmethod
+    def _violations(
+        cls,
+        document: Mapping[str, object],
+        registry: Mapping[str, object],
+    ) -> tuple[list[str], set[str], set[str], set[str], set[str]]:
+        violations: list[str] = []
+        if set(registry) != {"source_url", "facts", "open_questions"}:
+            violations.append("source_registry 只允许 source_url、facts、open_questions")
+        source_url = registry.get("source_url")
+        if not isinstance(source_url, str) or not source_url.strip():
+            violations.append("source_registry.source_url 无效")
+            source_url = ""
+        fact_ids = cls._registry_ids(registry, "facts", "F", 1, violations)
+        question_ids = cls._registry_ids(
+            registry,
+            "open_questions",
+            "Q",
+            0,
+            violations,
+        )
+        expected_document_fields = {*SOURCE_CLAIM_SECTIONS, "source_url"}
+        if set(document) != expected_document_fields:
+            violations.append("source_claims 文档字段不完整或包含未知字段")
+        if document.get("source_url") != source_url:
+            violations.append("source_claims.source_url 与来源登记不一致")
+
+        used_facts: set[str] = set()
+        used_questions: set[str] = set()
+        for section in SOURCE_CLAIM_SECTIONS:
+            raw_items = document.get(section)
+            if not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes)):
+                violations.append(f"{section} 必须是数组")
+                continue
+            minimum = (
+                1
+                if section
+                in {"problem", "functional_requirements", "acceptance_criteria"}
+                else 0
+            )
+            if not minimum <= len(raw_items) <= 50:
+                violations.append(f"{section} 必须包含 {minimum} 到 50 项")
+            for index, item in enumerate(raw_items):
+                location = f"{section}[{index}]"
+                if not isinstance(item, Mapping) or set(item) != {
+                    "text",
+                    "claim_type",
+                    "source_ids",
+                }:
+                    violations.append(f"{location} 结构无效")
+                    continue
+                text = item.get("text")
+                claim_type = item.get("claim_type")
+                source_ids = item.get("source_ids")
+                if not isinstance(text, str) or not text.strip() or len(text) > 1000:
+                    violations.append(f"{location}.text 无效")
+                if claim_type not in {"source_fact", "inference", "open_question"}:
+                    violations.append(f"{location}.claim_type 无效")
+                    continue
+                if not isinstance(source_ids, Sequence) or isinstance(
+                    source_ids,
+                    (str, bytes),
+                ):
+                    violations.append(f"{location}.source_ids 必须是数组")
+                    continue
+                normalized = [str(item_id) for item_id in source_ids]
+                if (
+                    not normalized
+                    or len(normalized) > 10
+                    or len(set(normalized)) != len(normalized)
+                ):
+                    violations.append(f"{location}.source_ids 数量或唯一性无效")
+                    continue
+                if claim_type == "open_question":
+                    if section != "open_questions":
+                        violations.append(f"{location} 的待确认问题必须放在 open_questions")
+                    invalid = sorted(set(normalized) - question_ids)
+                    if invalid:
+                        violations.append(f"{location} 引用了非 Q 编号：{', '.join(invalid)}")
+                    used_questions.update(set(normalized) & question_ids)
+                else:
+                    if section == "open_questions":
+                        violations.append(f"{location} 必须标记为 open_question")
+                    if section == "risks" and claim_type != "inference":
+                        violations.append(f"{location} 的风险必须标记为 inference")
+                    invalid = sorted(set(normalized) - fact_ids)
+                    if invalid:
+                        violations.append(f"{location} 引用了非 F 编号：{', '.join(invalid)}")
+                    used_facts.update(set(normalized) & fact_ids)
+        missing_facts = sorted(fact_ids - used_facts)
+        missing_questions = sorted(question_ids - used_questions)
+        if missing_facts:
+            violations.append("未覆盖来源事实：" + "、".join(missing_facts))
+        if missing_questions:
+            violations.append("未覆盖待确认问题：" + "、".join(missing_questions))
+        return violations, fact_ids, question_ids, used_facts, used_questions
 
 
 class DevelopmentToolExecutor:

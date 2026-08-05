@@ -197,6 +197,109 @@ def test_verified_owner_completion_submits_the_current_human_attempt():
     assert inbox.records(TENANT)[0].outcome == "submitted:human_node"
 
 
+def test_legacy_task_completion_cannot_bypass_an_accept_or_reject_card():
+    clock = Clock()
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=clock)
+    common_work = {
+        "objective": "Review the current result",
+        "inputs": [],
+        "outputs": [{"id": "decision", "type": "data"}],
+        "acceptance": ["A Human decision exists"],
+    }
+    service.create_draft(
+        instance_id="instance_decision_inbound",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=InstanceSnapshot(
+            nodes=(
+                NodeSpec(
+                    "draft",
+                    "Supply draft",
+                    "person_author",
+                    "human",
+                    work=common_work,
+                ),
+                NodeSpec(
+                    "review",
+                    "Accept or return draft",
+                    "person_reviewer",
+                    "human",
+                    deps=("draft",),
+                    work={
+                        **common_work,
+                        "inputs": ["dependencies.draft"],
+                        "decision": {
+                            "kind": "accept_reject",
+                            "reject_target": "draft",
+                        },
+                    },
+                ),
+            )
+        ),
+    )
+    service.confirm_draft(
+        TENANT,
+        "instance_decision_inbound",
+        actor_person_id="person_owner",
+    )
+    draft = service.dispatch_due(
+        TENANT,
+        "instance_decision_inbound",
+        worker_id="runtime-1",
+    )[0]
+    service.submit_human(
+        TENANT,
+        "instance_decision_inbound",
+        "draft",
+        actor_person_id="person_author",
+        attempt_no=draft.attempt_no,
+        expected_node_version=draft.expected_node_version,
+        result={"content": "draft result"},
+    )
+    review = service.dispatch_due(
+        TENANT,
+        "instance_decision_inbound",
+        worker_id="runtime-1",
+    )[0]
+    current = service.get(TENANT, "instance_decision_inbound")
+    review_node = current.nodes["review"]
+    repository.save_projection(
+        ProjectionRecord(
+            id="legacy-decision-task",
+            tenant_id=TENANT,
+            instance_id=current.id,
+            node_instance_id=review_node.id,
+            attempt_no=review.attempt_no,
+            kind=FEISHU_TASK_KIND,
+            external_id="task-1",
+            external_url="https://example.invalid/task-1",
+            idempotency_key="lf-binding",
+            sync_version=review_node.version,
+            state={"node_status": "waiting_human", "completed": False},
+            created_at=clock.now,
+            updated_at=clock.now,
+        )
+    )
+    inbox = InMemoryWorkflowInbox()
+    bridge = TaskEventInboxBridge(inbox, tenant_id=TENANT, clock=clock)
+    bridge("task.task.update_user_access_v2", event("event-decision-task"))
+    reader = TaskReader(task_state())
+
+    assert verify(inbox, reader, clock).run_once().verified == 1
+    report = worker(service, repository, inbox, clock).run_once()
+
+    assert report.submitted == 0
+    assert report.rejected == 1
+    restored = service.get(TENANT, "instance_decision_inbound")
+    assert restored.nodes["review"].status == NodeStatus.WAITING_HUMAN
+    assert (
+        inbox.records(TENANT)[0].outcome
+        == "rejected:decision_requires_card"
+    )
+
+
 def test_completion_poll_enqueues_a_durable_deduped_signal_and_reuses_intake():
     clock = Clock()
     service, repository, inbox, _ = setup_inbound(clock)

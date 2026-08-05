@@ -440,7 +440,15 @@ def validate_template_definition(definition: Mapping[str, Any]) -> None:
             raise TemplateValidationError(f"node work must be an object: {node_id}")
         _reject_unknown_fields(
             work,
-            {"objective", "inputs", "outputs", "acceptance", "agent", "tool"},
+            {
+                "objective",
+                "inputs",
+                "outputs",
+                "acceptance",
+                "agent",
+                "tool",
+                "decision",
+            },
             f"node work {node_id}",
         )
         executor = _required_text(raw_node.get("executor"), f"node executor: {node_id}")
@@ -458,7 +466,7 @@ def validate_template_definition(definition: Mapping[str, Any]) -> None:
                 )
             _reject_unknown_fields(
                 agent,
-                {"kind", "model_role", "instructions"},
+                {"kind", "model_role", "instructions", "result_format"},
                 f"node agent {node_id}",
             )
         elif agent is not None:
@@ -475,6 +483,17 @@ def validate_template_definition(definition: Mapping[str, Any]) -> None:
         elif tool is not None:
             raise TemplateValidationError(
                 f"tool definition requires tool executor: {node_id}"
+            )
+        decision = work.get("decision")
+        if decision is not None:
+            if executor != "human" or not isinstance(decision, Mapping):
+                raise TemplateValidationError(
+                    f"decision definition requires Human executor: {node_id}"
+                )
+            _reject_unknown_fields(
+                decision,
+                {"kind", "reject_target"},
+                f"node decision {node_id}",
             )
         inputs = work.get("inputs") or ()
         if not isinstance(inputs, Sequence) or isinstance(inputs, (str, bytes)):

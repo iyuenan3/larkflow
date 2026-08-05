@@ -439,7 +439,11 @@ def _target_event_observers(*, identity: str = "bot", profile: str | None = None
             "LARKFLOW_TARGET_INBOX_DSN and LARKFLOW_TARGET_TENANT must be set together"
         )
     from .workflow.cli import JsonLogger
-    from .workflow.im_commands import IMEventInboxBridge, RecoveryActionInboxBridge
+    from .workflow.im_commands import (
+        HumanDecisionActionInboxBridge,
+        IMEventInboxBridge,
+        RecoveryActionInboxBridge,
+    )
     from .workflow.inbound import TaskEventInboxBridge
     from .workflow.migrate import postgres_connection_factory
     from .workflow.postgres import PostgresIMCommandStore, PostgresWorkflowInbox
@@ -478,6 +482,14 @@ def _target_event_observers(*, identity: str = "bot", profile: str | None = None
         )
         observers.append(
             RecoveryActionInboxBridge(
+                im_store,
+                tenant_id=tenant_id,
+                card_updater=card_io.update_card,
+                feedback_reporter=feedback_logger,
+            )
+        )
+        observers.append(
+            HumanDecisionActionInboxBridge(
                 im_store,
                 tenant_id=tenant_id,
                 card_updater=card_io.update_card,

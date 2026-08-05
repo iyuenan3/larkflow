@@ -5,6 +5,7 @@ import re
 from collections.abc import Mapping, Sequence
 
 from .model import InstanceSnapshot, NodeStatus
+from .decision import HUMAN_DECISION_KIND
 
 
 NODE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -46,12 +47,17 @@ def validate_snapshot(snapshot: InstanceSnapshot) -> None:
             )
         if node.key in node.deps:
             raise GraphValidationError(f"node cannot depend on itself: {node.key}")
-        _validate_work(node.key, node.executor.value, node.work)
+        _validate_work(node.key, node.executor.value, node.work, node.deps)
 
     topological_order(snapshot)
 
 
-def _validate_work(node_key: str, executor: str, work: Mapping[str, object]) -> None:
+def _validate_work(
+    node_key: str,
+    executor: str,
+    work: Mapping[str, object],
+    deps: Sequence[str],
+) -> None:
     objective = work.get("objective")
     if not isinstance(objective, str) or not objective.strip():
         raise GraphValidationError(f"work objective is required: {node_key}")
@@ -91,6 +97,27 @@ def _validate_work(node_key: str, executor: str, work: Mapping[str, object]) -> 
         model_role = agent.get("model_role", "default")
         if not isinstance(model_role, str) or not model_role.strip():
             raise GraphValidationError(f"agent model_role is invalid: {node_key}")
+        result_format = agent.get("result_format", "plain_text")
+        if result_format not in {"plain_text", "source_claims.v1"}:
+            raise GraphValidationError(f"agent result_format is invalid: {node_key}")
+
+    decision = work.get("decision")
+    if decision is not None:
+        if executor != "human" or not isinstance(decision, Mapping):
+            raise GraphValidationError(
+                f"decision definition requires a Human node: {node_key}"
+            )
+        if set(decision) != {"kind", "reject_target"}:
+            raise GraphValidationError(
+                f"decision definition fields are invalid: {node_key}"
+            )
+        if decision.get("kind") != HUMAN_DECISION_KIND:
+            raise GraphValidationError(f"decision kind is invalid: {node_key}")
+        reject_target = decision.get("reject_target")
+        if not isinstance(reject_target, str) or reject_target not in deps:
+            raise GraphValidationError(
+                f"decision reject_target must be a direct dependency: {node_key}"
+            )
 
 
 def _non_empty_sequence(value: object) -> bool:

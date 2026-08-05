@@ -2392,6 +2392,7 @@ class PostgresIMCommandStore:
                 claim_token=token,
                 attempt_count=int(row["reply_attempt_count"]),
                 card_update_token=row["card_update_token"],
+                command_text=row["text"],
             )
             for row in rows
         )

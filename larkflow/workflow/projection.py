@@ -11,6 +11,12 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from .model import ExecutorKind, FrozenDict, NodeStatus, WorkflowInstance
+from .decision import (
+    HUMAN_DECISION_ACTION_NAME,
+    HumanDecision,
+    human_decision_action_name,
+    human_decision_config,
+)
 from .recovery import RECOVERY_ACTION_NAME, RecoveryAction, recovery_action_name
 from .repository import OutboxStore, ProjectionStore, WorkflowRepository
 from .serde import to_json_value
@@ -20,6 +26,7 @@ FEISHU_TASK_KIND = "feishu_task"
 FEISHU_MESSAGE_KIND = "feishu_message"
 FEISHU_DOCUMENT_KIND = "feishu_document"
 FEISHU_INSTANCE_MESSAGE_KIND = "feishu_instance_message"
+FEISHU_DECISION_CARD_KIND = "feishu_decision_card"
 PROJECTION_EVENTS = {
     "node.projection_create_requested",
     "node.projection_sync_requested",
@@ -394,7 +401,19 @@ class WorkflowProjectionWorker:
             or attempt.status.value == NodeStatus.WAITING_HUMAN.value
             or attempt.submitted_by_person_id is not None
         )
-        if human_work:
+        decision_work = (
+            node.executor == ExecutorKind.HUMAN
+            and human_decision_config(instance.snapshot.node(node_key).work)
+            is not None
+        )
+        if decision_work:
+            outcome = self._project_human_decision_card(
+                instance,
+                node_key,
+                attempt_no,
+                now=now,
+            )
+        elif human_work:
             outcome = self._project_task(
                 instance,
                 node_key,
@@ -421,6 +440,68 @@ class WorkflowProjectionWorker:
         if outcome == _ProjectionOutcome():
             return _ProjectionOutcome(noop=True)
         return outcome
+
+    def _project_human_decision_card(
+        self,
+        instance: WorkflowInstance,
+        node_key: str,
+        attempt_no: int,
+        *,
+        now: datetime,
+    ) -> _ProjectionOutcome:
+        node = instance.nodes[node_key]
+        attempt = instance.attempts[(node_key, attempt_no)]
+        current = attempt_no == node.current_attempt_no
+        if (
+            not current
+            or node.status != NodeStatus.WAITING_HUMAN
+            or attempt.status.value != NodeStatus.WAITING_HUMAN.value
+        ):
+            return _ProjectionOutcome(noop=True)
+        existing = self.projections.get_projection(
+            self.tenant_id,
+            node.id,
+            attempt_no,
+            FEISHU_DECISION_CARD_KIND,
+        )
+        if existing is not None:
+            return _ProjectionOutcome(noop=True)
+        if self.message_adapter is None:
+            raise ValueError("Human decision card requires a message adapter")
+        request = MessageProjectionRequest(
+            recipient_person_id=node.owner_person_id,
+            text=(
+                f"请复核流程 {instance.id} 的节点 {node_key}，"
+                "并在卡片中明确选择接受或退回。"
+            ),
+            idempotency_key=_projection_key(
+                self.tenant_id,
+                node.id,
+                str(attempt_no),
+                FEISHU_DECISION_CARD_KIND,
+            ),
+            card=human_decision_card(instance, node_key, attempt_no),
+        )
+        external = self.message_adapter.send_message(request)
+        if not external.message_id.strip():
+            raise ValueError("Feishu Human decision card returned no message_id")
+        self.projections.save_projection(
+            ProjectionRecord(
+                id=self.id_factory(),
+                tenant_id=self.tenant_id,
+                instance_id=instance.id,
+                node_instance_id=node.id,
+                attempt_no=attempt_no,
+                kind=FEISHU_DECISION_CARD_KIND,
+                external_id=external.message_id,
+                idempotency_key=request.idempotency_key,
+                sync_version=node.version,
+                state={"node_status": node.status.value, "settled": False},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        return _ProjectionOutcome(message_sent=True)
 
     def _project_task(
         self,
@@ -953,6 +1034,137 @@ def _safe_error_code(value: str | None) -> str:
         and (character.isalnum() or character in {"_", "-", ".", ":"})
     )
     return normalized or "execution_failed"
+
+
+def human_decision_card(
+    instance: WorkflowInstance,
+    node_key: str,
+    attempt_no: int,
+) -> dict[str, Any]:
+    """Render a version-bound accept or reject gate for one Human Owner."""
+
+    node = instance.nodes[node_key]
+    spec = instance.snapshot.node(node_key)
+    config = human_decision_config(spec.work)
+    if config is None:
+        raise ValueError("Human decision card requires an accept_reject contract")
+
+    def button(label: str, decision: HumanDecision, style: str) -> dict[str, Any]:
+        return {
+            "tag": "button",
+            "name": human_decision_action_name(decision),
+            "text": {"tag": "plain_text", "content": label},
+            "type": style,
+            "behaviors": [
+                {
+                    "type": "callback",
+                    "value": {
+                        "kind": HUMAN_DECISION_ACTION_NAME,
+                        "decision": decision.value,
+                        "instance_id": instance.id,
+                        "node_key": node_key,
+                        "attempt_no": attempt_no,
+                        "node_version": node.version,
+                        "instance_version": instance.version,
+                    },
+                }
+            ],
+        }
+
+    context = _decision_context(instance, node_key)
+    reject_target = str(config["reject_target"])
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "fill", "update_multi": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": "人工复核决定"},
+            "subtitle": {"tag": "plain_text", "content": spec.title},
+            "template": "blue",
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": (
+                        f"**流程**：`{instance.id}`\n"
+                        f"**节点**：{spec.title} (`{node_key}`)\n"
+                        f"**Attempt**：{attempt_no}\n"
+                        f"**退回建议起点**：`{reject_target}`\n\n"
+                        "接受会完成当前 Human 节点。退回会把当前 Attempt 和实例"
+                        "置为失败并保留全部证据，由 Instance Owner 再预览返工范围。"
+                    ),
+                },
+                {"tag": "hr"},
+                {"tag": "markdown", "content": context},
+                {
+                    "tag": "column_set",
+                    "columns": [
+                        {
+                            "tag": "column",
+                            "elements": [
+                                button(
+                                    "接受",
+                                    HumanDecision.ACCEPT,
+                                    "primary_filled",
+                                )
+                            ],
+                        },
+                        {
+                            "tag": "column",
+                            "elements": [
+                                button(
+                                    "退回",
+                                    HumanDecision.REJECT,
+                                    "default",
+                                )
+                            ],
+                        },
+                    ],
+                },
+            ]
+        },
+    }
+
+
+def human_decision_result_card(text: str) -> dict[str, Any]:
+    """Settle a Human decision card without leaving live controls."""
+
+    rejected_command = text.startswith("命令未执行") or "未执行" in text[:40]
+    returned = text.startswith("已退回")
+    if rejected_command:
+        title = "复核决定未执行"
+        template = "orange"
+    elif returned:
+        title = "已退回"
+        template = "red"
+    else:
+        title = "已接受"
+        template = "green"
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "default", "update_multi": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": title},
+            "template": template,
+        },
+        "body": {"elements": [{"tag": "markdown", "content": text}]},
+    }
+
+
+def _decision_context(instance: WorkflowInstance, node_key: str) -> str:
+    inputs = _instance_input_context(instance, node_key)
+    dependencies = _dependency_context(instance, node_key)
+    parts = []
+    if inputs:
+        parts.append("**流程输入**\n" + inputs)
+    if dependencies:
+        parts.append("**上游结果**\n" + dependencies)
+    rendered = "\n\n".join(parts) or "当前节点没有可展示的输入或上游结果。"
+    limit = 8_000
+    if len(rendered) <= limit:
+        return rendered
+    omitted = len(rendered) - limit
+    return rendered[:limit].rstrip() + f"\n\n[卡片省略 {omitted} 个字符]"
 
 
 def _recovery_card(

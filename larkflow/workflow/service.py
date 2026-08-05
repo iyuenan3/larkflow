@@ -14,6 +14,12 @@ from .editing import (
     StaleGraphEditPreviewError,
     apply_future_graph_edit,
 )
+from .decision import (
+    HumanDecision,
+    HumanDecisionNotAllowedError,
+    StaleHumanDecisionError,
+    human_decision_config,
+)
 from .events import AuditEvent, OutboxEvent
 from .graph import validate_snapshot
 from .model import (
@@ -23,6 +29,7 @@ from .model import (
     NodeActivation,
     NodeStatus,
     QualityResult,
+    QualityVerdict,
     WorkflowInstance,
     WorkflowInstanceSummary,
 )
@@ -406,6 +413,104 @@ class WorkflowService:
             audit_events=audit_events,
             outbox_events=outbox,
         )
+        return self.repository.get(tenant_id, instance_id)
+
+    def submit_human_decision(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        node_key: str,
+        decision: HumanDecision,
+        *,
+        actor_person_id: str,
+        attempt_no: int,
+        expected_instance_version: int,
+        expected_node_version: int,
+        correlation_id: str | None = None,
+    ) -> WorkflowInstance:
+        """Accept or reject one version-bound Human decision card."""
+
+        decision = HumanDecision(decision)
+        instance = self.repository.get(tenant_id, instance_id)
+        if instance.version != expected_instance_version:
+            raise StaleHumanDecisionError(
+                "instance changed after the decision card was sent"
+            )
+        expected_version = instance.version
+        self._require_running(instance)
+        try:
+            node = instance.nodes[node_key]
+            spec = instance.snapshot.node(node_key)
+        except KeyError as exc:
+            raise HumanDecisionNotAllowedError(
+                f"unknown Human decision node: {node_key}"
+            ) from exc
+        config = human_decision_config(spec.work)
+        if config is None or node.executor != ExecutorKind.HUMAN:
+            raise HumanDecisionNotAllowedError(
+                f"node is not an accept or reject decision: {node_key}"
+            )
+        now = self.clock()
+        if decision == HumanDecision.ACCEPT:
+            self.runner.submit_human(
+                instance,
+                node_key,
+                actor_person_id=actor_person_id,
+                attempt_no=attempt_no,
+                expected_node_version=expected_node_version,
+                result={"decision": "accepted"},
+                quality_result=None,
+                now=now,
+            )
+            self.scheduler.unlock_after(instance, node_key, now=now)
+            event_type = "node.human_decision_accepted"
+        else:
+            quality = QualityResult(
+                verdict=QualityVerdict.FAIL,
+                evidence="节点 Owner 明确退回当前交付物。",
+                suggestion=(
+                    "由 Instance Owner 通过节点重启预览选择返工范围，"
+                    "旧 Attempt、结果和审计继续保留。"
+                ),
+            )
+            self.runner.reject_human(
+                instance,
+                node_key,
+                actor_person_id=actor_person_id,
+                attempt_no=attempt_no,
+                expected_node_version=expected_node_version,
+                result={"decision": "rejected"},
+                quality_result=quality,
+                now=now,
+            )
+            self.scheduler.fail_instance(instance, now=now)
+            event_type = "node.human_decision_rejected"
+        audit_events = self._completion_audits(
+            instance,
+            event_type,
+            actor_person_id=actor_person_id,
+            node_key=node_key,
+            attempt_no=attempt_no,
+            correlation_id=correlation_id or self.id_factory(),
+            aggregate_version=expected_version + 1,
+            now=now,
+            payload={
+                "decision": decision.value,
+                "reject_target": config.get("reject_target"),
+            },
+        )
+        outbox = self._completion_outboxes(instance, node_key, now=now)
+        try:
+            self.repository.save(
+                instance,
+                expected_version=expected_version,
+                audit_events=audit_events,
+                outbox_events=outbox,
+            )
+        except ConcurrentUpdateError as exc:
+            raise StaleHumanDecisionError(
+                "instance changed while applying the decision"
+            ) from exc
         return self.repository.get(tenant_id, instance_id)
 
     def complete_automated(
