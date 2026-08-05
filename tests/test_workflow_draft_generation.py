@@ -63,6 +63,16 @@ class Completion:
         return self.value
 
 
+class SequenceCompletion:
+    def __init__(self, values):
+        self.values = iter(values)
+        self.calls = []
+
+    def complete(self, *, prompt, model_role):
+        self.calls.append((prompt, model_role))
+        return next(self.values)
+
+
 def test_generator_accepts_only_a_valid_bounded_inline_definition():
     completion = Completion(json.dumps(valid_definition()))
     generator = DraftDefinitionGenerator(completion)
@@ -73,6 +83,36 @@ def test_generator_accepts_only_a_valid_bounded_inline_definition():
     assert completion.calls[0][1] == "default"
     assert "1 到 8 个节点" in completion.calls[0][0]
     assert "personal.readonly" in completion.calls[0][0]
+    assert "不得反向引用或引用后续节点" in completion.calls[0][0]
+
+
+def test_generator_repairs_one_invalid_dependency_candidate():
+    invalid = valid_definition()
+    invalid["nodes"][0]["work"]["inputs"] = ["dependencies.review_summary"]
+    completion = SequenceCompletion(
+        (json.dumps(invalid), json.dumps(valid_definition()))
+    )
+
+    result = DraftDefinitionGenerator(completion).generate(
+        brief="Summarize the plan",
+        context="No invented facts",
+    )
+
+    assert result == valid_definition()
+    assert len(completion.calls) == 2
+    assert "node references undeclared dependency" in completion.calls[1][0]
+    assert "重新生成完整 JSON" in completion.calls[1][0]
+
+
+def test_generator_rejects_after_one_failed_repair_attempt():
+    invalid = valid_definition()
+    invalid["nodes"][0]["work"]["inputs"] = ["dependencies.review_summary"]
+    completion = SequenceCompletion((json.dumps(invalid), json.dumps(invalid)))
+
+    with pytest.raises(DraftGenerationRejected, match="undeclared dependency"):
+        DraftDefinitionGenerator(completion).generate(brief="brief", context="")
+
+    assert len(completion.calls) == 2
 
 
 def test_generator_preserves_server_owned_user_inputs_over_model_output():
