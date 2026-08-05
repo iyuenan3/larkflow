@@ -119,6 +119,15 @@ class RoleBindingReplyClaim:
     attempt_count: int
 
 
+@dataclass(frozen=True)
+class RoleBindingProgressClaim:
+    action: RoleBindingActionSignal
+    stage: str
+    revision: int
+    claim_token: str
+    attempt_count: int
+
+
 class RoleBindingStore(Protocol):
     def claim_role_binding_cards(
         self,
@@ -186,6 +195,7 @@ class RoleBindingStore(Protocol):
         *,
         claim_token: str,
         owner_bindings: Mapping[str, str],
+        progress_stage: str | None,
         now: datetime,
     ) -> None:
         ...
@@ -224,6 +234,28 @@ class RoleBindingStore(Protocol):
     ) -> tuple[RoleBindingActionClaim, ...]:
         ...
 
+    def claim_draft_generation_actions(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[RoleBindingActionClaim, ...]:
+        ...
+
+    def queue_role_binding_progress(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        stage: str,
+        now: datetime,
+    ) -> None:
+        ...
+
     def mark_role_binding_processed(
         self,
         tenant_id: str,
@@ -237,6 +269,38 @@ class RoleBindingStore(Protocol):
         ...
 
     def mark_role_binding_failed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        ...
+
+    def claim_role_binding_progress(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[RoleBindingProgressClaim, ...]:
+        ...
+
+    def mark_role_binding_progress_sent(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        now: datetime,
+    ) -> None:
+        ...
+
+    def mark_role_binding_progress_failed(
         self,
         tenant_id: str,
         event_id: str,
@@ -615,6 +679,12 @@ class RoleBindingVerificationWorker:
                 claim.action.id,
                 claim_token=claim.claim_token,
                 owner_bindings=bindings,
+                progress_stage=(
+                    "generating"
+                    if claim.request is not None
+                    and claim.request.kind == DRAFT_WIZARD_KIND
+                    else None
+                ),
                 now=completed_at,
             )
             verified += 1
@@ -710,6 +780,7 @@ class RoleBindingActionWorker:
         tenant_id: str,
         worker_id: str,
         draft_generator: DraftDefinitionGenerator | None = None,
+        draft_only: bool = False,
         clock: Callable[[], datetime] | None = None,
         claim_limit: int = 20,
         claim_ttl: timedelta = timedelta(minutes=2),
@@ -723,6 +794,9 @@ class RoleBindingActionWorker:
         self.tenant_id = tenant_id
         self.worker_id = worker_id
         self.draft_generator = draft_generator
+        self.draft_only = draft_only
+        if draft_only and draft_generator is None:
+            raise ValueError("draft-only worker requires a draft generator")
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.claim_limit = claim_limit
         self.claim_ttl = claim_ttl
@@ -731,7 +805,12 @@ class RoleBindingActionWorker:
 
     def run_once(self) -> RoleBindingActionReport:
         claim_now = self.clock()
-        claims = self.store.claim_role_binding_actions(
+        claim_method = (
+            self.store.claim_draft_generation_actions
+            if self.draft_only
+            else self.store.claim_role_binding_actions
+        )
+        claims = claim_method(
             self.tenant_id,
             worker_id=self.worker_id,
             now=claim_now,
@@ -803,7 +882,11 @@ class RoleBindingActionWorker:
         if request is None:
             raise RoleBindingRejected("role-binding request no longer exists")
         if request.kind == DRAFT_WIZARD_KIND:
+            if not self.draft_only:
+                raise RoleBindingRejected("draft wizard reached the regular action worker")
             return self._apply_draft_wizard(claim, request)
+        if self.draft_only:
+            raise RoleBindingRejected("non-wizard action reached the draft generator")
         if set(claim.owner_bindings) != set(request.roles):
             raise RoleBindingRejected("verified role bindings do not match the request")
         try:
@@ -897,6 +980,13 @@ class RoleBindingActionWorker:
                 definition = self.draft_generator.generate(
                     brief=brief,
                     context=context,
+                    on_repair=lambda: self.store.queue_role_binding_progress(
+                        self.tenant_id,
+                        claim.action.id,
+                        claim_token=claim.claim_token,
+                        stage="repairing",
+                        now=self.clock(),
+                    ),
                 )
                 roles = set(inline_owner_roles(definition))
                 available_bindings = {
@@ -956,6 +1046,88 @@ class RoleBindingActionWorker:
             ]
         )
         return instance.id, "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class RoleBindingProgressReport:
+    claimed: int = 0
+    sent: int = 0
+    failed: int = 0
+    errors: tuple[str, ...] = field(default_factory=tuple)
+
+
+class RoleBindingProgressWorker:
+    """Project durable draft-generation stages onto the original card."""
+
+    def __init__(
+        self,
+        store: RoleBindingStore,
+        sender: RoleBindingCardSender,
+        *,
+        tenant_id: str,
+        worker_id: str,
+        clock: Callable[[], datetime] | None = None,
+        claim_limit: int = 1,
+        claim_ttl: timedelta = timedelta(minutes=2),
+        retry_base: timedelta = timedelta(seconds=5),
+        retry_max: timedelta = timedelta(minutes=5),
+    ) -> None:
+        _validate_worker(tenant_id, worker_id, claim_limit, claim_ttl)
+        self.store = store
+        self.sender = sender
+        self.tenant_id = tenant_id
+        self.worker_id = worker_id
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.claim_limit = claim_limit
+        self.claim_ttl = claim_ttl
+        self.retry_base = retry_base
+        self.retry_max = retry_max
+
+    def run_once(self) -> RoleBindingProgressReport:
+        claims = self.store.claim_role_binding_progress(
+            self.tenant_id,
+            worker_id=self.worker_id,
+            now=self.clock(),
+            limit=self.claim_limit,
+            claim_ttl=self.claim_ttl,
+        )
+        sent = failed = 0
+        errors: list[str] = []
+        for claim in claims:
+            try:
+                self.sender.update_chat_card(
+                    token=claim.action.update_token,
+                    card=draft_wizard_progress_card(claim.stage),
+                )
+                self.store.mark_role_binding_progress_sent(
+                    self.tenant_id,
+                    claim.action.id,
+                    claim_token=claim.claim_token,
+                    now=self.clock(),
+                )
+                sent += 1
+            except Exception as exc:
+                failed += 1
+                failed_at = self.clock()
+                error = f"{claim.action.id}: {type(exc).__name__}: {exc}"
+                errors.append(error)
+                self.store.mark_role_binding_progress_failed(
+                    self.tenant_id,
+                    claim.action.id,
+                    claim_token=claim.claim_token,
+                    error=error,
+                    retry_at=failed_at + _retry_delay(
+                        claim.attempt_count,
+                        self.retry_base,
+                        self.retry_max,
+                    ),
+                )
+        return RoleBindingProgressReport(
+            claimed=len(claims),
+            sent=sent,
+            failed=failed,
+            errors=tuple(errors),
+        )
 
 
 @dataclass(frozen=True)
@@ -1312,6 +1484,31 @@ def draft_wizard_result_card(
     }
 
 
+def draft_wizard_progress_card(stage: str) -> dict[str, Any]:
+    content_by_stage = {
+        "generating": (
+            "参与人和输入已核验。中央 Agent 正在生成候选流程并执行服务端校验，"
+            "完成后只会保存为草稿，不会自动运行。"
+        ),
+        "repairing": (
+            "第一个候选未通过确定性校验。中央 Agent 正在根据校验结果重新生成，"
+            "完成后仍只会保存为草稿。"
+        ),
+    }
+    title_by_stage = {
+        "generating": "正在生成流程草稿",
+        "repairing": "正在修复候选图",
+    }
+    template_by_stage = {"generating": "blue", "repairing": "orange"}
+    if stage not in content_by_stage:
+        raise ValueError("unknown draft wizard progress stage")
+    return processing_card(
+        title=title_by_stage[stage],
+        content=content_by_stage[stage],
+        template=template_by_stage[stage],
+    )
+
+
 def role_binding_instance_id(tenant_id: str, message_id: str) -> str:
     digest = hashlib.sha256(
         f"{tenant_id}:{message_id}".encode("utf-8")
@@ -1391,10 +1588,14 @@ __all__ = [
     "RoleBindingReplyClaim",
     "RoleBindingReplyReport",
     "RoleBindingReplyWorker",
+    "RoleBindingProgressClaim",
+    "RoleBindingProgressReport",
+    "RoleBindingProgressWorker",
     "RoleBindingRequest",
     "RoleBindingVerificationReport",
     "RoleBindingVerificationWorker",
     "draft_wizard_card",
+    "draft_wizard_progress_card",
     "draft_wizard_result_card",
     "role_binding_card",
     "role_binding_instance_id",

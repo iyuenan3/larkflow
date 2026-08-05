@@ -33,7 +33,12 @@ def report_card_feedback(
         return
 
 
-def processing_card(*, title: str, content: str) -> dict[str, Any]:
+def processing_card(
+    *,
+    title: str,
+    content: str,
+    template: str = "blue",
+) -> dict[str, Any]:
     """Replace live controls with a visible, non-clickable processing state."""
 
     if not title.strip() or not content.strip():
@@ -43,7 +48,7 @@ def processing_card(*, title: str, content: str) -> dict[str, Any]:
         "config": {"width_mode": "default", "update_multi": True},
         "header": {
             "title": {"tag": "plain_text", "content": title.strip()},
-            "template": "blue",
+            "template": template,
         },
         "body": {
             "elements": [

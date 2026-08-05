@@ -21,6 +21,7 @@ from larkflow.llm.client import OpenAICompatLLM
 
 from .completion_poll import TaskCompletionPoller
 from .config import (
+    TargetDraftGenerationSettings,
     TargetInboundSettings,
     TargetInteractiveSettings,
     TargetProjectionSettings,
@@ -28,7 +29,8 @@ from .config import (
 )
 from .daemon import WorkflowWorkerLoop
 from .directory import CliFeishuDirectory
-from .draft_generation import DraftDefinitionGenerator
+from .draft_generation import DraftDefinitionGenerator, MAX_GENERATION_ATTEMPTS
+from .draft_generation_daemon import DraftGenerationWorkerLoop
 from .executors import (
     ContentCheckToolExecutor,
     DevelopmentToolExecutor,
@@ -61,6 +63,7 @@ from .projection_daemon import ProjectionWorkerLoop
 from .role_bindings import (
     RoleBindingActionWorker,
     RoleBindingCardWorker,
+    RoleBindingProgressWorker,
     RoleBindingReplyWorker,
     RoleBindingVerificationWorker,
 )
@@ -98,6 +101,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--inbound-worker-id",
         default=os.environ.get("LARKFLOW_TARGET_INBOUND_WORKER_ID"),
+    )
+    parser.add_argument(
+        "--draft-worker-id",
+        default=os.environ.get("LARKFLOW_TARGET_DRAFT_WORKER_ID"),
     )
     parser.add_argument(
         "--interactive-worker-id",
@@ -213,6 +220,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("run-once", help="run one durable worker tick")
     commands.add_parser("serve", help="run worker ticks until SIGINT or SIGTERM")
+    commands.add_parser(
+        "generate-drafts-once",
+        help="run one isolated natural-language draft generation tick",
+    )
+    commands.add_parser(
+        "generate-drafts",
+        help="generate natural-language drafts until stopped",
+    )
     commands.add_parser("project-once", help="run one Feishu projection tick")
     commands.add_parser(
         "reconcile-projections",
@@ -294,6 +309,10 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
     }
     inbound_command = namespace.command in {"inbound-once", "inbound"}
     interactive_command = namespace.command in {"interact-once", "interact"}
+    draft_generation_command = namespace.command in {
+        "generate-drafts-once",
+        "generate-drafts",
+    }
     verification_command = namespace.command in {
         "verify-inbound-once",
         "verify-inbound",
@@ -302,6 +321,7 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
         projection_command
         or inbound_command
         or interactive_command
+        or draft_generation_command
         or verification_command
     ):
         verify_migrations(connection_factory)
@@ -322,6 +342,55 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
         )
     service = WorkflowService(repository, directory=directory)
     templates = TemplateService(repository)
+
+    if draft_generation_command:
+        settings = TargetDraftGenerationSettings.from_environ(
+            dsn=dsn,
+            tenant_id=tenant_id,
+            worker_id=namespace.draft_worker_id,
+        )
+        generator = _draft_generator(settings, environ=os.environ, log=log)
+        worker = RoleBindingActionWorker(
+            PostgresIMCommandStore(connection_factory),
+            service,
+            templates,
+            tenant_id=settings.tenant_id,
+            worker_id=settings.worker_id,
+            draft_generator=generator,
+            draft_only=True,
+            claim_limit=settings.claim_limit,
+            claim_ttl=settings.claim_ttl,
+            retry_base=settings.retry_base,
+            retry_max=settings.retry_max,
+        )
+        if namespace.command == "generate-drafts-once":
+            report = worker.run_once()
+            log(
+                "draft_generation_tick",
+                DraftGenerationWorkerLoop.report_fields(report),
+            )
+            return int(bool(report.errors))
+        stop_event = Event()
+        _install_signal_handlers(stop_event, log, prefix="draft_generation")
+        log(
+            "draft_generation_started",
+            {
+                "tenant_id": settings.tenant_id,
+                "worker_id": settings.worker_id,
+                "claim_ttl_seconds": settings.claim_ttl.total_seconds(),
+                "claim_limit": settings.claim_limit,
+                "idle_min_seconds": settings.loop.idle_min_seconds,
+                "idle_max_seconds": settings.loop.idle_max_seconds,
+            },
+        )
+        with _postgres_worker_wakeup(connection_factory, log) as wait_for_work:
+            DraftGenerationWorkerLoop(
+                worker,
+                settings=settings.loop,
+                wait_for_work=wait_for_work,
+                log=log,
+            ).run(stop_event)
+        return 0
 
     if namespace.command == "template-create":
         template, version = templates.create_template(
@@ -657,6 +726,16 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 retry_base=settings.retry_base,
                 retry_max=settings.retry_max,
             ),
+            role_binding_progress_worker=RoleBindingProgressWorker(
+                im_store,
+                message_adapter,
+                tenant_id=settings.tenant_id,
+                worker_id=f"{settings.worker_id}:role-progress",
+                claim_limit=settings.claim_limit,
+                claim_ttl=settings.claim_ttl,
+                retry_base=settings.retry_base,
+                retry_max=settings.retry_max,
+            ),
             role_binding_reply_worker=RoleBindingReplyWorker(
                 im_store,
                 message_adapter,
@@ -842,12 +921,6 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
         runner=NodeRunner(claim_ttl=settings.claim_ttl),
     )
     executor_registry = _executors(settings, environ=os.environ, log=log)
-    agent_executor = executor_registry.get(ExecutorKind.AGENT)
-    draft_generator = (
-        DraftDefinitionGenerator(agent_executor.client)
-        if isinstance(agent_executor, LLMAgentExecutor)
-        else None
-    )
     worker = WorkflowWorker(
         service,
         repository,
@@ -876,7 +949,6 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             templates,
             tenant_id=settings.tenant_id,
             worker_id=f"{settings.worker_id}:role-binding",
-            draft_generator=draft_generator,
             claim_limit=settings.candidate_limit,
             claim_ttl=settings.claim_ttl,
         )
@@ -1007,6 +1079,47 @@ def _executors(
     if tool_adapters:
         registry[ExecutorKind.TOOL] = ToolExecutorRouter(tool_adapters)
     return registry
+
+
+def _draft_generator(
+    settings: TargetDraftGenerationSettings,
+    *,
+    environ: Mapping[str, str],
+    log: JsonLogger | None = None,
+) -> DraftDefinitionGenerator:
+    roles = load_llm_roles(dict(environ))
+    if not roles:
+        raise ValueError(
+            "Draft generation requires a complete LLM_BASE_URL, LLM_API_KEY, "
+            "and LLM_MODEL route"
+        )
+    route_seconds = _maximum_llm_route_seconds(roles)
+    required_seconds = (
+        route_seconds * MAX_GENERATION_ATTEMPTS
+        + settings.claim_safety.total_seconds()
+    )
+    if settings.claim_ttl.total_seconds() <= required_seconds:
+        raise ValueError(
+            "Draft claim TTL must exceed two complete LLM route budgets plus "
+            f"the safety margin ({required_seconds:g}s required)"
+        )
+
+    def note_call(fields: dict[str, Any]) -> None:
+        if log is not None:
+            log("draft_llm_call", fields)
+
+    def note_failover(fields: dict[str, Any]) -> None:
+        if log is not None:
+            log("draft_llm_failover", fields, stream=sys.stderr)
+
+    return DraftDefinitionGenerator(
+        OpenAICompatLLM(
+            roles,
+            on_call=note_call,
+            on_failover=note_failover,
+        ),
+        max_result_chars=settings.max_result_chars,
+    )
 
 
 def _maximum_llm_route_seconds(roles: Mapping[str, Mapping[str, Any]]) -> float:

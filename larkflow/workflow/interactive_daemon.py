@@ -27,6 +27,8 @@ class InteractiveWorkerReport:
     role_bindings_verified: int = 0
     role_bindings_rejected: int = 0
     role_binding_verification_failed: int = 0
+    role_binding_progress_sent: int = 0
+    role_binding_progress_failed: int = 0
     role_binding_replies_sent: int = 0
     role_binding_card_updates_failed: int = 0
     role_binding_replies_failed: int = 0
@@ -49,6 +51,8 @@ class InteractiveLoopSummary:
     role_bindings_verified: int = 0
     role_bindings_rejected: int = 0
     role_binding_verification_failed: int = 0
+    role_binding_progress_sent: int = 0
+    role_binding_progress_failed: int = 0
     role_binding_replies_sent: int = 0
     role_binding_card_updates_failed: int = 0
     role_binding_replies_failed: int = 0
@@ -65,6 +69,7 @@ class InteractiveWorker:
         im_reply_worker: Any | None = None,
         role_binding_card_worker: Any | None = None,
         role_binding_verification_worker: Any | None = None,
+        role_binding_progress_worker: Any | None = None,
         role_binding_reply_worker: Any | None = None,
         monotonic: Callable[[], float] | None = None,
         log: LogEvent | None = None,
@@ -73,6 +78,7 @@ class InteractiveWorker:
         self.im_reply_worker = im_reply_worker
         self.role_binding_card_worker = role_binding_card_worker
         self.role_binding_verification_worker = role_binding_verification_worker
+        self.role_binding_progress_worker = role_binding_progress_worker
         self.role_binding_reply_worker = role_binding_reply_worker
         self.monotonic = monotonic or time.monotonic
         self.log = log or (lambda _event, _fields: None)
@@ -117,6 +123,14 @@ class InteractiveWorker:
                     "role_bindings_verified": "verified",
                     "role_bindings_rejected": "rejected",
                     "role_binding_verification_failed": "failed",
+                },
+            ),
+            (
+                "role_progress",
+                self.role_binding_progress_worker,
+                {
+                    "role_binding_progress_sent": "sent",
+                    "role_binding_progress_failed": "failed",
                 },
             ),
             (

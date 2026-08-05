@@ -19,6 +19,7 @@ from larkflow.workflow import (
     ProjectionReconciliationReport,
     ProjectionWorkerReport,
     TargetInboundSettings,
+    TargetDraftGenerationSettings,
     TargetInteractiveSettings,
     TargetProjectionSettings,
     TargetRuntimeSettings,
@@ -552,6 +553,68 @@ def test_interactive_settings_enforce_one_claim_per_replica(monkeypatch):
                 "LARKFLOW_TARGET_DSN": "postgresql:///larkflow_target_dev",
                 "LARKFLOW_TARGET_TENANT": "dev",
                 "LARKFLOW_TARGET_INTERACTIVE_CLAIM_LIMIT": "2",
+            }
+        )
+
+
+def test_interactive_progress_lane_runs_before_the_terminal_reply_lane():
+    order = []
+
+    class Lane:
+        def __init__(self, name, report):
+            self.name = name
+            self.report = report
+
+        def run_once(self):
+            order.append(self.name)
+            return self.report
+
+    progress = SimpleNamespace(claimed=1, sent=1, failed=0, errors=())
+    reply = SimpleNamespace(
+        claimed=1,
+        sent=1,
+        card_updates_failed=0,
+        failed=0,
+        errors=(),
+    )
+
+    report = InteractiveWorker(
+        role_binding_progress_worker=Lane("progress", progress),
+        role_binding_reply_worker=Lane("reply", reply),
+    ).run_once()
+
+    assert order == ["progress", "reply"]
+    assert report.role_binding_progress_sent == 1
+    assert report.role_binding_replies_sent == 1
+
+
+def test_draft_generation_settings_are_single_claim_and_independent(monkeypatch):
+    monkeypatch.setattr("larkflow.workflow.config.socket.gethostname", lambda: "host-a")
+    monkeypatch.setattr("larkflow.workflow.config.os.getpid", lambda: 123)
+    settings = TargetDraftGenerationSettings.from_environ(
+        {
+            "LARKFLOW_TARGET_DSN": "postgresql:///larkflow_target_dev",
+            "LARKFLOW_TARGET_TENANT": "dev",
+            "LARKFLOW_TARGET_DRAFT_CLAIM_TTL_SECONDS": "700",
+            "LARKFLOW_TARGET_DRAFT_CLAIM_LIMIT": "1",
+            "LARKFLOW_TARGET_DRAFT_CLAIM_SAFETY_SECONDS": "40",
+            "LARKFLOW_TARGET_DRAFT_IDLE_MIN_SECONDS": "0.5",
+            "LARKFLOW_TARGET_DRAFT_IDLE_MAX_SECONDS": "2",
+        }
+    )
+
+    assert settings.worker_id == "host-a:123:draft"
+    assert settings.claim_ttl == timedelta(seconds=700)
+    assert settings.claim_limit == 1
+    assert settings.claim_safety == timedelta(seconds=40)
+    assert settings.loop == WorkerLoopSettings(0.5, 2.0)
+
+    with pytest.raises(ValueError, match="claim_limit must be 1"):
+        TargetDraftGenerationSettings.from_environ(
+            {
+                "LARKFLOW_TARGET_DSN": "postgresql:///larkflow_target_dev",
+                "LARKFLOW_TARGET_TENANT": "dev",
+                "LARKFLOW_TARGET_DRAFT_CLAIM_LIMIT": "2",
             }
         )
 

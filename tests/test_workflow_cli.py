@@ -99,6 +99,16 @@ def test_cli_exposes_isolated_interactive_worker_commands():
     assert persistent.command == "interact"
 
 
+def test_cli_exposes_isolated_draft_generation_commands():
+    parser = build_parser()
+
+    once = parser.parse_args(["generate-drafts-once"])
+    persistent = parser.parse_args(["generate-drafts"])
+
+    assert once.command == "generate-drafts-once"
+    assert persistent.command == "generate-drafts"
+
+
 def test_status_projection_never_exposes_claim_token():
     repository = InMemoryWorkflowRepository()
     service = WorkflowService(

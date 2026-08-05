@@ -1,7 +1,7 @@
 """Generate a bounded inline workflow definition from a human brief."""
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 import json
 from typing import Any, Protocol
 
@@ -49,6 +49,7 @@ class DraftDefinitionGenerator:
         *,
         brief: str,
         context: str,
+        on_repair: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         brief = _bounded_text(brief, field="brief", required=True)
         context = _bounded_text(context, field="context", required=False)
@@ -81,6 +82,8 @@ class DraftDefinitionGenerator:
                     invalid_result=invalid_result,
                     validation_error=str(exc),
                 )
+                if on_repair is not None:
+                    on_repair()
                 continue
             return definition
         raise AssertionError("draft generation attempt loop exhausted")

@@ -68,6 +68,7 @@ from .role_bindings import (
     RoleBindingActionClaim,
     RoleBindingActionSignal,
     RoleBindingCardClaim,
+    RoleBindingProgressClaim,
     RoleBindingReplyClaim,
     RoleBindingRequest,
 )
@@ -2661,6 +2662,26 @@ class PostgresIMCommandStore:
             limit=limit,
             claim_ttl=claim_ttl,
             stage="processing",
+            wizard_only=False,
+        )
+
+    def claim_draft_generation_actions(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[RoleBindingActionClaim, ...]:
+        return self._claim_role_binding_actions(
+            tenant_id,
+            worker_id=worker_id,
+            now=now,
+            limit=limit,
+            claim_ttl=claim_ttl,
+            stage="processing",
+            wizard_only=True,
         )
 
     def _claim_role_binding_actions(
@@ -2672,6 +2693,7 @@ class PostgresIMCommandStore:
         limit: int,
         claim_ttl: timedelta,
         stage: str,
+        wizard_only: bool | None = None,
     ) -> tuple[RoleBindingActionClaim, ...]:
         self._validate_claim(worker_id, limit, claim_ttl)
         if stage == "verification":
@@ -2694,13 +2716,31 @@ class PostgresIMCommandStore:
                 )
                 OR (status = 'processing' AND claim_expires_at <= %s)
             """
+        if wizard_only is None:
+            wizard_predicate = "TRUE"
+        else:
+            exists = """
+                EXISTS (
+                    SELECT 1
+                    FROM workflow_im_commands AS wizard_command
+                    WHERE wizard_command.tenant_id =
+                              workflow_role_binding_actions.tenant_id
+                      AND wizard_command.reply_kind = 'role_binding_card'
+                      AND wizard_command.reply_external_id =
+                              workflow_role_binding_actions.message_id
+                      AND wizard_command.role_binding_request->>'kind' =
+                              'draft_wizard'
+                )
+            """
+            wizard_predicate = exists if wizard_only else f"NOT ({exists})"
         token = secrets.token_urlsafe(24)
         expires_at = now + claim_ttl
         sql = f"""
             WITH selected AS (
                 SELECT tenant_id, id
                 FROM workflow_role_binding_actions
-                WHERE tenant_id = %s AND is_canonical AND ({predicate})
+                WHERE tenant_id = %s AND is_canonical
+                  AND ({wizard_predicate}) AND ({predicate})
                 ORDER BY available_at, received_at, id
                 FOR UPDATE SKIP LOCKED
                 LIMIT %s
@@ -2758,6 +2798,7 @@ class PostgresIMCommandStore:
         *,
         claim_token: str,
         owner_bindings: Mapping[str, str],
+        progress_stage: str | None,
         now: datetime,
     ) -> None:
         self._settle_role_action(
@@ -2765,6 +2806,19 @@ class PostgresIMCommandStore:
             UPDATE workflow_role_binding_actions
             SET status = 'verified', verified_at = %s, available_at = %s,
                 owner_bindings = %s, failure_stage = NULL, last_error = NULL,
+                progress_stage = %s,
+                progress_revision = CASE
+                    WHEN CAST(%s AS text) IS NULL THEN progress_revision
+                    ELSE progress_revision + 1
+                END,
+                progress_status = CASE
+                    WHEN CAST(%s AS text) IS NULL THEN progress_status
+                    ELSE 'pending'
+                END,
+                progress_available_at = CASE
+                    WHEN CAST(%s AS text) IS NULL THEN progress_available_at
+                    ELSE %s
+                END,
                 claimed_by = NULL, claim_token = NULL,
                 claim_expires_at = NULL
             WHERE tenant_id = %s AND id = %s
@@ -2775,6 +2829,11 @@ class PostgresIMCommandStore:
                 now,
                 now,
                 Jsonb(dict(owner_bindings)),
+                progress_stage,
+                progress_stage,
+                progress_stage,
+                progress_stage,
+                now,
                 tenant_id,
                 event_id,
                 claim_token,
@@ -2802,6 +2861,10 @@ class PostgresIMCommandStore:
                 END,
                 reply_available_at = CASE
                     WHEN CAST(%s AS text) IS NULL THEN NULL ELSE %s
+                END,
+                progress_status = CASE
+                    WHEN progress_status = 'sending' THEN 'sending'
+                    WHEN progress_status IS NULL THEN NULL ELSE 'sent'
                 END,
                 claimed_by = NULL, claim_token = NULL,
                 claim_expires_at = NULL
@@ -2893,6 +2956,39 @@ class PostgresIMCommandStore:
             event_id,
         )
 
+    def queue_role_binding_progress(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        stage: str,
+        now: datetime,
+    ) -> None:
+        if stage not in {"generating", "repairing"}:
+            raise ValueError("unknown role-binding progress stage")
+        self._settle_role_action(
+            """
+            UPDATE workflow_role_binding_actions
+            SET progress_revision = CASE
+                    WHEN progress_stage IS DISTINCT FROM %s
+                    THEN progress_revision + 1 ELSE progress_revision
+                END,
+                progress_stage = %s,
+                progress_status = CASE
+                    WHEN progress_status = 'sending' THEN 'sending'
+                    ELSE 'pending'
+                END,
+                progress_available_at = %s,
+                progress_last_error = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND status = 'processing' AND claim_token = %s
+            RETURNING id
+            """,
+            (stage, stage, now, tenant_id, event_id, claim_token),
+            event_id,
+        )
+
     def mark_role_binding_processed(
         self,
         tenant_id: str,
@@ -2911,6 +3007,10 @@ class PostgresIMCommandStore:
                 failure_stage = NULL, last_error = NULL,
                 reply_text = %s, reply_status = 'pending',
                 reply_available_at = %s,
+                progress_status = CASE
+                    WHEN progress_status = 'sending' THEN 'sending'
+                    WHEN progress_status IS NULL THEN NULL ELSE 'sent'
+                END,
                 claimed_by = NULL, claim_token = NULL,
                 claim_expires_at = NULL
             WHERE tenant_id = %s AND id = %s
@@ -2926,6 +3026,145 @@ class PostgresIMCommandStore:
                 event_id,
                 claim_token,
             ),
+            event_id,
+        )
+
+    def claim_role_binding_progress(
+        self,
+        tenant_id: str,
+        *,
+        worker_id: str,
+        now: datetime,
+        limit: int,
+        claim_ttl: timedelta,
+    ) -> tuple[RoleBindingProgressClaim, ...]:
+        self._validate_claim(worker_id, limit, claim_ttl)
+        token = secrets.token_urlsafe(24)
+        expires_at = now + claim_ttl
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                rows = connection.execute(
+                    """
+                    WITH selected AS (
+                        SELECT tenant_id, id
+                        FROM workflow_role_binding_actions
+                        WHERE tenant_id = %s AND is_canonical
+                          AND status IN ('verified', 'processing')
+                          AND (
+                            (progress_status IN ('pending', 'failed')
+                                AND progress_available_at <= %s)
+                            OR (
+                                progress_status = 'sending'
+                                AND progress_claim_expires_at <= %s
+                            )
+                          )
+                        ORDER BY progress_available_at, received_at, id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT %s
+                    ), updated AS (
+                        UPDATE workflow_role_binding_actions AS action
+                        SET progress_status = 'sending',
+                            progress_attempt_count =
+                                action.progress_attempt_count + 1,
+                            progress_claimed_by = %s,
+                            progress_claim_token = %s,
+                            progress_claim_expires_at = %s,
+                            progress_claim_revision = action.progress_revision
+                        FROM selected
+                        WHERE action.tenant_id = selected.tenant_id
+                          AND action.id = selected.id
+                        RETURNING action.*
+                    )
+                    SELECT * FROM updated
+                    """,
+                    (
+                        tenant_id,
+                        now,
+                        now,
+                        limit,
+                        worker_id,
+                        token,
+                        expires_at,
+                    ),
+                ).fetchall()
+        return tuple(
+            RoleBindingProgressClaim(
+                action=_role_action_from_row(row),
+                stage=str(row["progress_stage"]),
+                revision=int(row["progress_claim_revision"]),
+                claim_token=token,
+                attempt_count=int(row["progress_attempt_count"]),
+            )
+            for row in rows
+        )
+
+    def mark_role_binding_progress_sent(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        now: datetime,
+    ) -> None:
+        self._settle_role_action(
+            """
+            UPDATE workflow_role_binding_actions
+            SET progress_status = CASE
+                    WHEN progress_revision > progress_claim_revision
+                         AND status IN ('verified', 'processing')
+                    THEN 'pending' ELSE 'sent'
+                END,
+                progress_available_at = CASE
+                    WHEN progress_revision > progress_claim_revision
+                         AND status IN ('verified', 'processing')
+                    THEN %s ELSE progress_available_at
+                END,
+                progress_sent_at = %s,
+                progress_last_error = NULL,
+                progress_claimed_by = NULL,
+                progress_claim_token = NULL,
+                progress_claim_expires_at = NULL,
+                progress_claim_revision = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND progress_status = 'sending'
+              AND progress_claim_token = %s
+            RETURNING id
+            """,
+            (now, now, tenant_id, event_id, claim_token),
+            event_id,
+        )
+
+    def mark_role_binding_progress_failed(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        retry_at: datetime,
+    ) -> None:
+        self._settle_role_action(
+            """
+            UPDATE workflow_role_binding_actions
+            SET progress_status = CASE
+                    WHEN progress_revision > progress_claim_revision
+                         AND status IN ('verified', 'processing')
+                    THEN 'pending'
+                    WHEN status IN ('verified', 'processing') THEN 'failed'
+                    ELSE 'sent'
+                END,
+                progress_available_at = %s,
+                progress_last_error = %s,
+                progress_claimed_by = NULL,
+                progress_claim_token = NULL,
+                progress_claim_expires_at = NULL,
+                progress_claim_revision = NULL
+            WHERE tenant_id = %s AND id = %s
+              AND progress_status = 'sending'
+              AND progress_claim_token = %s
+            RETURNING id
+            """,
+            (retry_at, error, tenant_id, event_id, claim_token),
             event_id,
         )
 
@@ -2949,6 +3188,10 @@ class PostgresIMCommandStore:
                         SELECT tenant_id, id
                         FROM workflow_role_binding_actions
                         WHERE tenant_id = %s AND is_canonical
+                          AND NOT (
+                            progress_status = 'sending'
+                            AND progress_claim_expires_at > %s
+                          )
                           AND (
                             (reply_status IN ('pending', 'failed')
                                 AND reply_available_at <= %s)
@@ -2988,6 +3231,7 @@ class PostgresIMCommandStore:
                     """,
                     (
                         tenant_id,
+                        now,
                         now,
                         now,
                         limit,

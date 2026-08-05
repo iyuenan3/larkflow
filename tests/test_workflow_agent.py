@@ -14,9 +14,10 @@ from larkflow.workflow import (
     LLMAgentExecutor,
     TemplateService,
     TargetRuntimeSettings,
+    TargetDraftGenerationSettings,
     validate_snapshot,
 )
-from larkflow.workflow.cli import _executors
+from larkflow.workflow.cli import _draft_generator, _executors
 
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
@@ -179,6 +180,33 @@ def test_runtime_refuses_to_enable_agent_without_credentials():
 
     with pytest.raises(ValueError, match="LLM_BASE_URL"):
         _executors(settings, environ={})
+
+
+def test_draft_generator_budgets_both_model_attempts():
+    environment = {
+        "LLM_BASE_URL": "https://llm.example.invalid/v1",
+        "LLM_API_KEY": "test-key",
+        "LLM_MODEL": "test-model",
+        "LLM_TIMEOUT": "20",
+    }
+    safe = TargetDraftGenerationSettings(
+        dsn="postgresql:///test",
+        tenant_id="tenant_agent",
+        worker_id="draft_worker",
+        claim_ttl=timedelta(seconds=51),
+        claim_safety=timedelta(seconds=10),
+    )
+    assert _draft_generator(safe, environ=environment) is not None
+
+    unsafe = TargetDraftGenerationSettings(
+        dsn="postgresql:///test",
+        tenant_id="tenant_agent",
+        worker_id="draft_worker",
+        claim_ttl=timedelta(seconds=50),
+        claim_safety=timedelta(seconds=10),
+    )
+    with pytest.raises(ValueError, match="two complete LLM route budgets"):
+        _draft_generator(unsafe, environ=environment)
 
 
 def test_packaged_human_agent_human_template_matches_the_target_contract():

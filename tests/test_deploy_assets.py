@@ -23,6 +23,7 @@ def test_development_restart_asset_covers_all_python_services():
 
     expected = {
         "larkflow-target.service",
+        "larkflow-target-draft-generator.service",
         "larkflow-target-projection.service",
         "larkflow-target-interactive@1.service",
         "larkflow-target-interactive@2.service",
@@ -94,3 +95,20 @@ def test_interactive_systemd_template_runs_the_isolated_credential_lane():
     assert "interactive-%H-%i interact" in unit
     assert "KillMode=control-group" in unit
     assert "ReadWritePaths=/srv/larkflow/dev/.lark-cli" in unit
+
+
+def test_draft_generator_is_credential_free_and_uses_a_two_call_lease():
+    unit = (
+        ROOT / "deploy" / "larkflow-target-draft-generator.service"
+    ).read_text(encoding="utf-8")
+    environment = _env_values(
+        ROOT / "deploy" / "larkflow-target-draft-generator.env.example"
+    )
+
+    assert "User=lf_target_dev" in unit
+    assert "generate-drafts" in unit
+    assert "lark-cli" not in unit
+    assert int(environment["LARKFLOW_TARGET_DRAFT_CLAIM_LIMIT"]) == 1
+    assert int(environment["LARKFLOW_TARGET_DRAFT_CLAIM_TTL_SECONDS"]) > (
+        2 * 240 + int(environment["LARKFLOW_TARGET_DRAFT_CLAIM_SAFETY_SECONDS"])
+    )

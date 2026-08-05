@@ -19,6 +19,7 @@ from larkflow.workflow import (
     ExecutorKind,
     EdgeControlService,
     DeviceRevokedError,
+    DRAFT_WIZARD_KIND,
     ExternalTask,
     ExternalTaskState,
     InstanceSnapshot,
@@ -37,6 +38,7 @@ from larkflow.workflow import (
     ProjectionRecord,
     RestartScope,
     RoleBindingActionSignal,
+    RoleBindingRequest,
     RoleBindingVerificationWorker,
     TaskCompletionSignal,
     TemplateService,
@@ -332,6 +334,189 @@ def test_postgres_unknown_role_card_can_settle_to_a_generic_rejection():
     assert reply.request is None
     assert reply.instance_id is None
     assert reply.text.startswith("人员分工未执行")
+
+
+def test_postgres_draft_lane_versions_progress_and_fences_the_final_reply():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_draft_progress_{suffix}"
+    now = datetime(2026, 8, 5, 7, 0, tzinfo=timezone.utc)
+    store = PostgresIMCommandStore(connection_factory)
+    command = IMCommandSignal(
+        id=f"command_{suffix}",
+        tenant_id=tenant_id,
+        message_id=f"request_message_{suffix}",
+        chat_id=f"chat_{suffix}",
+        sender_person_id="person_owner",
+        text="/larkflow draft",
+        occurred_at=now,
+        received_at=now,
+    )
+    assert store.append_im_command(command) is True
+    verification = store.claim_im_verification(
+        tenant_id,
+        worker_id="im_verify",
+        now=now,
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    )[0]
+    store.mark_im_verified(
+        tenant_id,
+        command.id,
+        claim_token=verification.claim_token,
+        now=now,
+    )
+    command_claim = store.claim_im_commands(
+        tenant_id,
+        worker_id="im_domain",
+        now=now,
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    )[0]
+    request = RoleBindingRequest(
+        command_id=command.id,
+        tenant_id=tenant_id,
+        message_id=command.message_id,
+        chat_id=command.chat_id,
+        initiator_person_id=command.sender_person_id,
+        template_id="generated_inline",
+        template_version=0,
+        goal="根据描述生成一次性流程草稿",
+        inputs={},
+        roles=("collaborator",),
+        kind=DRAFT_WIZARD_KIND,
+    )
+    store.mark_im_role_binding_requested(
+        tenant_id,
+        command.id,
+        claim_token=command_claim.claim_token,
+        request=request,
+        now=now,
+    )
+    card_claim = store.claim_role_binding_cards(
+        tenant_id,
+        worker_id="role_card",
+        now=now,
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    )[0]
+    card_message_id = f"card_{suffix}"
+    store.mark_role_binding_card_sent(
+        tenant_id,
+        command.id,
+        claim_token=card_claim.claim_token,
+        candidate_person_ids=("person_owner", "person_reviewer"),
+        external_id=card_message_id,
+        now=now,
+    )
+    action = RoleBindingActionSignal(
+        id=f"action_{suffix}",
+        tenant_id=tenant_id,
+        message_id=card_message_id,
+        chat_id=command.chat_id,
+        operator_person_id="person_owner",
+        action_tag="button",
+        action_name="draft_wizard_submit",
+        form_value=(
+            '{"draft_brief":"生成摘要并复核",'
+            '"role__collaborator":"person_reviewer"}'
+        ),
+        update_token=f"update_{suffix}",
+        occurred_at=now,
+        received_at=now,
+    )
+    assert store.append_role_binding_action(action) is True
+    action_verification = store.claim_role_binding_verification(
+        tenant_id,
+        worker_id="role_verify",
+        now=now,
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    )[0]
+    store.mark_role_binding_verified(
+        tenant_id,
+        action.id,
+        claim_token=action_verification.claim_token,
+        owner_bindings={"collaborator": "person_reviewer"},
+        progress_stage="generating",
+        now=now,
+    )
+
+    assert store.claim_role_binding_actions(
+        tenant_id,
+        worker_id="regular_domain",
+        now=now,
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    ) == ()
+    first_progress = store.claim_role_binding_progress(
+        tenant_id,
+        worker_id="progress_1",
+        now=now,
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    )[0]
+    assert first_progress.stage == "generating"
+    generation = store.claim_draft_generation_actions(
+        tenant_id,
+        worker_id="draft_domain",
+        now=now,
+        limit=1,
+        claim_ttl=timedelta(minutes=10),
+    )[0]
+    store.queue_role_binding_progress(
+        tenant_id,
+        action.id,
+        claim_token=generation.claim_token,
+        stage="repairing",
+        now=now + timedelta(seconds=1),
+    )
+    store.mark_role_binding_progress_sent(
+        tenant_id,
+        action.id,
+        claim_token=first_progress.claim_token,
+        now=now + timedelta(seconds=2),
+    )
+    second_progress = store.claim_role_binding_progress(
+        tenant_id,
+        worker_id="progress_2",
+        now=now + timedelta(seconds=2),
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    )[0]
+    assert second_progress.stage == "repairing"
+    assert second_progress.revision == 2
+    store.mark_role_binding_processed(
+        tenant_id,
+        action.id,
+        claim_token=generation.claim_token,
+        instance_id=f"instance_{suffix}",
+        reply_text="draft ready",
+        now=now + timedelta(seconds=3),
+    )
+    assert store.claim_role_binding_replies(
+        tenant_id,
+        worker_id="reply_early",
+        now=now + timedelta(seconds=3),
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    ) == ()
+    store.mark_role_binding_progress_sent(
+        tenant_id,
+        action.id,
+        claim_token=second_progress.claim_token,
+        now=now + timedelta(seconds=4),
+    )
+    reply = store.claim_role_binding_replies(
+        tenant_id,
+        worker_id="reply_final",
+        now=now + timedelta(seconds=4),
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    )[0]
+    assert reply.instance_id == f"instance_{suffix}"
 
 
 def test_postgres_role_verification_records_each_item_completion_time():

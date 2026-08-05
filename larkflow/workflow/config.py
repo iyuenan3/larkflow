@@ -319,6 +319,95 @@ class TargetInteractiveSettings:
 
 
 @dataclass(frozen=True)
+class TargetDraftGenerationSettings:
+    """Credential-free process for bounded natural-language draft generation."""
+
+    dsn: str
+    tenant_id: str
+    worker_id: str
+    claim_ttl: timedelta = timedelta(minutes=10)
+    claim_limit: int = 1
+    retry_base: timedelta = timedelta(seconds=5)
+    retry_max: timedelta = timedelta(minutes=5)
+    claim_safety: timedelta = timedelta(seconds=30)
+    max_result_chars: int = 30_000
+    loop: WorkerLoopSettings = WorkerLoopSettings()
+
+    def __post_init__(self) -> None:
+        if not self.dsn.strip():
+            raise ValueError("Target PostgreSQL DSN is required")
+        if not self.tenant_id.strip():
+            raise ValueError("Target tenant_id is required")
+        if not self.worker_id.strip():
+            raise ValueError("Target draft worker_id is required")
+        if self.claim_ttl <= timedelta(0):
+            raise ValueError("draft claim_ttl must be positive")
+        if self.claim_limit != 1:
+            raise ValueError("draft claim_limit must be 1")
+        if self.retry_base <= timedelta(0) or self.retry_max < self.retry_base:
+            raise ValueError("draft retry delays are invalid")
+        if self.claim_safety <= timedelta(0):
+            raise ValueError("draft claim_safety must be positive")
+        if self.max_result_chars < 1:
+            raise ValueError("draft max_result_chars must be positive")
+
+    @classmethod
+    def from_environ(
+        cls,
+        environ: Mapping[str, str] | None = None,
+        *,
+        dsn: str | None = None,
+        tenant_id: str | None = None,
+        worker_id: str | None = None,
+    ) -> TargetDraftGenerationSettings:
+        values = os.environ if environ is None else environ
+        identity = (
+            worker_id
+            or values.get("LARKFLOW_TARGET_DRAFT_WORKER_ID")
+            or f"{socket.gethostname()}:{os.getpid()}:draft"
+        )
+        return cls(
+            dsn=dsn or values.get("LARKFLOW_TARGET_DSN", ""),
+            tenant_id=tenant_id or values.get("LARKFLOW_TARGET_TENANT", ""),
+            worker_id=identity,
+            claim_ttl=timedelta(
+                seconds=_positive_float(
+                    values, "LARKFLOW_TARGET_DRAFT_CLAIM_TTL_SECONDS", 600.0
+                )
+            ),
+            claim_limit=_positive_int(
+                values, "LARKFLOW_TARGET_DRAFT_CLAIM_LIMIT", 1
+            ),
+            retry_base=timedelta(
+                seconds=_positive_float(
+                    values, "LARKFLOW_TARGET_DRAFT_RETRY_BASE_SECONDS", 5.0
+                )
+            ),
+            retry_max=timedelta(
+                seconds=_positive_float(
+                    values, "LARKFLOW_TARGET_DRAFT_RETRY_MAX_SECONDS", 300.0
+                )
+            ),
+            claim_safety=timedelta(
+                seconds=_positive_float(
+                    values, "LARKFLOW_TARGET_DRAFT_CLAIM_SAFETY_SECONDS", 30.0
+                )
+            ),
+            max_result_chars=_positive_int(
+                values, "LARKFLOW_TARGET_DRAFT_MAX_RESULT_CHARS", 30_000
+            ),
+            loop=WorkerLoopSettings(
+                idle_min_seconds=_positive_float(
+                    values, "LARKFLOW_TARGET_DRAFT_IDLE_MIN_SECONDS", 0.25
+                ),
+                idle_max_seconds=_positive_float(
+                    values, "LARKFLOW_TARGET_DRAFT_IDLE_MAX_SECONDS", 1.0
+                ),
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class TargetInboundSettings:
     dsn: str
     tenant_id: str

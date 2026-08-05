@@ -3,6 +3,7 @@ set -euo pipefail
 
 services=(
   larkflow-target.service
+  larkflow-target-draft-generator.service
   larkflow-target-projection.service
   larkflow-target-interactive@1.service
   larkflow-target-interactive@2.service
