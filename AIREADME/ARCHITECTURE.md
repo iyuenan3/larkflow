@@ -33,7 +33,7 @@ flowchart LR
 - Scheduler：依据依赖和状态解锁节点。
 - Node Runner：运行 Agent 与 Tool 节点，接收 Human 节点提交。
 - Edge Control：管理本人设备配对、撤销和窄 capability，把合法设备映射到现有 Node Runner 租约，不另建业务状态机。
-- Console Read：把一个服务端认证主体映射到 tenant 与 person，只返回该 Instance Owner 的有界流程摘要、DAG、Attempt 和审计 DTO，不提供领域写命令。
+- Console Read：把一个服务端认证主体映射到 tenant 与 person，只返回该 Instance Owner 的有界流程摘要、DAG、Attempt、审计和待处理 DTO，不提供领域写命令。待处理项从同一 PostgreSQL 聚合即时派生，不形成第二套状态。
 - Projection Service：创建和对账飞书任务、卡片、消息及文档。
 - Audit Service：追加 actor、来源、状态、revision 和相关对象。
 - Outbox Worker：在数据库事务提交后可靠执行飞书副作用。
@@ -133,7 +133,7 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 - `repository.py`：Instance、Template、RestartPreview 与 GraphEditPreview 仓储 Port，以及仅供测试的 copy-on-read 内存实现；两类重启通过 `save_restart`，未来区域编辑通过 `save_graph_edit`，把 aggregate、预览消费、审计和 outbox 原子提交。
 - `migrations/` 与 `migrate.py`：PostgreSQL 14 schema、package-data migration 和 advisory lock migration runner；`0010_restart_previews` 保存短期重启授权，`0011_restart_scope` 增加显式 scope，`0012_graph_edit_previews` 保存未来区域编辑预览，`0013_im_command_mentions` 保存最小化 mention 数组，`0014_role_binding_cards` 保存人员选择卡状态，`0015_recovery_cards` 为失败恢复卡片增加耐久更新 token，`0016_role_card_single_action` 在不删除历史回调的前提下为每张人员选择卡保留一个 canonical 动作并建立部分唯一索引，`0017_card_feedback_metrics` 为人员选择与恢复动作保存完整的首个服务端反馈状态、耗时和完成时间，`0018_worker_wakeups` 为四类耐久工作表安装事务提交后通知触发器，`0019_draft_generation_progress` 为自然语言草稿增加独立生成、阶段进度与租约状态。
 - `postgres.py` 与 `serde.py`：模板版本、模板审计、JSONB 快照序列化、规范化运行态表、乐观并发仓储、追加型审计与 `FOR UPDATE SKIP LOCKED` outbox。
-- `console.py`、`console_http.py` 与 `console_cli.py`：Owner 范围的只读 DTO、静态凭据到服务端主体的开发映射、只接受 GET / HEAD 的 HTTP 边界和 loopback-only 服务入口。仓储查询同时限定 tenant 与 Instance Owner；详情读取再次校验 Owner。响应不返回人员 ID、claim token 或原始错误正文，并对列表、审计和结果大小设上限。浏览器页面只用 `textContent` 渲染，令牌只保存在当前标签页；DAG 视图依据 DTO 的 `deps` 计算拓扑层级并绘制依赖箭头，不把数组顺序伪装成执行链。
+- `console.py`、`console_http.py` 与 `console_cli.py`：Owner 范围的只读 DTO、静态凭据到服务端主体的开发映射、只接受 GET / HEAD 的 HTTP 边界和 loopback-only 服务入口。仓储查询同时限定 tenant 与 Instance Owner；详情读取再次校验 Owner。列表查询还在同一有界 Owner 实例集合上连接失败节点和本人 `waiting_human` 节点，由服务端派生失败恢复、Human 待办、暂停继续和草稿确认提示。响应不返回人员 ID、claim token、原始错误正文或 Audit payload，并对列表、审计和结果大小设上限。浏览器页面只用 `textContent` 渲染，令牌只保存在当前标签页；DAG 视图依据 DTO 的 `deps` 计算拓扑层级并绘制依赖箭头，不把数组顺序伪装成执行链。待处理卡只能复制现有飞书命令并打开详情，不能直接写聚合。
 - `service.py`、`restart.py` 与 `editing.py`：提供只读草稿预览、节点及完整实例重启影响计算、未来区域编辑计划、短期预览与原子确认，并在仓储事务内协调草稿确认、调度、执行结果、授权、审计、outbox 与实例终态。节点重启若遗漏影响集合之外的失败节点会被拒绝；目标恰好匹配当前失败决定的 `reject_target` 时，只向该目标的新 Attempt 注入 `{source_node_key, source_attempt_no, feedback}`，不污染其他受影响节点；完整实例重启覆盖整个冻结图但不自动继承局部返工意见；未来区域编辑只跨越未开始区域，并用候选 Snapshot 哈希检测语义漂移。
 - `recovery.py`：为失败的自动节点实现显式 `retry / human_takeover` 领域命令。两条路径都只允许当前节点 Owner，并比较 Instance version、Node version 和 Attempt 编号；旧卡片失效，原失败 Attempt 保持只读。重试复用受控节点重启语义，人工接管创建新 `waiting_human` Attempt 并进入现有 Task 投影与入站链路。
 - `runtime.py`：单步 `WorkflowWorker` 与 `AutomatedExecutor` Port。每个 tick 最多认领一个自动节点，先提交 claim，再调用外部 executor；外部异常写回失败，进程级崩溃留下的认领由租约恢复。
@@ -184,8 +184,8 @@ PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration �
 | 模板 | 简单生命周期、不可变版本、布尔锁 | Template Service、PostgreSQL 仓储、追加型审计、CLI 与 v0.2 示例已实现并真库验证 | 需要 importer 和模板管理界面 |
 | 责任 | 每节点唯一 Owner，执行器分离 | 新内核已强制 Owner 与 `human/agent/tool` 分离；IM mention 和 Card 2.0 人员选择均在凭据侧验证活跃成员，再由领域侧冻结角色绑定，已完成开发真栈正向验收；草稿 Owner 全量目录校验已落码但默认关闭 | 需要异常成员状态回归、管理入口和生产装配 |
 | 编辑与重启 | 预览确认、revision、下游 Attempt | 未来区域编辑及节点、完整实例重启都已实现耐久预览、Owner 重授权、版本与 revision 校验、历史保护和原子审计，并完成真库竞争与 Owner 飞书闭环；编辑拒绝矩阵覆盖冻结线、非法 DAG、陈旧预览与跨人员非 Owner | 需要图形化 diff、跨轮次浏览和生产装配 |
-| 飞书集成 | PostgreSQL outbox / Inbox、幂等、服务端授权、对账 | Human Task 创建 / 完成、可靠轮询、可选事件、服务端详情回读、两阶段授权、启动对账、受控 Task 重建、十五个窄命令、模板与无模板草稿、人员选择卡、失败恢复卡、自动节点消息、暂停继续取消、两类重启、未来区域编辑、跨人员分工、完成 Docx 与最终通知已落码；暂停继续取消已完成开发部署与真实 PostgreSQL 竞争，其余既有路径均已完成对应开发真栈验收，凭据侧交互已拆为两个单项领取副本 | 暂停继续取消仍需真实飞书命令、Task 与决定卡收口验收；需要更多业务命令、更高强度限流回归和生产拓扑 |
-| Owner 控制面 | 浏览流程、DAG、跨轮次 Attempt 与审计，写操作保持预览确认 | Owner 只读 Console v0 已从真实 PostgreSQL 展示列表、详情、DAG、Attempt 与审计；服务端按 tenant 与 Owner 过滤，开发服务强制 loopback | 仍缺飞书登录态或企业 SSO、生产反向代理授权、分页筛选、协作者可见性、跨轮次对比和任何可写控制面 |
+| 飞书集成 | PostgreSQL outbox / Inbox、幂等、服务端授权、对账 | Human Task 创建 / 完成、可靠轮询、可选事件、服务端详情回读、两阶段授权、启动对账、受控 Task 重建、十五个窄命令、模板与无模板草稿、人员选择卡、失败恢复卡、自动节点消息、暂停继续取消、两类重启、未来区域编辑、跨人员分工、完成 Docx 与最终通知已落码并完成相应开发真栈验收；凭据侧交互已拆为两个单项领取副本 | 需要更多业务命令、更高强度限流回归和生产拓扑 |
+| Owner 控制面 | 浏览流程、DAG、跨轮次 Attempt、审计与派生待处理提示，写操作保持预览确认 | Owner 只读 Console v0 已从真实 PostgreSQL 展示列表、详情、DAG、Attempt 与审计；内容提交 `30dc7ee` 与查询边界加固 `b6eda8c` 新增待处理中心，从有界 Owner 实例派生失败恢复、本人 Human、暂停和草稿提示，只复制既有飞书命令；服务端按 tenant 与 Owner 过滤，开发服务强制 loopback | 待处理中心仍需开发部署和 Owner 真机验收；仍缺飞书登录态或企业 SSO、生产反向代理授权、分页筛选、协作者可见性、跨轮次对比和任何可写控制面 |
 | 运行时 | 独立 Scheduler + Node Runner | 新内核已实现 Scheduler、Node Runner、持久化 runnable scan、`llm.generate`、`content.check`、Runtime / Projection / Interactive / Inbound Worker、能力过滤、优雅停机、过期 claim 恢复，以及失败自动节点的 Owner 重试与人工接管 | 需要更多业务 Tool、自动重试策略配置、恢复运营视图和生产装配 |
 | Personal Agent Edge | 默认关闭、本人设备、窄 capability、中央真相 | Proof v0 已实现配对、撤销、私有 HTTP、手工 run-once、前台 serve、只读 Codex adapter、续租失败取消、单设备锁与迟到结果拒绝；员工 Mac 前台 serve 已通过受控真机验收。macOS Keychain、开发试用 manager、安装、升级、回滚、离线诊断、哈希锁定 wheelhouse、bootstrap pip 修复和真实断网安装均已验证 | 安全评审结论为正式分发 No-Go。仍缺最小 Edge 独立包、可复现 lock 与构建证明、Developer ID 签名、公证、可信摘要渠道、目录级读取与数据外发治理、全新员工 Mac 验收；当前持久设备需受控 SSH 隧道，公网 E2E 仍要求 ICP 接入备案或迁移合规地域；产品化仍为 Later |
 

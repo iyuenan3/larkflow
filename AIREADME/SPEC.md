@@ -112,7 +112,9 @@ Interactive Worker 依次访问 IM 命令验证、IM 回复、人员分工卡创
 
 ### Target Owner 中央只读控制台 v0
 
-`larkflow-console` 使用与 Target 相同的 PostgreSQL 仓储，只装配读取服务，不装配确认、重启、编辑、Human 提交或其他领域写命令。HTTP 服务强制绑定 loopback，只接受 GET 与 HEAD：`/console/`、`/console/app.js` 和 `/console/styles.css` 提供静态页面；`GET /console/api/v1/instances?limit=<1..100>` 返回当前 Owner 的有界实例摘要；`GET /console/api/v1/instances/<instance_id>` 返回同一 Owner 实例的节点、历史 Attempt、最近审计和服务端提炼的 `insights`。`insights.reworked_nodes` 只列当前 Attempt 大于 1 的节点；`insights.latest_restart` 从最近 200 条审计中返回最近一次受控节点或实例重启的时间、操作者关系、目标与已验证影响节点，不返回原始 Audit payload。其他方法返回 405，未知路由返回 404。
+`larkflow-console` 使用与 Target 相同的 PostgreSQL 仓储，只装配读取服务，不装配确认、重启、编辑、Human 提交或其他领域写命令。HTTP 服务强制绑定 loopback，只接受 GET 与 HEAD：`/console/`、`/console/app.js` 和 `/console/styles.css` 提供静态页面；`GET /console/api/v1/instances?limit=<1..100>` 返回当前 Owner 的有界实例摘要和 `attention`；`GET /console/api/v1/instances/<instance_id>` 返回同一 Owner 实例的节点、历史 Attempt、最近审计和服务端提炼的 `insights`。`insights.reworked_nodes` 只列当前 Attempt 大于 1 的节点；`insights.latest_restart` 从最近 200 条审计中返回最近一次受控节点或实例重启的时间、操作者关系、目标与已验证影响节点，不返回原始 Audit payload。其他方法返回 405，未知路由返回 404。
+
+`attention` 是由当前 PostgreSQL 聚合即时派生的 Owner 待处理读模型，不单独保存状态。仓储先按 tenant、Instance Owner、`created_at DESC` 和 `limit` 限定最近实例，再只连接失败节点和归当前 Owner 的 `waiting_human` 节点。服务端生成四类有界提示：失败节点或失败实例为 `recover_failed`，当前 Owner 的 Human 待办为 `complete_human`，暂停实例为 `resume_flow`，草稿为 `confirm_draft`。失败项优先，其后依次为本人 Human、暂停与草稿；多个失败节点统一建议完整实例重启。DTO 只返回稳定 ID、类型、优先级、Instance ID、目标、实例状态、标题、说明、时间、可选节点、可选飞书命令和操作提示，不返回人员 ID、原始错误、claim、审计 payload 或凭据。页面只能复制现有 `/larkflow confirm / resume / restart / restart-all` 命令并打开详情，不能直接执行写操作；命令仍由飞书入口重新授权，并按既有预览确认和版本栅栏处理。复制与打开按钮在点击后立即显示处理中，随后明确显示成功或失败。
 
 开发鉴权要求 `LARKFLOW_CONSOLE_ACCESS_TOKEN` 至少 32 字符，并在服务端把该 Bearer token 映射到 `LARKFLOW_TARGET_TENANT + LARKFLOW_CONSOLE_PERSON_ID`。客户端不能提交 tenant 或 person。列表 SQL 同时限定 tenant 与 `owner_person_id`，详情读取完整聚合后再次校验 Instance Owner；不存在与非 Owner 都返回同一 404。返回 DTO 只使用 `you / collaborator / system` 表示人员关系，不含任何人员 ID、claim token、完整错误正文或原始审计 payload。列表最多 100 条，审计最多 200 条，单个结果超过 32000 字节时只返回截断预览。浏览器仅用 `textContent` 渲染服务端数据，访问令牌只放当前标签页，点击“锁定”立即回到令牌页。
 

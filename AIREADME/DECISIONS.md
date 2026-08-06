@@ -799,3 +799,13 @@
 - Tradeoff：drain 语义不是瞬时冻结，暂停后已经发出的节点仍可能完成或失败，但不会产生新的领取。版本绑定取消没有独立持久预览表和时间过期，任何聚合变化都会使确认失效，但实例长期无变化时确认命令仍有效。同步 Executor 已经完成的外部动作不能撤回，适配器仍需保持幂等并把不可逆动作设计为显式业务节点。当前已关闭本地领域、命令、运行时迟到结果、Human 投影测试、开发部署和 PostgreSQL 竞争；真实飞书命令、Task 与决定卡收口仍待完成。
 - Evidence：内容提交 `770243a02b116e12583ceebdb8362fd40b7fe0a7`。生命周期、运行时、投影、决定卡、IM 命令与投影常驻循环聚焦套件 `178 passed`，完整离线套件为 `939 passed, 18 skipped`。wheel SHA-256 为 `04b76ac0b1cbe14c410c739be0279d74e60127b9cd3f68eeb4f8a07e0ba2b8af`，安装态 lifecycle 模块与本地源码 SHA-256 均为 `d2e7e81a44e06393768af08a293bdba579b23bab884bcee270e294d416680025`。一次性 PostgreSQL 双连接竞争中，两个相同取消确认分别为执行与幂等回放，aggregate version 只增加 1，取消审计恰好 1 条；暂停与 Human dispatch 竞争只允许一路成功，本轮结果为 dispatch 成功、pause 冲突，最终保持 `running / waiting_human`。测试库与临时上传件已删除并回读为 0。十个服务均为 `active / NRestarts=0`，部署窗口 warning 为 0。真实飞书验收尚未执行。
 - Status addendum · 2026-08-06：真实飞书命令与外部投影收口已完成。实例 `im_c1c472a12a8ea4a7c8d63480` 的确认、暂停、继续、取消预览和版本绑定确认依次成功，普通 Human Task 在飞书服务端为 `done`；实例 `im_516c59e4082e82ab74b8bd14` 的前置 Human Task 通过真实完成事件推进决定节点，取消后原决定卡被原位替换为无操作控件的“复核已取消”。两个实例的 PostgreSQL 聚合版本、Node、Attempt、Projection 和追加型审计均与飞书终态一致，十个服务保持 `active / NRestarts=0` 且验收窗口 warning 为 0。ADR 的开发真栈证据门槛现已关闭，生产与业务价值边界不变。
+
+## ADR-093 · 2026-08-07 · Owner 待处理中心只派生下一步，不建立第二套命令面
+
+- **Status：Accepted · Local implementation, development deployment pending。**
+- Problem：只读 Console 已能展示完整实例和返工历史，但 Owner 仍需先知道应查看哪个实例，再自行判断下一步命令。立即增加浏览器写操作会把生产身份、CSRF、写授权、并发确认和卡片入口一致性同时引入，超过当前内部试用需要。
+- Constraint：PostgreSQL 继续是唯一业务真相；待处理项不得独立落库；当前主体只代表 Instance Owner，不能把协作者 Human 工作误报为“等待你处理”；响应不能泄漏人员 ID、原始错误、claim 或 Audit payload；失败恢复必须继续经过现有重启预览，客户端不能直接提交可信 Owner、节点状态或版本；查询必须有界，不能为每个列表项读取完整聚合。
+- Decision：在现有 Owner 列表查询旁增加一个独立的有界仓储读模型。仓储先按 tenant、Instance Owner、创建时间和列表上限选择实例，再连接失败节点与归当前 Owner 的 `waiting_human` 节点。服务端按失败、本人 Human、暂停、草稿的优先级生成安全 DTO；一个失败节点建议节点重启，多个或无法定位的失败节点建议完整实例重启。页面只复制既有飞书命令或打开只读详情，不调用领域写 API。所有真实操作仍由飞书入口重新验证当前 Owner，并复用预览确认、aggregate version 与 `graph_revision` 栅栏。
+- Alternatives(否决)：把待处理项保存为独立表；浏览器直接确认草稿、继续或重启；对列表中的每个实例调用完整 `get`；展示所有协作者 Human 节点；把原始错误正文和审计 payload 交给前端判断；先做通用可写 DAG 画布。
+- Tradeoff：Owner 获得更明确的下一步，但仍需要转到飞书执行命令或完成责任卡。当前列表上限内的提示不是全量工作箱，也没有分页、筛选、协作者视图、跨轮次比较或生产身份。复制命令减少输入错误，但不能消除飞书侧二次确认。
+- Evidence：内容提交 `30dc7ee` 新增 Owner 范围的仓储候选模型、服务端 DTO、响应式待处理卡和即时按钮反馈；`b6eda8c` 收紧 PostgreSQL Instance Owner 与节点 Owner 查询边界断言。Console 聚焦套件为 `16 passed`；移除本机代理后完整离线套件为 `943 passed, 18 skipped`，沙箱外进程树单项另行通过。没有新增 migration。本文写入时尚未部署或完成真实 PostgreSQL 与浏览器验收。

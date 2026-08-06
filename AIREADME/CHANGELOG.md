@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.56.0-draft · 2026-08-07 · Owner 待处理中心 v0
+
+- Added：Owner Console 列表响应新增 `attention` 读模型，从同一 PostgreSQL 聚合派生失败恢复、本人 Human 待办、暂停继续和草稿确认四类提示。失败优先；多个失败节点统一建议完整实例重启。
+- Safety：仓储先按 tenant、Instance Owner 和最多 100 个最近实例限制候选集，再只连接失败节点和归当前 Owner 的 `waiting_human` 节点。DTO 不返回人员 ID、原始错误、claim、凭据或 Audit payload。待处理数据不单独落库，不形成第二套业务状态。
+- UI：页面新增待处理中心，可打开只读流程详情，或复制现有 `/larkflow confirm / resume / restart / restart-all` 命令。复制与打开按钮点击后立即显示处理中，随后显示成功或失败。浏览器没有新增写 API，真实命令仍由飞书入口重新授权并走既有预览确认链路。
+- Verified：内容提交 `30dc7ee` 与 PostgreSQL Owner 查询边界加固 `b6eda8c` 已形成。Console 聚焦套件为 `16 passed`，JavaScript 语法检查与 Python 编译检查通过。移除本机代理环境后，完整离线套件为 `943 passed, 18 skipped`；唯一剩余的进程树用例因沙箱禁止 `ps` 单独在沙箱外重跑并通过，因此完整等价结果为 `944 passed, 18 skipped`。Git whitespace 检查通过。
+- Boundary：本轮没有新增 migration。功能尚未部署或完成真实 PostgreSQL 与浏览器验收，不能描述为开发真栈或生产上线。
+
 ## v0.55.0-draft · 2026-08-06 · 暂停、继续与安全取消
 
 - Added：新增 Owner 范围的 `/larkflow pause`、`/larkflow resume`、`/larkflow cancel` 与 `/larkflow cancel-confirm`，命令总数增至十五个。暂停使用 drain 语义，只停止新节点调度；已发出的 Human、Agent 与 Tool 继续使用原 Attempt 收口，继续操作也不创建新 Attempt。
