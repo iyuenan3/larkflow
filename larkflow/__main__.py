@@ -19,6 +19,7 @@ service 的 `_thread_lock` 只是进程内锁，故真栈一律走 `store.Instan
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 from functools import partial
 import json
 import sys
@@ -446,7 +447,12 @@ def _target_event_observers(*, identity: str = "bot", profile: str | None = None
     )
     from .workflow.inbound import TaskEventInboxBridge
     from .workflow.migrate import postgres_connection_factory
-    from .workflow.postgres import PostgresIMCommandStore, PostgresWorkflowInbox
+    from .workflow.postgres import (
+        PostgresIMCommandStore,
+        PostgresWorkflowInbox,
+        PostgresWorkflowRepository,
+    )
+    from .workflow.projection import FEISHU_DECISION_CARD_KIND
     from .workflow.role_bindings import RoleBindingActionInboxBridge
     from .io import CliLarkIO
     from .io.cli import run_cli
@@ -460,6 +466,21 @@ def _target_event_observers(*, identity: str = "bot", profile: str | None = None
     ]
     if _target_im_commands_enabled():
         im_store = PostgresIMCommandStore(connection_factory)
+        projection_store = PostgresWorkflowRepository(connection_factory)
+
+        def resolve_human_decision_binding(
+            message_id: str,
+        ) -> Mapping[str, object] | None:
+            projection = projection_store.get_projection_by_external_id(
+                tenant_id,
+                FEISHU_DECISION_CARD_KIND,
+                message_id,
+            )
+            if projection is None:
+                return None
+            binding = projection.state.get("decision_binding")
+            return binding if isinstance(binding, Mapping) else None
+
         card_io = CliLarkIO(
             identity=identity,
             profile=profile,
@@ -494,6 +515,7 @@ def _target_event_observers(*, identity: str = "bot", profile: str | None = None
                 tenant_id=tenant_id,
                 card_updater=card_io.update_card,
                 feedback_reporter=feedback_logger,
+                decision_binding_resolver=resolve_human_decision_binding,
             )
         )
     return tuple(observers)

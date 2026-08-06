@@ -464,7 +464,10 @@ def test_decision_node_projects_a_card_instead_of_a_second_task():
     assert feedback["name"] == "rejection_feedback"
     assert feedback["required"] is True
     assert feedback["max_length"] == 1_000
-    assert reject_form["elements"][-1]["action_type"] == "form_submit"
+    reject_button = reject_form["elements"][-1]
+    assert reject_button["form_action_type"] == "submit"
+    assert "behaviors" not in reject_button
+    assert "action_type" not in reject_button
     assert f"'attempt_no': {review.attempt_no}" in rendered
     instance = service.get(TENANT, "instance_decision")
     projection = repository.get_projection(
@@ -475,3 +478,11 @@ def test_decision_node_projects_a_card_instead_of_a_second_task():
     )
     assert projection is not None
     assert projection.external_id == "message-1"
+    assert projection.state["decision_binding"] == {
+        "kind": "human_decision",
+        "instance_id": "instance_decision",
+        "node_key": "review",
+        "attempt_no": review.attempt_no,
+        "node_version": instance.nodes["review"].version,
+        "instance_version": instance.version,
+    }

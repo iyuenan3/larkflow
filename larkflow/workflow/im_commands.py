@@ -536,6 +536,9 @@ class HumanDecisionActionInboxBridge:
         monotonic: Callable[[], float] | None = None,
         card_updater: Callable[..., None] | None = None,
         feedback_reporter: Callable[[str, dict[str, Any]], None] | None = None,
+        decision_binding_resolver: (
+            Callable[[str], Mapping[str, Any] | None] | None
+        ) = None,
     ) -> None:
         if not tenant_id.strip():
             raise ValueError("Target tenant_id is required")
@@ -545,6 +548,7 @@ class HumanDecisionActionInboxBridge:
         self.monotonic = monotonic or time.monotonic
         self.card_updater = card_updater
         self.feedback_reporter = feedback_reporter
+        self.decision_binding_resolver = decision_binding_resolver
 
     def __call__(self, event_type: str, payload: Mapping[str, Any]) -> bool:
         if event_type != "card.action.trigger":
@@ -567,9 +571,39 @@ class HumanDecisionActionInboxBridge:
         if payload.get("action_tag") != "button":
             raise ValueError("Human decision must come from a button")
         value = payload.get("action_value")
-        if not isinstance(value, Mapping):
+        value_payload = None
+        if isinstance(value, Mapping) and value:
+            value_payload = _validated_human_decision_card_payload(value)
+        elif value not in (None, {}):
             raise ValueError("Human decision action_value must be an object")
-        card_payload = _validated_human_decision_card_payload(value)
+        card_payload = value_payload
+        message_id = _required_text(payload.get("message_id"), "message_id")
+        if self.decision_binding_resolver is not None:
+            binding = self.decision_binding_resolver(message_id)
+            if binding is not None:
+                if not isinstance(binding, Mapping):
+                    raise ValueError("Human decision binding must be an object")
+                if action_name in {
+                    human_decision_action_name(decision)
+                    for decision in HumanDecision
+                }:
+                    bound_decision = next(
+                        decision
+                        for decision in HumanDecision
+                        if action_name == human_decision_action_name(decision)
+                    )
+                elif value_payload is not None:
+                    bound_decision = HumanDecision(value_payload["decision"])
+                else:
+                    raise IMCommandRejected("复核决定缺少服务端动作绑定")
+                resolved_payload = _validated_human_decision_card_payload(
+                    {**binding, "decision": bound_decision.value}
+                )
+                if value_payload is not None and value_payload != resolved_payload:
+                    raise IMCommandRejected("复核卡片参数与服务端绑定不一致")
+                card_payload = resolved_payload
+        if card_payload is None:
+            raise IMCommandRejected("复核卡片服务端绑定不存在")
         decision = HumanDecision(card_payload["decision"])
         if (
             action_name is not None
@@ -589,7 +623,7 @@ class HumanDecisionActionInboxBridge:
         event = IMCommandSignal(
             id=_required_text(payload.get("event_id"), "event_id"),
             tenant_id=self.tenant_id,
-            message_id=_required_text(payload.get("message_id"), "message_id"),
+            message_id=message_id,
             chat_id=_required_text(payload.get("chat_id"), "chat_id"),
             sender_person_id=_required_text(payload.get("operator_id"), "operator_id"),
             text=(

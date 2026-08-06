@@ -498,7 +498,15 @@ class WorkflowProjectionWorker:
                 external_id=external.message_id,
                 idempotency_key=request.idempotency_key,
                 sync_version=node.version,
-                state={"node_status": node.status.value, "settled": False},
+                state={
+                    "node_status": node.status.value,
+                    "settled": False,
+                    "decision_binding": _human_decision_binding(
+                        instance,
+                        node_key,
+                        attempt_no,
+                    ),
+                },
                 created_at=now,
                 updated_at=now,
             )
@@ -1050,6 +1058,7 @@ def human_decision_card(
     config = human_decision_config(spec.work)
     if config is None:
         raise ValueError("Human decision card requires an accept_reject contract")
+    binding = _human_decision_binding(instance, node_key, attempt_no)
 
     def button(
         label: str,
@@ -1068,20 +1077,13 @@ def human_decision_card(
             "behaviors": [
                 {
                     "type": "callback",
-                    "value": {
-                        "kind": HUMAN_DECISION_ACTION_NAME,
-                        "decision": decision.value,
-                        "instance_id": instance.id,
-                        "node_key": node_key,
-                        "attempt_no": attempt_no,
-                        "node_version": node.version,
-                        "instance_version": instance.version,
-                    },
+                    "value": {**binding, "decision": decision.value},
                 }
             ],
         }
         if submit_form:
-            rendered["action_type"] = "form_submit"
+            rendered.pop("behaviors")
+            rendered["form_action_type"] = "submit"
         return rendered
 
     context = _decision_context(instance, node_key)
@@ -1151,6 +1153,22 @@ def human_decision_card(
                 },
             ]
         },
+    }
+
+
+def _human_decision_binding(
+    instance: WorkflowInstance,
+    node_key: str,
+    attempt_no: int,
+) -> dict[str, Any]:
+    node = instance.nodes[node_key]
+    return {
+        "kind": HUMAN_DECISION_ACTION_NAME,
+        "instance_id": instance.id,
+        "node_key": node_key,
+        "attempt_no": attempt_no,
+        "node_version": node.version,
+        "instance_version": instance.version,
     }
 
 

@@ -552,6 +552,96 @@ def test_human_decision_accept_ignores_untrusted_form_feedback():
     assert parse_im_command(event.text)[2]["feedback"] is None
 
 
+def test_human_decision_form_submit_resolves_version_binding_by_message():
+    store = MemoryStore()
+    resolved = []
+    bridge = HumanDecisionActionInboxBridge(
+        store,
+        tenant_id=TENANT,
+        decision_binding_resolver=lambda message_id: (
+            resolved.append(message_id)
+            or {
+                "kind": "human_decision",
+                "instance_id": "instance_1",
+                "node_key": "review",
+                "attempt_no": 2,
+                "node_version": 5,
+                "instance_version": 8,
+            }
+        ),
+    )
+
+    assert bridge(
+        "card.action.trigger",
+        {
+            "event_id": "event_decision_form_submit",
+            "message_id": "message_decision_1",
+            "chat_id": "chat_reviewer",
+            "operator_id": "person_reviewer",
+            "action_tag": "button",
+            "action_name": "human_decision_reject",
+            "action_value": {},
+            "form_value": json.dumps(
+                {"rejection_feedback": "补齐 problem 和 acceptance_criteria。"},
+                ensure_ascii=False,
+            ),
+            "token": "decision-card-token",
+            "timestamp": "1785830400000",
+        },
+    ) is True
+
+    assert resolved == ["message_decision_1"]
+    assert parse_im_command(store.appended[0].text)[2] == {
+        "kind": "human_decision",
+        "decision": "reject",
+        "node_key": "review",
+        "attempt_no": 2,
+        "node_version": 5,
+        "instance_version": 8,
+        "feedback": "补齐 problem 和 acceptance_criteria。",
+    }
+
+
+def test_human_decision_callback_rejects_payload_that_disagrees_with_binding():
+    store = MemoryStore()
+    bridge = HumanDecisionActionInboxBridge(
+        store,
+        tenant_id=TENANT,
+        decision_binding_resolver=lambda _message_id: {
+            "kind": "human_decision",
+            "instance_id": "instance_1",
+            "node_key": "review",
+            "attempt_no": 2,
+            "node_version": 5,
+            "instance_version": 8,
+        },
+    )
+    payload = {
+        "event_id": "event_decision_mismatch",
+        "message_id": "message_decision_1",
+        "chat_id": "chat_reviewer",
+        "operator_id": "person_reviewer",
+        "action_tag": "button",
+        "action_name": "human_decision_reject",
+        "action_value": {
+            "kind": "human_decision",
+            "decision": "reject",
+            "instance_id": "instance_other",
+            "node_key": "review",
+            "attempt_no": 2,
+            "node_version": 5,
+            "instance_version": 8,
+        },
+        "form_value": json.dumps({"rejection_feedback": "返工"}),
+        "token": "decision-card-token",
+        "timestamp": "1785830400000",
+    }
+
+    with pytest.raises(IMCommandRejected, match="服务端绑定不一致"):
+        bridge("card.action.trigger", payload)
+    assert store.appended == []
+
+
 def test_recovery_card_bridge_persists_before_fast_feedback_failure():
     store = MemoryStore()
     reports = []
