@@ -166,7 +166,7 @@ larkflow-target --env-file /etc/larkflow-target.env show <instance>
 larkflow-target --env-file /etc/larkflow-target.env serve
 ```
 
-中央控制台 v0 是独立的 Owner 只读入口，用于查看本人发起的最近流程、DAG 状态、历史 Attempt 结果和审计时间线。内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6` 修正了首版把所有节点画成线性链的问题：浏览器现在依据服务端 `deps` 计算拓扑层级、绘制真实依赖箭头，并在节点上标注直接依赖。它不提供确认、重启或改图操作，也不复用 Personal Agent Edge API。服务强制绑定 loopback，当前开发鉴权把一个至少 32 字符的 Bearer token 映射到服务端配置的 tenant 与 person；令牌只在浏览器当前标签页保存。代码、wheel、服务与 API 技术回读已通过，新图形仍待一次 Owner 人工目视确认。生产部署前仍需替换为飞书登录态或企业 SSO，并重新设计反向代理边界。
+中央控制台 v0 是独立的 Owner 只读入口，用于查看本人发起的最近流程、DAG 状态、历史 Attempt 结果和审计时间线。内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6` 修正了首版把所有节点画成线性链的问题：浏览器现在依据服务端 `deps` 计算拓扑层级、绘制真实依赖箭头，并在节点上标注直接依赖。它不提供确认、重启或改图操作，也不复用 Personal Agent Edge API。服务强制绑定 loopback，当前开发鉴权把一个至少 32 字符的 Bearer token 映射到服务端配置的 tenant 与 person；令牌只在浏览器当前标签页保存。代码、wheel、服务与 API 技术回读已通过；真实 Chrome 页面刷新后又确认 4 条依赖边、分叉汇合、关联高亮、依赖标签和横向滚动均可见。生产部署前仍需替换为飞书登录态或企业 SSO，并重新设计反向代理边界。
 
 ```bash
 # env 文件同时提供 LARKFLOW_TARGET_DSN、LARKFLOW_TARGET_TENANT、
