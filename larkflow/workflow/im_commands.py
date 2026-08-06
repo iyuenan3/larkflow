@@ -19,10 +19,13 @@ from .card_feedback import (
 from .directory import PersonDirectory
 from .decision import (
     HUMAN_DECISION_ACTION_NAME,
+    HUMAN_DECISION_FEEDBACK_FIELD,
     HumanDecision,
+    HumanDecisionFeedbackError,
     HumanDecisionNotAllowedError,
     StaleHumanDecisionError,
     human_decision_action_name,
+    normalize_human_decision_feedback,
 )
 from .editing import (
     GraphEditConfirmation,
@@ -566,13 +569,20 @@ class HumanDecisionActionInboxBridge:
         value = payload.get("action_value")
         if not isinstance(value, Mapping):
             raise ValueError("Human decision action_value must be an object")
-        command_payload = _validated_human_decision_payload(value)
-        decision = HumanDecision(command_payload["decision"])
+        card_payload = _validated_human_decision_card_payload(value)
+        decision = HumanDecision(card_payload["decision"])
         if (
             action_name is not None
             and action_name != human_decision_action_name(decision)
         ):
             raise ValueError("Human decision action name does not match its value")
+        feedback = _human_decision_form_feedback(
+            decision,
+            payload.get("form_value"),
+        )
+        command_payload = _validated_human_decision_payload(
+            {**card_payload, "feedback": feedback}
+        )
 
         feedback_started = self.monotonic()
         now = self.clock()
@@ -991,6 +1001,7 @@ class IMCommandWorker:
                     attempt_no=int(inputs["attempt_no"]),
                     expected_instance_version=int(inputs["instance_version"]),
                     expected_node_version=int(inputs["node_version"]),
+                    feedback=inputs.get("feedback"),
                     correlation_id=event.message_id,
                 )
             except StaleHumanDecisionError:
@@ -1016,12 +1027,14 @@ class IMCommandWorker:
                 )
             config = instance.snapshot.node(node_key).work["decision"]
             reject_target = str(config["reject_target"])
+            feedback = _display_human_decision_feedback(str(inputs["feedback"]))
             return (
                 "human_decision_rejected",
                 instance.id,
                 "已退回节点结果，流程已进入失败状态，旧结果与审计均已保留。\n"
                 f"实例：{instance.id}\n节点：{node_key}\n"
                 f"Attempt：{inputs['attempt_no']}\n"
+                f"退回意见：{feedback}\n"
                 "请由 Instance Owner 预览返工范围：\n"
                 f"/larkflow restart {instance.id} {reject_target}",
             )
@@ -1709,7 +1722,9 @@ def _validated_recovery_payload(value: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _validated_human_decision_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+def _validated_human_decision_card_payload(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
     expected_keys = {
         "kind",
         "decision",
@@ -1742,6 +1757,61 @@ def _validated_human_decision_payload(value: Mapping[str, Any]) -> dict[str, Any
             raise IMCommandRejected("复核卡片 attempt_no 无效")
         normalized[field_name] = raw
     return normalized
+
+
+def _validated_human_decision_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    if set(value) != {
+        "kind",
+        "decision",
+        "instance_id",
+        "node_key",
+        "attempt_no",
+        "node_version",
+        "instance_version",
+        "feedback",
+    }:
+        raise IMCommandRejected("复核卡片参数不完整")
+    normalized = _validated_human_decision_card_payload(
+        {key: item for key, item in value.items() if key != "feedback"}
+    )
+    try:
+        normalized["feedback"] = normalize_human_decision_feedback(
+            HumanDecision(normalized["decision"]),
+            value.get("feedback"),
+        )
+    except HumanDecisionFeedbackError as exc:
+        raise IMCommandRejected(str(exc)) from None
+    return normalized
+
+
+def _human_decision_form_feedback(
+    decision: HumanDecision,
+    raw_form: Any,
+) -> str | None:
+    if decision == HumanDecision.ACCEPT:
+        return None
+    if isinstance(raw_form, str):
+        try:
+            raw_form = json.loads(raw_form)
+        except json.JSONDecodeError as exc:
+            raise IMCommandRejected("退回意见表单无效") from exc
+    if not isinstance(raw_form, Mapping):
+        raise IMCommandRejected("退回时必须填写具体意见")
+    if set(raw_form) != {HUMAN_DECISION_FEEDBACK_FIELD}:
+        raise IMCommandRejected("退回意见表单字段无效")
+    try:
+        return normalize_human_decision_feedback(
+            decision,
+            raw_form.get(HUMAN_DECISION_FEEDBACK_FIELD),
+        )
+    except HumanDecisionFeedbackError as exc:
+        raise IMCommandRejected(str(exc)) from None
+
+
+def _display_human_decision_feedback(value: str) -> str:
+    """Keep Human text readable without enabling Card markdown controls."""
+
+    return value.replace("<", "＜").replace(">", "＞").replace("`", "'")
 
 
 def _normalize_mentions(raw_mentions: Any) -> tuple[IMMention, ...]:

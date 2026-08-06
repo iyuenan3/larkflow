@@ -11,6 +11,7 @@ from larkflow.workflow import (
     ExternalTask,
     FEISHU_DECISION_CARD_KIND,
     HumanDecision,
+    HumanDecisionFeedbackError,
     InMemoryWorkflowRepository,
     InstanceSnapshot,
     InstanceStatus,
@@ -25,6 +26,9 @@ from larkflow.workflow import (
 
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
 TENANT = "tenant_decision"
+REJECTION_FEEDBACK = (
+    "移除与当前试点无关的发布步骤，并依据实际观察结果定义验收标准。"
+)
 
 
 class RecordingTasks:
@@ -150,7 +154,7 @@ def test_accept_decision_completes_the_human_gate_and_instance():
 
 
 def test_reject_decision_fails_current_attempt_but_preserves_upstream_evidence():
-    service, _, review = waiting_decision()
+    service, repository, review = waiting_decision()
     before = service.get(TENANT, "instance_decision")
 
     rejected = service.submit_human_decision(
@@ -162,14 +166,19 @@ def test_reject_decision_fails_current_attempt_but_preserves_upstream_evidence()
         attempt_no=review.attempt_no,
         expected_instance_version=before.version,
         expected_node_version=review.expected_node_version,
+        feedback=REJECTION_FEEDBACK,
     )
 
     assert rejected.status == InstanceStatus.FAILED
     assert rejected.nodes["review"].status == NodeStatus.FAILED
     attempt = rejected.current_attempt("review")
-    assert attempt.result == {"decision": "rejected"}
+    assert attempt.result == {
+        "decision": "rejected",
+        "feedback": REJECTION_FEEDBACK,
+    }
     assert attempt.quality_result is not None
     assert attempt.quality_result.verdict == QualityVerdict.FAIL
+    assert REJECTION_FEEDBACK in attempt.quality_result.evidence
     assert rejected.current_attempt("draft").result == {
         "content": "A durable source-grounded result"
     }
@@ -192,7 +201,203 @@ def test_reject_decision_fails_current_attempt_but_preserves_upstream_evidence()
     assert restarted.nodes["draft"].status == NodeStatus.READY
     assert restarted.nodes["review"].current_attempt_no == 2
     assert restarted.nodes["review"].status == NodeStatus.PENDING
-    assert restarted.attempts[("review", 1)].result == {"decision": "rejected"}
+    assert restarted.attempts[("review", 1)].result == {
+        "decision": "rejected",
+        "feedback": REJECTION_FEEDBACK,
+    }
+    assert restarted.current_attempt("draft").input_snapshot["rework_feedback"] == {
+        "source_node_key": "review",
+        "source_attempt_no": 1,
+        "feedback": REJECTION_FEEDBACK,
+    }
+
+    service.dispatch_due(
+        TENANT,
+        "instance_decision",
+        worker_id="runtime-2",
+    )
+    activated = service.get(TENANT, "instance_decision")
+    assert activated.current_attempt("draft").input_snapshot["rework_feedback"] == {
+        "source_node_key": "review",
+        "source_attempt_no": 1,
+        "feedback": REJECTION_FEEDBACK,
+    }
+    rejection_audit = next(
+        event
+        for event in repository.audit_log(TENANT, "instance_decision")
+        if event.event_type == "node.human_decision_rejected"
+    )
+    assert rejection_audit.payload["feedback"] == REJECTION_FEEDBACK
+
+
+@pytest.mark.parametrize("feedback", [None, "", "   \n"])
+def test_reject_decision_requires_non_empty_feedback(feedback):
+    service, _, review = waiting_decision()
+    before = service.get(TENANT, "instance_decision")
+
+    with pytest.raises(HumanDecisionFeedbackError, match="必须填写具体意见"):
+        service.submit_human_decision(
+            TENANT,
+            "instance_decision",
+            "review",
+            HumanDecision.REJECT,
+            actor_person_id="person_reviewer",
+            attempt_no=review.attempt_no,
+            expected_instance_version=before.version,
+            expected_node_version=review.expected_node_version,
+            feedback=feedback,
+        )
+
+    unchanged = service.get(TENANT, "instance_decision")
+    assert unchanged.version == before.version
+    assert unchanged.status == InstanceStatus.RUNNING
+    assert unchanged.nodes["review"].status == NodeStatus.WAITING_HUMAN
+
+
+def test_reject_decision_bounds_feedback_and_accept_discards_it():
+    service, _, review = waiting_decision()
+    before = service.get(TENANT, "instance_decision")
+
+    with pytest.raises(HumanDecisionFeedbackError, match="不能超过 1000"):
+        service.submit_human_decision(
+            TENANT,
+            "instance_decision",
+            "review",
+            HumanDecision.REJECT,
+            actor_person_id="person_reviewer",
+            attempt_no=review.attempt_no,
+            expected_instance_version=before.version,
+            expected_node_version=review.expected_node_version,
+            feedback="x" * 1_001,
+        )
+
+    accepted = service.submit_human_decision(
+        TENANT,
+        "instance_decision",
+        "review",
+        HumanDecision.ACCEPT,
+        actor_person_id="person_reviewer",
+        attempt_no=review.attempt_no,
+        expected_instance_version=before.version,
+        expected_node_version=review.expected_node_version,
+        feedback="这段伪造文本不得进入接受结果",
+    )
+    assert accepted.current_attempt("review").result == {"decision": "accepted"}
+
+
+def test_rework_feedback_reaches_only_the_restart_target_and_preserves_upstream():
+    common = {
+        "objective": "Produce or review one result",
+        "inputs": [],
+        "outputs": [{"id": "result", "type": "data"}],
+        "acceptance": ["A Human Owner records the result"],
+    }
+    snapshot = InstanceSnapshot(
+        goal="Preserve approved context while reworking a draft",
+        nodes=(
+            NodeSpec("context", "Confirm context", "person_owner", "human", work=common),
+            NodeSpec(
+                "draft",
+                "Write draft",
+                "person_author",
+                "human",
+                deps=("context",),
+                work={**common, "inputs": ["dependencies.context"]},
+            ),
+            NodeSpec(
+                "review",
+                "Review draft",
+                "person_reviewer",
+                "human",
+                deps=("draft",),
+                work={
+                    **common,
+                    "inputs": ["dependencies.draft"],
+                    "decision": {
+                        "kind": "accept_reject",
+                        "reject_target": "draft",
+                    },
+                },
+            ),
+        ),
+    )
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=lambda: NOW)
+    service.create_draft(
+        instance_id="instance_rework_scope",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=snapshot,
+    )
+    service.confirm_draft(TENANT, "instance_rework_scope", actor_person_id="person_owner")
+    context = service.dispatch_due(
+        TENANT,
+        "instance_rework_scope",
+        worker_id="runtime-scope",
+    )[0]
+    service.submit_human(
+        TENANT,
+        "instance_rework_scope",
+        "context",
+        actor_person_id="person_owner",
+        attempt_no=context.attempt_no,
+        expected_node_version=context.expected_node_version,
+        result={"brief": "approved context"},
+    )
+    draft = service.dispatch_due(
+        TENANT,
+        "instance_rework_scope",
+        worker_id="runtime-scope",
+    )[0]
+    service.submit_human(
+        TENANT,
+        "instance_rework_scope",
+        "draft",
+        actor_person_id="person_author",
+        attempt_no=draft.attempt_no,
+        expected_node_version=draft.expected_node_version,
+        result={"content": "first draft"},
+    )
+    review = service.dispatch_due(
+        TENANT,
+        "instance_rework_scope",
+        worker_id="runtime-scope",
+    )[0]
+    before_reject = service.get(TENANT, "instance_rework_scope")
+    service.submit_human_decision(
+        TENANT,
+        "instance_rework_scope",
+        "review",
+        HumanDecision.REJECT,
+        actor_person_id="person_reviewer",
+        attempt_no=review.attempt_no,
+        expected_instance_version=before_reject.version,
+        expected_node_version=review.expected_node_version,
+        feedback=REJECTION_FEEDBACK,
+    )
+    preview = service.preview_node_restart(
+        TENANT,
+        "instance_rework_scope",
+        "draft",
+        actor_person_id="person_owner",
+    )
+    restarted = service.confirm_node_restart(
+        TENANT,
+        preview.id,
+        actor_person_id="person_owner",
+    ).instance
+
+    assert preview.affected_node_keys == ("draft", "review")
+    assert restarted.nodes["context"].current_attempt_no == 1
+    assert restarted.current_attempt("context").result == {
+        "brief": "approved context"
+    }
+    assert "rework_feedback" not in restarted.current_attempt("context").input_snapshot
+    assert restarted.current_attempt("draft").input_snapshot["rework_feedback"][
+        "feedback"
+    ] == REJECTION_FEEDBACK
+    assert "rework_feedback" not in restarted.current_attempt("review").input_snapshot
 
 
 def test_decision_requires_the_node_owner_and_current_card_versions():
@@ -247,9 +452,19 @@ def test_decision_node_projects_a_card_instead_of_a_second_task():
     assert card is not None
     rendered = str(card)
     assert "接受" in rendered
-    assert "退回" in rendered
+    assert "填写意见并退回" in rendered
     assert "human_decision_accept" in rendered
     assert "human_decision_reject" in rendered
+    reject_form = next(
+        element
+        for element in card["body"]["elements"]
+        if element.get("tag") == "form"
+    )
+    feedback = reject_form["elements"][0]
+    assert feedback["name"] == "rejection_feedback"
+    assert feedback["required"] is True
+    assert feedback["max_length"] == 1_000
+    assert reject_form["elements"][-1]["action_type"] == "form_submit"
     assert f"'attempt_no': {review.attempt_no}" in rendered
     instance = service.get(TENANT, "instance_decision")
     projection = repository.get_projection(

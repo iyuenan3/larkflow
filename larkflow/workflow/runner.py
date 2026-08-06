@@ -354,14 +354,17 @@ class NodeRunner:
         node_key: str,
     ) -> FrozenDict:
         spec = instance.snapshot.node(node_key)
+        pending_snapshot = instance.current_attempt(node_key).input_snapshot
         dependencies = {
             dependency: instance.current_attempt(dependency).result
             for dependency in spec.deps
         }
-        return FrozenDict(
-            {
-                "instance_inputs": instance.snapshot.inputs,
-                "dependencies": dependencies,
-                "work": spec.work,
-            }
-        )
+        captured: dict[str, Any] = {
+            "instance_inputs": instance.snapshot.inputs,
+            "dependencies": dependencies,
+            "work": spec.work,
+        }
+        rework_feedback = pending_snapshot.get("rework_feedback")
+        if isinstance(rework_feedback, Mapping):
+            captured["rework_feedback"] = rework_feedback
+        return FrozenDict(captured)

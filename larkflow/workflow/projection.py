@@ -13,6 +13,8 @@ from uuid import uuid4
 from .model import ExecutorKind, FrozenDict, NodeStatus, WorkflowInstance
 from .decision import (
     HUMAN_DECISION_ACTION_NAME,
+    HUMAN_DECISION_FEEDBACK_FIELD,
+    MAX_HUMAN_DECISION_FEEDBACK_CHARS,
     HumanDecision,
     human_decision_action_name,
     human_decision_config,
@@ -1049,12 +1051,20 @@ def human_decision_card(
     if config is None:
         raise ValueError("Human decision card requires an accept_reject contract")
 
-    def button(label: str, decision: HumanDecision, style: str) -> dict[str, Any]:
-        return {
+    def button(
+        label: str,
+        decision: HumanDecision,
+        style: str,
+        *,
+        submit_form: bool = False,
+    ) -> dict[str, Any]:
+        rendered: dict[str, Any] = {
             "tag": "button",
+            "element_id": f"decision_{decision.value}",
             "name": human_decision_action_name(decision),
             "text": {"tag": "plain_text", "content": label},
             "type": style,
+            "width": "fill",
             "behaviors": [
                 {
                     "type": "callback",
@@ -1070,6 +1080,9 @@ def human_decision_card(
                 }
             ],
         }
+        if submit_form:
+            rendered["action_type"] = "form_submit"
+        return rendered
 
     context = _decision_context(instance, node_key)
     reject_target = str(config["reject_target"])
@@ -1091,34 +1104,49 @@ def human_decision_card(
                         f"**Attempt**：{attempt_no}\n"
                         f"**退回建议起点**：`{reject_target}`\n\n"
                         "接受会完成当前 Human 节点。退回会把当前 Attempt 和实例"
-                        "置为失败并保留全部证据，由 Instance Owner 再预览返工范围。"
+                        "置为失败并保留全部证据。退回意见会进入返工节点的新 Attempt，"
+                        "由 Instance Owner 再预览返工范围。"
                     ),
                 },
                 {"tag": "hr"},
                 {"tag": "markdown", "content": context},
+                button(
+                    "接受",
+                    HumanDecision.ACCEPT,
+                    "primary_filled",
+                ),
                 {
-                    "tag": "column_set",
-                    "columns": [
+                    "tag": "form",
+                    "name": "decision_reject_form",
+                    "direction": "vertical",
+                    "vertical_spacing": "medium",
+                    "elements": [
                         {
-                            "tag": "column",
-                            "elements": [
-                                button(
-                                    "接受",
-                                    HumanDecision.ACCEPT,
-                                    "primary_filled",
-                                )
-                            ],
+                            "tag": "input",
+                            "element_id": "decision_feedback",
+                            "name": HUMAN_DECISION_FEEDBACK_FIELD,
+                            "required": True,
+                            "input_type": "multiline_text",
+                            "rows": 3,
+                            "auto_resize": True,
+                            "max_rows": 8,
+                            "max_length": MAX_HUMAN_DECISION_FEEDBACK_CHARS,
+                            "width": "fill",
+                            "label": {
+                                "tag": "plain_text",
+                                "content": "退回意见",
+                            },
+                            "placeholder": {
+                                "tag": "plain_text",
+                                "content": "说明哪里不符合要求，以及返工时应如何修正",
+                            },
                         },
-                        {
-                            "tag": "column",
-                            "elements": [
-                                button(
-                                    "退回",
-                                    HumanDecision.REJECT,
-                                    "default",
-                                )
-                            ],
-                        },
+                        button(
+                            "填写意见并退回",
+                            HumanDecision.REJECT,
+                            "default",
+                            submit_form=True,
+                        ),
                     ],
                 },
             ]

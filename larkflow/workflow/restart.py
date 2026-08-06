@@ -1,10 +1,12 @@
 """Safe preview and confirmation rules for node restarts."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
+from .decision import human_decision_config
 from .graph import reachable_downstream, topological_order
 from .model import (
     AttemptStatus,
@@ -218,6 +220,11 @@ def _apply_restart(
         affected = affected_instance_restart_node_keys(instance)
     if affected != preview.affected_node_keys:
         raise StaleRestartPreviewError("restart impact changed after preview")
+    rework_feedback = (
+        _rework_feedback_for_target(instance, preview.node_key)
+        if preview.scope == RestartScope.NODE and preview.node_key is not None
+        else None
+    )
 
     for node_key in affected:
         spec = instance.snapshot.node(node_key)
@@ -241,12 +248,18 @@ def _apply_restart(
         node.ready_at = None
         node.started_at = None
         node.completed_at = None
+        input_snapshot: dict[str, object] = {
+            "deps": spec.deps,
+            "work": spec.work,
+        }
+        if node_key == preview.node_key and rework_feedback is not None:
+            input_snapshot["rework_feedback"] = rework_feedback
         instance.attempts[(node_key, next_attempt_no)] = NodeAttempt(
             id=f"{node.id}:attempt:{next_attempt_no}",
             node_instance_id=node.id,
             attempt_no=next_attempt_no,
             status=AttemptStatus.PENDING,
-            input_snapshot=FrozenDict({"deps": spec.deps, "work": spec.work}),
+            input_snapshot=FrozenDict(input_snapshot),
         )
 
     if preview.scope == RestartScope.NODE:
@@ -263,3 +276,37 @@ def _apply_restart(
         node.ready_at = now
     instance.status = InstanceStatus.RUNNING
     instance.completed_at = None
+
+
+def _rework_feedback_for_target(
+    instance: WorkflowInstance,
+    target_node_key: str,
+) -> FrozenDict | None:
+    """Find the latest current rejection that explicitly targets this node."""
+
+    candidates: list[tuple[float, int, str, str]] = []
+    for spec in instance.snapshot.nodes:
+        config = human_decision_config(spec.work)
+        if config is None or str(config.get("reject_target")) != target_node_key:
+            continue
+        attempt = instance.current_attempt(spec.key)
+        result = attempt.result
+        if not isinstance(result, Mapping) or result.get("decision") != "rejected":
+            continue
+        feedback = result.get("feedback")
+        if not isinstance(feedback, str) or not feedback.strip():
+            continue
+        completed = attempt.completed_at.timestamp() if attempt.completed_at else -1.0
+        candidates.append(
+            (completed, attempt.attempt_no, spec.key, feedback.strip())
+        )
+    if not candidates:
+        return None
+    _completed, attempt_no, source_node_key, feedback = max(candidates)
+    return FrozenDict(
+        {
+            "source_node_key": source_node_key,
+            "source_attempt_no": attempt_no,
+            "feedback": feedback,
+        }
+    )

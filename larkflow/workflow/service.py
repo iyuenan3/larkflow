@@ -19,6 +19,7 @@ from .decision import (
     HumanDecisionNotAllowedError,
     StaleHumanDecisionError,
     human_decision_config,
+    normalize_human_decision_feedback,
 )
 from .events import AuditEvent, OutboxEvent
 from .graph import validate_snapshot
@@ -426,6 +427,7 @@ class WorkflowService:
         attempt_no: int,
         expected_instance_version: int,
         expected_node_version: int,
+        feedback: str | None = None,
         correlation_id: str | None = None,
     ) -> WorkflowInstance:
         """Accept or reject one version-bound Human decision card."""
@@ -450,6 +452,9 @@ class WorkflowService:
             raise HumanDecisionNotAllowedError(
                 f"node is not an accept or reject decision: {node_key}"
             )
+        if actor_person_id != node.owner_person_id:
+            raise AuthorizationError(f"only the node owner may submit: {node_key}")
+        normalized_feedback = normalize_human_decision_feedback(decision, feedback)
         now = self.clock()
         if decision == HumanDecision.ACCEPT:
             self.runner.submit_human(
@@ -467,10 +472,10 @@ class WorkflowService:
         else:
             quality = QualityResult(
                 verdict=QualityVerdict.FAIL,
-                evidence="节点 Owner 明确退回当前交付物。",
+                evidence=f"节点 Owner 明确退回：{normalized_feedback}",
                 suggestion=(
                     "由 Instance Owner 通过节点重启预览选择返工范围，"
-                    "旧 Attempt、结果和审计继续保留。"
+                    "新 Attempt 会携带本次退回意见，旧 Attempt、结果和审计继续保留。"
                 ),
             )
             self.runner.reject_human(
@@ -479,7 +484,10 @@ class WorkflowService:
                 actor_person_id=actor_person_id,
                 attempt_no=attempt_no,
                 expected_node_version=expected_node_version,
-                result={"decision": "rejected"},
+                result={
+                    "decision": "rejected",
+                    "feedback": normalized_feedback,
+                },
                 quality_result=quality,
                 now=now,
             )
@@ -497,6 +505,7 @@ class WorkflowService:
             payload={
                 "decision": decision.value,
                 "reject_target": config.get("reject_target"),
+                "feedback": normalized_feedback,
             },
         )
         outbox = self._completion_outboxes(instance, node_key, now=now)

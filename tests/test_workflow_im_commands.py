@@ -424,6 +424,14 @@ def test_human_decision_bridge_uses_trusted_operator_and_immediate_feedback():
             "node_version": 5,
             "instance_version": 8,
         },
+        "form_value": json.dumps(
+            {
+                "rejection_feedback": (
+                    "删除与试点无关的发布步骤，并重新依据实际观察结果验收。"
+                )
+            },
+            ensure_ascii=False,
+        ),
         "token": "decision-card-token",
         "timestamp": "1785830400000",
     }
@@ -443,6 +451,7 @@ def test_human_decision_bridge_uses_trusted_operator_and_immediate_feedback():
             "attempt_no": 2,
             "node_version": 5,
             "instance_version": 8,
+            "feedback": "删除与试点无关的发布步骤，并重新依据实际观察结果验收。",
         },
     )
     assert updates[0]["token"] == "decision-card-token"
@@ -459,6 +468,88 @@ def test_human_decision_bridge_uses_trusted_operator_and_immediate_feedback():
             },
         )
     ]
+
+
+@pytest.mark.parametrize(
+    "form_value, message",
+    [
+        (None, "必须填写具体意见"),
+        ('{"rejection_feedback":"   "}', "必须填写具体意见"),
+        ('{"unexpected":"text"}', "表单字段无效"),
+        (
+            json.dumps({"rejection_feedback": "x" * 1_001}),
+            "不能超过 1000",
+        ),
+    ],
+)
+def test_human_decision_bridge_rejects_invalid_feedback_before_persistence(
+    form_value,
+    message,
+):
+    store = MemoryStore()
+    bridge = HumanDecisionActionInboxBridge(store, tenant_id=TENANT)
+    payload = {
+        "event_id": "event_decision_invalid",
+        "message_id": "message_decision_invalid",
+        "chat_id": "chat_reviewer",
+        "operator_id": "person_reviewer",
+        "action_tag": "button",
+        "action_name": "human_decision_reject",
+        "action_value": {
+            "kind": "human_decision",
+            "decision": "reject",
+            "instance_id": "instance_1",
+            "node_key": "review",
+            "attempt_no": 2,
+            "node_version": 5,
+            "instance_version": 8,
+        },
+        "form_value": form_value,
+        "token": "decision-card-token",
+        "timestamp": "1785830400000",
+    }
+
+    with pytest.raises(IMCommandRejected, match=message):
+        bridge("card.action.trigger", payload)
+    assert store.appended == []
+
+
+def test_human_decision_accept_ignores_untrusted_form_feedback():
+    store = MemoryStore()
+    bridge = HumanDecisionActionInboxBridge(store, tenant_id=TENANT)
+
+    assert bridge(
+        "card.action.trigger",
+        {
+            "event_id": "event_decision_accept",
+            "message_id": "message_decision_accept",
+            "chat_id": "chat_reviewer",
+            "operator_id": "actual_clicker",
+            "action_tag": "button",
+            "action_name": "human_decision_accept",
+            "action_value": {
+                "kind": "human_decision",
+                "decision": "accept",
+                "instance_id": "instance_1",
+                "node_key": "review",
+                "attempt_no": 2,
+                "node_version": 5,
+                "instance_version": 8,
+            },
+            "form_value": json.dumps(
+                {
+                    "rejection_feedback": "forged feedback",
+                    "operator_id": "forged_owner",
+                }
+            ),
+            "token": "decision-card-token",
+            "timestamp": "1785830400000",
+        },
+    ) is True
+
+    event = store.appended[0]
+    assert event.sender_person_id == "actual_clicker"
+    assert parse_im_command(event.text)[2]["feedback"] is None
 
 
 def test_recovery_card_bridge_persists_before_fast_feedback_failure():

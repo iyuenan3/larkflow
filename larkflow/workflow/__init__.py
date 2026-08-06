@@ -72,12 +72,16 @@ from .executors import (
 )
 from .decision import (
     HUMAN_DECISION_ACTION_NAME,
+    HUMAN_DECISION_FEEDBACK_FIELD,
     HUMAN_DECISION_KIND,
+    MAX_HUMAN_DECISION_FEEDBACK_CHARS,
     HumanDecision,
+    HumanDecisionFeedbackError,
     HumanDecisionNotAllowedError,
     StaleHumanDecisionError,
     human_decision_action_name,
     human_decision_config,
+    normalize_human_decision_feedback,
 )
 from .directory import (
     CandidateDirectory,
@@ -397,8 +401,11 @@ __all__ = [
     "RecoveryActionInboxBridge",
     "RecoveryNotAllowedError",
     "HUMAN_DECISION_ACTION_NAME",
+    "HUMAN_DECISION_FEEDBACK_FIELD",
     "HUMAN_DECISION_KIND",
+    "MAX_HUMAN_DECISION_FEEDBACK_CHARS",
     "HumanDecision",
+    "HumanDecisionFeedbackError",
     "HumanDecisionNotAllowedError",
     "InMemoryTemplateStore",
     "InMemoryEdgeStore",
@@ -523,6 +530,7 @@ __all__ = [
     "human_decision_action_name",
     "human_decision_card",
     "human_decision_config",
+    "normalize_human_decision_feedback",
     "human_decision_result_card",
     "inline_owner_roles",
     "instantiate_inline_definition",
