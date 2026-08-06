@@ -1,6 +1,6 @@
 # ARCHITECTURE · larkflow
 
-> 状态：Target + Gap · 既有架构简化版 · 2026-08-05
+> 状态：Target + Gap · 既有架构简化版 · 2026-08-06
 
 ## 1. 架构原则
 
@@ -17,6 +17,7 @@
 ```mermaid
 flowchart LR
     F["飞书<br/>IM / Task / Doc / Drive / Directory"] <-->|"事件、命令、投影、对账"| C["larkflow 模块化单体"]
+    W["项目 Owner 浏览器<br/>中央只读控制台"] -->|"开发期 loopback<br/>Owner 范围查询"| C
     E["员工电脑<br/>Personal Agent Edge"] -->|"私有 HTTPS<br/>配对、领取、续租、回传"| C
     C --> D[("PostgreSQL<br/>Template / Instance / Attempt / Audit")]
     C --> S["DAG Scheduler"]
@@ -32,6 +33,7 @@ flowchart LR
 - Scheduler：依据依赖和状态解锁节点。
 - Node Runner：运行 Agent 与 Tool 节点，接收 Human 节点提交。
 - Edge Control：管理本人设备配对、撤销和窄 capability，把合法设备映射到现有 Node Runner 租约，不另建业务状态机。
+- Console Read：把一个服务端认证主体映射到 tenant 与 person，只返回该 Instance Owner 的有界流程摘要、DAG、Attempt 和审计 DTO，不提供领域写命令。
 - Projection Service：创建和对账飞书任务、卡片、消息及文档。
 - Audit Service：追加 actor、来源、状态、revision 和相关对象。
 - Outbox Worker：在数据库事务提交后可靠执行飞书副作用。
@@ -131,6 +133,7 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 - `repository.py`：Instance、Template、RestartPreview 与 GraphEditPreview 仓储 Port，以及仅供测试的 copy-on-read 内存实现；两类重启通过 `save_restart`，未来区域编辑通过 `save_graph_edit`，把 aggregate、预览消费、审计和 outbox 原子提交。
 - `migrations/` 与 `migrate.py`：PostgreSQL 14 schema、package-data migration 和 advisory lock migration runner；`0010_restart_previews` 保存短期重启授权，`0011_restart_scope` 增加显式 scope，`0012_graph_edit_previews` 保存未来区域编辑预览，`0013_im_command_mentions` 保存最小化 mention 数组，`0014_role_binding_cards` 保存人员选择卡状态，`0015_recovery_cards` 为失败恢复卡片增加耐久更新 token，`0016_role_card_single_action` 在不删除历史回调的前提下为每张人员选择卡保留一个 canonical 动作并建立部分唯一索引，`0017_card_feedback_metrics` 为人员选择与恢复动作保存完整的首个服务端反馈状态、耗时和完成时间，`0018_worker_wakeups` 为四类耐久工作表安装事务提交后通知触发器，`0019_draft_generation_progress` 为自然语言草稿增加独立生成、阶段进度与租约状态。
 - `postgres.py` 与 `serde.py`：模板版本、模板审计、JSONB 快照序列化、规范化运行态表、乐观并发仓储、追加型审计与 `FOR UPDATE SKIP LOCKED` outbox。
+- `console.py`、`console_http.py` 与 `console_cli.py`：Owner 范围的只读 DTO、静态凭据到服务端主体的开发映射、只接受 GET / HEAD 的 HTTP 边界和 loopback-only 服务入口。仓储查询同时限定 tenant 与 Instance Owner；详情读取再次校验 Owner。响应不返回人员 ID、claim token 或原始错误正文，并对列表、审计和结果大小设上限。浏览器页面只用 `textContent` 渲染，令牌只保存在当前标签页。
 - `service.py`、`restart.py` 与 `editing.py`：提供只读草稿预览、节点及完整实例重启影响计算、未来区域编辑计划、短期预览与原子确认，并在仓储事务内协调草稿确认、调度、执行结果、授权、审计、outbox 与实例终态。节点重启若遗漏影响集合之外的失败节点会被拒绝；目标恰好匹配当前失败决定的 `reject_target` 时，只向该目标的新 Attempt 注入 `{source_node_key, source_attempt_no, feedback}`，不污染其他受影响节点；完整实例重启覆盖整个冻结图但不自动继承局部返工意见；未来区域编辑只跨越未开始区域，并用候选 Snapshot 哈希检测语义漂移。
 - `recovery.py`：为失败的自动节点实现显式 `retry / human_takeover` 领域命令。两条路径都只允许当前节点 Owner，并比较 Instance version、Node version 和 Attempt 编号；旧卡片失效，原失败 Attempt 保持只读。重试复用受控节点重启语义，人工接管创建新 `waiting_human` Attempt 并进入现有 Task 投影与入站链路。
 - `runtime.py`：单步 `WorkflowWorker` 与 `AutomatedExecutor` Port。每个 tick 最多认领一个自动节点，先提交 claim，再调用外部 executor；外部异常写回失败，进程级崩溃留下的认领由租约恢复。
@@ -146,7 +149,7 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 - `draft_generation_daemon.py`：在不加载 lark-cli profile 的独立进程中只认领 `draft_wizard` canonical 动作。生成租约下限按两次完整 LLM 路由预算加安全余量计算，避免合法修复调用在租约中途被另一 Worker 接管；阶段进度使用独立短租约和 revision fencing，模型调用与飞书卡片更新不共享进程或凭据。
 - `im_commands.py` 中的 `RecoveryActionInboxBridge` 与 `HumanDecisionActionInboxBridge`：把飞书恢复卡片和人类决定卡回调转换为耐久命令。接受按钮位于表单外，退回通过表单提交必填的 `rejection_feedback`；桥接层归一化 lark-cli 字符串化 `action_value`、可缺失 `action_name` 和秒、毫秒、微秒时间戳，并严格拒绝空白或超过 1000 字的退回意见。若 `action_name` 存在则必须与服务端动作交叉一致。操作人只从飞书顶层认证字段取值，卡片 payload 中的身份不参与授权；动作耐久插入后立即尝试把原卡片替换为无按钮“处理中”，最终再更新原卡片并发送耐久文本回执。决定命令还绑定 Instance、Node、Attempt 版本并重验当前 Owner。`event_time.py` 为卡片回调提供共享时间归一化，避免边界解析分叉。
 - `card_feedback.py`：统一生成蓝色处理中与橙色拒绝卡。Target 长连接入口使用最长 3 秒的 lark-cli 直接更新；动作先延后 10 秒防止后台 Worker 抢先写入最终状态，直接更新结束后立即释放，崩溃时由延后时间兜底。单调时钟从有效回调被接受开始覆盖动作插入和直接更新，释放动作时原子保存 `updated / failed`、非负毫秒数和完成时间；结构化日志只记录动作类型、结果和耗时，不记录人员、消息或卡片标识，日志报告失败也不能破坏回调。该顺序保证最终状态不会被迟到的处理中状态覆盖，也不让视觉回写失败撤销已持久化动作。
-- `cli.py`：独立 `larkflow-target` 运维入口，提供模板全生命周期、从模板创建草稿、预览、确认、状态、Human 提交，以及 Runtime、Projection、Interactive、Draft Generation、入站校验和领域入站的单步 / 常驻服务；`generate-drafts-once / generate-drafts` 运行无凭据草稿生成车道，`reconcile-instance-completion` 可显式修复一个已完成实例缺失的完成文档或最终通知。
+- `cli.py`：独立 `larkflow-target` 运维入口，提供模板全生命周期、从模板创建草稿、预览、确认、状态、Human 提交，以及 Runtime、Projection、Interactive、Draft Generation、入站校验和领域入站的单步 / 常驻服务；`generate-drafts-once / generate-drafts` 运行无凭据草稿生成车道，`reconcile-instance-completion` 可显式修复一个已完成实例缺失的完成文档或最终通知。独立 `larkflow-console` 只装配只读仓储与 HTTP 页面，不复用领域命令入口。
 - `executors.py`：包含只接受 `work.agent.kind=llm.generate` 的 `LLMAgentExecutor`、按 `work.tool.kind` 路由内部 adapter 的 `ToolExecutorRouter`、确定性的 `content.check` 与 `source_claims.check`，以及只用于开发验证的 `development.echo`。`source_claims.v1` 要求 Agent 区分来源事实、推断和开放问题；`source_claims.check` 只检查结构、类别、稳定引用覆盖与来源 URL 一致性，不访问网页或判断事实真伪。Runtime 在 claim 前按 adapter 能力筛选具体节点，未接受的 kind 保持 ready，不会先认领后失败。
 - `edge.py`、`edge_postgres.py` 与 migration `0007_edge_devices`：一次性配对、设备哈希凭据、撤销、追加型 Edge 审计和 `personal.readonly` 能力过滤。Edge 复用当前 Attempt 的 Worker、token、版本与租期校验，不创建第二套任务真相。
 - `edge_http.py` 与 `edge_gateway_cli.py`：提供私有 `/edge/v1` JSON 边界和运维入口。Gateway 默认且强制只监听 loopback；远程设备必须经独立 HTTPS 反向代理，仓库不把该接口描述为公网 API。
@@ -157,11 +160,13 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 
 内容提交 `0dc5359e990635c7b6aa16ec0bcd798eb8df39d0` 与原生表单绑定修复 `f6125331aa541e824675e25f9cd2d756cd4c6b56` 已部署，完整离线套件为 `910 passed, 18 skipped`。它们不增加 migration，复用 Attempt `input_snapshot / result / quality_result` 与 Audit payload 的既有 JSONB。真实实例 `im_5717aa5b9480d146239907d5` 已从 PostgreSQL 回读意见持久化、质量证据、追加审计、三节点重启、只注入 Agent Attempt 2 的 `rework_feedback`、上游与下游隔离和 Tool 从失败转为通过；新的 Human Attempt 2 决定卡也已从飞书服务端读回。该证据证明开发环境中的窄返工上下文契约，不证明模型内容质量规模化或生产可用性。
 
+内容提交 `ee2fa9439594d765cd08f2caa0f7ecb20d30d78b` 已部署 Owner 只读中央控制台。完整离线套件为 `922 passed, 18 skipped`，未新增 migration。开发服务以 `lf_target_dev` 运行，读取权限收紧的 env，通过 Unix socket peer authentication 访问长期 PostgreSQL，只监听 `127.0.0.1:8780`。真实 API 验证了 Owner 列表、运行中详情和跨 Owner 404；SSH 隧道浏览器验证了 30 条流程、运行中 DAG、Attempt 1/2、审计时间线、草稿 0/3、无浏览器错误和显式锁定。控制台加入统一重启脚本后，九个 Target 服务与一个 legacy 消费者均回读 `active / NRestarts=0`。当前静态 Bearer token 只适合开发试用，不构成公网或生产鉴权。
+
 领域状态、审计与 outbox 在同一事务提交。事务提交后，Human 节点与所有节点状态变化通过 outbox 请求投影同步；Agent 和 Tool 激活直接返回 NodeActivation，由 Runtime Worker 在提交后交给 executor，避免数据库事务跨越外部调用。自动执行是 at-least-once，executor 必须使用 tenant-scoped Attempt 幂等键消除重复副作用。Agent 装配还会检查所有显式故障切换线路的超时总和，加上安全余量后必须小于 claim 租期，避免正常慢调用在结果提交前失去租约。Edge Proof 不发明独立 Capability Lease，它把可撤销设备身份与一个明确 kind 映射到同一 Node claim，并用心跳延长当前租期；设备失联或本机执行器异常后，租约到期才允许接管。
 
-下段保留累计验证实录。其中“十八份 migration、六个服务、四条监听连接”属于较早开发快照，不代表当前拓扑；当前 As-built 以本节上方的十九份 migration、九个 Python 服务和七条监听连接为准。
+下段保留累计验证实录。其中“十八份 migration、六个服务、四条监听连接”属于较早开发快照，不代表当前拓扑；当前 As-built 以本节上方的十九份 migration、十个 Python 服务和七条监听连接为准。
 
-PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration 重入、完整聚合往返、模板并发启用、不可变版本触发器、审计追加保护、outbox、Inbox、双 Worker 竞争、过期认领恢复、验证耗尽终态，以及投影分页对账、缺失补建、受控换绑和重入。通知验收还证明未提交事务不唤醒、提交后唤醒一次，监听关闭后普通轮询仍可领取耐久工作。Owner 实例列表还验证了 tenant 与 Owner 隔离、稳定倒序、进度汇总和索引存在性。节点重启、完整实例重启和未来区域编辑分别验证同一预览的两个真实连接恰好一路执行、一路幂等回放，聚合版本只增加一次、历史 Attempt 保留且审计只有一条。Edge migration 与 store 也已验证配对竞争、领取、续租、完成、撤销、原始 secret 不落库和 Edge 审计不可改写；测试库和上传件随后删除。长期开发库已应用十八份 migration。第十六份迁移在真实库发现一组五条历史同卡回调后无损执行，保留最早一条 canonical 动作与四条非 canonical 历史，canonical 重复组为零；第十七份迁移在两类动作表增加首个服务端反馈指标及完整性约束；第十八份迁移为四类耐久工作表增加空通知触发器。`alicloud-sh` 已建立长期 Target 开发库、每日备份，以及 Runtime、Projection、入站校验、领域入站和 Edge Gateway 五个 Target 常驻服务；加上 legacy 事件消费者，共六个 Python 服务。前四个 Target Worker 各自持有一条 PostgreSQL 监听连接，队列表和轮询继续保证可靠性。飞书 IM 命令、mention 与卡片人员分工、发送者和候选人目录校验、草稿创建与确认、Human-Agent-Tool-Human、自动节点消息、完成 Docx、最终通知、Owner 专属状态查询、最近实例列表、两类重启、未来区域编辑和自动节点失败恢复已在测试组织完成真实闭环。失败恢复验收中，两个不同恢复卡分别创建 Attempt 2 和 3；人工接管创建 Attempt 4 与 Human Task，Task 完成后 Instance 进入 `done`，前三次失败 Attempt、错误、审计与投影全部保留，Attempt 4 的完成文档和最终消息均已投影。编辑正向实例完成于 `version 8 / graph_revision 2`，更新后的 Human Task、Docx 与最终消息均已绑定；负向实例真实拒绝冻结线、成环依赖和陈旧预览，完成于 `version 7 / graph_revision 1`，没有图编辑审计。完整实例重启验收覆盖三节点全图预览、确认、从全部根节点重新调度、重复确认 no-op 和再次完成；三个当前 Attempt 为 2、2、3，旧 Attempt、Task、结果和完成投影均保留，新旧完成文档与最终消息具有不同外部 ID。Task 完成事件在本轮仍未被 bot 长连接收到，Projection 对当前 Human Task 的周期读回仍是可靠路径。轮询和可选事件都只写 Inbox，不直接改 Target 领域状态。凭据侧以 `lf-dev` 重新读取飞书资源并写验证结果，领域侧以 `lf_target_dev` 重新校验业务授权，后者不能读取 lark-cli profile。开发应用发布所需通讯录数据范围后，中央应用从根部门读取到五名活跃成员，并能解析选定测试成员。该成员持有的合成实例生成真实 Human Task 投影后，当前登录用户发送的 `/larkflow edit` 被耐久处理为拒绝并成功回复；实例保持 `graph_revision 1`，没有创建预览或图编辑审计。群聊 mention 和单聊 Card 2.0 两条跨人员正向入口均已创建冻结草稿；后者的原卡片已回写为已确认状态。提交 `a506e7d` 已将批次 Worker 的验证、领域处理与回复完成时间改为逐项结算；一次性真实 PostgreSQL 验证同批两条记录分别保存不同完成时刻。修正版五次人员选择卡都只创建一个 canonical 动作和一个草稿，首反馈、凭据验证、领域处理与最终回复的 P50 / P95 分别为 0.991 / 1.274 秒、4.757 / 12.358 秒、4.941 / 12.582 秒和 12.670 / 19.298 秒。前四次为 7.548 秒内的突发点击，第五次约 19 分钟后隔离点击并于 4.044 秒完成全链路；突发最终回复范围为 8.368 到 19.569 秒，说明串行外部调用存在队头阻塞。提交 `a506e7d` 之前公布的首反馈数据仍有效，但下游精确耗时使用了批次开始时间，现已废止。飞书服务端读回五张原卡片均为终态且没有操作控件；这些耗时不包含客户端渲染。更多业务 Tool、图形化控制面和生产装配仍未实现；同机本地备份不构成生产级高可用或灾难恢复。投影对账已部署到长期开发服务，并用专用实例完成真实 Task 删除后的换绑、重入及新 Task 完成入站验收。Gateway 以 `lf_target_dev` 常驻且只监听 `127.0.0.1:8765`。临时本机 Edge 通过 SSH 隧道完成两条合成 Codex 跨机实例，第二条产生 10 次真实续租审计；设备撤销后旧凭据领取被拒绝。开发服务器另以 Caddy 将专用 DNS-only 子域名反向代理到 loopback Gateway，受信任证书、SAN、安全响应头和源站 401 均已验证；但公网客户端后续 TLS 握手在到达 ECS 前被阿里云中国内地 ICP 接入备案系统重置，因此公网配对、领取、续租和回传尚未验证。阻断确认后 Caddy 已停止并禁用开机启动，配置、证书和回滚备份保留，Gateway 与其他 Target 服务不受影响。
+PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration 重入、完整聚合往返、模板并发启用、不可变版本触发器、审计追加保护、outbox、Inbox、双 Worker 竞争、过期认领恢复、验证耗尽终态，以及投影分页对账、缺失补建、受控换绑和重入。通知验收还证明未提交事务不唤醒、提交后唤醒一次，监听关闭后普通轮询仍可领取耐久工作。Owner 实例列表还验证了 tenant 与 Owner 隔离、稳定倒序、进度汇总和索引存在性。节点重启、完整实例重启和未来区域编辑分别验证同一预览的两个真实连接恰好一路执行、一路幂等回放，聚合版本只增加一次、历史 Attempt 保留且审计只有一条。Edge migration 与 store 也已验证配对竞争、领取、续租、完成、撤销、原始 secret 不落库和 Edge 审计不可改写；测试库和上传件随后删除。长期开发库已应用十八份 migration。第十六份迁移在真实库发现一组五条历史同卡回调后无损执行，保留最早一条 canonical 动作与四条非 canonical 历史，canonical 重复组为零；第十七份迁移在两类动作表增加首个服务端反馈指标及完整性约束；第十八份迁移为四类耐久工作表增加空通知触发器。`alicloud-sh` 已建立长期 Target 开发库、每日备份，以及 Runtime、Projection、入站校验、领域入站和 Edge Gateway 五个 Target 常驻服务；加上 legacy 事件消费者，共六个 Python 服务。前四个 Target Worker 各自持有一条 PostgreSQL 监听连接，队列表和轮询继续保证可靠性。飞书 IM 命令、mention 与卡片人员分工、发送者和候选人目录校验、草稿创建与确认、Human-Agent-Tool-Human、自动节点消息、完成 Docx、最终通知、Owner 专属状态查询、最近实例列表、两类重启、未来区域编辑和自动节点失败恢复已在测试组织完成真实闭环。失败恢复验收中，两个不同恢复卡分别创建 Attempt 2 和 3；人工接管创建 Attempt 4 与 Human Task，Task 完成后 Instance 进入 `done`，前三次失败 Attempt、错误、审计与投影全部保留，Attempt 4 的完成文档和最终消息均已投影。编辑正向实例完成于 `version 8 / graph_revision 2`，更新后的 Human Task、Docx 与最终消息均已绑定；负向实例真实拒绝冻结线、成环依赖和陈旧预览，完成于 `version 7 / graph_revision 1`，没有图编辑审计。完整实例重启验收覆盖三节点全图预览、确认、从全部根节点重新调度、重复确认 no-op 和再次完成；三个当前 Attempt 为 2、2、3，旧 Attempt、Task、结果和完成投影均保留，新旧完成文档与最终消息具有不同外部 ID。Task 完成事件在本轮仍未被 bot 长连接收到，Projection 对当前 Human Task 的周期读回仍是可靠路径。轮询和可选事件都只写 Inbox，不直接改 Target 领域状态。凭据侧以 `lf-dev` 重新读取飞书资源并写验证结果，领域侧以 `lf_target_dev` 重新校验业务授权，后者不能读取 lark-cli profile。开发应用发布所需通讯录数据范围后，中央应用从根部门读取到五名活跃成员，并能解析选定测试成员。该成员持有的合成实例生成真实 Human Task 投影后，当前登录用户发送的 `/larkflow edit` 被耐久处理为拒绝并成功回复；实例保持 `graph_revision 1`，没有创建预览或图编辑审计。群聊 mention 和单聊 Card 2.0 两条跨人员正向入口均已创建冻结草稿；后者的原卡片已回写为已确认状态。提交 `a506e7d` 已将批次 Worker 的验证、领域处理与回复完成时间改为逐项结算；一次性真实 PostgreSQL 验证同批两条记录分别保存不同完成时刻。修正版五次人员选择卡都只创建一个 canonical 动作和一个草稿，首反馈、凭据验证、领域处理与最终回复的 P50 / P95 分别为 0.991 / 1.274 秒、4.757 / 12.358 秒、4.941 / 12.582 秒和 12.670 / 19.298 秒。前四次为 7.548 秒内的突发点击，第五次约 19 分钟后隔离点击并于 4.044 秒完成全链路；突发最终回复范围为 8.368 到 19.569 秒，说明串行外部调用存在队头阻塞。提交 `a506e7d` 之前公布的首反馈数据仍有效，但下游精确耗时使用了批次开始时间，现已废止。飞书服务端读回五张原卡片均为终态且没有操作控件；这些耗时不包含客户端渲染。更多业务 Tool、可写图形化控制面和生产装配仍未实现；同机本地备份不构成生产级高可用或灾难恢复。投影对账已部署到长期开发服务，并用专用实例完成真实 Task 删除后的换绑、重入及新 Task 完成入站验收。Gateway 以 `lf_target_dev` 常驻且只监听 `127.0.0.1:8765`。临时本机 Edge 通过 SSH 隧道完成两条合成 Codex 跨机实例，第二条产生 10 次真实续租审计；设备撤销后旧凭据领取被拒绝。开发服务器另以 Caddy 将专用 DNS-only 子域名反向代理到 loopback Gateway，受信任证书、SAN、安全响应头和源站 401 均已验证；但公网客户端后续 TLS 握手在到达 ECS 前被阿里云中国内地 ICP 接入备案系统重置，因此公网配对、领取、续租和回传尚未验证。阻断确认后 Caddy 已停止并禁用开机启动，配置、证书和回滚备份保留，Gateway 与其他 Target 服务不受影响。
 
 ## 8. Intended vs implemented
 
@@ -174,6 +179,7 @@ PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration �
 | 责任 | 每节点唯一 Owner，执行器分离 | 新内核已强制 Owner 与 `human/agent/tool` 分离；IM mention 和 Card 2.0 人员选择均在凭据侧验证活跃成员，再由领域侧冻结角色绑定，已完成开发真栈正向验收；草稿 Owner 全量目录校验已落码但默认关闭 | 需要异常成员状态回归、管理入口和生产装配 |
 | 编辑与重启 | 预览确认、revision、下游 Attempt | 未来区域编辑及节点、完整实例重启都已实现耐久预览、Owner 重授权、版本与 revision 校验、历史保护和原子审计，并完成真库竞争与 Owner 飞书闭环；编辑拒绝矩阵覆盖冻结线、非法 DAG、陈旧预览与跨人员非 Owner | 需要图形化 diff、跨轮次浏览和生产装配 |
 | 飞书集成 | PostgreSQL outbox / Inbox、幂等、服务端授权、对账 | Human Task 创建 / 完成、可靠轮询、可选事件、服务端详情回读、两阶段授权、启动对账、受控 Task 重建、十一个窄命令、模板与无模板草稿、人员选择卡、失败恢复卡、自动节点消息、两类重启、未来区域编辑、跨人员分工、完成 Docx 与最终通知已落码并完成开发真栈验收；凭据侧交互已拆为两个单项领取副本 | 需要更多业务命令、更高强度限流回归和生产拓扑 |
+| Owner 控制面 | 浏览流程、DAG、跨轮次 Attempt 与审计，写操作保持预览确认 | Owner 只读 Console v0 已从真实 PostgreSQL 展示列表、详情、DAG、Attempt 与审计；服务端按 tenant 与 Owner 过滤，开发服务强制 loopback | 仍缺飞书登录态或企业 SSO、生产反向代理授权、分页筛选、协作者可见性、跨轮次对比和任何可写控制面 |
 | 运行时 | 独立 Scheduler + Node Runner | 新内核已实现 Scheduler、Node Runner、持久化 runnable scan、`llm.generate`、`content.check`、Runtime / Projection / Interactive / Inbound Worker、能力过滤、优雅停机、过期 claim 恢复，以及失败自动节点的 Owner 重试与人工接管 | 需要更多业务 Tool、自动重试策略配置、恢复运营视图和生产装配 |
 | Personal Agent Edge | 默认关闭、本人设备、窄 capability、中央真相 | Proof v0 已实现配对、撤销、私有 HTTP、手工 run-once、前台 serve、只读 Codex adapter、续租失败取消、单设备锁与迟到结果拒绝；员工 Mac 前台 serve 已通过受控真机验收。macOS Keychain、开发试用 manager、安装、升级、回滚、离线诊断、哈希锁定 wheelhouse、bootstrap pip 修复和真实断网安装均已验证 | 安全评审结论为正式分发 No-Go。仍缺最小 Edge 独立包、可复现 lock 与构建证明、Developer ID 签名、公证、可信摘要渠道、目录级读取与数据外发治理、全新员工 Mac 验收；当前持久设备需受控 SSH 隧道，公网 E2E 仍要求 ICP 接入备案或迁移合规地域；产品化仍为 Later |
 
@@ -182,6 +188,7 @@ PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration �
 ## 9. 安全与运维不变量
 
 - 凭证、token、真实人员 ID 和生产数据不进入模板、日志或仓库。
+- 控制台身份只由服务端认证结果映射，不从查询参数、卡片 payload 或浏览器提交的 person 字段取值。非 Owner 与不存在资源使用相同 404；开发静态 token 不得暴露到公网。
 - 每个命令按当前 actor、tenant、责任关系、状态和 expected revision 重新授权。
 - 人员、模板或实例失效必须有可审计的逻辑终态，不通过物理删除抹除历史。
 - 状态事务与飞书副作用通过 outbox 或等价机制解耦。

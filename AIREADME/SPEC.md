@@ -4,7 +4,7 @@
 >
 > 当前 legacy 契约部分定型：节点契约含投票 / 分支 / 打回权限，引擎契约和产出协议已跑通。Target 已另行实现 PostgreSQL、Template v0.2 与窄 Personal Agent Edge Proof，但仍没有三级父子实例或 Capability Registry。
 >
-> 2026-07-25：**legacy 对外契约的 as-built 面从「驱动层 Python 方法」扩到「CLI 子命令」**（ADR-031），见〈引擎对外接口 as-built〉。legacy 仍没有网络接口；2026-08-02 新增的 `/edge/v1` 只服务 Target Edge Proof。
+> 2026-07-25：**legacy 对外契约的 as-built 面从「驱动层 Python 方法」扩到「CLI 子命令」**（ADR-031），见〈引擎对外接口 as-built〉。legacy 仍没有网络接口；Target 当前有只服务 Edge Proof 的私有 `/edge/v1`，以及 2026-08-06 新增的 loopback Owner 只读 `/console`，两者都不是公开网络 API。
 >
 > DAG Template 的产品目标契约见 [DAG_TEMPLATE_SPEC.md](DAG_TEMPLATE_SPEC.md)。下文“模板节点契约”描述的是当前引擎可执行的 legacy compact form，不代表 v0.1 已落码。
 
@@ -109,6 +109,14 @@ Target 使用独立 `larkflow-target` CLI，不复用上述 legacy 驱动层。�
 六条 Target Worker 连接使用 PostgreSQL 通知缩短耐久阶段之间的空闲等待。服务启动时先建立专用监听连接，再执行首次队列扫描；`workflow_outbox_events`、`workflow_inbox_events`、`workflow_im_commands` 与 `workflow_role_binding_actions` 的可认领状态在事务提交后向固定 channel 发送空通知。通知不携带 tenant、人员、消息、Instance、Node 或任何业务状态，也不替代数据库 claim。连接、监听或等待失败时，Worker 继续按原有有界退避扫描，所以通知丢失只影响延迟，不影响最终处理。
 
 Interactive Worker 依次访问 IM 命令验证、IM 回复、人员分工卡创建、人员分工回调验证与人员分工回复五条车道。配置契约要求 `LARKFLOW_TARGET_INTERACTIVE_CLAIM_LIMIT=1`，其他值拒绝启动；并行度只由独立进程副本数决定。开发拓扑固定两个副本，Projection 不再读取 `LARKFLOW_TARGET_ENABLE_IM_COMMANDS`，也不再认领上述五条车道。所有授权、幂等、租约、重试和数据库状态机保持原契约，双副本不能绕过服务端校验。
+
+### Target Owner 中央只读控制台 v0
+
+`larkflow-console` 使用与 Target 相同的 PostgreSQL 仓储，只装配读取服务，不装配确认、重启、编辑、Human 提交或其他领域写命令。HTTP 服务强制绑定 loopback，只接受 GET 与 HEAD：`/console/`、`/console/app.js` 和 `/console/styles.css` 提供静态页面；`GET /console/api/v1/instances?limit=<1..100>` 返回当前 Owner 的有界实例摘要；`GET /console/api/v1/instances/<instance_id>` 返回同一 Owner 实例的节点、历史 Attempt 和最近审计。其他方法返回 405，未知路由返回 404。
+
+开发鉴权要求 `LARKFLOW_CONSOLE_ACCESS_TOKEN` 至少 32 字符，并在服务端把该 Bearer token 映射到 `LARKFLOW_TARGET_TENANT + LARKFLOW_CONSOLE_PERSON_ID`。客户端不能提交 tenant 或 person。列表 SQL 同时限定 tenant 与 `owner_person_id`，详情读取完整聚合后再次校验 Instance Owner；不存在与非 Owner 都返回同一 404。返回 DTO 只使用 `you / collaborator / system` 表示人员关系，不含任何人员 ID、claim token、完整错误正文或原始审计 payload。列表最多 100 条，审计最多 200 条，单个结果超过 32000 字节时只返回截断预览。浏览器仅用 `textContent` 渲染服务端数据，访问令牌只放当前标签页，点击“锁定”立即回到令牌页。
+
+开发 unit `larkflow-target-console.service` 以 `lf_target_dev` 运行，通过 Unix socket peer authentication 连接 PostgreSQL，只监听 `127.0.0.1:8780`，并使用 systemd 文件系统、设备、能力、命名空间和地址过滤。当前静态 token 不等于生产登录态；任何公网或正式内部部署前都必须替换为飞书登录或企业 SSO，并在反向代理层建立同源、会话、CSRF、限流和授权边界。首版没有协作者视图、分页游标、筛选、跨轮次 diff 或写操作。
 
 Target 自动节点按工作契约 kind 路由。Agent 当前只接受 `work.agent.kind=llm.generate`。默认结果是正文；可选 `work.agent.result_format=source_claims.v1` 要求模型返回 `problem / target_users / functional_requirements / acceptance_criteria / risks / open_questions / source_url`，其中声明必须标记为 `source_fact / inference / open_question` 并引用服务端登记的稳定 `F` 或 `Q` ID。Tool 由 `ToolExecutorRouter` 按 `work.tool.kind` 选择 adapter；`content.check` 读取直接依赖正文并执行长度与必需词检查，`source_claims.check` 对结构、声明类型、事实与问题引用覆盖、来源 URL 一致性执行确定性检查。检查器不访问网页，也不声称验证事实真伪。配置或输入错误使当前 Attempt 显式失败，未知 kind 在 claim 前保持未认领。
 

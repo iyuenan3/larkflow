@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.49.0-draft · 2026-08-06 · Owner 中央只读控制台
+
+- Added：新增独立 `larkflow-console`、Owner 范围读取服务、loopback HTTP 边界和静态页面。列表展示本人最近流程，详情展示 DAG、节点状态、历史 Attempt 结果与最近审计；首版不提供确认、重启、编辑或其他写操作。
+- Security：开发 Bearer token 至少 32 字符，并只映射到服务端配置的 tenant 与 person。列表 SQL 同时限定 tenant 和 Owner，详情再次校验 Owner；不存在与非 Owner 统一 404。DTO 不返回人员 ID、claim token、完整错误正文或审计 payload，结果、审计和列表均有上限。systemd unit 强制 `127.0.0.1:8780` 与地址、文件系统、设备、能力和命名空间限制。
+- Verified：内容提交 `ee2fa9439594d765cd08f2caa0f7ecb20d30d78b`；完整离线套件 `922 passed, 18 skipped`。非 editable wheel 已回读页面资源，SHA-256 为 `58b27648ccaf3f863cf4bb0ca820b3e2209523b58b0574af626aa303c0e4ff5c`。
+- Deployment：升级前 PostgreSQL 备份成功，migration runner 回读十九份既有 migration 且无待应用版本。九个 Target 服务与一个 legacy 消费者统一重启后均为 `active / NRestarts=0`，5432、8765 与 8780 只监听 loopback，部署窗口 warning 为 0。
+- Acceptance：真实 API 返回 30 条当前 Owner 流程、运行中实例 4 个节点与 16 条审计；另一 Owner 的真实实例统一返回 404。SSH 隧道浏览器验证运行中 DAG、Attempt 1/2、审计时间线、草稿 0/3、零浏览器 error / warning 和显式锁定。隧道、两端临时凭据和上传件均已删除。
+- Boundary：当前静态 token 只适合开发试用。生产前仍需飞书登录态或企业 SSO、反向代理授权、会话与 CSRF、限流、可见性策略、分页筛选和跨轮次对比；本次不构成生产上线或业务价值证明。
+
 ## v0.48.0-draft · 2026-08-06 · 原生表单绑定与真实返工上下文闭环
 
 - Fixed：内容提交 `f6125331aa541e824675e25f9cd2d756cd4c6b56` 把 Card 2.0 表单按钮改为原生 `form_action_type=submit`，并由服务端投影保存决定绑定。表单回调不携带 `action_value` 时按消息 ID 恢复绑定；若客户端仍携带动作值，则必须与服务端绑定交叉一致。

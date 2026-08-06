@@ -778,3 +778,13 @@
 - Tradeoff：退回多一步输入，但换来可执行、可审计的返工原因。部署前创建的旧决定卡没有输入框，升级后无法满足新的退回契约；部署前必须读回当前等待中的旧决定卡，必要时先完成，或明确作废旧 Attempt 并在升级后通过受控节点重启生成新卡，不能让旧卡静默失败。自由文本只约束长度，不自动判断意见质量。
 - Evidence：内容提交 `0dc5359e990635c7b6aa16ec0bcd798eb8df39d0` 已推送；完整离线套件 `908 passed, 18 skipped`。测试覆盖空白与超长拒绝、接受忽略额外字段、结果与审计持久化、目标重启注入、Runner 激活保留、范围外节点和完整实例重启隔离；删除 Runner 保留逻辑的定向变异被回归测试捕获。本文写入时开发部署、旧卡兼容性读回和真实飞书返工验收仍待执行。
 - Status addendum · 2026-08-06：原生表单绑定修复 `f6125331aa541e824675e25f9cd2d756cd4c6b56` 已与 `0dc5359e990635c7b6aa16ec0bcd798eb8df39d0` 一起部署，完整离线套件为 `910 passed, 18 skipped`。真实实例 `im_5717aa5b9480d146239907d5` 的退回意见已写入 Human Attempt、质量证据和追加审计；节点重启只影响 Agent、Tool 与最终 Human，来源确认保持 Attempt 1。只有 Agent Attempt 2 收到 `rework_feedback`，冻结 Snapshot、Tool 与 Human 的新 Attempt 都没有该结构化字段。Agent 根据意见补齐问题与验收条件后，Tool 从首轮失败转为 `pass`，新决定卡已从飞书服务端读回。当前关闭的是开发环境返工上下文门槛，不是内容质量规模化或生产证明。
+
+## ADR-091 · 2026-08-06 · 中央前端先提供 Owner 只读控制台，不把可写画布作为内部试用前置
+
+- **Status：Accepted · Development deployment verified。**
+- Problem：飞书命令和责任卡已经能推进流程，但 Owner 要理解完整 DAG、历史 Attempt 与审计时需要反复输入命令，并把多个回复手工拼接。直接建设可写图编辑器会同时引入生产登录、细粒度可见性、写授权、并发确认和复杂交互，容易在尚未证明内部使用价值时扩大产品面。
+- Constraint：PostgreSQL 继续是唯一业务真相；控制台不能建立第二套状态或绕过既有领域服务；只允许 Instance Owner 查看；客户端不能声明 tenant、person 或 Owner；不存在与无权限不可形成枚举信号；结果和审计必须有界且脱敏；首版不能公网暴露静态凭据；任何未来写操作仍要经过现有预览确认、Owner 重授权、版本与 revision 栅栏。
+- Decision：先交付独立 Owner 只读 Console v0。服务端把开发 Bearer token 映射到固定 tenant 与 person，列表仓储同时限定 tenant 和 Owner，详情读取再次比较 Owner。页面只展示本人最近流程、DAG、节点状态、全部历史 Attempt 的有界结果和最近审计，不提供确认、重启、编辑或 Human 提交。HTTP 只接受 GET / HEAD，服务强制 loopback；开发验收经 SSH 隧道访问。人员只以 `you / collaborator / system` 相对关系表示，不返回人员 ID、claim token、完整错误正文或审计 payload。
+- Alternatives(否决)：继续只靠飞书命令；立即建设可写 DAG 画布；复用 Edge `/edge/v1`；让浏览器提交 person ID 后在前端过滤；把静态 token 放到 URL；先开放公网再补登录；允许节点协作者默认查看完整实例。
+- Tradeoff：Owner 获得更完整的观察面，但当前没有分页游标、筛选、协作者视图、跨轮次 diff 或任何写操作。每次详情会读取一个完整聚合和最近 200 条审计，适合当前单企业开发样本，不代表生产容量。静态 token 只适合受控开发；生产前必须接入飞书登录或企业 SSO，并补齐反向代理授权、会话、CSRF、限流和可见性策略。
+- Evidence：内容提交 `ee2fa9439594d765cd08f2caa0f7ecb20d30d78b`；完整离线套件 `922 passed, 18 skipped`。wheel SHA-256 为 `58b27648ccaf3f863cf4bb0ca820b3e2209523b58b0574af626aa303c0e4ff5c`，已安装到 Target venv；migration runner 回读十九份既有 migration 且无待应用版本。服务以 `lf_target_dev` 运行并只监听 `127.0.0.1:8780`。真实 API 返回 30 条 Owner 流程，运行中实例为 4 个节点与 16 条审计，另一 Owner 的实例返回 404。SSH 隧道浏览器验证运行中、草稿、DAG、Attempt、审计、锁定与零 error / warning；隧道和临时凭据随后删除。统一重启后十个 Python 服务均为 `active / NRestarts=0`，部署窗口 warning 为 0。

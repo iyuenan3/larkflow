@@ -48,7 +48,7 @@ larkflow 选择做飞书原生的企业协作 DAG，不复制完整办公平台�
 | Human、Agent、Tool 节点 | 五维评分改为可解释的 `pass/fail` | 个人 Agent Edge 的产品化、后台常驻与写能力 |
 | 未来区域编辑与二次确认 | 模板锁改为版本级布尔值 | RAG、能力注册表、模板市场 |
 | 节点重启、下游重置、Attempt | 模块化单体加 PostgreSQL outbox | Kafka、微服务、复杂 ACL |
-| 飞书投影、幂等、对账、审计 | 表单或 YAML 优先，不做专用画布 | 自动企业 Process Map |
+| 飞书投影、幂等、对账、审计 | 表单或 YAML 优先，加 Owner 只读控制台，不做专用画布 | 自动企业 Process Map |
 
 ## 6. 成功标准
 
