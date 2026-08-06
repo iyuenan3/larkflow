@@ -164,6 +164,18 @@ larkflow-target --env-file /etc/larkflow-target.env show <instance>
 larkflow-target --env-file /etc/larkflow-target.env serve
 ```
 
+中央控制台 v0 是独立的 Owner 只读入口，用于查看本人发起的最近流程、DAG 状态、历史 Attempt 结果和审计时间线。它不提供确认、重启或改图操作，也不复用 Personal Agent Edge API。服务强制绑定 loopback，当前开发鉴权把一个至少 32 字符的 Bearer token 映射到服务端配置的 tenant 与 person；令牌只在浏览器当前标签页保存。生产部署前仍需替换为飞书登录态或企业 SSO，并重新设计反向代理边界。
+
+```bash
+# env 文件同时提供 LARKFLOW_TARGET_DSN、LARKFLOW_TARGET_TENANT、
+# LARKFLOW_CONSOLE_PERSON_ID 与 LARKFLOW_CONSOLE_ACCESS_TOKEN
+larkflow-console --env-file /etc/larkflow-target-console.env \
+  --host 127.0.0.1 --port 8780
+
+# 仅在本机浏览器打开
+# http://127.0.0.1:8780/console/
+```
+
 `reconcile-projections` 会只读查询并可能重建飞书 Task，因此只能使用持有开发 profile 的 Projection env 显式执行：`larkflow-target --env-file /etc/larkflow-target-projection.env reconcile-projections`。`reconcile-completions` 使用同一身份立即扫描当前 Human Task，只把已完成状态写入耐久 Inbox，不直接提交节点。`reconcile-instance-completion <instance_id>` 只修复一个已完成实例缺失的完成文档或最终通知，依赖稳定幂等键，重复执行不会复制外部资源。
 
 Edge Proof v0 有两个独立入口。开发服务器已把 Gateway 作为仅监听 loopback 的 systemd 服务部署，并完成独立 Caddy HTTPS 反向代理的源站验证。本机 Edge 默认只接受 HTTPS，只有 loopback 可以使用明文 HTTP。当前 ECS 位于阿里云中国内地，专用域名尚未完成 ICP 接入备案，因此公网 TLS 会被接入侧阻断；Caddy 已停止并禁用开机启动。完成备案或迁移到合规的非中国内地环境前，下面的 HTTPS 入口只是配置形状，不能作为已通过的公网验收：

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>larkflow 中央控制台</title>
+    <link rel="stylesheet" href="/console/styles.css">
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+
+    <section id="unlock" class="unlock" aria-labelledby="unlock-title">
+      <div class="unlock-card">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <p class="eyebrow">CENTRAL CONSOLE</p>
+        <h1 id="unlock-title">看清协作如何前进</h1>
+        <p class="unlock-copy">输入本机控制台访问令牌，只读取由你发起的流程、节点执行和审计记录。</p>
+        <form id="unlock-form">
+          <label for="access-token">访问令牌</label>
+          <div class="token-row">
+            <input id="access-token" type="password" autocomplete="current-password" required minlength="32" placeholder="LARKFLOW_CONSOLE_ACCESS_TOKEN">
+            <button type="submit">进入控制台</button>
+          </div>
+          <p id="unlock-error" class="form-error" role="alert"></p>
+        </form>
+        <p class="local-note"><span></span>只连接当前 loopback 服务，令牌仅保存在本标签页。</p>
+      </div>
+    </section>
+
+    <div id="app" class="app" hidden>
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark small" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div>
+            <strong>larkflow</strong>
+            <span>中央控制台</span>
+          </div>
+        </div>
+        <div class="top-actions">
+          <div id="connection" class="connection"><i></i><span>已连接</span></div>
+          <button id="refresh" class="icon-button" type="button" title="刷新" aria-label="刷新">↻</button>
+          <button id="lock" class="quiet-button" type="button">锁定</button>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <aside class="sidebar">
+          <div class="sidebar-heading">
+            <div>
+              <p class="eyebrow">MY WORKFLOWS</p>
+              <h2>我发起的流程</h2>
+            </div>
+            <span id="instance-count" class="count">0</span>
+          </div>
+          <div id="instance-list" class="instance-list" aria-live="polite"></div>
+        </aside>
+
+        <main class="main">
+          <section id="empty-state" class="empty-state">
+            <div class="empty-orbit"><span></span><span></span><span></span></div>
+            <p class="eyebrow">WORKFLOW OBSERVABILITY</p>
+            <h2>选择一个流程</h2>
+            <p>查看 DAG 进度、每次执行结果与完整审计时间线。</p>
+          </section>
+
+          <section id="detail" class="detail" hidden>
+            <div class="detail-head">
+              <div class="detail-copy">
+                <div class="detail-meta">
+                  <span id="detail-status" class="status-pill"></span>
+                  <span id="detail-id" class="mono"></span>
+                </div>
+                <h1 id="detail-goal"></h1>
+                <p id="detail-created" class="muted"></p>
+              </div>
+              <div class="progress-ring" id="progress-ring">
+                <div><strong id="progress-value">0/0</strong><span>已完成</span></div>
+              </div>
+            </div>
+
+            <div class="detail-grid">
+              <section class="panel graph-panel">
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">EXECUTION GRAPH</p>
+                    <h2>流程执行图</h2>
+                  </div>
+                  <span id="graph-revision" class="revision"></span>
+                </div>
+                <div id="graph" class="graph"></div>
+              </section>
+
+              <section class="panel attempt-panel">
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">ATTEMPTS</p>
+                    <h2 id="attempt-heading">执行记录</h2>
+                  </div>
+                  <span id="attempt-count" class="count">0</span>
+                </div>
+                <div id="attempts" class="attempts"></div>
+              </section>
+            </div>
+
+            <section class="panel audit-panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">AUDIT TRAIL</p>
+                  <h2>审计时间线</h2>
+                </div>
+                <span id="audit-count" class="count">0</span>
+              </div>
+              <div id="audit" class="audit"></div>
+            </section>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <script src="/console/app.js" defer></script>
+  </body>
+</html>

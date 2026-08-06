@@ -23,6 +23,7 @@ from larkflow import __version__
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = ROOT / "larkflow" / "templates"
 WORKFLOW_MIGRATIONS = ROOT / "larkflow" / "workflow" / "migrations"
+CONSOLE_ASSETS = ROOT / "larkflow" / "workflow" / "console_assets"
 EDGE_DISTRIBUTION_SCRIPTS = (
     ROOT / "deploy" / "larkflow-edge-manager.py",
     ROOT / "deploy" / "build-larkflow-edge-bundle.py",
@@ -95,6 +96,21 @@ def test_every_workflow_migration_is_covered_by_package_data():
         assert any(fnmatch.fnmatch(migration.name, pat) for pat in pats), (
             f"{migration.name} 不被 package-data 的 {pats} 覆盖，"
             "安装后无法初始化 PostgreSQL"
+        )
+
+
+def test_every_console_asset_is_covered_by_package_data():
+    pats = declared_patterns("larkflow.workflow.console_assets")
+    assets = [
+        path
+        for path in CONSOLE_ASSETS.iterdir()
+        if path.is_file() and path.suffix != ".py"
+    ]
+    assert {path.name for path in assets} == {"index.html", "app.js", "styles.css"}
+    for asset in assets:
+        assert any(fnmatch.fnmatch(asset.name, pat) for pat in pats), (
+            f"{asset.name} 不被 package-data 的 {pats} 覆盖，"
+            "安装后的中央控制台会缺少页面资源"
         )
 
 

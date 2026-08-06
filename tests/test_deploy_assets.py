@@ -30,6 +30,7 @@ def test_development_restart_asset_covers_all_python_services():
         "larkflow-target-inbound-adapter.service",
         "larkflow-target-inbound.service",
         "larkflow-target-edge.service",
+        "larkflow-target-console.service",
         "larkflow@dev.service",
     }
     declared = {
@@ -112,3 +113,26 @@ def test_draft_generator_is_credential_free_and_uses_a_two_call_lease():
     assert int(environment["LARKFLOW_TARGET_DRAFT_CLAIM_TTL_SECONDS"]) > (
         2 * 240 + int(environment["LARKFLOW_TARGET_DRAFT_CLAIM_SAFETY_SECONDS"])
     )
+
+
+def test_console_service_is_loopback_only_and_owner_scoped():
+    unit = (
+        ROOT / "deploy" / "larkflow-target-console.service"
+    ).read_text(encoding="utf-8")
+    environment = _env_values(
+        ROOT / "deploy" / "larkflow-target-console.env.example"
+    )
+
+    assert "User=lf_target_dev" in unit
+    assert "--env-file /etc/larkflow-target-console.env" in unit
+    assert "--host 127.0.0.1 --port 8780" in unit
+    assert "ProtectSystem=strict" in unit
+    assert "IPAddressAllow=localhost" in unit
+    assert "IPAddressDeny=any" in unit
+    assert "EnvironmentFile=" not in unit
+    assert environment["LARKFLOW_TARGET_DSN"] == (
+        "postgresql:///larkflow_target_dev"
+    )
+    assert environment["LARKFLOW_TARGET_TENANT"] == "dev"
+    assert environment["LARKFLOW_CONSOLE_PERSON_ID"] == ""
+    assert environment["LARKFLOW_CONSOLE_ACCESS_TOKEN"] == ""

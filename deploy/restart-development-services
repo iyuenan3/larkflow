@@ -10,6 +10,7 @@ services=(
   larkflow-target-inbound-adapter.service
   larkflow-target-inbound.service
   larkflow-target-edge.service
+  larkflow-target-console.service
   larkflow@dev.service
 )
 

@@ -94,6 +94,15 @@ class WorkflowRepository(Protocol):
     ) -> tuple[WorkflowInstanceSummary, ...]:
         ...
 
+    def recent_audit_log(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        *,
+        limit: int = 200,
+    ) -> tuple[AuditEvent, ...]:
+        ...
+
     def add_restart_preview(self, preview: RestartPreview) -> None:
         ...
 
@@ -557,6 +566,18 @@ class InMemoryWorkflowRepository:
             for event in self._audit_events
             if event.tenant_id == tenant_id and event.instance_id == instance_id
         )
+
+    def recent_audit_log(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        *,
+        limit: int = 200,
+    ) -> tuple[AuditEvent, ...]:
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        events = self.audit_log(tenant_id, instance_id)
+        return events[-limit:]
 
     def outbox_records(self, tenant_id: str) -> tuple[OutboxRecord, ...]:
         return tuple(

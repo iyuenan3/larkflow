@@ -23,6 +23,7 @@ larkflow = "larkflow.__main__:main"
 larkflow-target = "larkflow.workflow.cli:main"
 larkflow-edge-gateway = "larkflow.workflow.edge_gateway_cli:main"
 larkflow-edge = "larkflow.workflow.edge_cli:main"
+larkflow-console = "larkflow.workflow.console_cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
@@ -38,6 +39,7 @@ include = ["larkflow*"]
 [tool.setuptools.package-data]
 "larkflow.templates" = ["*.yaml"]
 "larkflow.workflow.migrations" = ["*.sql"]
+"larkflow.workflow.console_assets" = ["*.html", "*.js", "*.css"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

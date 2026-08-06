@@ -197,6 +197,30 @@ class PostgresWorkflowRepository:
             for row in rows
         )
 
+    def recent_audit_log(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        *,
+        limit: int = 200,
+    ) -> tuple[AuditEvent, ...]:
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        with self.connection_factory() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM workflow_audit_events
+                WHERE tenant_id = %s AND instance_id = %s
+                ORDER BY occurred_at DESC, id DESC
+                LIMIT %s
+                """,
+                (tenant_id, instance_id, limit),
+            ).fetchall()
+        return tuple(
+            self._audit_event_from_row(row)
+            for row in reversed(rows)
+        )
+
     def add_restart_preview(self, preview: RestartPreview) -> None:
         with self.connection_factory() as connection:
             inserted = connection.execute(
@@ -1474,6 +1498,23 @@ class PostgresWorkflowRepository:
             template_id=row["template_id"],
             event_type=row["event_type"],
             actor_person_id=row["actor_person_id"],
+            aggregate_version=int(row["aggregate_version"]),
+            payload=row["payload"],
+            occurred_at=row["occurred_at"],
+        )
+
+    @staticmethod
+    def _audit_event_from_row(row: dict[str, Any]) -> AuditEvent:
+        return AuditEvent(
+            id=row["id"],
+            tenant_id=row["tenant_id"],
+            instance_id=row["instance_id"],
+            node_key=row["node_key"],
+            attempt_no=row["attempt_no"],
+            event_type=row["event_type"],
+            actor_person_id=row["actor_person_id"],
+            source=row["source"],
+            correlation_id=row["correlation_id"],
             aggregate_version=int(row["aggregate_version"]),
             payload=row["payload"],
             occurred_at=row["occurred_at"],
