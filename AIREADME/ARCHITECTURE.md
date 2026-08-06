@@ -162,7 +162,7 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 
 内容提交 `ee2fa9439594d765cd08f2caa0f7ecb20d30d78b` 已部署 Owner 只读中央控制台。完整离线套件为 `922 passed, 18 skipped`，未新增 migration。开发服务以 `lf_target_dev` 运行，读取权限收紧的 env，通过 Unix socket peer authentication 访问长期 PostgreSQL，只监听 `127.0.0.1:8780`。真实 API 验证了 Owner 列表、运行中详情和跨 Owner 404；SSH 隧道浏览器验证了 30 条流程、运行中 DAG、Attempt 1/2、审计时间线、草稿 0/3、无浏览器错误和显式锁定。控制台加入统一重启脚本后，九个 Target 服务与一个 legacy 消费者均回读 `active / NRestarts=0`。当前静态 Bearer token 只适合开发试用，不构成公网或生产鉴权。
 
-内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6` 进一步修正首版图形把节点数组误画成线性链的问题。前端现按真实 `deps` 分层，以 SVG 绘制依赖方向、显示直接依赖，并在选择节点时突出关联边。完整离线套件仍为 `922 passed, 18 skipped`；候选 wheel、服务器安装资源与本地源码的 `app.js` SHA-256 一致。本次 migration runner 返回 `versions=[]`，只重启 Console，十个 Python 服务均保持 `active / NRestarts=0`；8780 仍只监听 loopback，未认证 API 返回 401，认证详情返回 200，部署窗口 warning 为 0。自动浏览器受回环地址安全策略限制，因此新版图形的人工目视确认仍待完成，不据此声称已降低状态追踪成本。
+内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6` 进一步修正首版图形把节点数组误画成线性链的问题。前端现按真实 `deps` 分层，以 SVG 绘制依赖方向、显示直接依赖，并在选择节点时突出关联边。完整离线套件仍为 `922 passed, 18 skipped`；候选 wheel、服务器安装资源与本地源码的 `app.js` SHA-256 一致。本次 migration runner 返回 `versions=[]`，只重启 Console，十个 Python 服务均保持 `active / NRestarts=0`；8780 仍只监听 loopback，未认证 API 返回 401，认证详情返回 200，部署窗口 warning 为 0。真实 Chrome 标签页刷新后回读 4 条 SVG 依赖边和 4 条依赖标签，分叉、汇合、关联高亮与横向溢出均完成目视确认；用户独立使用价值仍需另行验证。
 
 领域状态、审计与 outbox 在同一事务提交。事务提交后，Human 节点与所有节点状态变化通过 outbox 请求投影同步；Agent 和 Tool 激活直接返回 NodeActivation，由 Runtime Worker 在提交后交给 executor，避免数据库事务跨越外部调用。自动执行是 at-least-once，executor 必须使用 tenant-scoped Attempt 幂等键消除重复副作用。Agent 装配还会检查所有显式故障切换线路的超时总和，加上安全余量后必须小于 claim 租期，避免正常慢调用在结果提交前失去租约。Edge Proof 不发明独立 Capability Lease，它把可撤销设备身份与一个明确 kind 映射到同一 Node claim，并用心跳延长当前租期；设备失联或本机执行器异常后，租约到期才允许接管。
 

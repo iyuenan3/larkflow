@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.52.0-draft · 2026-08-06 · Console 真实 DAG 页面验收
+
+- Acceptance：真实 Chrome 标签页经 SSH 隧道刷新后加载当前静态资源，页面回读 4 条 SVG 依赖边和 4 条直接依赖标签。Agent 同时指向 Tool 与最终 Human，Tool 再汇入最终 Human；横向滚动可查看完整图，选中最终节点时两条关联边与节点同步高亮。
+- Evidence：同一真实运行中实例在页面显示 `3/4`、最终 Human Attempt 2 等待人工、Attempt 1 退回结果和 16 条追加型审计。该结果与页面 DTO 一致，没有通过数据库代查替代浏览器验收。
+- Boundary：本轮关闭新版 DAG 图形目视缺口，不证明 Owner 已独立依靠 Console 降低追踪成本。下一项门槛仍是用户不依赖聊天状态命令或开发者解释完成一次受控 Console 使用。
+- Known Issue：部署前已经打开的标签页仍运行当时加载的旧 JavaScript，页面数据刷新不能替换脚本；部署验收必须显式刷新标签页后再检查 DOM 与截图。
+
 ## v0.51.0-draft · 2026-08-06 · Console 真实 DAG 依赖图
 
 - Fixed：内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6` 移除把节点数组画成线性链的旧连接器。浏览器现在依据 `deps` 计算拓扑层级，以 SVG 绘制真实依赖方向，节点展示直接依赖；选择节点时关联边同步高亮，窗口尺寸变化后重绘。
