@@ -9,6 +9,9 @@
 - Deployment：内容提交 `770243a02b116e12583ceebdb8362fd40b7fe0a7` 已推送。wheel SHA-256 为 `04b76ac0b1cbe14c410c739be0279d74e60127b9cd3f68eeb4f8a07e0ba2b8af`，保存在 `/srv/larkflow/target/releases/20260806_221621_lifecycle_770243a/` 并安装到 Target 与 legacy 虚拟环境。升级前备份为 `larkflow_target_dev-20260806T221621+0800.dump`、222114 bytes、`0600`；migration runner 返回空列表，长期库保持十九份 migration。十个服务均回读 `active / NRestarts=0`，部署窗口 warning 为 0，5432、8765 与 8780 只监听 loopback。
 - Acceptance：一次性 PostgreSQL 双连接竞争证明重复取消确认只有一次落地和一次幂等回放，aggregate version 只增加 1，取消审计恰好 1 条。暂停与 Human dispatch 同时竞争时只允许一路成功，本轮为 dispatch 成功、pause 明确冲突，最终保持 `running / waiting_human`。测试库与远端临时上传件随后删除并回读为 0，正式 release wheel 保留且哈希一致。
 - Boundary：本轮没有新增 migration。真实飞书命令、普通 Human Task 和决定卡取消收口尚未执行，不构成生产上线证明。
+- Acceptance addendum：真实飞书实例 `im_c1c472a12a8ea4a7c8d63480` 依次完成确认、暂停、继续、取消预览与版本绑定确认，Instance 最终为 `canceled / version 5`，三个 Node 与三个 Attempt 均为 `canceled` 且 claim 已释放。审计按版本记录 confirmed、paused、resumed 与 canceled。普通 Human Task `4a980670-8cdc-473b-acf4-5e7f54dbf06c` 从飞书服务端回读为 `done`，中央 Projection 为 `completed=true / node_status=canceled`。
+- Acceptance addendum：决定卡实例 `im_516c59e4082e82ab74b8bd14` 的前置 Task 通过真实完成事件推进到 Human 决定节点。取消确认后，Instance 为 `canceled / version 5`，决定节点与 Attempt 为 `canceled`，Projection 为 `settled=true / node_status=canceled`；飞书同一条 Card 2.0 消息原位更新为无控件“复核已取消”，并明确不能再提交。十个服务均为 `active / NRestarts=0`，验收窗口 warning 为 0。
+- Boundary addendum：此前“真实飞书验收尚未执行”只描述首次部署时点，现已由上述开发测试组织证据关闭。该结果仍不证明生产上线、生产容量、内容质量或业务价值。
 
 ## v0.54.0-draft · 2026-08-06 · Console 实例状态与返工摘要
 
