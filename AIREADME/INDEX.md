@@ -18,7 +18,9 @@
 >
 > 内容提交 `b7e589ba4af0398573ec995254dd61e9b1a4508c` 新增来源约束型材料复核：`source_claims.v1` 区分来源事实、推断和开放问题，`source_claims.check` 只校验确定性来源契约，最终 Human Owner 通过版本绑定 Card 2.0 明确接受或退回。完整离线套件为 `898 passed, 18 skipped`。该提交现已部署；候选 wheel SHA-256 为 `0dcccb7f674135dde8b44ab08d437ba397b92397b8456ede8a064f66f1eb2af1`，长期库保持十九份 migration，九个 Python 服务回读 `active / running / NRestarts=0`。两个公开材料实例已分别完成直接接受，以及退回后从 Agent 节点重启、Attempt 2 重新执行和最终接受恢复；证据仅覆盖开发测试组织，下一阶段转向受控内部试用。
 >
-> last-synced: b7e589ba4af0398573ec995254dd61e9b1a4508c · 2026-08-06
+> 内容提交 `0dc5359e990635c7b6aa16ec0bcd798eb8df39d0` 已把具体退回意见纳入 Human 决定与节点返工契约：退回表单必填且最多 1000 字，服务端把规范化意见保存到 Attempt、质量证据和审计，并在 `reject_target` 节点重启时只注入该目标的新 Attempt 输入快照。接受路径忽略额外意见，冻结 Instance Snapshot、范围外上游与旧 Attempt 不变。完整离线套件为 `908 passed, 18 skipped`，无需新增 migration。该内容提交已推送，文档提交时尚未部署或完成真实飞书表单返工验收。
+>
+> last-synced: 0dc5359e990635c7b6aa16ec0bcd798eb8df39d0 · 2026-08-06
 
 ## 阅读顺序
 
@@ -36,16 +38,16 @@
 |---|:--:|---|
 | CORE | ✅ | Target 身份、简化边界、Edge Proof 和不变量 |
 | PRODUCT_STRATEGY | ✅ | 范围收敛取舍、窄 Edge 实验，明确未做市场验证 |
-| PRD | ✅ | Target 单层 DAG MVP、来源约束型结果、人类明确决定与 Edge Proof 功能契约 |
+| PRD | ✅ | Target 单层 DAG MVP、来源约束型结果、带具体意见的人类决定与 Edge Proof 功能契约 |
 | DAG_TEMPLATE_SPEC | ✅ | v0.2 模板、mention 角色绑定、草稿预览、未来区域编辑和两类重启已实现 |
-| ARCHITECTURE | ✅ | Target 模块化单体、独立凭据侧 Interactive 双副本、无凭据 Draft Generation Worker、来源契约检查、人类决定卡、PostgreSQL 通知唤醒与轮询兜底、飞书投影、失败恢复、Edge Proof、macOS 版本化安装与剩余差距 |
+| ARCHITECTURE | ✅ | Target 模块化单体、独立凭据侧 Interactive 双副本、无凭据 Draft Generation Worker、来源契约检查、带返工上下文的人类决定卡、PostgreSQL 通知唤醒与轮询兜底、飞书投影、失败恢复、Edge Proof、macOS 版本化安装与剩余差距 |
 | RELATIONS | ✅ | Target 飞书、mention 与人员选择卡身份边界、中央 lark-cli、Edge HTTPS、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | Phase 1 已完成来源约束型接受与退回重启路径，下一门槛为受控内部试用及 Edge 正式分发门禁 |
-| SPEC | ✅ | legacy 契约、Target CLI、独立 interact 与 draft generation Worker、数据库通知唤醒、来源声明与确定性检查、人类决定卡、十一个飞书窄命令、模板与无模板草稿、Task 入站、受控变化、完成投影与私有 Edge v1 HTTP、前台客户端、doctor 及 macOS manager |
+| ROADMAP | ✅ | 受控内部试用首个真实样本已暴露并推动修复返工上下文，下一门槛为真实飞书复测及 Edge 正式分发门禁 |
+| SPEC | ✅ | legacy 契约、Target CLI、独立 interact 与 draft generation Worker、数据库通知唤醒、来源声明与确定性检查、必填退回意见的人类决定卡、十一个飞书窄命令、模板与无模板草稿、Task 入站、受控变化、完成投影与私有 Edge v1 HTTP、前台客户端、doctor 及 macOS manager |
 | DEPLOYMENT | ✅ | Legacy ECS 与当前 Target 八服务、十九份 migration、七条监听连接、来源约束型真实接受、独立草稿生成、Edge serve、macOS 版本化安装、PostgreSQL、备份与回滚实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
-| DECISIONS | ✅ | Append-only ADR 历史，最新记录停止堆叠合成验收并转向受控内部试用 |
-| CHANGELOG | ✅ | Append-only 已实现变更，最新为真实退回、重启与 Attempt 2 恢复闭环 |
+| DECISIONS | ✅ | Append-only ADR 历史，最新记录退回必须携带可执行返工意见且只注入目标新 Attempt |
+| CHANGELOG | ✅ | Append-only 已实现变更，最新为退回意见采集、持久化与返工上下文传播 |
 | MEMORY | ⚑ | Append-only 经验，仍含语义占位，已记录回调漂移、通知边界、批次计时、虚拟环境、Keychain 上下文、bootstrap pip 与构建模块遮蔽风险 |
 
 ## 按任务读取

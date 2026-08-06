@@ -767,3 +767,13 @@
 - Alternatives(否决)：继续扩充合成模板和点击次数；在没有真实工作证据时开始生产化扩容；等待外部测试成员全部有空再开始；把单次公开材料接受或技术闭环当作市场验证；立即扩大 Personal Agent Edge 能力。
 - Tradeoff：真实工作样本更慢、输入不统一且可能暴露新的产品缺口，但它能产生合成验收无法提供的可用性与协调价值证据。暂不设统计显著性门槛会限制结论强度，因此结果只用于下一轮产品取舍，不用于市场或生产声明。
 - Evidence：实例 `source_grounded_20260805_234517` 完成来源约束型直接接受路径。实例 `source_grounded_reject_20260806_001940` 又从首轮明确退回的 `failed / version 9`，经只影响 Agent、Tool 与最终 Human 的节点重启创建 Attempt 2，并在第二张决定卡接受后恢复为 `done / version 16`；两轮结果、两种决定、两张卡、完成投影和唯一重启审计均保留，验收窗口无 warning。
+
+## ADR-090 · 2026-08-06 · 退回必须携带可执行返工意见并只注入目标新 Attempt
+
+- **Status：Accepted · Local implementation, development deployment pending。**
+- Problem：首个真实内部试用样本能够完成到 Human 明确退回，但决定入口只能提交通用退回结果，无法记录具体原因。Owner 随后重启目标节点时，Agent 仍只能看到原始输入与依赖结果，返工动作缺少最关键的人类判断上下文。
+- Constraint：接受仍应保持一键操作；退回意见必须有界且由服务端重新校验；冻结 Instance Snapshot、范围外节点和旧 Attempt 不能改写；授权继续只依赖服务端身份、当前 Owner 与版本；重复确认不能重复注入或增加历史；现有 JSONB 足以承载数据，不应为自由文本增加专用 migration。
+- Decision：决定卡把接受按钮放在表单外，退回表单必填 `rejection_feedback` 且最多 1000 字。桥接层与领域服务都拒绝空白和超长意见；领域服务把规范化意见写入 Human Attempt 结果、质量证据和追加型审计。Instance Owner 确认节点重启时，只有目标恰好等于当前失败决定的 `reject_target`，服务端才向该目标的新 Attempt 输入快照注入 `rework_feedback={source_node_key, source_attempt_no, feedback}`，Runner 激活时继续保留。接受忽略额外意见，完整实例重启不自动继承某次局部退回意见。
+- Alternatives(否决)：让 Owner 在聊天中另行补充原因；修改冻结 Instance 输入；把意见复制到全部受影响节点；只保存在审计而不交给 Agent；要求接受也填写说明；完整实例重启自动猜测应继承哪次局部意见。
+- Tradeoff：退回多一步输入，但换来可执行、可审计的返工原因。部署前创建的旧决定卡没有输入框，升级后无法满足新的退回契约；部署前必须读回当前等待中的旧决定卡，必要时先完成，或明确作废旧 Attempt 并在升级后通过受控节点重启生成新卡，不能让旧卡静默失败。自由文本只约束长度，不自动判断意见质量。
+- Evidence：内容提交 `0dc5359e990635c7b6aa16ec0bcd798eb8df39d0` 已推送；完整离线套件 `908 passed, 18 skipped`。测试覆盖空白与超长拒绝、接受忽略额外字段、结果与审计持久化、目标重启注入、Runner 激活保留、范围外节点和完整实例重启隔离；删除 Runner 保留逻辑的定向变异被回归测试捕获。本文写入时开发部署、旧卡兼容性读回和真实飞书返工验收仍待执行。

@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.47.0-draft · 2026-08-06 · 退回意见与目标 Attempt 返工上下文
+
+- Added：Human 决定卡保留表单外一键接受，退回改为必填 `rejection_feedback`，最多 1000 字。桥接层与领域服务都重新校验，空白和超长输入 fail closed。
+- Decision：退回意见写入 Human Attempt 结果、质量证据和追加型审计；接受路径忽略客户端附带的额外意见，不让无关字段改变接受语义。
+- Recovery：Owner 确认 `reject_target` 节点重启时，意见只进入目标新 Attempt 的 `rework_feedback`，Runner 激活时继续保留。范围外上游、受影响下游占位 Attempt、冻结 Instance Snapshot、旧 Attempt 和完整实例重启均不隐式复制局部意见。
+- Verified：内容提交 `0dc5359e990635c7b6aa16ec0bcd798eb8df39d0` 已推送；完整离线套件为 `908 passed, 18 skipped`。删除 Runner 保留逻辑的定向变异被新增回归捕获。实现复用既有 JSONB，不增加 migration。
+- Compatibility：旧发布件创建的决定卡没有退回意见输入框。升级前必须查询仍在等待的旧决定卡，必要时先完成，或明确作废旧 Attempt 并在升级后通过受控节点重启生成新卡；不能把旧卡回调失败误判成用户未操作。
+- Boundary：本条只记录代码与离线证据。开发服务器部署、PostgreSQL 真实读回和真实飞书“填写意见、退回、重启、Agent 收到意见”仍待执行，不构成生产上线证明。
+
 ## v0.46.0-draft · 2026-08-06 · 真实退回、节点重启与 Attempt 2 恢复
 
 - Acceptance：第二个公开材料实例 `source_grounded_reject_20260806_001940` 首轮完成 Human-Agent-Tool-Human，Tool 回读 6/6 条事实、3/3 个开放问题、零违规。Owner 明确退回后，决定命令进入 `processed / human_decision_rejected / sent / updated`，卡片反馈写入耗时 1041 ms，Instance 进入 `failed / version 9`。

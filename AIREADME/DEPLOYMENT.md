@@ -6,6 +6,7 @@
 
 ## 当前发布状态 · 2026-08-06
 
+- 内容提交 `0dc5359e990635c7b6aa16ec0bcd798eb8df39d0` 已推送但尚未部署；当前服务器发布件仍是下述 `b7e589ba4af0398573ec995254dd61e9b1a4508c`。新提交复用既有 JSONB，不增加 migration。旧发布件创建的决定卡没有必填退回意见字段，升级前必须从 PostgreSQL 查询仍在等待的 `accept_reject` Attempt 与卡片投影；若存在，需先完成，或明确作废旧 Attempt 并在升级后通过受控节点重启生成新卡，避免旧卡在新服务端无法退回。
 - 当前开发发布件对应内容提交 `b7e589ba4af0398573ec995254dd61e9b1a4508c`。wheel SHA-256 为 `0dcccb7f674135dde8b44ab08d437ba397b92397b8456ede8a064f66f1eb2af1`，位于 `/srv/larkflow/target/releases/20260805_233701_source_review_b7e589b/`；包内已回读 `source_grounded_review.yaml`、决定卡与 `source_claims.check` 实现。
 - 升级前 PostgreSQL custom-format 备份 `/var/backups/larkflow-postgres/larkflow_target_dev-20260805T233536+0800.dump` 为 169991 bytes、`0600 lf_target_dev:lf_target_dev`，`pg_restore --list` 成功读取 125 个 TOC 条目。候选已同时安装到 Target 与 legacy 虚拟环境；migration runner 返回无待应用版本，长期库保持 `19 / 0019_draft_generation_progress`。
 - Runtime、Projection、两个 Interactive、凭据侧入站、领域侧入站、Draft Generation Worker、Edge 和 legacy 消费者共九个 Python 服务，均回读 `active / running / NRestarts=0`；部署窗口 warning 为 0。Caddy 因 ICP 边界继续保持 `disabled / inactive`。
