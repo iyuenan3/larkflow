@@ -3,12 +3,20 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 import json
 import secrets
 from typing import Any
 
 from .events import AuditEvent
-from .model import NodeAttempt, WorkflowInstance, WorkflowInstanceSummary
+from .model import (
+    InstanceStatus,
+    NodeAttempt,
+    NodeStatus,
+    WorkflowAttentionCandidate,
+    WorkflowInstance,
+    WorkflowInstanceSummary,
+)
 from .repository import InstanceNotFoundError, WorkflowRepository
 from .serde import quality_to_dict, to_json_value
 
@@ -94,8 +102,28 @@ class ConsoleReadService:
             owner_person_id=principal.person_id,
             limit=limit,
         )
+        candidates = self.repository.list_attention_for_owner(
+            principal.tenant_id,
+            owner_person_id=principal.person_id,
+            limit=limit,
+        )
+        attention = self._attention(candidates, principal.person_id)
         return {
             "instances": [self._summary(item) for item in summaries],
+            "attention": {
+                "items": attention,
+                "total": len(attention),
+                "counts": {
+                    kind: sum(1 for item in attention if item["kind"] == kind)
+                    for kind in (
+                        "recover_failed",
+                        "complete_human",
+                        "resume_flow",
+                        "confirm_draft",
+                    )
+                },
+                "instance_limit": limit,
+            },
             "limit": limit,
         }
 
@@ -157,6 +185,158 @@ class ConsoleReadService:
             "completed_nodes": summary.completed_nodes,
             "total_nodes": summary.total_nodes,
             "created_at": summary.created_at.isoformat(),
+        }
+
+    @staticmethod
+    def _attention(
+        candidates: tuple[WorkflowAttentionCandidate, ...],
+        person_id: str,
+    ) -> list[dict[str, Any]]:
+        by_instance: dict[str, list[WorkflowAttentionCandidate]] = {}
+        for candidate in candidates:
+            by_instance.setdefault(candidate.instance_id, []).append(candidate)
+
+        items: list[dict[str, Any]] = []
+        for instance_id, group in by_instance.items():
+            first = group[0]
+            failed = [
+                candidate
+                for candidate in group
+                if candidate.node_status == NodeStatus.FAILED
+            ]
+            waiting = [
+                candidate
+                for candidate in group
+                if candidate.node_status == NodeStatus.WAITING_HUMAN
+                and candidate.instance_status
+                in {InstanceStatus.RUNNING, InstanceStatus.PAUSED}
+                and candidate.node_owner_person_id is not None
+                and secrets.compare_digest(
+                    candidate.node_owner_person_id,
+                    person_id,
+                )
+            ]
+
+            if len(failed) == 1:
+                candidate = failed[0]
+                target = candidate.reject_target or candidate.node_key
+                items.append(
+                    ConsoleReadService._attention_item(
+                        candidate,
+                        kind="recover_failed",
+                        priority=0,
+                        title=(
+                            "恢复失败节点："
+                            f"{candidate.node_title or candidate.node_key}"
+                        ),
+                        detail="先预览该节点及下游的重启影响，再确认执行。",
+                        command=f"/larkflow restart {instance_id} {target}",
+                        action_hint="把命令发送给 larkflow，按回复中的确认命令执行。",
+                    )
+                )
+            elif len(failed) > 1:
+                items.append(
+                    ConsoleReadService._attention_item(
+                        first,
+                        kind="recover_failed",
+                        priority=0,
+                        title=f"恢复失败流程：{len(failed)} 个失败节点",
+                        detail="存在多个失败节点，先预览完整实例重启影响。",
+                        command=f"/larkflow restart-all {instance_id}",
+                        action_hint="把命令发送给 larkflow，按回复中的确认命令执行。",
+                    )
+                )
+            elif first.instance_status == InstanceStatus.FAILED:
+                items.append(
+                    ConsoleReadService._attention_item(
+                        first,
+                        kind="recover_failed",
+                        priority=0,
+                        title="恢复失败流程",
+                        detail="未定位到单一失败节点，先预览完整实例重启影响。",
+                        command=f"/larkflow restart-all {instance_id}",
+                        action_hint="把命令发送给 larkflow，按回复中的确认命令执行。",
+                    )
+                )
+
+            for candidate in waiting:
+                items.append(
+                    ConsoleReadService._attention_item(
+                        candidate,
+                        kind="complete_human",
+                        priority=1,
+                        title=f"完成待办：{candidate.node_title}",
+                        detail="该 Human 节点正在等待你的输入或决定。",
+                        command=None,
+                        action_hint="在飞书完成该节点对应的任务或决定卡。",
+                    )
+                )
+
+            if first.instance_status == InstanceStatus.PAUSED:
+                items.append(
+                    ConsoleReadService._attention_item(
+                        first,
+                        kind="resume_flow",
+                        priority=2,
+                        title="继续已暂停流程",
+                        detail="恢复后，中央调度器会从现有待调度节点继续。",
+                        command=f"/larkflow resume {instance_id}",
+                        action_hint="把命令发送给 larkflow。该操作不会创建新 Attempt。",
+                    )
+                )
+            elif first.instance_status == InstanceStatus.DRAFT:
+                items.append(
+                    ConsoleReadService._attention_item(
+                        first,
+                        kind="confirm_draft",
+                        priority=3,
+                        title="确认流程草稿",
+                        detail="该草稿尚未启动，可以先在详情中核对节点。",
+                        command=f"/larkflow confirm {instance_id}",
+                        action_hint="核对后把命令发送给 larkflow。",
+                    )
+                )
+
+        items.sort(
+            key=lambda item: (
+                item["priority"],
+                -datetime.fromisoformat(item["occurred_at"]).timestamp(),
+                item["id"],
+            )
+        )
+        return items
+
+    @staticmethod
+    def _attention_item(
+        candidate: WorkflowAttentionCandidate,
+        *,
+        kind: str,
+        priority: int,
+        title: str,
+        detail: str,
+        command: str | None,
+        action_hint: str,
+    ) -> dict[str, Any]:
+        occurred_at = candidate.node_occurred_at or candidate.created_at
+        node = (
+            {"key": candidate.node_key, "title": candidate.node_title}
+            if candidate.node_key is not None
+            else None
+        )
+        suffix = candidate.node_key or "instance"
+        return {
+            "id": f"{kind}:{candidate.instance_id}:{suffix}",
+            "kind": kind,
+            "priority": priority,
+            "instance_id": candidate.instance_id,
+            "goal": candidate.goal,
+            "instance_status": candidate.instance_status.value,
+            "title": title,
+            "detail": detail,
+            "occurred_at": occurred_at.isoformat(),
+            "node": node,
+            "command": command,
+            "action_hint": action_hint,
         }
 
     def _node(

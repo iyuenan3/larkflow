@@ -3,6 +3,7 @@
 const state = {
   token: sessionStorage.getItem("larkflow.console.token") || "",
   instances: [],
+  attention: [],
   detail: null,
   selectedNode: null,
   graphScale: 1,
@@ -33,6 +34,12 @@ const STATUS = {
 
 const EXECUTOR = { human: "Human", agent: "Agent", tool: "Tool" };
 const RELATION = { you: "你", collaborator: "协作者", system: "系统" };
+const ATTENTION = {
+  recover_failed: "失败恢复",
+  complete_human: "等待你处理",
+  resume_flow: "已暂停",
+  confirm_draft: "待确认",
+};
 const EVENT = {
   "instance.draft_created": "流程草稿已创建",
   "instance.confirmed": "流程已确认启动",
@@ -112,13 +119,137 @@ async function request(path) {
 async function loadInstances(selectId = null) {
   const payload = await request("/console/api/v1/instances?limit=30");
   state.instances = payload.instances;
+  state.attention = payload.attention?.items || [];
   renderInstances();
+  renderAttention(payload.attention || { items: [], counts: {}, instance_limit: 30 });
   if (selectId) {
     await loadDetail(selectId);
   } else if (!state.detail && state.instances.length > 0) {
     const active = state.instances.find((item) => ["running", "paused", "failed"].includes(item.status));
     await loadDetail((active || state.instances[0]).id);
   }
+}
+
+function renderAttention(attention) {
+  const list = el("attention-list");
+  const summary = el("attention-summary");
+  list.replaceChildren();
+  summary.replaceChildren();
+  el("attention-count").textContent = attention.total ?? state.attention.length;
+  el("attention-scope").textContent = `基于最近 ${attention.instance_limit || 30} 个本人流程，只提供安全的下一步提示`;
+
+  Object.entries(ATTENTION).forEach(([kind, label]) => {
+    const count = attention.counts?.[kind] || 0;
+    if (count < 1) return;
+    const chip = node("span", `attention-summary-chip attention-kind-${kind}`);
+    chip.append(node("strong", "", count), document.createTextNode(label));
+    summary.append(chip);
+  });
+
+  if (state.attention.length === 0) {
+    const empty = node("div", "attention-empty");
+    empty.append(
+      node("strong", "", "当前没有需要你处理的流程"),
+      node("p", "", "草稿确认、本人 Human 待办、暂停流程和失败恢复会出现在这里。"),
+    );
+    list.append(empty);
+    return;
+  }
+
+  state.attention.forEach((item) => list.append(attentionCard(item)));
+}
+
+function attentionCard(item) {
+  const card = node("article", `attention-card attention-kind-${item.kind}`);
+  const copy = node("div", "attention-copy");
+  const meta = node("div", "attention-meta");
+  meta.append(
+    node("span", "attention-kind", ATTENTION[item.kind] || item.kind),
+    node("span", "attention-time", formatDate(item.occurred_at)),
+  );
+  copy.append(
+    meta,
+    node("strong", "attention-title", item.title),
+    node("span", "attention-goal", item.goal || "未命名流程"),
+    node("p", "attention-detail", item.detail),
+    node("p", "attention-hint", item.action_hint),
+  );
+
+  const actions = node("div", "attention-actions");
+  if (item.command) {
+    const command = node("div", "attention-command");
+    command.append(node("code", "", item.command));
+    const copyButton = node("button", "attention-copy-button", "复制命令");
+    copyButton.type = "button";
+    copyButton.addEventListener("click", () => copyCommand(item.command, copyButton));
+    command.append(copyButton);
+    actions.append(command);
+  }
+  const openButton = node("button", "attention-open-button", "查看流程");
+  openButton.type = "button";
+  openButton.addEventListener("click", async () => {
+    openButton.disabled = true;
+    openButton.dataset.state = "working";
+    openButton.textContent = "正在打开";
+    try {
+      await loadDetail(item.instance_id);
+      openButton.dataset.state = "done";
+      openButton.textContent = "已打开";
+      detailView.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (error) {
+      openButton.dataset.state = "error";
+      openButton.textContent = "打开失败";
+      showWorkspaceError(error);
+    } finally {
+      openButton.disabled = false;
+      setTimeout(() => {
+        openButton.dataset.state = "idle";
+        openButton.textContent = "查看流程";
+      }, 1600);
+    }
+  });
+  actions.append(openButton);
+  card.append(copy, actions);
+  return card;
+}
+
+async function copyCommand(command, button) {
+  button.disabled = true;
+  button.dataset.state = "working";
+  button.textContent = "复制中";
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(command);
+    } else {
+      copyCommandFallback(command);
+    }
+    button.dataset.state = "done";
+    button.textContent = "已复制";
+  } catch (error) {
+    button.dataset.state = "error";
+    button.textContent = "复制失败";
+  } finally {
+    button.disabled = false;
+    setTimeout(() => {
+      button.dataset.state = "idle";
+      button.textContent = "复制命令";
+    }, 1600);
+  }
+}
+
+function copyCommandFallback(command) {
+  const textarea = node("textarea", "clipboard-fallback");
+  textarea.value = command;
+  textarea.readOnly = true;
+  document.body.append(textarea);
+  let copied = false;
+  try {
+    textarea.select();
+    copied = document.execCommand("copy");
+  } finally {
+    textarea.remove();
+  }
+  if (!copied) throw new Error("copy failed");
 }
 
 async function loadDetail(instanceId) {
@@ -539,6 +670,7 @@ function renderAudit(events) {
 
 function lockConsole() {
   state.token = "";
+  state.attention = [];
   state.detail = null;
   sessionStorage.removeItem("larkflow.console.token");
   app.hidden = true;

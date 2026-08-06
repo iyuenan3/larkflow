@@ -58,6 +58,19 @@
         </aside>
 
         <main class="main">
+          <section id="attention-center" class="panel attention-panel" aria-labelledby="attention-title">
+            <div class="attention-heading">
+              <div>
+                <p class="eyebrow">OWNER ACTION CENTER</p>
+                <h2 id="attention-title">待处理中心</h2>
+                <p id="attention-scope">基于最近 30 个本人流程，只提供安全的下一步提示</p>
+              </div>
+              <span id="attention-count" class="count">0</span>
+            </div>
+            <div id="attention-summary" class="attention-summary" aria-label="待处理分类汇总"></div>
+            <div id="attention-list" class="attention-list" aria-live="polite"></div>
+          </section>
+
           <section id="empty-state" class="empty-state">
             <div class="empty-orbit"><span></span><span></span><span></span></div>
             <p class="eyebrow">WORKFLOW OBSERVABILITY</p>

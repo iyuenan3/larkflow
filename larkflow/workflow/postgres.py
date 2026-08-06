@@ -46,6 +46,7 @@ from .model import (
     TemplateAuditEvent,
     TemplateStatus,
     WorkflowInstance,
+    WorkflowAttentionCandidate,
     WorkflowInstanceSummary,
     WorkflowTemplate,
     WorkflowTemplateVersion,
@@ -196,6 +197,100 @@ class PostgresWorkflowRepository:
             )
             for row in rows
         )
+
+    def list_attention_for_owner(
+        self,
+        tenant_id: str,
+        *,
+        owner_person_id: str,
+        limit: int = 30,
+    ) -> tuple[WorkflowAttentionCandidate, ...]:
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        with self.connection_factory() as connection:
+            rows = connection.execute(
+                """
+                WITH owner_instances AS (
+                    SELECT id, tenant_id, goal, status, created_at, snapshot
+                    FROM workflow_instances
+                    WHERE tenant_id = %s
+                      AND owner_person_id = %s
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT %s
+                )
+                SELECT instance.id AS instance_id,
+                       instance.goal,
+                       instance.status AS instance_status,
+                       instance.created_at,
+                       instance.snapshot,
+                       node.node_key,
+                       node.status AS node_status,
+                       node.executor AS node_executor,
+                       node.owner_person_id AS node_owner_person_id,
+                       COALESCE(
+                           node.completed_at,
+                           node.started_at,
+                           node.ready_at,
+                           instance.created_at
+                       ) AS node_occurred_at
+                FROM owner_instances AS instance
+                LEFT JOIN workflow_node_instances AS node
+                  ON node.tenant_id = instance.tenant_id
+                 AND node.instance_id = instance.id
+                 AND (
+                     node.status = 'failed'
+                     OR (
+                         node.status = 'waiting_human'
+                         AND node.owner_person_id = %s
+                     )
+                 )
+                ORDER BY instance.created_at DESC,
+                         instance.id DESC,
+                         node.node_key
+                """,
+                (tenant_id, owner_person_id, limit, owner_person_id),
+            ).fetchall()
+
+        candidates: list[WorkflowAttentionCandidate] = []
+        for row in rows:
+            node_key = row["node_key"]
+            node_title = None
+            reject_target = None
+            if node_key is not None:
+                for spec in row["snapshot"].get("nodes", ()):
+                    if spec.get("key") != node_key:
+                        continue
+                    node_title = str(spec.get("title") or node_key)
+                    decision = (spec.get("work") or {}).get("decision")
+                    if isinstance(decision, Mapping) and decision.get(
+                        "reject_target"
+                    ):
+                        reject_target = str(decision["reject_target"])
+                    break
+            candidates.append(
+                WorkflowAttentionCandidate(
+                    instance_id=row["instance_id"],
+                    goal=row["goal"],
+                    instance_status=InstanceStatus(row["instance_status"]),
+                    created_at=row["created_at"],
+                    node_key=node_key,
+                    node_title=node_title,
+                    node_status=(
+                        NodeStatus(row["node_status"])
+                        if row["node_status"] is not None
+                        else None
+                    ),
+                    node_executor=(
+                        ExecutorKind(row["node_executor"])
+                        if row["node_executor"] is not None
+                        else None
+                    ),
+                    node_owner_person_id=row["node_owner_person_id"],
+                    node_occurred_at=row["node_occurred_at"],
+                    reject_target=reject_target,
+                )
+            )
+        return tuple(candidates)
 
     def recent_audit_log(
         self,

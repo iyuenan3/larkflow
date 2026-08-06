@@ -21,7 +21,14 @@ from larkflow.workflow.console_http import (
     build_console_http_server,
 )
 from larkflow.workflow import console_http
-from larkflow.workflow.model import InstanceSnapshot, NodeSpec
+from larkflow.workflow.model import (
+    AttemptStatus,
+    InstanceSnapshot,
+    InstanceStatus,
+    NodeSpec,
+    NodeStatus,
+    WorkflowAttentionCandidate,
+)
 from larkflow.workflow.postgres import PostgresWorkflowRepository
 from larkflow.workflow.repository import InMemoryWorkflowRepository
 from larkflow.workflow.service import WorkflowService
@@ -114,6 +121,7 @@ def _repository() -> TrackingRepository:
         "instance_owner",
         actor_person_id=OWNER,
     )
+    service.dispatch_ready(TENANT, "instance_owner", max_automated=0)
     service.create_draft(
         instance_id="instance_foreign",
         tenant_id=TENANT,
@@ -126,6 +134,7 @@ def _repository() -> TrackingRepository:
         "instance_foreign",
         actor_person_id=COLLABORATOR,
     )
+    service.dispatch_ready(TENANT, "instance_foreign", max_automated=0)
     service.create_draft(
         instance_id="instance_owner",
         tenant_id="tenant_other",
@@ -138,6 +147,7 @@ def _repository() -> TrackingRepository:
         "instance_owner",
         actor_person_id=OWNER,
     )
+    service.dispatch_ready("tenant_other", "instance_owner", max_automated=0)
     return repository
 
 
@@ -183,6 +193,154 @@ def test_console_list_and_detail_are_owner_and_tenant_scoped():
         "reworked_nodes": [],
         "latest_restart": None,
     }
+
+
+def test_console_attention_only_includes_actionable_owner_work():
+    service = ConsoleReadService(_repository())
+
+    listing = service.list_instances(_principal())
+    attention = listing["attention"]
+    encoded = json.dumps(attention, ensure_ascii=False)
+
+    assert attention["total"] == 1
+    assert attention["counts"] == {
+        "recover_failed": 0,
+        "complete_human": 1,
+        "resume_flow": 0,
+        "confirm_draft": 0,
+    }
+    assert attention["items"][0] == {
+        "id": "complete_human:instance_owner:confirm_input",
+        "kind": "complete_human",
+        "priority": 1,
+        "instance_id": "instance_owner",
+        "goal": "Review a release summary",
+        "instance_status": "running",
+        "title": "完成待办：Confirm input",
+        "detail": "该 Human 节点正在等待你的输入或决定。",
+        "occurred_at": NOW.isoformat(),
+        "node": {"key": "confirm_input", "title": "Confirm input"},
+        "command": None,
+        "action_hint": "在飞书完成该节点对应的任务或决定卡。",
+    }
+    assert "instance_foreign" not in encoded
+    assert OWNER not in encoded
+    assert COLLABORATOR not in encoded
+
+
+def test_console_attention_excludes_collaborator_human_work_from_owner_inbox():
+    repository = _repository()
+    instance = repository.get(TENANT, "instance_owner")
+    instance.nodes["confirm_input"].owner_person_id = COLLABORATOR
+    repository.save(instance, expected_version=instance.version)
+
+    attention = ConsoleReadService(repository).list_instances(
+        _principal()
+    )["attention"]
+
+    assert attention["total"] == 0
+    assert attention["counts"]["complete_human"] == 0
+
+
+def test_console_attention_uses_rework_target_and_safe_full_restart_fallback():
+    rejected = WorkflowAttentionCandidate(
+        instance_id="rejected_instance",
+        goal="Revise a brief",
+        instance_status=InstanceStatus.FAILED,
+        created_at=NOW,
+        node_key="review_summary",
+        node_title="Review summary",
+        node_status=NodeStatus.FAILED,
+        node_owner_person_id=COLLABORATOR,
+        node_occurred_at=NOW,
+        reject_target="generate_summary",
+    )
+    first_failure = replace(
+        rejected,
+        instance_id="multiple_failures",
+        node_key="generate_summary",
+        node_title="Generate summary",
+        reject_target=None,
+    )
+    second_failure = replace(
+        first_failure,
+        node_key="check_summary",
+        node_title="Check summary",
+    )
+
+    items = ConsoleReadService._attention(
+        (rejected, first_failure, second_failure),
+        OWNER,
+    )
+
+    assert items[0]["command"] == "/larkflow restart-all multiple_failures"
+    commands = {item["instance_id"]: item["command"] for item in items}
+    assert commands == {
+        "multiple_failures": "/larkflow restart-all multiple_failures",
+        "rejected_instance": (
+            "/larkflow restart rejected_instance generate_summary"
+        ),
+    }
+
+
+def test_console_attention_prioritizes_failure_then_human_pause_and_draft():
+    repository = TrackingRepository()
+    identifiers = count(1)
+    service = WorkflowService(
+        repository,
+        clock=lambda: NOW,
+        id_factory=lambda: f"attention-test-id-{next(identifiers)}",
+    )
+    service.create_draft(
+        instance_id="draft_attention",
+        tenant_id=TENANT,
+        owner_person_id=OWNER,
+        actor_person_id=OWNER,
+        snapshot=_snapshot(),
+    )
+    service.create_draft(
+        instance_id="paused_attention",
+        tenant_id=TENANT,
+        owner_person_id=OWNER,
+        actor_person_id=OWNER,
+        snapshot=_snapshot(),
+    )
+    service.confirm_draft(TENANT, "paused_attention", actor_person_id=OWNER)
+    service.dispatch_ready(TENANT, "paused_attention", max_automated=0)
+    service.pause_instance(TENANT, "paused_attention", actor_person_id=OWNER)
+    service.create_draft(
+        instance_id="failed_attention",
+        tenant_id=TENANT,
+        owner_person_id=OWNER,
+        actor_person_id=OWNER,
+        snapshot=_snapshot(),
+    )
+    service.confirm_draft(TENANT, "failed_attention", actor_person_id=OWNER)
+    failed = repository.get(TENANT, "failed_attention")
+    failed.status = InstanceStatus.FAILED
+    failed.nodes["confirm_input"].status = NodeStatus.FAILED
+    failed.nodes["confirm_input"].completed_at = NOW
+    failed.attempts[("confirm_input", 1)].status = AttemptStatus.FAILED
+    failed.attempts[("confirm_input", 1)].error_message = "private failure detail"
+    repository.save(failed, expected_version=failed.version)
+
+    listing = ConsoleReadService(repository).list_instances(_principal())
+    items = listing["attention"]["items"]
+    kinds = [item["kind"] for item in items]
+    encoded = json.dumps(items, ensure_ascii=False)
+
+    assert kinds == [
+        "recover_failed",
+        "complete_human",
+        "resume_flow",
+        "confirm_draft",
+    ]
+    assert items[0]["command"] == (
+        "/larkflow restart failed_attention confirm_input"
+    )
+    assert items[2]["command"] == "/larkflow resume paused_attention"
+    assert items[3]["command"] == "/larkflow confirm draft_attention"
+    assert "private failure detail" not in encoded
 
 
 def test_console_summarizes_reworked_nodes_and_latest_restart_without_raw_payload():
@@ -377,6 +535,10 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"setGraphScale" in script.body
     assert b"fitGraph" in script.body
     assert b"renderInsights" in script.body
+    assert b"renderAttention" in script.body
+    assert b"copyCommand" in script.body
+    assert "复制中".encode() in script.body
+    assert "已复制".encode() in script.body
     assert b'addEventListener("pointerdown"' in script.body
     assert b'event.target.closest(".graph-node")' in script.body
     assert b'addEventListener("wheel"' in script.body
@@ -386,6 +548,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b".graph-controls" in styles.body
     assert b".insight-grid" in styles.body
     assert b"instance-insights" in page.body
+    assert b"attention-center" in page.body
     assert b"graph-zoom-in" in page.body
     assert b"graph-fit" in page.body
     assert missing_auth.status == 401
@@ -394,6 +557,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert [item["id"] for item in _json(authorized)["instances"]] == [
         "instance_owner"
     ]
+    assert _json(authorized)["attention"]["total"] == 1
 
 
 def test_console_http_rejects_writes_bad_queries_and_resource_enumeration():
@@ -512,3 +676,72 @@ def test_postgres_recent_audit_query_is_bounded_tenant_scoped_and_chronological(
     assert "ORDER BY occurred_at DESC, id DESC" in calls[0][0]
     with pytest.raises(ValueError):
         repository.recent_audit_log(TENANT, "instance_owner", limit=501)
+
+
+def test_postgres_attention_query_is_bounded_and_owner_scoped():
+    rows = [
+        {
+            "instance_id": "instance_owner",
+            "goal": "Review a release summary",
+            "instance_status": "failed",
+            "created_at": NOW,
+            "snapshot": {
+                "nodes": [
+                    {
+                        "key": "review_summary",
+                        "title": "Review summary",
+                        "work": {
+                            "decision": {
+                                "kind": "accept_reject",
+                                "reject_target": "generate_summary",
+                            }
+                        },
+                    }
+                ]
+            },
+            "node_key": "review_summary",
+            "node_status": "failed",
+            "node_executor": "human",
+            "node_owner_person_id": OWNER,
+            "node_occurred_at": NOW,
+        }
+    ]
+    calls = []
+
+    class Cursor:
+        def fetchall(self):
+            return rows
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params):
+            calls.append((sql, params))
+            return Cursor()
+
+    repository = PostgresWorkflowRepository(Connection)
+
+    candidates = repository.list_attention_for_owner(
+        TENANT,
+        owner_person_id=OWNER,
+        limit=30,
+    )
+
+    assert candidates[0].node_title == "Review summary"
+    assert candidates[0].reject_target == "generate_summary"
+    assert calls[0][1] == (TENANT, OWNER, 30, OWNER)
+    assert "WITH owner_instances AS" in calls[0][0]
+    assert "instance.owner_person_id = %s" not in calls[0][0]
+    assert "owner_person_id = %s" in calls[0][0]
+    assert "LIMIT %s" in calls[0][0]
+    assert "node.status = 'failed'" in calls[0][0]
+    with pytest.raises(ValueError):
+        repository.list_attention_for_owner(
+            TENANT,
+            owner_person_id=OWNER,
+            limit=101,
+        )

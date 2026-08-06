@@ -255,6 +255,23 @@ class WorkflowInstanceSummary:
 
 
 @dataclass(frozen=True)
+class WorkflowAttentionCandidate:
+    """Internal owner-scoped facts used to derive console attention items."""
+
+    instance_id: str
+    goal: str
+    instance_status: InstanceStatus
+    created_at: datetime
+    node_key: str | None = None
+    node_title: str | None = None
+    node_status: NodeStatus | None = None
+    node_executor: ExecutorKind | None = None
+    node_owner_person_id: str | None = None
+    node_occurred_at: datetime | None = None
+    reject_target: str | None = None
+
+
+@dataclass(frozen=True)
 class NodeActivation:
     instance_id: str
     node_key: str

@@ -1,7 +1,7 @@
 """Persistence port and deterministic in-memory implementation."""
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -27,6 +27,7 @@ from .editing import (
 from .model import (
     TemplateAuditEvent,
     TemplateStatus,
+    WorkflowAttentionCandidate,
     WorkflowInstance,
     WorkflowInstanceSummary,
     WorkflowTemplate,
@@ -92,6 +93,15 @@ class WorkflowRepository(Protocol):
         owner_person_id: str,
         limit: int = 10,
     ) -> tuple[WorkflowInstanceSummary, ...]:
+        ...
+
+    def list_attention_for_owner(
+        self,
+        tenant_id: str,
+        *,
+        owner_person_id: str,
+        limit: int = 30,
+    ) -> tuple[WorkflowAttentionCandidate, ...]:
         ...
 
     def recent_audit_log(
@@ -386,6 +396,79 @@ class InMemoryWorkflowRepository:
             )
             for instance in candidates[:limit]
         )
+
+    def list_attention_for_owner(
+        self,
+        tenant_id: str,
+        *,
+        owner_person_id: str,
+        limit: int = 30,
+    ) -> tuple[WorkflowAttentionCandidate, ...]:
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        instances = [
+            instance
+            for (instance_tenant, _), instance in self._instances.items()
+            if instance_tenant == tenant_id
+            and instance.owner_person_id == owner_person_id
+            and instance.created_at is not None
+        ]
+        instances.sort(
+            key=lambda instance: (instance.created_at, instance.id),
+            reverse=True,
+        )
+        candidates: list[WorkflowAttentionCandidate] = []
+        for instance in instances[:limit]:
+            relevant_nodes = [
+                node
+                for node in instance.nodes.values()
+                if node.status.value == "failed"
+                or (
+                    node.status.value == "waiting_human"
+                    and node.owner_person_id == owner_person_id
+                )
+            ]
+            if not relevant_nodes:
+                candidates.append(
+                    WorkflowAttentionCandidate(
+                        instance_id=instance.id,
+                        goal=instance.snapshot.goal,
+                        instance_status=instance.status,
+                        created_at=instance.created_at,
+                    )
+                )
+                continue
+            for node in relevant_nodes:
+                spec = instance.snapshot.node(node.node_key)
+                decision = spec.work.get("decision")
+                reject_target = (
+                    decision.get("reject_target")
+                    if isinstance(decision, Mapping)
+                    else None
+                )
+                candidates.append(
+                    WorkflowAttentionCandidate(
+                        instance_id=instance.id,
+                        goal=instance.snapshot.goal,
+                        instance_status=instance.status,
+                        created_at=instance.created_at,
+                        node_key=node.node_key,
+                        node_title=spec.title,
+                        node_status=node.status,
+                        node_executor=node.executor,
+                        node_owner_person_id=node.owner_person_id,
+                        node_occurred_at=(
+                            node.completed_at
+                            or node.started_at
+                            or node.ready_at
+                            or instance.created_at
+                        ),
+                        reject_target=(
+                            str(reject_target) if reject_target else None
+                        ),
+                    )
+                )
+        return tuple(candidates)
 
     def add_restart_preview(self, preview: RestartPreview) -> None:
         key = (preview.tenant_id, preview.id)
