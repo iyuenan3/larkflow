@@ -548,6 +548,7 @@ el("graph").addEventListener("wheel", (event) => {
 
 el("graph").addEventListener("pointerdown", (event) => {
   if (event.pointerType === "mouse" && event.button !== 0) return;
+  if (event.target.closest(".graph-node")) return;
   const graph = el("graph");
   graphDrag = {
     pointerId: event.pointerId,

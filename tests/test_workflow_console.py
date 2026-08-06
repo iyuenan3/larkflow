@@ -295,6 +295,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"setGraphScale" in script.body
     assert b"fitGraph" in script.body
     assert b'addEventListener("pointerdown"' in script.body
+    assert b'event.target.closest(".graph-node")' in script.body
     assert b'addEventListener("wheel"' in script.body
     assert b"graph-connector" not in script.body
     assert styles.status == 200
