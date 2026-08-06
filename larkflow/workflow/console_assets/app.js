@@ -5,6 +5,7 @@ const state = {
   instances: [],
   detail: null,
   selectedNode: null,
+  graphScale: 1,
 };
 
 const el = (id) => document.getElementById(id);
@@ -51,6 +52,12 @@ const EVENT = {
   "node.human_decision_rejected": "人工决定已退回",
   "node.human_takeover_started": "人工接管已开始",
 };
+
+const GRAPH_MIN_SCALE = 0.5;
+const GRAPH_MAX_SCALE = 1.6;
+const GRAPH_SCALE_STEP = 0.1;
+let graphDrag = null;
+let suppressGraphClick = false;
 
 function node(tag, className, text) {
   const item = document.createElement(tag);
@@ -116,10 +123,16 @@ async function loadInstances(selectId = null) {
 
 async function loadDetail(instanceId) {
   const payload = await request(`/console/api/v1/instances/${encodeURIComponent(instanceId)}`);
+  const instanceChanged = state.detail?.instance.id !== payload.instance.id;
   state.detail = payload;
   state.selectedNode = chooseNode(payload.nodes);
+  if (instanceChanged) state.graphScale = 1;
   renderInstances();
   renderDetail();
+  if (instanceChanged) {
+    el("graph").scrollLeft = 0;
+    el("graph").scrollTop = 0;
+  }
 }
 
 function chooseNode(nodes) {
@@ -192,8 +205,10 @@ function renderGraph(nodes) {
 
   const layers = topologicalLayers(nodes);
   const ordinalByKey = new Map(nodes.map((item, index) => [item.key, index + 1]));
+  const minimumWidth = Math.max(1, layers.length) * 250 + Math.max(0, layers.length - 1) * 52;
+  const stage = node("div", "dag-stage");
   const canvas = node("div", "dag-canvas");
-  canvas.style.minWidth = `${Math.max(1, layers.length) * 250 + Math.max(0, layers.length - 1) * 52}px`;
+  canvas.dataset.minimumWidth = String(minimumWidth);
   const edges = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   edges.classList.add("dag-edges");
   edges.setAttribute("aria-hidden", "true");
@@ -212,8 +227,9 @@ function renderGraph(nodes) {
   });
 
   canvas.append(edges, grid);
-  graph.append(canvas);
-  requestAnimationFrame(() => drawDagEdges(canvas, nodes));
+  stage.append(canvas);
+  graph.append(stage);
+  requestAnimationFrame(layoutGraphCanvas);
 }
 
 function graphNodeCard(item, ordinal, nodes) {
@@ -224,7 +240,7 @@ function graphNodeCard(item, ordinal, nodes) {
   card.dataset.selected = String(state.selectedNode === item.key);
   card.addEventListener("click", () => {
     state.selectedNode = item.key;
-    renderGraph(nodes);
+    updateGraphSelection(nodes);
     renderAttempts(item);
   });
 
@@ -280,12 +296,77 @@ function topologicalLayers(nodes) {
   return layers.filter(Boolean);
 }
 
+function clampGraphScale(value) {
+  return Math.min(GRAPH_MAX_SCALE, Math.max(GRAPH_MIN_SCALE, value));
+}
+
+function updateGraphControls() {
+  const percent = Math.round(state.graphScale * 100);
+  el("graph-zoom-reset").textContent = `${percent}%`;
+  el("graph-zoom-out").disabled = state.graphScale <= GRAPH_MIN_SCALE;
+  el("graph-zoom-in").disabled = state.graphScale >= GRAPH_MAX_SCALE;
+}
+
+function layoutGraphCanvas() {
+  const graph = el("graph");
+  const stage = graph.querySelector(".dag-stage");
+  const canvas = graph.querySelector(".dag-canvas");
+  if (!stage || !canvas || !state.detail) {
+    updateGraphControls();
+    return;
+  }
+  const minimumWidth = Number(canvas.dataset.minimumWidth) || 250;
+  const naturalWidth = Math.max(minimumWidth, graph.clientWidth - 36);
+  canvas.style.width = `${naturalWidth}px`;
+  canvas.style.transform = `scale(${state.graphScale})`;
+  const naturalHeight = Math.max(344, canvas.scrollHeight);
+  stage.style.width = `${naturalWidth * state.graphScale}px`;
+  stage.style.height = `${naturalHeight * state.graphScale}px`;
+  drawDagEdges(canvas, state.detail.nodes);
+  updateGraphControls();
+}
+
+function setGraphScale(value, anchorX = null, anchorY = null) {
+  const graph = el("graph");
+  const previousScale = state.graphScale;
+  const nextScale = clampGraphScale(Math.round(value * 100) / 100);
+  if (nextScale === previousScale) return;
+  const viewportX = anchorX ?? graph.clientWidth / 2;
+  const viewportY = anchorY ?? graph.clientHeight / 2;
+  const contentX = (graph.scrollLeft + viewportX) / previousScale;
+  const contentY = (graph.scrollTop + viewportY) / previousScale;
+  state.graphScale = nextScale;
+  layoutGraphCanvas();
+  graph.scrollLeft = contentX * nextScale - viewportX;
+  graph.scrollTop = contentY * nextScale - viewportY;
+}
+
+function fitGraph() {
+  const graph = el("graph");
+  const canvas = graph.querySelector(".dag-canvas");
+  if (!canvas) return;
+  const minimumWidth = Number(canvas.dataset.minimumWidth) || 250;
+  const availableWidth = Math.max(1, graph.clientWidth - 36);
+  setGraphScale(Math.min(1, availableWidth / minimumWidth), 0, 0);
+  graph.scrollLeft = 0;
+  graph.scrollTop = 0;
+}
+
+function updateGraphSelection(nodes) {
+  const graph = el("graph");
+  graph.querySelectorAll(".graph-node").forEach((card) => {
+    card.dataset.selected = String(card.dataset.nodeKey === state.selectedNode);
+  });
+  const canvas = graph.querySelector(".dag-canvas");
+  if (canvas) drawDagEdges(canvas, nodes);
+}
+
 function drawDagEdges(canvas, nodes) {
   const svg = canvas.querySelector(".dag-edges");
   if (!svg) return;
   svg.replaceChildren();
-  const width = canvas.scrollWidth;
-  const height = canvas.scrollHeight;
+  const width = canvas.offsetWidth;
+  const height = canvas.offsetHeight;
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.setAttribute("width", String(width));
   svg.setAttribute("height", String(height));
@@ -318,10 +399,10 @@ function drawDagEdges(canvas, nodes) {
       if (!source) return;
       const sourceRect = source.getBoundingClientRect();
       const targetRect = target.getBoundingClientRect();
-      const startX = sourceRect.right - canvasRect.left;
-      const startY = sourceRect.top + sourceRect.height / 2 - canvasRect.top;
-      const endX = targetRect.left - canvasRect.left;
-      const endY = targetRect.top + targetRect.height / 2 - canvasRect.top;
+      const startX = (sourceRect.right - canvasRect.left) / state.graphScale;
+      const startY = (sourceRect.top + sourceRect.height / 2 - canvasRect.top) / state.graphScale;
+      const endX = (targetRect.left - canvasRect.left) / state.graphScale;
+      const endY = (targetRect.top + targetRect.height / 2 - canvasRect.top) / state.graphScale;
       const bend = Math.max(30, (endX - startX) * 0.45);
       const path = document.createElementNS(namespace, "path");
       path.classList.add("dag-edge");
@@ -436,6 +517,7 @@ unlockForm.addEventListener("submit", async (event) => {
     sessionStorage.setItem("larkflow.console.token", state.token);
     unlock.hidden = true;
     app.hidden = false;
+    requestAnimationFrame(layoutGraphCanvas);
   } catch (error) {
     unlockError.textContent = error.message;
     unlock.hidden = false;
@@ -447,9 +529,88 @@ el("refresh").addEventListener("click", () => {
   loadInstances(state.detail?.instance.id || null).catch(showWorkspaceError);
 });
 el("lock").addEventListener("click", lockConsole);
+el("graph-zoom-out").addEventListener("click", () => setGraphScale(state.graphScale - GRAPH_SCALE_STEP));
+el("graph-zoom-reset").addEventListener("click", () => setGraphScale(1));
+el("graph-zoom-in").addEventListener("click", () => setGraphScale(state.graphScale + GRAPH_SCALE_STEP));
+el("graph-fit").addEventListener("click", fitGraph);
+
+el("graph").addEventListener("wheel", (event) => {
+  if (!event.ctrlKey && !event.metaKey) return;
+  event.preventDefault();
+  const rect = el("graph").getBoundingClientRect();
+  const direction = event.deltaY < 0 ? GRAPH_SCALE_STEP : -GRAPH_SCALE_STEP;
+  setGraphScale(
+    state.graphScale + direction,
+    event.clientX - rect.left,
+    event.clientY - rect.top,
+  );
+}, { passive: false });
+
+el("graph").addEventListener("pointerdown", (event) => {
+  if (event.pointerType === "mouse" && event.button !== 0) return;
+  const graph = el("graph");
+  graphDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    scrollLeft: graph.scrollLeft,
+    scrollTop: graph.scrollTop,
+    moved: false,
+  };
+  graph.setPointerCapture(event.pointerId);
+});
+
+el("graph").addEventListener("pointermove", (event) => {
+  if (!graphDrag || graphDrag.pointerId !== event.pointerId) return;
+  const deltaX = event.clientX - graphDrag.startX;
+  const deltaY = event.clientY - graphDrag.startY;
+  if (!graphDrag.moved && Math.hypot(deltaX, deltaY) < 4) return;
+  graphDrag.moved = true;
+  const graph = el("graph");
+  graph.dataset.panning = "true";
+  graph.scrollLeft = graphDrag.scrollLeft - deltaX;
+  graph.scrollTop = graphDrag.scrollTop - deltaY;
+  event.preventDefault();
+});
+
+function finishGraphPan(event) {
+  if (!graphDrag || graphDrag.pointerId !== event.pointerId) return;
+  const graph = el("graph");
+  if (graph.hasPointerCapture(event.pointerId)) graph.releasePointerCapture(event.pointerId);
+  suppressGraphClick = graphDrag.moved;
+  if (suppressGraphClick) {
+    setTimeout(() => { suppressGraphClick = false; }, 0);
+  }
+  graphDrag = null;
+  delete graph.dataset.panning;
+}
+
+el("graph").addEventListener("pointerup", finishGraphPan);
+el("graph").addEventListener("pointercancel", finishGraphPan);
+el("graph").addEventListener("click", (event) => {
+  if (!suppressGraphClick) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  suppressGraphClick = false;
+}, true);
+
+el("graph").addEventListener("keydown", (event) => {
+  const graph = el("graph");
+  if (["Enter", " "].includes(event.key) && event.target.closest(".graph-node")) return;
+  if (event.key === "ArrowLeft") graph.scrollLeft -= 80;
+  else if (event.key === "ArrowRight") graph.scrollLeft += 80;
+  else if (event.key === "ArrowUp") graph.scrollTop -= 80;
+  else if (event.key === "ArrowDown") graph.scrollTop += 80;
+  else if (["+", "="].includes(event.key)) setGraphScale(state.graphScale + GRAPH_SCALE_STEP);
+  else if (event.key === "-") setGraphScale(state.graphScale - GRAPH_SCALE_STEP);
+  else if (event.key === "0") setGraphScale(1);
+  else if (event.key.toLowerCase() === "f") fitGraph();
+  else return;
+  event.preventDefault();
+});
+
 window.addEventListener("resize", () => {
-  const canvas = document.querySelector(".dag-canvas");
-  if (canvas && state.detail) drawDagEdges(canvas, state.detail.nodes);
+  if (state.detail) layoutGraphCanvas();
 });
 
 if (state.token) {

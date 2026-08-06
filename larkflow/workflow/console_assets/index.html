@@ -88,11 +88,17 @@
                     <h2>流程执行图</h2>
                   </div>
                   <div class="graph-heading-meta">
-                    <span class="graph-legend">箭头表示依赖方向</span>
+                    <span class="graph-legend">拖动平移 · Ctrl/⌘ + 滚轮缩放</span>
+                    <div class="graph-controls" role="group" aria-label="流程图视图控制">
+                      <button id="graph-zoom-out" class="graph-control-button" type="button" title="缩小" aria-label="缩小流程图">−</button>
+                      <button id="graph-zoom-reset" class="graph-zoom-value" type="button" title="恢复 100%" aria-label="恢复流程图为 100%">100%</button>
+                      <button id="graph-zoom-in" class="graph-control-button" type="button" title="放大" aria-label="放大流程图">+</button>
+                      <button id="graph-fit" class="graph-fit-button" type="button">适配</button>
+                    </div>
                     <span id="graph-revision" class="revision"></span>
                   </div>
                 </div>
-                <div id="graph" class="graph"></div>
+                <div id="graph" class="graph" tabindex="0" aria-label="流程执行图，可拖动平移并缩放"></div>
               </section>
 
               <section class="panel attempt-panel">

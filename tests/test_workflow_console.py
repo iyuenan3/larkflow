@@ -292,9 +292,16 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"innerHTML" not in script.body
     assert b"topologicalLayers" in script.body
     assert b"targetNode.deps" in script.body
+    assert b"setGraphScale" in script.body
+    assert b"fitGraph" in script.body
+    assert b'addEventListener("pointerdown"' in script.body
+    assert b'addEventListener("wheel"' in script.body
     assert b"graph-connector" not in script.body
     assert styles.status == 200
     assert b".dag-edge" in styles.body
+    assert b".graph-controls" in styles.body
+    assert b"graph-zoom-in" in page.body
+    assert b"graph-fit" in page.body
     assert missing_auth.status == 401
     assert missing_auth.headers["WWW-Authenticate"] == "Bearer"
     assert authorized.status == 200
