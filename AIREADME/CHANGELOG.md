@@ -6,7 +6,9 @@
 - Safety：仓储先按 tenant、Instance Owner 和最多 100 个最近实例限制候选集，再只连接失败节点和归当前 Owner 的 `waiting_human` 节点。DTO 不返回人员 ID、原始错误、claim、凭据或 Audit payload。待处理数据不单独落库，不形成第二套业务状态。
 - UI：页面新增待处理中心，可打开只读流程详情，或复制现有 `/larkflow confirm / resume / restart / restart-all` 命令。复制与打开按钮点击后立即显示处理中，随后显示成功或失败。浏览器没有新增写 API，真实命令仍由飞书入口重新授权并走既有预览确认链路。
 - Verified：内容提交 `30dc7ee` 与 PostgreSQL Owner 查询边界加固 `b6eda8c` 已形成。Console 聚焦套件为 `16 passed`，JavaScript 语法检查与 Python 编译检查通过。移除本机代理环境后，完整离线套件为 `943 passed, 18 skipped`；唯一剩余的进程树用例因沙箱禁止 `ps` 单独在沙箱外重跑并通过，因此完整等价结果为 `944 passed, 18 skipped`。Git whitespace 检查通过。
-- Boundary：本轮没有新增 migration。功能尚未部署或完成真实 PostgreSQL 与浏览器验收，不能描述为开发真栈或生产上线。
+- Deployment：内容提交 `b6eda8caaa06d338de8c5aa0283c3d787a8affe7` 的 wheel 已保存到 `/srv/larkflow/target/releases/20260807_010810_attention_b6eda8c/` 并安装到 Target 虚拟环境，SHA-256 为 `14cdbcfc5f343dc16d4985f62752ef7ab302cb6f20e8e1410eae7f7420befa3c`。升级前备份 `larkflow_target_dev-20260807T010925+0800.dump` 成功；migration runner 无待应用版本，长期库保持十九份 migration。本次只重启 Console，十个 Python 服务均为 `active / running / NRestarts=0`，5432、8765 与 8780 继续只监听 loopback。
+- Acceptance：真实认证 API 回读最近 30 个本人流程和 22 条待处理项，其中失败恢复 2 条、本人 Human 1 条、草稿确认 19 条；响应不含配置的人员 ID。PostgreSQL 仓储直接查询返回 30 条有界候选、两条失败节点和一条本人 Human 等待节点。服务器安装态的三份静态资源与本地源码哈希一致；同一前端发布内容以非敏感测试身份完成浏览器功能验收，“查看流程”进入明确的“已打开”终态，1280 像素视口无横向溢出或浏览器错误。
+- Boundary：本轮没有新增 migration，也没有把真实开发 token 注入自动化浏览器，因此不把浏览器部分描述为真实数据真机验收。待处理中心已经完成开发部署和真实 PostgreSQL 验收，但 Owner 不依赖开发者解释的独立使用仍未完成，更不构成生产上线证明。
 
 ## v0.55.0-draft · 2026-08-06 · 暂停、继续与安全取消
 

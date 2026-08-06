@@ -802,10 +802,10 @@
 
 ## ADR-093 · 2026-08-07 · Owner 待处理中心只派生下一步，不建立第二套命令面
 
-- **Status：Accepted · Local implementation, development deployment pending。**
+- **Status：Accepted · Development deployed, independent Owner acceptance pending。**
 - Problem：只读 Console 已能展示完整实例和返工历史，但 Owner 仍需先知道应查看哪个实例，再自行判断下一步命令。立即增加浏览器写操作会把生产身份、CSRF、写授权、并发确认和卡片入口一致性同时引入，超过当前内部试用需要。
 - Constraint：PostgreSQL 继续是唯一业务真相；待处理项不得独立落库；当前主体只代表 Instance Owner，不能把协作者 Human 工作误报为“等待你处理”；响应不能泄漏人员 ID、原始错误、claim 或 Audit payload；失败恢复必须继续经过现有重启预览，客户端不能直接提交可信 Owner、节点状态或版本；查询必须有界，不能为每个列表项读取完整聚合。
 - Decision：在现有 Owner 列表查询旁增加一个独立的有界仓储读模型。仓储先按 tenant、Instance Owner、创建时间和列表上限选择实例，再连接失败节点与归当前 Owner 的 `waiting_human` 节点。服务端按失败、本人 Human、暂停、草稿的优先级生成安全 DTO；一个失败节点建议节点重启，多个或无法定位的失败节点建议完整实例重启。页面只复制既有飞书命令或打开只读详情，不调用领域写 API。所有真实操作仍由飞书入口重新验证当前 Owner，并复用预览确认、aggregate version 与 `graph_revision` 栅栏。
 - Alternatives(否决)：把待处理项保存为独立表；浏览器直接确认草稿、继续或重启；对列表中的每个实例调用完整 `get`；展示所有协作者 Human 节点；把原始错误正文和审计 payload 交给前端判断；先做通用可写 DAG 画布。
 - Tradeoff：Owner 获得更明确的下一步，但仍需要转到飞书执行命令或完成责任卡。当前列表上限内的提示不是全量工作箱，也没有分页、筛选、协作者视图、跨轮次比较或生产身份。复制命令减少输入错误，但不能消除飞书侧二次确认。
-- Evidence：内容提交 `30dc7ee` 新增 Owner 范围的仓储候选模型、服务端 DTO、响应式待处理卡和即时按钮反馈；`b6eda8c` 收紧 PostgreSQL Instance Owner 与节点 Owner 查询边界断言。Console 聚焦套件为 `16 passed`；移除本机代理后完整离线套件为 `943 passed, 18 skipped`，沙箱外进程树单项另行通过。没有新增 migration。本文写入时尚未部署或完成真实 PostgreSQL 与浏览器验收。
+- Evidence：内容提交 `30dc7ee` 新增 Owner 范围的仓储候选模型、服务端 DTO、响应式待处理卡和即时按钮反馈；`b6eda8c` 收紧 PostgreSQL Instance Owner 与节点 Owner 查询边界断言。Console 聚焦套件为 `16 passed`；移除本机代理后完整离线套件为 `943 passed, 18 skipped`，沙箱外进程树单项另行通过。没有新增 migration。该内容已部署到开发服务器，真实认证 API 回读最近 30 个本人流程和 22 条待处理项，PostgreSQL 直接查询返回两条失败节点与一条本人 Human 等待节点，响应不含配置的人员 ID。十个服务保持 `active / running / NRestarts=0`，loopback 边界不变；同发布内容浏览器功能验收确认“查看流程”进入“已打开”且无横向溢出或控制台错误。真实开发 token 未进入自动化浏览器，Owner 独立使用仍是下一门槛。
