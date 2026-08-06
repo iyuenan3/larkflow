@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.51.0-draft · 2026-08-06 · Console 真实 DAG 依赖图
+
+- Fixed：内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6` 移除把节点数组画成线性链的旧连接器。浏览器现在依据 `deps` 计算拓扑层级，以 SVG 绘制真实依赖方向，节点展示直接依赖；选择节点时关联边同步高亮，窗口尺寸变化后重绘。
+- Verified：完整离线套件为 `922 passed, 18 skipped`，Console 与部署相关聚焦套件为 `22 passed`，JavaScript 语法检查通过。候选 wheel SHA-256 为 `6b8faed6eb5a4f32d695e40fdc495480585e53d9058e28e7ca7d2ece32421f8d`；服务器安装资源、wheel 与本地源码的 `app.js` SHA-256 均为 `a17afe0badc483d009b2b6049eb94c77a82c2f3cb1cbccd8045e7d50a08c2cc1`。
+- Deployment：升级前备份 `/var/backups/larkflow-postgres/larkflow_target_dev-20260806T183926+0800.dump` 成功，大小 222114 bytes，权限为 `0600 lf_target_dev:lf_target_dev`。migration runner 返回 `versions=[]`，长期库仍为十九份 migration。本次只重启 Console；十个 Python 服务均为 `active / NRestarts=0`，5432、8765、8780 只监听 loopback，未认证与认证 API 分别返回 401 和 200，部署窗口 Console warning 为 0。
+- Boundary：自动浏览器受本地回环地址安全策略限制，新版 DAG 图形仍需一次 Owner 人工目视确认。当前证据只证明代码、打包、部署与 HTTP 边界一致，不证明控制台已降低状态追踪成本，也不增加任何写操作。
+
 ## v0.50.0-draft · 2026-08-06 · 首批真实内部试用小样本基线
 
 - Acceptance：第三个真实项目样本 `pilot_console_value_20260806_164925` 以固定版本路线图为来源，Human、Agent、Tool、Human 四节点均在 Attempt 1 完成。Tool 覆盖 5/5 条来源事实与 3/3 个开放问题，Owner 直接接受首次结果，实例从确认到接受用时 12 分 41 秒。

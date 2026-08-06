@@ -28,7 +28,7 @@ Personal Agent Edge 的 macOS 客户端现已接入登录 Keychain：设备密�
 - **飞书入口 as-built**：已实现 `/larkflow help`、`/larkflow start`、`/larkflow draft`、`/larkflow confirm`、`/larkflow status`、`/larkflow list`、`/larkflow restart`、`/larkflow restart-all`、`/larkflow restart-confirm`、`/larkflow edit`、`/larkflow edit-confirm` 十一个窄命令，以及命令回执、Agent / Tool 结果消息、完成文档和最终通知。`start` 从启用模板创建草稿；`draft <JSON定义>` 是最多 100 个节点的结构化高级入口；裸 `draft` 打开 Card 2.0 自然语言引导，收集目标、可选背景和一名协作者，再由中央 Agent 生成最多八个 Human / Agent 节点的受限候选图。自然语言回调复用现有耐久动作链，重新校验操作人和冻结候选人；服务端覆盖模型返回的输入，限制 Owner 角色，拒绝 Tool、服务配置与 Personal Edge capability，并在最终卡片上展示无按钮图预览。首次候选校验失败时只允许同一中央 Agent 有界重生成一次，第二次失败仍拒绝，绝不绕过确定性校验。`start` 与两种 `draft` 都只创建草稿，`confirm` 才启动实例。人员选择卡、自然语言引导卡与失败恢复卡在动作耐久落库后立即尝试显示无按钮的“处理中”，最终再替换为成功或拒绝状态；服务端用单调时钟记录有效回调被接受到直接更新返回的耗时，不把它误写为客户端渲染耗时。`status` 只向 Instance Owner 返回单实例有界状态摘要，`list` 只返回本人拥有的最近十个实例摘要，restart 和 edit 命令只创建短期影响预览，对应 confirm 命令才执行原子变更。模板、结构化无模板、自然语言引导和跨人员正向分工均已在开发测试组织完成真实闭环。
 - **尚未实现**：上述十一类命令之外的通用飞书控制面、更多业务 Tool adapter、图形化编辑体验和生产装配。企业目录草稿 Owner 全量校验已落码并部署但默认关闭；IM 命令发送者、mention 角色成员和 Card 2.0 候选人的活跃成员校验已完成开发真栈验证。Edge 已具备版本化开发安装、回滚、Keychain、哈希锁定离线 bundle 与依赖清单，但正式员工分发仍为 No-Go：当前没有 Apple Developer ID 身份与公证凭据，员工端仍携带完整中央依赖栈，目录级读取隔离和可复现构建证明也未完成。当前设计不提供操作系统级守护或隐藏后台常驻。可持续使用的公网 HTTPS 入口还必须先完成 ICP 接入备案，或迁移到合规的非中国内地环境。真实 Agent、确定性内容检查、模板入口和飞书 IM / Card / Doc 投影只在开发环境和测试组织验证，不能据此描述为生产上线。
 - **证据边界**：本轮完成的是既有设计简化与一致性核验，不是访谈、市场或商业验证。
-- **重要边界**：`alicloud-sh` 已运行 Target Runtime、Projection、两个凭据侧 Interactive、凭据侧入站校验、领域侧入站、Draft Generation Worker 和 loopback Edge Gateway 八个 Target 服务，并保留一个 legacy 事件消费者，共九个 Python 服务。七条 PostgreSQL `LISTEN` 连接分属 `lf-dev` 四条和 `lf_target_dev` 三条。Caddy 仍因备案阻断处于 disabled / inactive，服务器只有 SSH 对公网监听。Projection 只负责飞书投影与 Task 状态读取；两个 Interactive 副本持有受限 bot profile；Draft Generation Worker 不持有飞书 profile。凭据侧重新读取外部资源后只写已验证 Inbox，领域侧不能读取 lark-cli profile。legacy 服务继续使用 SQLite，并仅作为事件桥接时写入 Target Inbox，不能把 checkpointer 或全局 LangGraph state 扩展为新产品领域模型。
+- **重要边界**：`alicloud-sh` 已运行 Target Runtime、Projection、两个凭据侧 Interactive、凭据侧入站校验、领域侧入站、Draft Generation Worker、loopback Edge Gateway 和 Owner Console 九个 Target 服务，并保留一个 legacy 事件消费者，共十个 Python 服务。七条 PostgreSQL `LISTEN` 连接分属 `lf-dev` 四条和 `lf_target_dev` 三条。Caddy 仍因备案阻断处于 disabled / inactive，服务器只有 SSH 对公网监听。Projection 只负责飞书投影与 Task 状态读取；两个 Interactive 副本持有受限 bot profile；Draft Generation Worker 不持有飞书 profile。凭据侧重新读取外部资源后只写已验证 Inbox，领域侧不能读取 lark-cli profile。legacy 服务继续使用 SQLite，并仅作为事件桥接时写入 Target Inbox，不能把 checkpointer 或全局 LangGraph state 扩展为新产品领域模型。
 
 产品与架构真相源从 [AIREADME/INDEX.md](AIREADME/INDEX.md) 开始。判断“目标是什么”和“现在做到了什么”时，必须区分 Target 与 As-built。
 
@@ -119,9 +119,9 @@ Phase 0 的设计一致性核验已经完成，当前进入 Phase 1 中央工作
 - 可选企业目录边界会在草稿入库前校验 Instance Owner 与全部节点 Owner。无法证明 open_id 属于当前租户活跃成员时 fail closed；开发环境默认关闭，启用需额外的通讯录只读 scope。
 - PostgreSQL 14 schema、migration runner、事务仓储、追加型 Audit 和带租约的 outbox 已落码；领域状态、审计和 outbox 在同一事务提交。
 - migration SQL 已进入 wheel，仓库与长期开发库均为十九份。`0013_im_command_mentions` 到 `0019_draft_generation_progress` 依次覆盖 mention、人员选择卡、恢复卡、canonical 动作、首反馈指标、通知唤醒和独立草稿生成进度。migration 19、真实 PostgreSQL 双副本竞争和通知连接均已验收；既有节点重启、完整实例重启和未来区域编辑预览继续保持恰好一路执行、一路幂等回放。
-- 当前完整离线套件为 `910 passed, 18 skipped`；跳过项是需要显式外部环境的集成验证，不会在默认测试中访问网络、凭据或真实飞书。
+- 当前完整离线套件为 `922 passed, 18 skipped`；跳过项是需要显式外部环境的集成验证，不会在默认测试中访问网络、凭据或真实飞书。
 - `larkflow-target` CLI 已提供模板创建、追加版本、启用、停用、逻辑删除、查询，从模板创建草稿和预览，以及实例确认、状态、Human 提交、既有 Worker 命令和 `generate-drafts-once / generate-drafts`；环境配置由项目 dotenv 解析器读取，不使用 shell `source`。
-- `alicloud-sh` 的长期 Target 开发库只接受本机 peer authentication，已应用十九份 migration。八个 Target systemd 服务与一个 legacy 事件消费者组成九个 Python 服务，均回读 `active / running / NRestarts=0`。Edge Gateway 只监听 `127.0.0.1:8765`；七条 PostgreSQL 通知连接分别由凭据侧持有四条、领域侧持有三条。两个 Interactive 副本固定 `claim_limit=1`，Draft Generation Worker 不持有飞书 profile。队列表仍是业务权威，通知失败时继续使用有界轮询。当前发布件对应内容提交 `f6125331aa541e824675e25f9cd2d756cd4c6b56`，同时包含按原消息 ID 更新自然语言草稿卡片、来源约束型材料复核、必填退回意见、目标 Attempt 返工上下文和原生表单提交绑定；真实接受路径与带具体意见的退回到 Agent 重做路径均已通过。既有小样本延迟只描述开发环境，不能外推生产容量。
+- `alicloud-sh` 的长期 Target 开发库只接受本机 peer authentication，已应用十九份 migration。九个 Target systemd 服务与一个 legacy 事件消费者组成十个 Python 服务，均回读 `active / running / NRestarts=0`。Edge Gateway 与 Owner Console 分别只监听 `127.0.0.1:8765` 和 `127.0.0.1:8780`；七条 PostgreSQL 通知连接分别由凭据侧持有四条、领域侧持有三条。两个 Interactive 副本固定 `claim_limit=1`，Draft Generation Worker 不持有飞书 profile。队列表仍是业务权威，通知失败时继续使用有界轮询。当前中央开发发布件对应内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6`，包含既有流程能力与 Owner 只读 Console 的真实 DAG 依赖渲染；既有接受路径和带具体意见的退回到 Agent 重做路径均已通过。既有小样本延迟只描述开发环境，不能外推生产容量。
 - Projection Worker 只认领明确的投影事件，在数据库 claim 提交后调用 lark-cli，以稳定幂等键创建任务，并把 Task GUID、URL、同步版本和完成状态写回 Projection 记录。启动全量对账以 PostgreSQL 为权威分页扫描当前 Human 责任入口，补建缺失记录，并在飞书明确返回 Task 不存在时使用新一代稳定幂等键重建；权限或网络错误不会被误判为删除。该版本已部署到常驻开发服务。专用开发实例已完成真实删除重建及后续完成验收：旧 Task 读回 `1470404` 后只重建 1 条，Projection 换绑到新 GUID、`repair_generation=1`，第二次对账 3 条绑定全部不变；人工完成新 Task 后，凭据侧验证 1 条、领域侧提交 1 条且均无失败，Instance、Node、Attempt 与 Projection 一致进入完成态。
 - Human Task 会展示节点明确声明的 Instance 输入；下游任务还会展示直接依赖中已提交的 Agent 正文。超长内容只在任务描述中截断，完整输入与结果仍保存在 PostgreSQL。
 - 每日 custom-format 备份保留约 7 天，并完成过一次新库恢复演练。
@@ -166,7 +166,7 @@ larkflow-target --env-file /etc/larkflow-target.env show <instance>
 larkflow-target --env-file /etc/larkflow-target.env serve
 ```
 
-中央控制台 v0 是独立的 Owner 只读入口，用于查看本人发起的最近流程、DAG 状态、历史 Attempt 结果和审计时间线。它不提供确认、重启或改图操作，也不复用 Personal Agent Edge API。服务强制绑定 loopback，当前开发鉴权把一个至少 32 字符的 Bearer token 映射到服务端配置的 tenant 与 person；令牌只在浏览器当前标签页保存。生产部署前仍需替换为飞书登录态或企业 SSO，并重新设计反向代理边界。
+中央控制台 v0 是独立的 Owner 只读入口，用于查看本人发起的最近流程、DAG 状态、历史 Attempt 结果和审计时间线。内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6` 修正了首版把所有节点画成线性链的问题：浏览器现在依据服务端 `deps` 计算拓扑层级、绘制真实依赖箭头，并在节点上标注直接依赖。它不提供确认、重启或改图操作，也不复用 Personal Agent Edge API。服务强制绑定 loopback，当前开发鉴权把一个至少 32 字符的 Bearer token 映射到服务端配置的 tenant 与 person；令牌只在浏览器当前标签页保存。代码、wheel、服务与 API 技术回读已通过，新图形仍待一次 Owner 人工目视确认。生产部署前仍需替换为飞书登录态或企业 SSO，并重新设计反向代理边界。
 
 ```bash
 # env 文件同时提供 LARKFLOW_TARGET_DSN、LARKFLOW_TARGET_TENANT、
