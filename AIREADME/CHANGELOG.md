@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.54.0-draft · 2026-08-06 · Console 实例状态与返工摘要
+
+- Added：内容提交 `efc1dff935d21918517d73c0d10fd15336516d9a` 在 Owner 实例详情增加最终状态、返工节点和关键重启三类只读摘要。服务端从当前聚合与最近审计提炼 DTO，影响节点重新限定到冻结 Snapshot，不向浏览器暴露原始 Audit payload。
+- Verified：完整离线套件为 `923 passed, 18 skipped`，Console 聚焦套件为 `11 passed`，JavaScript 语法检查与 Git whitespace 检查通过。wheel SHA-256 为 `ffb36696ca3eac191edeccf1c9b48642a3d1c164611c00fdcb8df0c0654993b9`，服务器安装资源、wheel 与本地源码的 `app.js` SHA-256 均为 `af67724e7370d54d9e8c06e0c79b4772d588e4007e2b81fd90a859a2d9d698ea`。
+- Deployment：升级前备份 `/var/backups/larkflow-postgres/larkflow_target_dev-20260806T200617+0800.dump` 成功，大小 222115 bytes。migration runner 返回 `versions=[]`，长期库保持十九份 migration；本次只重启 Console，十个 Python 服务均为 `active / running / NRestarts=0`，5432、8765、8780 只监听 loopback，未认证 API 返回 401，部署窗口 Console warning 为 0。
+- Acceptance：真实 Chrome 在 `source_grounded_reject_20260806_001940` 直接回读 `done / 4/4 / version 16`、三个 Attempt 2 节点和 00:53:27 的三节点重启；无返工实例同时回读两类空状态。页面显式声明只读边界。
+- Boundary：摘要减少理解返工历史所需的人工解释，但尚未证明 Owner 能在完全没有开发者解释的情况下稳定完成状态判断。流程画板级操作和可写前端继续保持低优先级。
+
 ## v0.53.0-draft · 2026-08-06 · Console 拖动缩放与节点点击组合验收
 
 - Fixed：内容提交 `b153c5311771eaa5b98d964fe6ffd448b62cf49d` 为真实依赖图增加空白区域拖动平移、50% 到 160% 缩放、100% 重置、适配、键盘操作和点击后视口保持。内容提交 `c3e23fcbf3bf9e66eeb9cf97bf8bbbc1bb2eefc3` 把节点卡片排除在平移手势启动范围之外，避免鼠标细微位移吞掉节点点击。

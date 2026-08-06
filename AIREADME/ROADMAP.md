@@ -32,7 +32,7 @@
 - 已完成 Template Service：`draft / enabled / disabled / deleted`、不可变版本、布尔锁、角色与参数绑定、追加型模板审计和 aggregate version 乐观并发；真实 PostgreSQL 同时启用竞争验证已通过。
 - 已完成从启用模板生成冻结草稿、Owner 只读预览和正式 CLI 入口；开发环境已用合成输入创建、预览、确认模板实例，并完成正式模板的真实 `Human -> Agent -> Human` 闭环。
 - `alicloud-sh` 已建立长期 Target 开发库、本机 peer authentication、每日备份、新库恢复演练和 enabled Target 服务；仍缺异机备份、PITR 与生产运行手册。
-- 已完成 Owner 中央只读控制台 v0：真实 PostgreSQL 可展示本人最近流程、运行中或草稿 DAG、跨轮次 Attempt 与追加型审计；非 Owner 真实实例返回 404。内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6` 已把错误的线性链渲染改为按真实 `deps` 分层、绘制依赖箭头和直接依赖标签；`b153c5311771eaa5b98d964fe6ffd448b62cf49d` 与 `c3e23fcbf3bf9e66eeb9cf97bf8bbbc1bb2eefc3` 又增加空白区域拖动、缩放、适配、键盘操作和节点点击命中区隔离。开发服务只监听 loopback；真实 Chrome 已完成拖动后鼠标选中 Tool、Attempt 切换、100% 到 90% 缩小和 57% 适配。当前静态 token 只适合开发试用，不是生产登录方案。
+- 已完成 Owner 中央只读控制台 v0：真实 PostgreSQL 可展示本人最近流程、运行中或草稿 DAG、跨轮次 Attempt 与追加型审计；非 Owner 真实实例返回 404。内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6` 已按真实 `deps` 分层绘制依赖，`b153c5311771eaa5b98d964fe6ffd448b62cf49d` 与 `c3e23fcbf3bf9e66eeb9cf97bf8bbbc1bb2eefc3` 增加拖动缩放操作并隔离节点点击，`efc1dff935d21918517d73c0d10fd15336516d9a` 又在详情顶部直接汇总最终状态、返工节点与最近重启。开发服务只监听 loopback；真实 Chrome 已验证返工实例与无返工实例两类摘要。当前静态 token 只适合开发试用，不是生产登录方案。下一门槛是让 Owner 在没有开发者解释的情况下独立完成一次状态判断，不优先引入通用画板依赖或可写前端。
 - 每个节点的唯一 Owner 解析与服务端授权。当前内核已拒绝非 Owner 提交，飞书 IM 命令发送者的活跃成员校验已在测试组织通过；草稿 Owner 全量企业目录校验已落码并部署但默认关闭。
 - 独立业务 Scheduler 和 Human、Agent、Tool Node Runner。领域规则、持久化、常驻 Worker、Agent adapter、首个 Tool adapter、真实开发链路与恢复扫描已落码，更多业务 Tool 按验证需求增加。
 - 已完成启动全量 Task 对账、缺失 Projection 补建和确认删除后的外部 Task 重建；一次性 PostgreSQL 与常驻开发服务均已验证补建、真实删除换绑、重入及修复后完成入站。

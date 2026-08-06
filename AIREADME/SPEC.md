@@ -112,7 +112,7 @@ Interactive Worker 依次访问 IM 命令验证、IM 回复、人员分工卡创
 
 ### Target Owner 中央只读控制台 v0
 
-`larkflow-console` 使用与 Target 相同的 PostgreSQL 仓储，只装配读取服务，不装配确认、重启、编辑、Human 提交或其他领域写命令。HTTP 服务强制绑定 loopback，只接受 GET 与 HEAD：`/console/`、`/console/app.js` 和 `/console/styles.css` 提供静态页面；`GET /console/api/v1/instances?limit=<1..100>` 返回当前 Owner 的有界实例摘要；`GET /console/api/v1/instances/<instance_id>` 返回同一 Owner 实例的节点、历史 Attempt 和最近审计。其他方法返回 405，未知路由返回 404。
+`larkflow-console` 使用与 Target 相同的 PostgreSQL 仓储，只装配读取服务，不装配确认、重启、编辑、Human 提交或其他领域写命令。HTTP 服务强制绑定 loopback，只接受 GET 与 HEAD：`/console/`、`/console/app.js` 和 `/console/styles.css` 提供静态页面；`GET /console/api/v1/instances?limit=<1..100>` 返回当前 Owner 的有界实例摘要；`GET /console/api/v1/instances/<instance_id>` 返回同一 Owner 实例的节点、历史 Attempt、最近审计和服务端提炼的 `insights`。`insights.reworked_nodes` 只列当前 Attempt 大于 1 的节点；`insights.latest_restart` 从最近 200 条审计中返回最近一次受控节点或实例重启的时间、操作者关系、目标与已验证影响节点，不返回原始 Audit payload。其他方法返回 405，未知路由返回 404。
 
 开发鉴权要求 `LARKFLOW_CONSOLE_ACCESS_TOKEN` 至少 32 字符，并在服务端把该 Bearer token 映射到 `LARKFLOW_TARGET_TENANT + LARKFLOW_CONSOLE_PERSON_ID`。客户端不能提交 tenant 或 person。列表 SQL 同时限定 tenant 与 `owner_person_id`，详情读取完整聚合后再次校验 Instance Owner；不存在与非 Owner 都返回同一 404。返回 DTO 只使用 `you / collaborator / system` 表示人员关系，不含任何人员 ID、claim token、完整错误正文或原始审计 payload。列表最多 100 条，审计最多 200 条，单个结果超过 32000 字节时只返回截断预览。浏览器仅用 `textContent` 渲染服务端数据，访问令牌只放当前标签页，点击“锁定”立即回到令牌页。
 

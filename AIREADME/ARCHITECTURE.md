@@ -166,6 +166,8 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 
 内容提交 `b153c5311771eaa5b98d964fe6ffd448b62cf49d` 在该真实依赖图上增加显式视口控制。空白区域拖动平移，按钮和快捷键提供 50% 到 160% 缩放、100% 重置与适配；缩放以视口锚点保持上下文。节点点击只更新当前选中态、关联边和 Attempt 面板，不重建 DAG 画布。真实浏览器发现同一指针手势仍可能把节点点击误判为拖动后，内容提交 `c3e23fcbf3bf9e66eeb9cf97bf8bbbc1bb2eefc3` 禁止从 `.graph-node` 启动平移，从而让空白拖动与节点单击拥有互不竞争的命中区。Console 继续只读，不承担文字回复或领域命令输入。
 
+内容提交 `efc1dff935d21918517d73c0d10fd15336516d9a` 在只读详情 DTO 增加 `insights`，由服务端同时读取当前聚合与有界审计后提炼。返工节点只来自当前 `NodeInstance.current_attempt_no > 1`，最近重启只接受两个领域事件类型，并把审计 payload 中的影响键重新交叉限定到冻结 Snapshot 节点；前端不获得原始 payload、人员 ID 或其他内部字段。页面把该 DTO 渲染为最终状态、返工节点和关键重启三张摘要卡，并显式声明写操作边界。该摘要是观察面派生数据，不是第二套流程状态，也不增加 migration。
+
 领域状态、审计与 outbox 在同一事务提交。事务提交后，Human 节点与所有节点状态变化通过 outbox 请求投影同步；Agent 和 Tool 激活直接返回 NodeActivation，由 Runtime Worker 在提交后交给 executor，避免数据库事务跨越外部调用。自动执行是 at-least-once，executor 必须使用 tenant-scoped Attempt 幂等键消除重复副作用。Agent 装配还会检查所有显式故障切换线路的超时总和，加上安全余量后必须小于 claim 租期，避免正常慢调用在结果提交前失去租约。Edge Proof 不发明独立 Capability Lease，它把可撤销设备身份与一个明确 kind 映射到同一 Node claim，并用心跳延长当前租期；设备失联或本机执行器异常后，租约到期才允许接管。
 
 下段保留累计验证实录。其中“十八份 migration、六个服务、四条监听连接”属于较早开发快照，不代表当前拓扑；当前 As-built 以本节上方的十九份 migration、十个 Python 服务和七条监听连接为准。
