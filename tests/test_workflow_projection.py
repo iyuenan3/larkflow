@@ -80,10 +80,14 @@ class RecordingTasks:
 class RecordingMessages:
     def __init__(self) -> None:
         self.requests = []
+        self.card_updates = []
 
     def send_message(self, request):
         self.requests.append(request)
         return ExternalMessage(message_id=f"message-{len(self.requests)}")
+
+    def update_chat_card_message(self, *, message_id, card):
+        self.card_updates.append((message_id, card))
 
 
 class RecordingDocuments:
@@ -242,6 +246,47 @@ def test_human_task_is_created_after_activation_and_completed_after_submission()
     completed = worker.run_once()
     assert completed.tasks_completed == 1
     assert tasks.completed == ["task-1"]
+    assert worker.run_once().claimed == 0
+
+
+def test_canceling_an_instance_completes_its_existing_human_task():
+    clock = Clock()
+    service, repository, tasks, worker = setup_human(clock)
+    worker.run_once()
+    service.dispatch_due(
+        TENANT,
+        "instance_projection",
+        worker_id="runtime_1",
+    )
+    assert worker.run_once().tasks_created == 1
+    preview = service.preview_cancellation(
+        TENANT,
+        "instance_projection",
+        actor_person_id="person_owner",
+    )
+
+    service.confirm_cancellation(
+        TENANT,
+        "instance_projection",
+        actor_person_id="person_owner",
+        expected_instance_version=preview.expected_instance_version,
+    )
+    report = worker.run_once()
+
+    assert report.tasks_completed == 1
+    assert tasks.completed == ["task-1"]
+    instance = service.get(TENANT, "instance_projection")
+    projection = repository.get_projection(
+        TENANT,
+        instance.nodes["approve"].id,
+        1,
+        FEISHU_TASK_KIND,
+    )
+    assert projection is not None
+    assert projection.state == {
+        "node_status": NodeStatus.CANCELED.value,
+        "completed": True,
+    }
     assert worker.run_once().claimed == 0
 
 

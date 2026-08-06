@@ -1731,6 +1731,135 @@ def test_status_hides_instance_existence_from_non_owner():
     assert replies[0] == "命令未执行：实例不存在或你无权查看"
 
 
+def test_owner_can_pause_resume_and_confirm_a_version_bound_cancellation():
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=lambda: NOW)
+    service.create_draft(
+        instance_id="lifecycle_from_im",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=InstanceSnapshot(
+            goal="Operate one process safely",
+            nodes=(
+                NodeSpec(
+                    "review",
+                    "Review",
+                    "person_owner",
+                    "human",
+                    work={
+                        "objective": "Review the process",
+                        "inputs": [],
+                        "outputs": [{"id": "decision", "type": "data"}],
+                        "acceptance": ["A decision is recorded"],
+                    },
+                ),
+            ),
+        ),
+    )
+    service.confirm_draft(
+        TENANT,
+        "lifecycle_from_im",
+        actor_person_id="person_owner",
+    )
+    store = MemoryStore()
+    worker = IMCommandWorker(
+        store,
+        service,
+        TemplateService(InMemoryTemplateStore(), clock=lambda: NOW),
+        tenant_id=TENANT,
+        worker_id="command_1",
+        clock=lambda: NOW,
+    )
+
+    store.command_claims = [
+        IMCommandClaim(
+            signal(
+                "/larkflow pause lifecycle_from_im",
+                event_id="event_pause",
+            ),
+            "pause-token",
+            1,
+        )
+    ]
+    assert worker.run_once().processed == 1
+    assert store.processed[-1][2]["outcome"] == "instance_paused"
+    assert "不会再调度新节点" in store.processed[-1][2]["reply_text"]
+    assert service.get(TENANT, "lifecycle_from_im").status == InstanceStatus.PAUSED
+
+    paused_version = service.get(TENANT, "lifecycle_from_im").version
+    store.command_claims = [
+        IMCommandClaim(
+            signal(
+                "/larkflow pause lifecycle_from_im",
+                event_id="event_pause_replay",
+            ),
+            "pause-replay-token",
+            1,
+        )
+    ]
+    assert worker.run_once().processed == 1
+    assert store.processed[-1][2]["outcome"] == "instance_paused"
+    assert service.get(TENANT, "lifecycle_from_im").version == paused_version
+
+    store.command_claims = [
+        IMCommandClaim(
+            signal(
+                "/larkflow resume lifecycle_from_im",
+                event_id="event_resume",
+            ),
+            "resume-token",
+            1,
+        )
+    ]
+    assert worker.run_once().processed == 1
+    assert store.processed[-1][2]["outcome"] == "instance_resumed"
+    assert service.get(TENANT, "lifecycle_from_im").status == InstanceStatus.RUNNING
+
+    store.command_claims = [
+        IMCommandClaim(
+            signal(
+                "/larkflow cancel lifecycle_from_im",
+                event_id="event_cancel_preview",
+            ),
+            "cancel-preview-token",
+            1,
+        )
+    ]
+    assert worker.run_once().processed == 1
+    preview_reply = store.processed[-1][2]["reply_text"]
+    assert store.processed[-1][2]["outcome"] == "cancellation_previewed"
+    assert "完整实例取消预览" in preview_reply
+    assert "已经发生的外部副作用不会自动回滚" in preview_reply
+    confirm_command = preview_reply.splitlines()[-1]
+
+    store.command_claims = [
+        IMCommandClaim(
+            signal(confirm_command, event_id="event_cancel_confirm"),
+            "cancel-confirm-token",
+            1,
+        )
+    ]
+    assert worker.run_once().processed == 1
+    assert store.processed[-1][2]["outcome"] == "instance_canceled"
+    assert "状态：已取消" in store.processed[-1][2]["reply_text"]
+    canceled = service.get(TENANT, "lifecycle_from_im")
+    assert canceled.status == InstanceStatus.CANCELED
+    assert canceled.nodes["review"].status == NodeStatus.CANCELED
+
+    canceled_version = canceled.version
+    store.command_claims = [
+        IMCommandClaim(
+            signal(confirm_command, event_id="event_cancel_replay"),
+            "cancel-replay-token",
+            1,
+        )
+    ]
+    assert worker.run_once().processed == 1
+    assert store.processed[-1][2]["outcome"] == "cancellation_already_applied"
+    assert service.get(TENANT, "lifecycle_from_im").version == canceled_version
+
+
 def test_list_returns_only_recent_instance_owner_summaries_without_writes():
     repository = InMemoryWorkflowRepository()
     templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
@@ -2202,6 +2331,13 @@ def test_help_lists_status_command():
         "/larkflow edit-confirm <preview_id>"
         in store.processed[-1][2]["reply_text"]
     )
+    assert "/larkflow pause <instance_id>" in store.processed[-1][2]["reply_text"]
+    assert "/larkflow resume <instance_id>" in store.processed[-1][2]["reply_text"]
+    assert "/larkflow cancel <instance_id>" in store.processed[-1][2]["reply_text"]
+    assert (
+        "/larkflow cancel-confirm <instance_id> <instance_version>"
+        in store.processed[-1][2]["reply_text"]
+    )
 
 
 def test_unknown_template_is_rejected_without_retrying_forever():
@@ -2296,6 +2432,13 @@ def test_non_owner_confirm_is_rejected_without_retrying_forever():
         "/larkflow restart-all instance extra",
         "/larkflow restart-confirm",
         "/larkflow restart-confirm preview extra",
+        "/larkflow pause",
+        "/larkflow pause instance extra",
+        "/larkflow resume",
+        "/larkflow cancel",
+        "/larkflow cancel-confirm instance",
+        "/larkflow cancel-confirm instance not-a-version",
+        "/larkflow cancel-confirm instance -1",
         "/larkflow edit instance_only",
         "/larkflow edit instance_1 {}",
         "/larkflow edit-confirm",
@@ -2323,6 +2466,29 @@ def test_command_parser_accepts_status():
         "status",
         "instance_1",
         {},
+    )
+
+
+def test_command_parser_accepts_process_lifecycle_commands():
+    assert parse_im_command("/larkflow pause instance_1") == (
+        "pause",
+        "instance_1",
+        {},
+    )
+    assert parse_im_command("/larkflow resume instance_1") == (
+        "resume",
+        "instance_1",
+        {},
+    )
+    assert parse_im_command("/larkflow cancel instance_1") == (
+        "cancel",
+        "instance_1",
+        {},
+    )
+    assert parse_im_command("/larkflow cancel-confirm instance_1 42") == (
+        "cancel-confirm",
+        "instance_1",
+        {"instance_version": 42},
     )
 
 

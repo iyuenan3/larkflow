@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import hashlib
 import html
@@ -112,6 +112,14 @@ class MessageProjectionAdapter(Protocol):
     def send_message(self, request: MessageProjectionRequest) -> ExternalMessage:
         ...
 
+    def update_chat_card_message(
+        self,
+        *,
+        message_id: str,
+        card: Mapping[str, Any],
+    ) -> None:
+        ...
+
 
 @dataclass(frozen=True)
 class DocumentProjectionRequest:
@@ -134,6 +142,7 @@ class ProjectionWorkerReport:
     tasks_created: int = 0
     tasks_completed: int = 0
     messages_sent: int = 0
+    cards_updated: int = 0
     documents_created: int = 0
     noops: int = 0
     failed: int = 0
@@ -213,6 +222,7 @@ class WorkflowProjectionWorker:
         tasks_created = 0
         tasks_completed = 0
         messages_sent = 0
+        cards_updated = 0
         documents_created = 0
         noops = 0
         failed = 0
@@ -242,6 +252,7 @@ class WorkflowProjectionWorker:
             tasks_created += int(outcome.created)
             tasks_completed += int(outcome.completed)
             messages_sent += int(outcome.message_sent)
+            cards_updated += int(outcome.card_updated)
             documents_created += int(outcome.document_created)
             noops += int(outcome.noop)
         return ProjectionWorkerReport(
@@ -250,6 +261,7 @@ class WorkflowProjectionWorker:
             tasks_created=tasks_created,
             tasks_completed=tasks_completed,
             messages_sent=messages_sent,
+            cards_updated=cards_updated,
             documents_created=documents_created,
             noops=noops,
             failed=failed,
@@ -454,18 +466,58 @@ class WorkflowProjectionWorker:
         node = instance.nodes[node_key]
         attempt = instance.attempts[(node_key, attempt_no)]
         current = attempt_no == node.current_attempt_no
-        if (
-            not current
-            or node.status != NodeStatus.WAITING_HUMAN
-            or attempt.status.value != NodeStatus.WAITING_HUMAN.value
-        ):
-            return _ProjectionOutcome(noop=True)
+        effective_status = (
+            node.status if current else NodeStatus(attempt.status.value)
+        )
         existing = self.projections.get_projection(
             self.tenant_id,
             node.id,
             attempt_no,
             FEISHU_DECISION_CARD_KIND,
         )
+        if effective_status == NodeStatus.CANCELED and existing is not None:
+            desired_state = {
+                **dict(existing.state),
+                "node_status": NodeStatus.CANCELED.value,
+                "settled": True,
+            }
+            if (
+                existing.sync_version >= node.version
+                and dict(existing.state) == desired_state
+            ):
+                return _ProjectionOutcome(noop=True)
+            updater = getattr(
+                self.message_adapter,
+                "update_chat_card_message",
+                None,
+            )
+            if not callable(updater) or not existing.external_id:
+                raise ValueError(
+                    "canceling a Human decision requires message card update support"
+                )
+            updater(
+                message_id=existing.external_id,
+                card=human_decision_canceled_card(
+                    instance,
+                    node_key,
+                    attempt_no,
+                ),
+            )
+            self.projections.save_projection(
+                replace(
+                    existing,
+                    sync_version=max(existing.sync_version, node.version),
+                    state=desired_state,
+                    updated_at=now,
+                )
+            )
+            return _ProjectionOutcome(card_updated=True)
+        if (
+            not current
+            or node.status != NodeStatus.WAITING_HUMAN
+            or attempt.status.value != NodeStatus.WAITING_HUMAN.value
+        ):
+            return _ProjectionOutcome(noop=True)
         if existing is not None:
             return _ProjectionOutcome(noop=True)
         if self.message_adapter is None:
@@ -978,6 +1030,7 @@ class _ProjectionOutcome:
     recreated: bool = False
     completed: bool = False
     message_sent: bool = False
+    card_updated: bool = False
     document_created: bool = False
     noop: bool = False
 
@@ -987,6 +1040,7 @@ class _ProjectionOutcome:
             "recreated": self.recreated,
             "completed": self.completed,
             "message_sent": self.message_sent,
+            "card_updated": self.card_updated,
             "document_created": self.document_created,
             "noop": self.noop,
         }
@@ -1194,6 +1248,32 @@ def human_decision_result_card(text: str) -> dict[str, Any]:
             "template": template,
         },
         "body": {"elements": [{"tag": "markdown", "content": text}]},
+    }
+
+
+def human_decision_canceled_card(
+    instance: WorkflowInstance,
+    node_key: str,
+    attempt_no: int,
+) -> dict[str, Any]:
+    """Settle a canceled decision projection without leaving live controls."""
+
+    spec = instance.snapshot.node(node_key)
+    content = (
+        "<text_tag color='grey'>已取消</text_tag> "
+        "该复核所在流程已经取消，卡片不能再提交。\n\n"
+        f"流程：`{instance.id}`\n"
+        f"节点：{spec.title} (`{node_key}`)\n"
+        f"Attempt：{attempt_no}"
+    )
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "default", "update_multi": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": "复核已取消"},
+            "template": "grey",
+        },
+        "body": {"elements": [{"tag": "markdown", "content": content}]},
     }
 
 

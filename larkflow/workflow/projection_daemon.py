@@ -46,6 +46,7 @@ class ProjectionLoopSummary:
     tasks_created: int = 0
     tasks_completed: int = 0
     messages_sent: int = 0
+    cards_updated: int = 0
     documents_created: int = 0
     noops: int = 0
     failed: int = 0
@@ -106,6 +107,7 @@ class ProjectionWorkerLoop:
             "tasks_created": 0,
             "tasks_completed": 0,
             "messages_sent": 0,
+            "cards_updated": 0,
             "documents_created": 0,
             "noops": 0,
             "failed": 0,
@@ -205,6 +207,7 @@ class ProjectionWorkerLoop:
             "tasks_created",
             "tasks_completed",
             "messages_sent",
+            "cards_updated",
             "documents_created",
             "noops",
             "failed",
@@ -239,6 +242,7 @@ class ProjectionWorkerLoop:
             "tasks_created": report.tasks_created,
             "tasks_completed": report.tasks_completed,
             "messages_sent": report.messages_sent,
+            "cards_updated": report.cards_updated,
             "documents_created": report.documents_created,
             "noops": report.noops,
             "failed": report.failed,

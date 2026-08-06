@@ -22,6 +22,7 @@ from larkflow.workflow import (
     QualityResult,
     QualityVerdict,
     StaleAttemptError,
+    StaleCancellationError,
     TransitionError,
     WorkflowInstance,
     WorkflowService,
@@ -350,6 +351,274 @@ def test_human_agent_and_tool_flow_unlocks_successors_and_finishes_instance():
 
     assert instance.status == InstanceStatus.DONE
     assert all(node.status == NodeStatus.DONE for node in instance.nodes.values())
+
+
+def test_pause_drains_active_work_without_dispatching_new_nodes_then_resumes():
+    service, repository = build_service()
+    service.confirm_draft(TENANT, "instance_1", actor_person_id="person_owner")
+
+    paused = service.pause_instance(
+        TENANT,
+        "instance_1",
+        actor_person_id="person_owner",
+        correlation_id="pause-before-dispatch",
+    )
+    assert paused.status == InstanceStatus.PAUSED
+    with pytest.raises(TransitionError, match="not running"):
+        service.dispatch_ready(TENANT, "instance_1")
+
+    resumed = service.resume_instance(
+        TENANT,
+        "instance_1",
+        actor_person_id="person_owner",
+        correlation_id="resume-for-human",
+    )
+    assert resumed.status == InstanceStatus.RUNNING
+    human = service.dispatch_ready(TENANT, "instance_1")[0]
+
+    service.pause_instance(
+        TENANT,
+        "instance_1",
+        actor_person_id="person_owner",
+        correlation_id="pause-with-human",
+    )
+    drained = service.submit_human(
+        TENANT,
+        "instance_1",
+        "collect_brief",
+        actor_person_id="person_owner",
+        attempt_no=human.attempt_no,
+        expected_node_version=human.expected_node_version,
+        result={"brief": "approved while paused"},
+    )
+    assert drained.status == InstanceStatus.PAUSED
+    assert drained.nodes["collect_brief"].status == NodeStatus.DONE
+    assert drained.nodes["write_draft"].status == NodeStatus.READY
+    with pytest.raises(TransitionError, match="not running"):
+        service.dispatch_ready(TENANT, "instance_1", worker_id="worker_1")
+
+    service.resume_instance(
+        TENANT,
+        "instance_1",
+        actor_person_id="person_owner",
+        correlation_id="resume-for-agent",
+    )
+    agent = service.dispatch_ready(
+        TENANT,
+        "instance_1",
+        worker_id="worker_1",
+    )[0]
+    service.pause_instance(
+        TENANT,
+        "instance_1",
+        actor_person_id="person_owner",
+        correlation_id="pause-with-agent",
+    )
+    drained = service.complete_automated(
+        TENANT,
+        "instance_1",
+        "write_draft",
+        attempt_no=agent.attempt_no,
+        expected_node_version=agent.expected_node_version,
+        claim_token=agent.claim_token or "",
+        result={"document": "draft"},
+        worker_id="worker_1",
+    )
+    assert drained.status == InstanceStatus.PAUSED
+    assert drained.nodes["publish_doc"].status == NodeStatus.READY
+
+    version_before_replay = drained.version
+    replay = service.pause_instance(
+        TENANT,
+        "instance_1",
+        actor_person_id="person_owner",
+    )
+    assert replay.version == version_before_replay
+    event_types = [
+        event.event_type
+        for event in repository.audit_log(TENANT, "instance_1")
+    ]
+    assert event_types.count("instance.paused") == 3
+    assert event_types.count("instance.resumed") == 2
+
+
+def test_paused_single_active_node_can_settle_the_instance():
+    snapshot = InstanceSnapshot(
+        nodes=(
+            NodeSpec(
+                "generate",
+                "Generate",
+                "person_owner",
+                "agent",
+                work=node_work(),
+            ),
+        )
+    )
+    service, _ = build_service(snapshot)
+    service.confirm_draft(TENANT, "instance_1", actor_person_id="person_owner")
+    activation = service.dispatch_ready(
+        TENANT,
+        "instance_1",
+        worker_id="worker_1",
+    )[0]
+    service.pause_instance(
+        TENANT,
+        "instance_1",
+        actor_person_id="person_owner",
+    )
+
+    settled = service.complete_automated(
+        TENANT,
+        "instance_1",
+        "generate",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        claim_token=activation.claim_token or "",
+        result={"content": "done"},
+        worker_id="worker_1",
+    )
+
+    assert settled.status == InstanceStatus.DONE
+    assert settled.completed_at == NOW
+
+
+def test_cancel_is_owner_only_version_bound_and_rejects_late_results():
+    service, repository = build_service()
+    service.confirm_draft(TENANT, "instance_1", actor_person_id="person_owner")
+    human = service.dispatch_ready(TENANT, "instance_1")[0]
+    service.submit_human(
+        TENANT,
+        "instance_1",
+        "collect_brief",
+        actor_person_id="person_owner",
+        attempt_no=human.attempt_no,
+        expected_node_version=human.expected_node_version,
+        result={"brief": "approved"},
+    )
+    agent = service.dispatch_ready(
+        TENANT,
+        "instance_1",
+        worker_id="worker_1",
+    )[0]
+
+    with pytest.raises(AuthorizationError, match="instance owner"):
+        service.preview_cancellation(
+            TENANT,
+            "instance_1",
+            actor_person_id="person_editor",
+        )
+    preview = service.preview_cancellation(
+        TENANT,
+        "instance_1",
+        actor_person_id="person_owner",
+    )
+    assert preview.affected_node_keys == ("write_draft", "publish_doc")
+    assert preview.active_node_keys == ("write_draft",)
+
+    confirmation = service.confirm_cancellation(
+        TENANT,
+        "instance_1",
+        actor_person_id="person_owner",
+        expected_instance_version=preview.expected_instance_version,
+        correlation_id="cancel-confirm",
+    )
+    canceled = confirmation.instance
+    assert canceled.status == InstanceStatus.CANCELED
+    assert canceled.nodes["collect_brief"].status == NodeStatus.DONE
+    assert canceled.nodes["write_draft"].status == NodeStatus.CANCELED
+    assert canceled.nodes["publish_doc"].status == NodeStatus.CANCELED
+    assert canceled.current_attempt("write_draft").status == AttemptStatus.CANCELED
+    assert canceled.current_attempt("write_draft").claim_token is None
+    assert confirmation.canceled_node_keys == ("write_draft", "publish_doc")
+    assert confirmation.revoked_claim_node_keys == ("write_draft",)
+    audit = repository.audit_log(TENANT, "instance_1")[-1]
+    assert audit.event_type == "instance.canceled"
+    assert audit.payload["from_status"] == "running"
+    assert audit.payload["canceled_node_keys"] == (
+        "write_draft",
+        "publish_doc",
+    )
+
+    with pytest.raises(TransitionError, match="not running"):
+        service.complete_automated(
+            TENANT,
+            "instance_1",
+            "write_draft",
+            attempt_no=agent.attempt_no,
+            expected_node_version=agent.expected_node_version,
+            claim_token=agent.claim_token or "",
+            result={"document": "late"},
+            worker_id="worker_1",
+        )
+    version_before_replay = canceled.version
+    replay = service.confirm_cancellation(
+        TENANT,
+        "instance_1",
+        actor_person_id="person_owner",
+        expected_instance_version=preview.expected_instance_version,
+    )
+    assert replay.already_applied is True
+    assert replay.instance.version == version_before_replay
+
+
+def test_cancel_confirmation_fails_closed_after_pause_changes_the_version():
+    service, _ = build_service()
+    service.confirm_draft(TENANT, "instance_1", actor_person_id="person_owner")
+    preview = service.preview_cancellation(
+        TENANT,
+        "instance_1",
+        actor_person_id="person_owner",
+    )
+    service.pause_instance(
+        TENANT,
+        "instance_1",
+        actor_person_id="person_owner",
+    )
+
+    with pytest.raises(StaleCancellationError, match="changed"):
+        service.confirm_cancellation(
+            TENANT,
+            "instance_1",
+            actor_person_id="person_owner",
+            expected_instance_version=preview.expected_instance_version,
+        )
+
+
+def test_non_owner_cannot_pause_resume_or_confirm_cancellation():
+    service, _ = build_service()
+    service.confirm_draft(TENANT, "instance_1", actor_person_id="person_owner")
+
+    with pytest.raises(AuthorizationError, match="instance owner"):
+        service.pause_instance(
+            TENANT,
+            "instance_1",
+            actor_person_id="person_editor",
+        )
+    preview = service.preview_cancellation(
+        TENANT,
+        "instance_1",
+        actor_person_id="person_owner",
+    )
+    with pytest.raises(AuthorizationError, match="instance owner"):
+        service.confirm_cancellation(
+            TENANT,
+            "instance_1",
+            actor_person_id="person_editor",
+            expected_instance_version=preview.expected_instance_version,
+        )
+
+    service.pause_instance(
+        TENANT,
+        "instance_1",
+        actor_person_id="person_owner",
+    )
+    with pytest.raises(AuthorizationError, match="instance owner"):
+        service.resume_instance(
+            TENANT,
+            "instance_1",
+            actor_person_id="person_editor",
+        )
+    assert service.get(TENANT, "instance_1").status == InstanceStatus.PAUSED
 
 
 def test_fan_in_unlocks_only_after_every_dependency_is_done():

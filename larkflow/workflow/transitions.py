@@ -25,7 +25,12 @@ INSTANCE_TRANSITIONS = {
         InstanceStatus.FAILED,
         InstanceStatus.CANCELED,
     },
-    InstanceStatus.PAUSED: {InstanceStatus.RUNNING, InstanceStatus.CANCELED},
+    InstanceStatus.PAUSED: {
+        InstanceStatus.RUNNING,
+        InstanceStatus.DONE,
+        InstanceStatus.FAILED,
+        InstanceStatus.CANCELED,
+    },
 }
 
 NODE_TRANSITIONS = {

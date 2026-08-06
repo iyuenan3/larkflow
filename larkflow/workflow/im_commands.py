@@ -36,6 +36,12 @@ from .editing import (
     StaleGraphEditPreviewError,
 )
 from .event_time import feishu_event_time
+from .lifecycle import (
+    CancellationConfirmation,
+    CancellationNotAllowedError,
+    CancellationPreview,
+    StaleCancellationError,
+)
 from .model import InstanceStatus, WorkflowInstance, WorkflowInstanceSummary
 from .repository import (
     InstanceAlreadyExistsError,
@@ -972,6 +978,10 @@ class IMCommandWorker:
                 "/larkflow confirm <instance_id>\n"
                 "/larkflow status <instance_id>\n"
                 "/larkflow list\n"
+                "/larkflow pause <instance_id>\n"
+                "/larkflow resume <instance_id>\n"
+                "/larkflow cancel <instance_id>\n"
+                "/larkflow cancel-confirm <instance_id> <instance_version>\n"
                 "/larkflow edit <instance_id> <JSON操作数组>\n"
                 "/larkflow edit-confirm <preview_id>\n"
                 "/larkflow restart <instance_id> <node_key>\n"
@@ -1276,6 +1286,95 @@ class IMCommandWorker:
                 "instances_listed",
                 None,
                 _list_reply(summaries),
+            )
+        if command == "pause":
+            instance_id = argument or ""
+            try:
+                instance = self.service.pause_instance(
+                    self.tenant_id,
+                    instance_id,
+                    actor_person_id=event.sender_person_id,
+                    correlation_id=event.message_id,
+                )
+            except (AuthorizationError, InstanceNotFoundError, TransitionError):
+                raise IMCommandRejected(
+                    "实例不存在、无权操作，或当前状态不可暂停"
+                ) from None
+            return (
+                "instance_paused",
+                instance.id,
+                "流程当前已暂停。"
+                f"\n实例：{instance.id}\n状态：已暂停\n"
+                "不会再调度新节点；已经发出的 Human、Agent 和 Tool 节点仍可收口。",
+            )
+        if command == "resume":
+            instance_id = argument or ""
+            try:
+                instance = self.service.resume_instance(
+                    self.tenant_id,
+                    instance_id,
+                    actor_person_id=event.sender_person_id,
+                    correlation_id=event.message_id,
+                )
+            except (AuthorizationError, InstanceNotFoundError, TransitionError):
+                raise IMCommandRejected(
+                    "实例不存在、无权操作，或当前状态不可继续"
+                ) from None
+            return (
+                "instance_resumed",
+                instance.id,
+                "流程当前正在运行。"
+                f"\n实例：{instance.id}\n状态：进行中",
+            )
+        if command == "cancel":
+            instance_id = argument or ""
+            try:
+                preview = self.service.preview_cancellation(
+                    self.tenant_id,
+                    instance_id,
+                    actor_person_id=event.sender_person_id,
+                )
+            except (
+                AuthorizationError,
+                CancellationNotAllowedError,
+                InstanceNotFoundError,
+            ):
+                raise IMCommandRejected(
+                    "实例不存在、无权操作，或当前状态不可取消"
+                ) from None
+            return (
+                "cancellation_previewed",
+                preview.instance_id,
+                _cancellation_preview_reply(preview),
+            )
+        if command == "cancel-confirm":
+            instance_id = argument or ""
+            try:
+                confirmation = self.service.confirm_cancellation(
+                    self.tenant_id,
+                    instance_id,
+                    actor_person_id=event.sender_person_id,
+                    expected_instance_version=int(inputs["instance_version"]),
+                    correlation_id=event.message_id,
+                )
+            except StaleCancellationError:
+                raise IMCommandRejected(
+                    "流程状态已变化，请重新预览取消影响"
+                ) from None
+            except (
+                AuthorizationError,
+                CancellationNotAllowedError,
+                InstanceNotFoundError,
+            ):
+                raise IMCommandRejected(
+                    "实例不存在、取消确认已失效或你无权操作"
+                ) from None
+            return (
+                "cancellation_already_applied"
+                if confirmation.already_applied
+                else "instance_canceled",
+                confirmation.instance.id,
+                _cancellation_confirmation_reply(confirmation),
             )
         if command == "edit":
             instance_id = argument or ""
@@ -1660,7 +1759,23 @@ def _parse_im_command(text: str) -> _ParsedIMCommand:
                 "用法：/larkflow restart-confirm <preview_id>"
             )
         return _ParsedIMCommand("restart-confirm", parts[2])
-    if parts[1] in {"confirm", "status"}:
+    if parts[1] == "cancel-confirm":
+        if len(parts) != 4:
+            raise IMCommandRejected(
+                "用法：/larkflow cancel-confirm <instance_id> <instance_version>"
+            )
+        try:
+            instance_version = int(parts[3])
+        except ValueError as exc:
+            raise IMCommandRejected("取消确认版本必须是非负整数") from exc
+        if instance_version < 0:
+            raise IMCommandRejected("取消确认版本必须是非负整数")
+        return _ParsedIMCommand(
+            "cancel-confirm",
+            parts[2],
+            inputs={"instance_version": instance_version},
+        )
+    if parts[1] in {"confirm", "status", "pause", "resume", "cancel"}:
         if len(parts) != 3:
             raise IMCommandRejected(
                 f"用法：/larkflow {parts[1]} <instance_id>"
@@ -1668,8 +1783,9 @@ def _parse_im_command(text: str) -> _ParsedIMCommand:
         return _ParsedIMCommand(parts[1], parts[2])
     if parts[1] != "start" or len(parts) < 3:
         raise IMCommandRejected(
-            "仅支持 draft、start、confirm、status、list、edit、edit-confirm、restart、"
-            "restart-all、restart-confirm 和 help"
+            "仅支持 draft、start、confirm、status、list、pause、resume、cancel、"
+            "cancel-confirm、edit、edit-confirm、restart、restart-all、"
+            "restart-confirm 和 help"
         )
     inputs, owner_mentions = _parse_start_tail(parts[3] if len(parts) == 4 else "")
     return _ParsedIMCommand(
@@ -2149,6 +2265,53 @@ def _restart_preview_reply(
         )
     )
     return "\n".join(lines)
+
+
+def _cancellation_preview_reply(preview: CancellationPreview) -> str:
+    lines = [
+        "完整实例取消预览",
+        f"实例：{_status_field(preview.instance_id)}",
+        f"未完成节点：{len(preview.affected_node_keys)} 个",
+        f"已发出节点：{len(preview.active_node_keys)} 个",
+    ]
+    for node_key in preview.affected_node_keys[:MAX_STATUS_NODES]:
+        marker = "正在收口" if node_key in preview.active_node_keys else "尚未开始"
+        lines.append(f"- {node_key}｜{marker}")
+    remaining = len(preview.affected_node_keys) - MAX_STATUS_NODES
+    if remaining > 0:
+        lines.append(f"- 另有 {remaining} 个节点未展开")
+    lines.extend(
+        (
+            "确认后，未完成节点和当前 Attempt 将进入取消终态；"
+            "已完成或失败的历史保持不变。",
+            "已经发生的外部副作用不会自动回滚。",
+            "若流程状态发生变化，该确认会自动失效。",
+            "请确认：",
+            f"/larkflow cancel-confirm {preview.instance_id} "
+            f"{preview.expected_instance_version}",
+        )
+    )
+    return "\n".join(lines)
+
+
+def _cancellation_confirmation_reply(
+    confirmation: CancellationConfirmation,
+) -> str:
+    prefix = (
+        "该实例已经取消，无需重复操作。"
+        if confirmation.already_applied
+        else "实例已取消。"
+    )
+    return "\n".join(
+        (
+            prefix,
+            f"实例：{_status_field(confirmation.instance.id)}",
+            "状态：已取消",
+            f"取消节点：{len(confirmation.canceled_node_keys)} 个",
+            f"撤销中的自动执行 claim：{len(confirmation.revoked_claim_node_keys)} 个",
+            "旧 Attempt、结果和审计均已保留；不会再调度新节点。",
+        )
+    )
 
 
 def _restart_confirmation_reply(confirmation: RestartConfirmation) -> str:

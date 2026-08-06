@@ -23,7 +23,15 @@ from .decision import (
 )
 from .events import AuditEvent, OutboxEvent
 from .graph import validate_snapshot
+from .lifecycle import (
+    CancellationConfirmation,
+    CancellationPreview,
+    StaleCancellationError,
+    apply_cancellation,
+    preview_cancellation,
+)
 from .model import (
+    AttemptStatus,
     ExecutorKind,
     InstanceSnapshot,
     InstanceStatus,
@@ -216,6 +224,211 @@ class WorkflowService:
         )
         return self.repository.get(tenant_id, instance_id)
 
+    def pause_instance(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        *,
+        actor_person_id: str,
+        correlation_id: str | None = None,
+    ) -> WorkflowInstance:
+        """Stop new dispatch while allowing already active work to settle."""
+
+        instance = self.repository.get(tenant_id, instance_id)
+        self._require_instance_owner(instance, actor_person_id)
+        if instance.status == InstanceStatus.PAUSED:
+            return instance
+        expected_version = instance.version
+        now = self.clock()
+        transition_instance(instance, InstanceStatus.PAUSED, now=now)
+        audit = self._audit(
+            instance,
+            "instance.paused",
+            actor_person_id=actor_person_id,
+            correlation_id=correlation_id or self.id_factory(),
+            aggregate_version=expected_version + 1,
+            now=now,
+            payload={
+                "active_node_keys": tuple(
+                    spec.key
+                    for spec in instance.snapshot.nodes
+                    if instance.nodes[spec.key].status
+                    in {NodeStatus.RUNNING, NodeStatus.WAITING_HUMAN}
+                ),
+            },
+        )
+        try:
+            self.repository.save(
+                instance,
+                expected_version=expected_version,
+                audit_events=(audit,),
+            )
+        except ConcurrentUpdateError:
+            current = self.repository.get(tenant_id, instance_id)
+            self._require_instance_owner(current, actor_person_id)
+            if current.status == InstanceStatus.PAUSED:
+                return current
+            raise
+        return self.repository.get(tenant_id, instance_id)
+
+    def resume_instance(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        *,
+        actor_person_id: str,
+        correlation_id: str | None = None,
+    ) -> WorkflowInstance:
+        """Resume dispatch for one paused process without replacing Attempts."""
+
+        instance = self.repository.get(tenant_id, instance_id)
+        self._require_instance_owner(instance, actor_person_id)
+        if instance.status == InstanceStatus.RUNNING:
+            return instance
+        expected_version = instance.version
+        now = self.clock()
+        transition_instance(instance, InstanceStatus.RUNNING, now=now)
+        audit = self._audit(
+            instance,
+            "instance.resumed",
+            actor_person_id=actor_person_id,
+            correlation_id=correlation_id or self.id_factory(),
+            aggregate_version=expected_version + 1,
+            now=now,
+        )
+        try:
+            self.repository.save(
+                instance,
+                expected_version=expected_version,
+                audit_events=(audit,),
+            )
+        except ConcurrentUpdateError:
+            current = self.repository.get(tenant_id, instance_id)
+            self._require_instance_owner(current, actor_person_id)
+            if current.status == InstanceStatus.RUNNING:
+                return current
+            raise
+        return self.repository.get(tenant_id, instance_id)
+
+    def preview_cancellation(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        *,
+        actor_person_id: str,
+    ) -> CancellationPreview:
+        """Preview a terminal cancellation without changing the process."""
+
+        instance = self.repository.get(tenant_id, instance_id)
+        self._require_instance_owner(instance, actor_person_id)
+        return preview_cancellation(instance)
+
+    def confirm_cancellation(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        *,
+        actor_person_id: str,
+        expected_instance_version: int,
+        correlation_id: str | None = None,
+    ) -> CancellationConfirmation:
+        """Cancel unfinished work through a version-bound confirmation."""
+
+        instance = self.repository.get(tenant_id, instance_id)
+        self._require_instance_owner(instance, actor_person_id)
+        if instance.status == InstanceStatus.CANCELED:
+            return CancellationConfirmation(
+                instance=instance,
+                canceled_node_keys=tuple(
+                    spec.key
+                    for spec in instance.snapshot.nodes
+                    if instance.nodes[spec.key].status == NodeStatus.CANCELED
+                ),
+                revoked_claim_node_keys=(),
+                already_applied=True,
+            )
+        expected_version = instance.version
+        if expected_version != expected_instance_version:
+            raise StaleCancellationError(
+                "instance changed after the cancellation preview"
+            )
+        now = self.clock()
+        from_status = instance.status
+        human_work = {
+            spec.key: (
+                instance.nodes[spec.key].executor == ExecutorKind.HUMAN
+                or instance.current_attempt(spec.key).status
+                == AttemptStatus.WAITING_HUMAN
+                or instance.current_attempt(spec.key).submitted_by_person_id is not None
+            )
+            for spec in instance.snapshot.nodes
+        }
+        canceled_node_keys, revoked_claim_node_keys = apply_cancellation(
+            instance,
+            expected_instance_version=expected_instance_version,
+            now=now,
+        )
+        audit = self._audit(
+            instance,
+            "instance.canceled",
+            actor_person_id=actor_person_id,
+            correlation_id=correlation_id or self.id_factory(),
+            aggregate_version=expected_version + 1,
+            now=now,
+            payload={
+                "from_status": from_status.value,
+                "canceled_node_keys": canceled_node_keys,
+                "revoked_claim_node_keys": revoked_claim_node_keys,
+            },
+        )
+        outbox = tuple(
+            self._outbox(
+                instance,
+                event_type="node.projection_sync_requested",
+                aggregate_type="node_instance",
+                aggregate_id=instance.nodes[node_key].id,
+                aggregate_version=instance.nodes[node_key].version,
+                payload={
+                    "instance_id": instance.id,
+                    "node_key": node_key,
+                    "attempt_no": instance.nodes[node_key].current_attempt_no,
+                    "status": NodeStatus.CANCELED.value,
+                },
+                now=now,
+            )
+            for node_key in canceled_node_keys
+            if human_work[node_key]
+        )
+        try:
+            self.repository.save(
+                instance,
+                expected_version=expected_version,
+                audit_events=(audit,),
+                outbox_events=outbox,
+            )
+        except ConcurrentUpdateError as exc:
+            current = self.repository.get(tenant_id, instance_id)
+            self._require_instance_owner(current, actor_person_id)
+            if current.status == InstanceStatus.CANCELED:
+                return CancellationConfirmation(
+                    instance=current,
+                    canceled_node_keys=tuple(
+                        spec.key
+                        for spec in current.snapshot.nodes
+                        if current.nodes[spec.key].status == NodeStatus.CANCELED
+                    ),
+                    revoked_claim_node_keys=(),
+                    already_applied=True,
+                )
+            raise StaleCancellationError(
+                "instance changed while applying cancellation"
+            ) from exc
+        return CancellationConfirmation(
+            instance=self.repository.get(tenant_id, instance_id),
+            canceled_node_keys=canceled_node_keys,
+            revoked_claim_node_keys=revoked_claim_node_keys,
+        )
+
     def dispatch_ready(
         self,
         tenant_id: str,
@@ -384,7 +597,7 @@ class WorkflowService:
     ) -> WorkflowInstance:
         instance = self.repository.get(tenant_id, instance_id)
         expected_version = instance.version
-        self._require_running(instance)
+        self._require_active(instance)
         now = self.clock()
         self.runner.submit_human(
             instance,
@@ -439,7 +652,7 @@ class WorkflowService:
                 "instance changed after the decision card was sent"
             )
         expected_version = instance.version
-        self._require_running(instance)
+        self._require_active(instance)
         try:
             node = instance.nodes[node_key]
             spec = instance.snapshot.node(node_key)
@@ -540,7 +753,7 @@ class WorkflowService:
             raise ValueError("worker_id is required")
         instance = self.repository.get(tenant_id, instance_id)
         expected_version = instance.version
-        self._require_running(instance)
+        self._require_active(instance)
         now = self.clock()
         self.runner.complete_automated(
             instance,
@@ -592,7 +805,7 @@ class WorkflowService:
             raise ValueError("worker_id is required")
         instance = self.repository.get(tenant_id, instance_id)
         expected_version = instance.version
-        self._require_running(instance)
+        self._require_active(instance)
         now = self.clock()
         expires_at = self.runner.renew_automated_claim(
             instance,
@@ -639,7 +852,7 @@ class WorkflowService:
             raise ValueError("worker_id is required")
         instance = self.repository.get(tenant_id, instance_id)
         expected_version = instance.version
-        self._require_running(instance)
+        self._require_active(instance)
         now = self.clock()
         self.runner.fail_automated(
             instance,
@@ -1313,4 +1526,9 @@ class WorkflowService:
     @staticmethod
     def _require_running(instance: WorkflowInstance) -> None:
         if instance.status != InstanceStatus.RUNNING:
+            raise TransitionError(f"instance is not running: {instance.id}")
+
+    @staticmethod
+    def _require_active(instance: WorkflowInstance) -> None:
+        if instance.status not in {InstanceStatus.RUNNING, InstanceStatus.PAUSED}:
             raise TransitionError(f"instance is not running: {instance.id}")

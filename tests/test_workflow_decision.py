@@ -50,10 +50,14 @@ class RecordingTasks:
 class RecordingMessages:
     def __init__(self) -> None:
         self.requests = []
+        self.card_updates = []
 
     def send_message(self, request):
         self.requests.append(request)
         return ExternalMessage(message_id=f"message-{len(self.requests)}")
+
+    def update_chat_card_message(self, *, message_id, card):
+        self.card_updates.append((message_id, card))
 
 
 def decision_snapshot() -> InstanceSnapshot:
@@ -486,3 +490,33 @@ def test_decision_node_projects_a_card_instead_of_a_second_task():
         "node_version": instance.nodes["review"].version,
         "instance_version": instance.version,
     }
+
+    preview = service.preview_cancellation(
+        TENANT,
+        "instance_decision",
+        actor_person_id="person_owner",
+    )
+    service.confirm_cancellation(
+        TENANT,
+        "instance_decision",
+        actor_person_id="person_owner",
+        expected_instance_version=preview.expected_instance_version,
+    )
+    canceled_report = worker.run_once()
+
+    assert canceled_report.cards_updated == 1
+    assert len(messages.card_updates) == 1
+    message_id, canceled_card = messages.card_updates[0]
+    assert message_id == "message-1"
+    assert "复核已取消" in str(canceled_card)
+    assert "button" not in str(canceled_card)
+    assert "form" not in str(canceled_card)
+    projection = repository.get_projection(
+        TENANT,
+        instance.nodes["review"].id,
+        review.attempt_no,
+        FEISHU_DECISION_CARD_KIND,
+    )
+    assert projection is not None
+    assert projection.state["settled"] is True
+    assert projection.state["node_status"] == NodeStatus.CANCELED.value

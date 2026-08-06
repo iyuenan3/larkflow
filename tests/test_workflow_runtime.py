@@ -179,6 +179,42 @@ def test_worker_commits_claim_before_calling_external_executor():
     assert service.get(TENANT, "instance_runtime").status == InstanceStatus.DONE
 
 
+def test_cancellation_during_execution_discards_the_late_worker_result():
+    clock = Clock()
+    service, repository = build_runtime(clock=clock)
+    executor = RecordingExecutor(result={"value": "must not commit"})
+
+    def cancel_after_claim(_request: ExecutionRequest) -> None:
+        preview = service.preview_cancellation(
+            TENANT,
+            "instance_runtime",
+            actor_person_id="person_owner",
+        )
+        service.confirm_cancellation(
+            TENANT,
+            "instance_runtime",
+            actor_person_id="person_owner",
+            expected_instance_version=preview.expected_instance_version,
+        )
+
+    executor.on_execute = cancel_after_claim
+    report = worker(
+        service,
+        repository,
+        executor,
+        clock=clock,
+        worker_id="worker_1",
+    ).run_once()
+
+    assert report.automated_claimed == 1
+    assert report.completed == 0
+    assert report.stale_results == 1
+    canceled = service.get(TENANT, "instance_runtime")
+    assert canceled.status == InstanceStatus.CANCELED
+    assert canceled.current_attempt("generate").status == AttemptStatus.CANCELED
+    assert canceled.current_attempt("generate").result is None
+
+
 def test_worker_receives_committed_upstream_results_in_the_input_snapshot():
     clock = Clock()
     snapshot = InstanceSnapshot(
