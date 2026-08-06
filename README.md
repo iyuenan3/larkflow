@@ -18,6 +18,8 @@ larkflow 已开始按收敛后的产品设计重建中央工作流，目前完�
 
 首批三项真实项目小样本现已覆盖直接退回、带具体意见返工和直接接受。第三项 `pilot_console_value_20260806_164925` 使用固定版本路线图作为来源，Human-Agent-Tool-Human 四节点均在 Attempt 1 完成，Tool 覆盖 5/5 条来源事实与 3/3 个开放问题，Owner 接受首次结果；从确认到接受用时 12 分 41 秒，完成文档、通知和其他外部投影均保持唯一。该小样本说明流程能记录结果可用性、返工与人工干预，不证明稳定模型质量、市场价值或生产容量。本轮状态仍由开发操作者通过 PostgreSQL 与聊天追踪，没有证明用户独立使用中央控制台能降低追踪成本，下一门槛见 [`AIREADME/ROADMAP.md`](AIREADME/ROADMAP.md)。
 
+第一次 Owner 独立 Console 试用已成功定位 `source_grounded_reject_20260806_001940`，同时暴露两个真实体验边界：Console 是只读观察面，文字回复仍在当前 Agent 对话；首版流程图只有浏览器滚动条，没有可发现的拖动、缩放或适配操作。内容提交 `b153c5311771eaa5b98d964fe6ffd448b62cf49d` 增加空白区域拖动平移、50% 到 160% 缩放、适配、重置、键盘操作和视口保持，内容提交 `c3e23fcbf3bf9e66eeb9cf97bf8bbbc1bb2eefc3` 又消除平移手势与节点点击竞争。最终真实 Chrome 验收在同一返工实例上完成拖动后鼠标选中 Tool 节点、右侧 Attempt 切换、100% 到 90% 缩小和 57% 适配；该能力已部署，但仍需 Owner 再次独立使用后才能判断是否降低状态追踪成本。
+
 Personal Agent Edge 的 macOS 客户端现已接入登录 Keychain：设备密钥只写入系统钥匙串，`0600` 元数据文件只保存服务器地址和设备 ID。除隔离合成项外，这台员工 Mac 已通过临时 SSH 隧道，以真实流程 Owner 身份完成默认 Keychain 槽位的一次性配对；随后 `run-once` 返回 `no_work`，服务器回读设备为 active、配对审计存在且认证后的 `last_seen_at` 已推进。隧道已关闭，设备凭据和非敏感元数据继续保留，重新建立受控隧道后可再次使用。该证据关闭真实设备 Keychain 配对缺口，但不等于员工安装分发、安全评审、可持续公网链路或生产上线。
 
 - **目标产品**：单企业、单层 DAG 的最小闭环，支持模板可选、草稿确认、Human / Agent / Tool 节点、受控编辑、重启、审计和飞书投影。
@@ -121,7 +123,7 @@ Phase 0 的设计一致性核验已经完成，当前进入 Phase 1 中央工作
 - migration SQL 已进入 wheel，仓库与长期开发库均为十九份。`0013_im_command_mentions` 到 `0019_draft_generation_progress` 依次覆盖 mention、人员选择卡、恢复卡、canonical 动作、首反馈指标、通知唤醒和独立草稿生成进度。migration 19、真实 PostgreSQL 双副本竞争和通知连接均已验收；既有节点重启、完整实例重启和未来区域编辑预览继续保持恰好一路执行、一路幂等回放。
 - 当前完整离线套件为 `922 passed, 18 skipped`；跳过项是需要显式外部环境的集成验证，不会在默认测试中访问网络、凭据或真实飞书。
 - `larkflow-target` CLI 已提供模板创建、追加版本、启用、停用、逻辑删除、查询，从模板创建草稿和预览，以及实例确认、状态、Human 提交、既有 Worker 命令和 `generate-drafts-once / generate-drafts`；环境配置由项目 dotenv 解析器读取，不使用 shell `source`。
-- `alicloud-sh` 的长期 Target 开发库只接受本机 peer authentication，已应用十九份 migration。九个 Target systemd 服务与一个 legacy 事件消费者组成十个 Python 服务，均回读 `active / running / NRestarts=0`。Edge Gateway 与 Owner Console 分别只监听 `127.0.0.1:8765` 和 `127.0.0.1:8780`；七条 PostgreSQL 通知连接分别由凭据侧持有四条、领域侧持有三条。两个 Interactive 副本固定 `claim_limit=1`，Draft Generation Worker 不持有飞书 profile。队列表仍是业务权威，通知失败时继续使用有界轮询。当前中央开发发布件对应内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6`，包含既有流程能力与 Owner 只读 Console 的真实 DAG 依赖渲染；既有接受路径和带具体意见的退回到 Agent 重做路径均已通过。既有小样本延迟只描述开发环境，不能外推生产容量。
+- `alicloud-sh` 的长期 Target 开发库只接受本机 peer authentication，已应用十九份 migration。九个 Target systemd 服务与一个 legacy 事件消费者组成十个 Python 服务，均回读 `active / running / NRestarts=0`。Edge Gateway 与 Owner Console 分别只监听 `127.0.0.1:8765` 和 `127.0.0.1:8780`；七条 PostgreSQL 通知连接分别由凭据侧持有四条、领域侧持有三条。两个 Interactive 副本固定 `claim_limit=1`，Draft Generation Worker 不持有飞书 profile。队列表仍是业务权威，通知失败时继续使用有界轮询。当前中央开发发布件对应内容提交 `c3e23fcbf3bf9e66eeb9cf97bf8bbbc1bb2eefc3`，包含既有流程能力、Owner 只读 Console 的真实 DAG 依赖渲染，以及拖动、缩放、适配和点击后视口保持；既有接受路径和带具体意见的退回到 Agent 重做路径均已通过。既有小样本延迟只描述开发环境，不能外推生产容量。
 - Projection Worker 只认领明确的投影事件，在数据库 claim 提交后调用 lark-cli，以稳定幂等键创建任务，并把 Task GUID、URL、同步版本和完成状态写回 Projection 记录。启动全量对账以 PostgreSQL 为权威分页扫描当前 Human 责任入口，补建缺失记录，并在飞书明确返回 Task 不存在时使用新一代稳定幂等键重建；权限或网络错误不会被误判为删除。该版本已部署到常驻开发服务。专用开发实例已完成真实删除重建及后续完成验收：旧 Task 读回 `1470404` 后只重建 1 条，Projection 换绑到新 GUID、`repair_generation=1`，第二次对账 3 条绑定全部不变；人工完成新 Task 后，凭据侧验证 1 条、领域侧提交 1 条且均无失败，Instance、Node、Attempt 与 Projection 一致进入完成态。
 - Human Task 会展示节点明确声明的 Instance 输入；下游任务还会展示直接依赖中已提交的 Agent 正文。超长内容只在任务描述中截断，完整输入与结果仍保存在 PostgreSQL。
 - 每日 custom-format 备份保留约 7 天，并完成过一次新库恢复演练。
