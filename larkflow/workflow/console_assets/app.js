@@ -185,35 +185,156 @@ function statusBadge(status, id = "") {
 function renderGraph(nodes) {
   const graph = el("graph");
   graph.replaceChildren();
-  nodes.forEach((item, index) => {
-    if (index > 0) {
-      const connector = node("div", "graph-connector");
-      connector.append(node("span", ""), node("i", ""));
-      graph.append(connector);
-    }
-    const card = node("button", "graph-node");
-    card.type = "button";
-    card.dataset.status = item.status;
-    card.dataset.selected = String(state.selectedNode === item.key);
-    card.addEventListener("click", () => {
-      state.selectedNode = item.key;
-      renderGraph(nodes);
-      renderAttempts(item);
-    });
+  if (nodes.length === 0) {
+    graph.append(node("p", "muted", "草稿中没有节点。"));
+    return;
+  }
 
-    const ordinal = node("span", "node-ordinal", String(index + 1).padStart(2, "0"));
-    const content = node("div", "node-content");
-    const top = node("div", "node-title-row");
-    top.append(node("strong", "", item.title), statusBadge(item.status));
-    const metadata = node("div", "node-metadata");
-    metadata.append(
-      node("span", `executor executor-${item.executor}`, EXECUTOR[item.executor] || item.executor),
-      node("span", "", `Owner: ${RELATION[item.owner_relation] || item.owner_relation}`),
-      node("span", "", `Attempt ${item.current_attempt_no}`),
-    );
-    content.append(top, node("span", "node-key mono", item.key), metadata);
-    card.append(ordinal, content, node("span", "node-arrow", "›"));
-    graph.append(card);
+  const layers = topologicalLayers(nodes);
+  const ordinalByKey = new Map(nodes.map((item, index) => [item.key, index + 1]));
+  const canvas = node("div", "dag-canvas");
+  canvas.style.minWidth = `${Math.max(1, layers.length) * 250 + Math.max(0, layers.length - 1) * 52}px`;
+  const edges = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  edges.classList.add("dag-edges");
+  edges.setAttribute("aria-hidden", "true");
+  const grid = node("div", "dag-grid");
+  grid.style.gridTemplateColumns = `repeat(${layers.length}, minmax(250px, 1fr))`;
+
+  layers.forEach((items, layerIndex) => {
+    const layer = node("section", "dag-layer");
+    layer.append(node("p", "dag-layer-label", `阶段 ${String(layerIndex + 1).padStart(2, "0")}`));
+    const stack = node("div", "dag-layer-nodes");
+    items.forEach((item) => {
+      stack.append(graphNodeCard(item, ordinalByKey.get(item.key), nodes));
+    });
+    layer.append(stack);
+    grid.append(layer);
+  });
+
+  canvas.append(edges, grid);
+  graph.append(canvas);
+  requestAnimationFrame(() => drawDagEdges(canvas, nodes));
+}
+
+function graphNodeCard(item, ordinal, nodes) {
+  const card = node("button", "graph-node");
+  card.type = "button";
+  card.dataset.nodeKey = item.key;
+  card.dataset.status = item.status;
+  card.dataset.selected = String(state.selectedNode === item.key);
+  card.addEventListener("click", () => {
+    state.selectedNode = item.key;
+    renderGraph(nodes);
+    renderAttempts(item);
+  });
+
+  const badge = node("span", "node-ordinal", String(ordinal).padStart(2, "0"));
+  const content = node("div", "node-content");
+  const top = node("div", "node-title-row");
+  top.append(node("strong", "", item.title), statusBadge(item.status));
+  const metadata = node("div", "node-metadata");
+  metadata.append(
+    node("span", `executor executor-${item.executor}`, EXECUTOR[item.executor] || item.executor),
+    node("span", "", `Owner: ${RELATION[item.owner_relation] || item.owner_relation}`),
+    node("span", "", `Attempt ${item.current_attempt_no}`),
+  );
+  const dependency = item.deps.length > 0
+    ? `依赖 ${item.deps.join("、")}`
+    : "入口节点，无依赖";
+  content.append(
+    top,
+    node("span", "node-key mono", item.key),
+    metadata,
+    node("span", "node-dependencies", dependency),
+  );
+  card.append(badge, content);
+  return card;
+}
+
+function topologicalLayers(nodes) {
+  const byKey = new Map(nodes.map((item) => [item.key, item]));
+  const depthByKey = new Map();
+  const visiting = new Set();
+
+  function depth(item) {
+    if (depthByKey.has(item.key)) return depthByKey.get(item.key);
+    if (visiting.has(item.key)) return 0;
+    visiting.add(item.key);
+    const dependencies = item.deps
+      .map((key) => byKey.get(key))
+      .filter(Boolean);
+    const value = dependencies.length > 0
+      ? Math.max(...dependencies.map((dependency) => depth(dependency))) + 1
+      : 0;
+    visiting.delete(item.key);
+    depthByKey.set(item.key, value);
+    return value;
+  }
+
+  const layers = [];
+  nodes.forEach((item) => {
+    const layerIndex = depth(item);
+    if (!layers[layerIndex]) layers[layerIndex] = [];
+    layers[layerIndex].push(item);
+  });
+  return layers.filter(Boolean);
+}
+
+function drawDagEdges(canvas, nodes) {
+  const svg = canvas.querySelector(".dag-edges");
+  if (!svg) return;
+  svg.replaceChildren();
+  const width = canvas.scrollWidth;
+  const height = canvas.scrollHeight;
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("width", String(width));
+  svg.setAttribute("height", String(height));
+
+  const namespace = "http://www.w3.org/2000/svg";
+  const definitions = document.createElementNS(namespace, "defs");
+  const marker = document.createElementNS(namespace, "marker");
+  marker.setAttribute("id", "dag-arrow");
+  marker.setAttribute("viewBox", "0 0 10 10");
+  marker.setAttribute("refX", "8");
+  marker.setAttribute("refY", "5");
+  marker.setAttribute("markerWidth", "6");
+  marker.setAttribute("markerHeight", "6");
+  marker.setAttribute("orient", "auto-start-reverse");
+  const arrow = document.createElementNS(namespace, "path");
+  arrow.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+  marker.append(arrow);
+  definitions.append(marker);
+  svg.append(definitions);
+
+  const cardByKey = new Map(
+    [...canvas.querySelectorAll(".graph-node")].map((card) => [card.dataset.nodeKey, card]),
+  );
+  const canvasRect = canvas.getBoundingClientRect();
+  nodes.forEach((targetNode) => {
+    const target = cardByKey.get(targetNode.key);
+    if (!target) return;
+    targetNode.deps.forEach((dependencyKey) => {
+      const source = cardByKey.get(dependencyKey);
+      if (!source) return;
+      const sourceRect = source.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const startX = sourceRect.right - canvasRect.left;
+      const startY = sourceRect.top + sourceRect.height / 2 - canvasRect.top;
+      const endX = targetRect.left - canvasRect.left;
+      const endY = targetRect.top + targetRect.height / 2 - canvasRect.top;
+      const bend = Math.max(30, (endX - startX) * 0.45);
+      const path = document.createElementNS(namespace, "path");
+      path.classList.add("dag-edge");
+      path.dataset.selected = String(
+        state.selectedNode === dependencyKey || state.selectedNode === targetNode.key,
+      );
+      path.setAttribute(
+        "d",
+        `M ${startX} ${startY} C ${startX + bend} ${startY}, ${endX - bend} ${endY}, ${endX} ${endY}`,
+      );
+      path.setAttribute("marker-end", "url(#dag-arrow)");
+      svg.append(path);
+    });
   });
 }
 
@@ -326,6 +447,10 @@ el("refresh").addEventListener("click", () => {
   loadInstances(state.detail?.instance.id || null).catch(showWorkspaceError);
 });
 el("lock").addEventListener("click", lockConsole);
+window.addEventListener("resize", () => {
+  const canvas = document.querySelector(".dag-canvas");
+  if (canvas && state.detail) drawDagEdges(canvas, state.detail.nodes);
+});
 
 if (state.token) {
   unlock.hidden = true;

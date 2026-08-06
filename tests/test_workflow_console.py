@@ -172,6 +172,11 @@ def test_console_list_and_detail_are_owner_and_tenant_scoped():
         "you",
         "collaborator",
     ]
+    assert [item["deps"] for item in detail["nodes"]] == [
+        [],
+        ["confirm_input"],
+        ["generate_summary"],
+    ]
 
 
 def test_console_can_inspect_a_draft_before_runtime_nodes_exist():
@@ -272,6 +277,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
 
     page = application.handle("GET", "/console/")
     script = application.handle("GET", "/console/app.js")
+    styles = application.handle("GET", "/console/styles.css")
     missing_auth = application.handle("GET", "/console/api/v1/instances")
     authorized = application.handle(
         "GET",
@@ -284,6 +290,11 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"CENTRAL CONSOLE" in page.body
     assert script.status == 200
     assert b"innerHTML" not in script.body
+    assert b"topologicalLayers" in script.body
+    assert b"targetNode.deps" in script.body
+    assert b"graph-connector" not in script.body
+    assert styles.status == 200
+    assert b".dag-edge" in styles.body
     assert missing_auth.status == 401
     assert missing_auth.headers["WWW-Authenticate"] == "Bearer"
     assert authorized.status == 200
