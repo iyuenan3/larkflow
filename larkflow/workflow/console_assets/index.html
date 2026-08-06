@@ -80,6 +80,31 @@
               </div>
             </div>
 
+            <section id="instance-insights" class="panel insight-panel" aria-labelledby="insight-title">
+              <div class="insight-heading">
+                <div>
+                  <p class="eyebrow">INSTANCE SUMMARY</p>
+                  <h2 id="insight-title">实例摘要</h2>
+                </div>
+                <span class="insight-boundary">本页只读，回复与操作仍在 Agent 对话或飞书入口完成</span>
+              </div>
+              <div class="insight-grid">
+                <article class="insight-card insight-status-card">
+                  <p class="insight-label">最终状态</p>
+                  <div id="insight-status"></div>
+                  <p id="insight-status-detail" class="insight-detail"></p>
+                </article>
+                <article class="insight-card">
+                  <p class="insight-label">发生过返工的节点</p>
+                  <div id="insight-rework" class="insight-list"></div>
+                </article>
+                <article class="insight-card">
+                  <p class="insight-label">关键重启审计</p>
+                  <div id="insight-restart" class="insight-detail"></div>
+                </article>
+              </div>
+            </section>
+
             <div class="detail-grid">
               <section class="panel graph-panel">
                 <div class="panel-heading">

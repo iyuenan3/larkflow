@@ -13,6 +13,11 @@ from .repository import InstanceNotFoundError, WorkflowRepository
 from .serde import quality_to_dict, to_json_value
 
 
+RESTART_EVENT_TYPES = frozenset(
+    {"instance.node_restarted", "instance.restarted"}
+)
+
+
 class InvalidConsoleCredentialError(PermissionError):
     pass
 
@@ -133,6 +138,11 @@ class ConsoleReadService:
                 self._node(instance, spec.key, principal.person_id)
                 for spec in instance.snapshot.nodes
             ],
+            "insights": self._insights(
+                instance,
+                audit_events,
+                principal.person_id,
+            ),
             "audit": [
                 self._audit(event, principal.person_id) for event in audit_events
             ],
@@ -232,6 +242,71 @@ class ConsoleReadService:
             "_truncated": True,
             "original_bytes": len(encoded),
             "preview": preview,
+        }
+
+    @staticmethod
+    def _insights(
+        instance: WorkflowInstance,
+        audit_events: tuple[AuditEvent, ...],
+        person_id: str,
+    ) -> dict[str, Any]:
+        node_titles = {
+            spec.key: spec.title for spec in instance.snapshot.nodes
+        }
+        reworked_nodes = [
+            {
+                "key": spec.key,
+                "title": spec.title,
+                "current_attempt_no": node.current_attempt_no,
+            }
+            for spec in instance.snapshot.nodes
+            if (node := instance.nodes.get(spec.key)) is not None
+            and node.current_attempt_no > 1
+        ]
+        restart_event = next(
+            (
+                event
+                for event in reversed(audit_events)
+                if event.event_type in RESTART_EVENT_TYPES
+            ),
+            None,
+        )
+        if restart_event is None:
+            latest_restart = None
+        else:
+            affected_keys = restart_event.payload.get("affected_node_keys", ())
+            if not isinstance(affected_keys, (tuple, list)):
+                affected_keys = ()
+            affected_nodes = [
+                {"key": key, "title": node_titles[key]}
+                for key in affected_keys
+                if isinstance(key, str) and key in node_titles
+            ]
+            target_key = restart_event.node_key
+            target_node = (
+                {"key": target_key, "title": node_titles[target_key]}
+                if target_key in node_titles
+                else None
+            )
+            latest_restart = {
+                "event_type": restart_event.event_type,
+                "scope": (
+                    "instance"
+                    if restart_event.event_type == "instance.restarted"
+                    else "node"
+                ),
+                "occurred_at": restart_event.occurred_at.isoformat(),
+                "actor_relation": ConsoleReadService._person_relation(
+                    restart_event.actor_person_id,
+                    person_id,
+                ),
+                "target_node": target_node,
+                "attempt_no": restart_event.attempt_no,
+                "affected_nodes": affected_nodes,
+            }
+        return {
+            "reworked_nodes": reworked_nodes,
+            "latest_restart": latest_restart,
         }
 
     @staticmethod

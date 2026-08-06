@@ -1,12 +1,14 @@
 """Owner authorization and read-model tests for the central console."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from itertools import count
 import json
 
 import pytest
 
+from larkflow.workflow.events import AuditEvent
 from larkflow.workflow.console import (
     ConsolePrincipal,
     ConsoleReadService,
@@ -177,6 +179,86 @@ def test_console_list_and_detail_are_owner_and_tenant_scoped():
         ["confirm_input"],
         ["generate_summary"],
     ]
+    assert detail["insights"] == {
+        "reworked_nodes": [],
+        "latest_restart": None,
+    }
+
+
+def test_console_summarizes_reworked_nodes_and_latest_restart_without_raw_payload():
+    repository = _repository()
+    instance = repository.get(TENANT, "instance_owner")
+    for node_key in ("generate_summary", "review_summary"):
+        node = instance.nodes[node_key]
+        node.current_attempt_no = 2
+        instance.attempts[(node_key, 2)] = replace(
+            instance.attempts[(node_key, 1)],
+            id=f"{node.id}:attempt:2",
+            attempt_no=2,
+        )
+    restart = AuditEvent(
+        id="audit-restart-private",
+        tenant_id=TENANT,
+        instance_id=instance.id,
+        event_type="instance.node_restarted",
+        source="workflow_service",
+        correlation_id="correlation-restart-private",
+        aggregate_version=instance.version + 1,
+        occurred_at=datetime(2026, 8, 6, 8, 53, 27, tzinfo=timezone.utc),
+        actor_person_id=OWNER,
+        node_key="generate_summary",
+        attempt_no=2,
+        payload={
+            "affected_node_keys": (
+                "generate_summary",
+                "review_summary",
+                "unknown_private_node",
+            ),
+            "private_reason": "must never leave the server DTO",
+        },
+    )
+    repository.save(
+        instance,
+        expected_version=instance.version,
+        audit_events=(restart,),
+    )
+
+    payload = ConsoleReadService(repository).get_instance(
+        _principal(),
+        "instance_owner",
+    )
+    insights = payload["insights"]
+    encoded = json.dumps(payload, ensure_ascii=False)
+
+    assert insights["reworked_nodes"] == [
+        {
+            "key": "generate_summary",
+            "title": "Generate summary",
+            "current_attempt_no": 2,
+        },
+        {
+            "key": "review_summary",
+            "title": "Review summary",
+            "current_attempt_no": 2,
+        },
+    ]
+    assert insights["latest_restart"] == {
+        "event_type": "instance.node_restarted",
+        "scope": "node",
+        "occurred_at": "2026-08-06T08:53:27+00:00",
+        "actor_relation": "you",
+        "target_node": {
+            "key": "generate_summary",
+            "title": "Generate summary",
+        },
+        "attempt_no": 2,
+        "affected_nodes": [
+            {"key": "generate_summary", "title": "Generate summary"},
+            {"key": "review_summary", "title": "Review summary"},
+        ],
+    }
+    assert "private_reason" not in encoded
+    assert "unknown_private_node" not in encoded
 
 
 def test_console_can_inspect_a_draft_before_runtime_nodes_exist():
@@ -294,6 +376,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"targetNode.deps" in script.body
     assert b"setGraphScale" in script.body
     assert b"fitGraph" in script.body
+    assert b"renderInsights" in script.body
     assert b'addEventListener("pointerdown"' in script.body
     assert b'event.target.closest(".graph-node")' in script.body
     assert b'addEventListener("wheel"' in script.body
@@ -301,6 +384,8 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert styles.status == 200
     assert b".dag-edge" in styles.body
     assert b".graph-controls" in styles.body
+    assert b".insight-grid" in styles.body
+    assert b"instance-insights" in page.body
     assert b"graph-zoom-in" in page.body
     assert b"graph-fit" in page.body
     assert missing_auth.status == 401

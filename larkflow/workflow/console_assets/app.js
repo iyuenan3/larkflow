@@ -184,9 +184,52 @@ function renderDetail() {
   const percent = progress.total_nodes ? Math.round(progress.completed_nodes / progress.total_nodes * 100) : 0;
   el("progress-ring").style.setProperty("--progress", `${percent * 3.6}deg`);
   el("graph-revision").textContent = `Graph r${instance.graph_revision}`;
+  renderInsights(payload);
   renderGraph(payload.nodes);
   renderAttempts(payload.nodes.find((item) => item.key === state.selectedNode));
   renderAudit(payload.audit);
+}
+
+function renderInsights(payload) {
+  const instance = payload.instance;
+  const progress = instance.progress;
+  const insights = payload.insights || { reworked_nodes: [], latest_restart: null };
+
+  const status = el("insight-status");
+  status.replaceChildren(statusBadge(instance.status));
+  el("insight-status-detail").textContent = `${progress.completed_nodes}/${progress.total_nodes} 个节点完成 · 实例版本 ${instance.version}`;
+
+  const rework = el("insight-rework");
+  rework.replaceChildren();
+  if (insights.reworked_nodes.length === 0) {
+    rework.append(node("p", "insight-empty", "未发现多轮执行节点"));
+  } else {
+    insights.reworked_nodes.forEach((item) => {
+      const row = node("div", "insight-node");
+      const copy = node("div", "insight-node-copy");
+      copy.append(node("strong", "", item.title), node("span", "mono", item.key));
+      row.append(copy, node("span", "attempt-chip", `Attempt ${item.current_attempt_no}`));
+      rework.append(row);
+    });
+  }
+
+  const restart = el("insight-restart");
+  restart.replaceChildren();
+  const event = insights.latest_restart;
+  if (!event) {
+    restart.append(node("p", "insight-empty", "最近审计中未发现受控重启"));
+    return;
+  }
+  const title = event.scope === "instance" ? "完整实例重启" : "节点重启";
+  const target = event.target_node ? ` · 起点：${event.target_node.title}` : "";
+  restart.append(
+    node("strong", "insight-restart-title", title),
+    node("p", "", `${formatDate(event.occurred_at)} · 操作者：${RELATION[event.actor_relation] || event.actor_relation}${target}`),
+    node("p", "", `影响 ${event.affected_nodes.length} 个节点${event.attempt_no ? ` · 新 Attempt ${event.attempt_no}` : ""}`),
+  );
+  if (event.affected_nodes.length > 0) {
+    restart.append(node("p", "insight-affected", event.affected_nodes.map((item) => item.title).join("、")));
+  }
 }
 
 function statusBadge(status, id = "") {
