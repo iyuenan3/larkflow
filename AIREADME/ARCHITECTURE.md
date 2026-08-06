@@ -155,7 +155,7 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 
 内容提交 `1a80b4035d0a5ad5c634af7be957f4b7d1ee37d7`、`2ed644e640f3c3834f82c464e05fe0b4c3a241cc` 与 `b7e589ba4af0398573ec995254dd61e9b1a4508c` 已部署到 `alicloud-sh`。Runtime、Projection、两个 Interactive、凭据侧入站、领域侧入站、Draft Generation Worker 和 Edge 共八个 Target 服务，加上 legacy 消费者共九个 Python 服务，均回读 `active / running / NRestarts=0`。七条 PostgreSQL 通知连接分属凭据侧四条和领域侧三条。独立生成拓扑已通过真实双副本竞争；自然语言草稿新实例证明首次 token 反馈、按消息 ID 的生成进度和最终图预览可以在同一卡片顺序收口。两个来源约束型实例又分别证明直接接受，以及明确退回后只重启 Agent、Tool 与最终 Human、创建 Attempt 2、保留旧结果并最终恢复完成。两张决定卡、两轮自动结果、完成文档、通知与追加型审计均保留独立外部绑定。该证据只适用于开发测试组织中的公开材料接受与返工路径，不能解释为事实真伪、模型质量规模化、业务价值、生产容量或生产上线。
 
-内容提交 `0dc5359e990635c7b6aa16ec0bcd798eb8df39d0` 已推送并通过 `908 passed, 18 skipped` 的完整离线套件，但本文档提交时尚未部署。它不增加 migration，复用 Attempt `input_snapshot / result / quality_result` 与 Audit payload 的既有 JSONB。开发服务器和真实飞书是否按上述表单及返工上下文契约运行，必须在候选部署后分别从 PostgreSQL 与飞书服务端读回，不能由代码存在或进程存活代替。
+内容提交 `0dc5359e990635c7b6aa16ec0bcd798eb8df39d0` 与原生表单绑定修复 `f6125331aa541e824675e25f9cd2d756cd4c6b56` 已部署，完整离线套件为 `910 passed, 18 skipped`。它们不增加 migration，复用 Attempt `input_snapshot / result / quality_result` 与 Audit payload 的既有 JSONB。真实实例 `im_5717aa5b9480d146239907d5` 已从 PostgreSQL 回读意见持久化、质量证据、追加审计、三节点重启、只注入 Agent Attempt 2 的 `rework_feedback`、上游与下游隔离和 Tool 从失败转为通过；新的 Human Attempt 2 决定卡也已从飞书服务端读回。该证据证明开发环境中的窄返工上下文契约，不证明模型内容质量规模化或生产可用性。
 
 领域状态、审计与 outbox 在同一事务提交。事务提交后，Human 节点与所有节点状态变化通过 outbox 请求投影同步；Agent 和 Tool 激活直接返回 NodeActivation，由 Runtime Worker 在提交后交给 executor，避免数据库事务跨越外部调用。自动执行是 at-least-once，executor 必须使用 tenant-scoped Attempt 幂等键消除重复副作用。Agent 装配还会检查所有显式故障切换线路的超时总和，加上安全余量后必须小于 claim 租期，避免正常慢调用在结果提交前失去租约。Edge Proof 不发明独立 Capability Lease，它把可撤销设备身份与一个明确 kind 映射到同一 Node claim，并用心跳延长当前租期；设备失联或本机执行器异常后，租约到期才允许接管。
 

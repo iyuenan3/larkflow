@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.48.0-draft · 2026-08-06 · 原生表单绑定与真实返工上下文闭环
+
+- Fixed：内容提交 `f6125331aa541e824675e25f9cd2d756cd4c6b56` 把 Card 2.0 表单按钮改为原生 `form_action_type=submit`，并由服务端投影保存决定绑定。表单回调不携带 `action_value` 时按消息 ID 恢复绑定；若客户端仍携带动作值，则必须与服务端绑定交叉一致。
+- Verified：完整离线套件为 `910 passed, 18 skipped`。候选 wheel SHA-256 为 `f7c909a4844fa69ef7c5387d20f0fa8fa3e43863c807392c3b26d37cb9e45c61`，已同时安装到 Target 与 legacy 虚拟环境；长期 PostgreSQL 保持十九份 migration，九个 Python 服务回读 `active / running / NRestarts=0`，验收窗口 warning 为 0。
+- Recovery：真实实例 `im_5717aa5b9480d146239907d5` 的退回意见原文进入 Human Attempt、质量证据与 `node.human_decision_rejected` 审计。卡片动作为 `processed / human_decision_rejected / sent / updated`，首个服务端反馈为 1155 ms。Owner 确认三节点重启后，只有 Agent Attempt 2 收到 `rework_feedback`，来源确认仍为 Attempt 1，Tool、Human 新 Attempt 和冻结 Snapshot 都未获得该结构化字段。
+- Outcome：Agent Attempt 2 根据意见补出 1 项问题和 3 项验收条件，确定性 Tool 从首轮失败变为 `pass`，3/3 条来源事实和 2/2 个开放问题均按类别引用。新 Human Attempt 2 决定卡已从飞书服务端读回，实例保持 `running` 等待最终人工复核。
+- Boundary：本次关闭开发环境中的具体退回意见与目标 Agent 返工上下文门槛。它不证明模型内容质量规模化、市场价值、生产容量或生产上线。
+
 ## v0.47.0-draft · 2026-08-06 · 退回意见与目标 Attempt 返工上下文
 
 - Added：Human 决定卡保留表单外一键接受，退回改为必填 `rejection_feedback`，最多 1000 字。桥接层与领域服务都重新校验，空白和超长输入 fail closed。
