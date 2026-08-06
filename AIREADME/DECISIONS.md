@@ -739,7 +739,7 @@
 
 ## ADR-087 · 2026-08-05 · 慢草稿生成与飞书凭据车道隔离
 
-- **Status：Accepted · Local implementation, development deployment pending。**
+- **Status：Accepted · Development deployment and PostgreSQL competition verified。**
 - Problem：自然语言草稿可能连续执行两次长模型调用。若它与卡片更新、IM 回复和其他凭据侧工作共享 Interactive 主循环，一次生成会造成明显队头阻塞；只有“处理中”这一种长时间状态也无法告诉用户系统是在首次生成还是确定性修复。
 - Constraint：模型进程不能持有飞书 profile；卡片更新仍须由凭据侧执行；同一动作只能有一个 canonical 生成者；崩溃恢复不得让两个 Worker 同时生成，也不得让迟到进度覆盖最终图预览；生成租约必须覆盖首轮与修复轮的完整路由预算；PostgreSQL 仍是状态权威，通知只负责唤醒。
 - Decision：新增无凭据 Draft Generation Worker，只认领 `draft_wizard` canonical 动作；普通人员分工 Worker 显式排除该类型。migration 19 保存生成 claim、阶段进度 revision、独立进度 claim 和完成栅栏。生成开始排队 `generating`，确定性校验拒绝首个候选时排队 `repairing`；两个 Interactive 副本继续负责更新原卡片。最终回复在当前进度 revision 结算后才可认领。生成租约下限为两次完整 LLM 路由预算加安全余量。
@@ -788,3 +788,13 @@
 - Alternatives(否决)：继续只靠飞书命令；立即建设可写 DAG 画布；复用 Edge `/edge/v1`；让浏览器提交 person ID 后在前端过滤；把静态 token 放到 URL；先开放公网再补登录；允许节点协作者默认查看完整实例。
 - Tradeoff：Owner 获得更完整的观察面，但当前没有分页游标、筛选、协作者视图、跨轮次 diff 或任何写操作。每次详情会读取一个完整聚合和最近 200 条审计，适合当前单企业开发样本，不代表生产容量。静态 token 只适合受控开发；生产前必须接入飞书登录或企业 SSO，并补齐反向代理授权、会话、CSRF、限流和可见性策略。
 - Evidence：内容提交 `ee2fa9439594d765cd08f2caa0f7ecb20d30d78b`；完整离线套件 `922 passed, 18 skipped`。wheel SHA-256 为 `58b27648ccaf3f863cf4bb0ca820b3e2209523b58b0574af626aa303c0e4ff5c`，已安装到 Target venv；migration runner 回读十九份既有 migration 且无待应用版本。服务以 `lf_target_dev` 运行并只监听 `127.0.0.1:8780`。真实 API 返回 30 条 Owner 流程，运行中实例为 4 个节点与 16 条审计，另一 Owner 的实例返回 404。SSH 隧道浏览器验证运行中、草稿、DAG、Attempt、审计、锁定与零 error / warning；隧道和临时凭据随后删除。统一重启后十个 Python 服务均为 `active / NRestarts=0`，部署窗口 warning 为 0。
+
+## ADR-092 · 2026-08-06 · 暂停使用 drain 语义，取消必须版本绑定二次确认
+
+- **Status：Accepted · Local implementation, development deployment pending。**
+- Problem：实例状态和产品契约已经包含 `paused / canceled`，但领域服务与飞书入口没有对应操作，Owner 无法阻止新节点继续领取，也无法把不再需要的流程安全收口。只切换 Instance 状态会留下活动 Attempt、自动 claim 和飞书 Task，迟到结果仍可能写回，形成“表面取消、实际继续”的假取消。
+- Constraint：操作只允许当前 Instance Owner；暂停不能覆盖 Attempt 或制造重复外部副作用；已经发出的 Human、Agent 与 Tool 可能无法瞬时中断；取消必须保留 `done / failed` 节点、旧 Attempt、结果和追加型审计；客户端状态与身份都不是授权事实；取消确认前后发生任意 aggregate 变化都必须 fail closed；已经发生的外部副作用无法由状态机自动回滚。
+- Decision：`pause` 采用 drain 语义，只把 `running` 实例转为 `paused` 并停止新的 dispatch。已经进入 `running / waiting_human` 的节点继续使用原 Attempt 收口，后继只解锁为 `ready`；若最后活动节点完成或失败，实例可从 paused 进入对应终态。`resume` 只把 paused 转回 running，不创建新 Attempt。`cancel` 只返回完整影响和当前 aggregate version；`cancel-confirm` 重新校验 Owner 与版本，在一个聚合保存事务内把所有未完成 Node 和当前非终态 Attempt 置为 canceled、清除自动 claim、追加一条实例取消审计，并以 outbox 关闭已有 Human Task 与 Human 决定卡。取消后的迟到结果由实例终态、Node version 与 claim 撤销共同拒绝。重复 pause、resume 或 cancel-confirm 不增加版本和审计。
+- Alternatives(否决)：暂停时立即取消所有活动 Attempt 并在继续时创建新 Attempt；允许 paused 期间继续领取新节点；直接用单条命令不可逆取消；尝试从中央状态机强杀不同进程中的同步 Executor；取消时删除旧 Attempt 或回滚外部系统副作用。
+- Tradeoff：drain 语义不是瞬时冻结，暂停后已经发出的节点仍可能完成或失败，但不会产生新的领取。版本绑定取消没有独立持久预览表和时间过期，任何聚合变化都会使确认失效，但实例长期无变化时确认命令仍有效。同步 Executor 已经完成的外部动作不能撤回，适配器仍需保持幂等并把不可逆动作设计为显式业务节点。当前已关闭本地领域、命令、运行时迟到结果、Human 投影测试、开发部署和 PostgreSQL 竞争；真实飞书命令、Task 与决定卡收口仍待完成。
+- Evidence：内容提交 `770243a02b116e12583ceebdb8362fd40b7fe0a7`。生命周期、运行时、投影、决定卡、IM 命令与投影常驻循环聚焦套件 `178 passed`，完整离线套件为 `939 passed, 18 skipped`。wheel SHA-256 为 `04b76ac0b1cbe14c410c739be0279d74e60127b9cd3f68eeb4f8a07e0ba2b8af`，安装态 lifecycle 模块与本地源码 SHA-256 均为 `d2e7e81a44e06393768af08a293bdba579b23bab884bcee270e294d416680025`。一次性 PostgreSQL 双连接竞争中，两个相同取消确认分别为执行与幂等回放，aggregate version 只增加 1，取消审计恰好 1 条；暂停与 Human dispatch 竞争只允许一路成功，本轮结果为 dispatch 成功、pause 冲突，最终保持 `running / waiting_human`。测试库与临时上传件已删除并回读为 0。十个服务均为 `active / NRestarts=0`，部署窗口 warning 为 0。真实飞书验收尚未执行。

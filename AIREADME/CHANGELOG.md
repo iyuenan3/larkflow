@@ -1,5 +1,15 @@
 # CHANGELOG · larkflow
 
+## v0.55.0-draft · 2026-08-06 · 暂停、继续与安全取消
+
+- Added：新增 Owner 范围的 `/larkflow pause`、`/larkflow resume`、`/larkflow cancel` 与 `/larkflow cancel-confirm`，命令总数增至十五个。暂停使用 drain 语义，只停止新节点调度；已发出的 Human、Agent 与 Tool 继续使用原 Attempt 收口，继续操作也不创建新 Attempt。
+- Safety：取消先返回 aggregate version 绑定的完整影响预览，确认时重新校验 Owner 与版本。事务内把未完成 Node 和当前非终态 Attempt 置为 canceled，清除自动 claim，保留完成或失败节点、旧 Attempt、结果和追加型审计。Instance 终态、Node version 与 claim 撤销共同拒绝迟到结果；已经发生的外部副作用不自动回滚。
+- Projection：取消通过 outbox 关闭已有普通 Human Task，并把已有 Human 决定卡替换为无按钮、无表单的“复核已取消”终态。重复 pause、resume 与 cancel-confirm 不增加版本或审计。
+- Verified：生命周期、运行时、投影、决定卡、IM 命令与投影常驻循环聚焦套件为 `178 passed`；移除本机代理环境后，完整离线套件为 `939 passed, 18 skipped`。Python 编译检查和 Git whitespace 检查通过。
+- Deployment：内容提交 `770243a02b116e12583ceebdb8362fd40b7fe0a7` 已推送。wheel SHA-256 为 `04b76ac0b1cbe14c410c739be0279d74e60127b9cd3f68eeb4f8a07e0ba2b8af`，保存在 `/srv/larkflow/target/releases/20260806_221621_lifecycle_770243a/` 并安装到 Target 与 legacy 虚拟环境。升级前备份为 `larkflow_target_dev-20260806T221621+0800.dump`、222114 bytes、`0600`；migration runner 返回空列表，长期库保持十九份 migration。十个服务均回读 `active / NRestarts=0`，部署窗口 warning 为 0，5432、8765 与 8780 只监听 loopback。
+- Acceptance：一次性 PostgreSQL 双连接竞争证明重复取消确认只有一次落地和一次幂等回放，aggregate version 只增加 1，取消审计恰好 1 条。暂停与 Human dispatch 同时竞争时只允许一路成功，本轮为 dispatch 成功、pause 明确冲突，最终保持 `running / waiting_human`。测试库与远端临时上传件随后删除并回读为 0，正式 release wheel 保留且哈希一致。
+- Boundary：本轮没有新增 migration。真实飞书命令、普通 Human Task 和决定卡取消收口尚未执行，不构成生产上线证明。
+
 ## v0.54.0-draft · 2026-08-06 · Console 实例状态与返工摘要
 
 - Added：内容提交 `efc1dff935d21918517d73c0d10fd15336516d9a` 在 Owner 实例详情增加最终状态、返工节点和关键重启三类只读摘要。服务端从当前聚合与最近审计提炼 DTO，影响节点重新限定到冻结 Snapshot，不向浏览器暴露原始 Audit payload。

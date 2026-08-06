@@ -28,7 +28,7 @@
 >
 > 内容提交 `0dc5359e990635c7b6aa16ec0bcd798eb8df39d0` 已把具体退回意见纳入 Human 决定与节点返工契约，内容提交 `f6125331aa541e824675e25f9cd2d756cd4c6b56` 修正原生 Card 2.0 表单提交的服务端绑定。退回表单必填且最多 1000 字，服务端把规范化意见保存到 Attempt、质量证据和审计，并在 `reject_target` 节点重启时只注入该目标的新 Attempt 输入快照。接受路径忽略额外意见，冻结 Instance Snapshot、范围外上游与旧 Attempt 不变。完整离线套件为 `910 passed, 18 skipped`，无需新增 migration。开发服务器已部署该候选；真实实例 `im_5717aa5b9480d146239907d5` 已完成具体意见退回、三节点重启、Agent Attempt 2 接收意见、Tool 从失败转为通过和新决定卡投影，当前停在最终人工复核。
 >
-> last-synced: 671af40a1401e92859b9da1790d3365e66f0e5cc · 2026-08-06
+> last-synced: 770243a02b116e12583ceebdb8362fd40b7fe0a7 · 2026-08-06
 
 ## 阅读顺序
 
@@ -51,11 +51,11 @@
 | ARCHITECTURE | ✅ | Target 模块化单体、可拖动缩放且按真实依赖分层的 Owner 只读中央控制台、独立凭据侧 Interactive 双副本、无凭据 Draft Generation Worker、来源契约检查、带返工上下文的人类决定卡、PostgreSQL 通知唤醒与轮询兜底、飞书投影、失败恢复、Edge Proof、macOS 版本化安装与剩余差距 |
 | RELATIONS | ✅ | Target 飞书、mention 与人员选择卡身份边界、中央 lark-cli、Edge HTTPS、Node Runner 与 LangGraph 边界 |
 | ROADMAP | ✅ | 首批三项真实工作小样本已建立，第一次独立 Console 使用暴露的操作缺口已修复，下一门槛为修复后复用、生产鉴权边界及 Edge 正式分发门禁 |
-| SPEC | ✅ | legacy 契约、Target CLI、Owner 只读 Console HTTP、独立 interact 与 draft generation Worker、数据库通知唤醒、来源声明与确定性检查、必填退回意见的人类决定卡、十一个飞书窄命令、模板与无模板草稿、Task 入站、受控变化、完成投影与私有 Edge v1 HTTP、前台客户端、doctor 及 macOS manager |
+| SPEC | ✅ | legacy 契约、Target CLI、Owner 只读 Console HTTP、独立 interact 与 draft generation Worker、数据库通知唤醒、来源声明与确定性检查、必填退回意见的人类决定卡、十五个飞书窄命令、模板与无模板草稿、暂停继续取消、Task 入站、受控变化、完成投影与私有 Edge v1 HTTP、前台客户端、doctor 及 macOS manager |
 | DEPLOYMENT | ✅ | Legacy ECS 与当前 Target 九服务、十九份 migration、七条监听连接、可拖动缩放的真实依赖 Console 部署、来源约束型真实接受与具体意见返工、独立草稿生成、Edge serve、macOS 版本化安装、PostgreSQL、备份与回滚实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
-| DECISIONS | ✅ | Append-only ADR 历史，最新为 Owner 只读中央控制台与生产鉴权边界 |
-| CHANGELOG | ✅ | Append-only 已实现变更，最新为 Console 拖动缩放与节点点击组合验收 |
+| DECISIONS | ✅ | Append-only ADR 历史，最新为暂停 drain 语义与版本绑定取消 |
+| CHANGELOG | ✅ | Append-only 已实现变更，最新为暂停、继续和取消的本地闭环 |
 | MEMORY | ⚑ | Append-only 经验，仍含语义占位，已记录流程图操作可发现性、手势竞争、静态页面旧标签页、回调漂移、通知边界、批次计时、虚拟环境、Keychain 上下文、bootstrap pip 与构建模块遮蔽风险 |
 
 ## 按任务读取

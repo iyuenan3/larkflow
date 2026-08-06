@@ -29,8 +29,8 @@ Personal Agent Edge 的 macOS 客户端现已接入登录 Keychain：设备密�
 - **Edge Proof v0**：已实现一次性配对、设备哈希凭据、撤销、Owner 与 `personal.readonly` 双重过滤、租约续期、迟到结果拒绝、loopback Gateway、手工 `run-once`、前台 `serve` 和 Codex 只读适配器。`serve` 在一个用户主动启动的会话中固定单工作区，使用长轮询、有界退避、应用心跳、单设备锁和信号安全停止；续租失败会取消整个 Codex 进程组，不回传失去租约的结果。内容提交 `fd6933a` 构建的 wheel 已部署到 `alicloud-sh`，并以同一候选件的临时安装态在员工 Mac 上完成前台真机验收。实例在 37 次空闲心跳后被领取，真实 Codex 执行期间产生 18 次续租并完成；同凭据第二个 Worker 被拒绝，SIGTERM 安全退出，设备撤销后再次领取返回 403。临时凭据和隧道均已删除。专用 DNS 记录、Caddy、Let’s Encrypt 证书、源站反向代理和未认证 401 已验证；公网 TLS 随后被 ICP 接入备案阻断，因此公网配对、领取、续租和回传仍未完成。
 - **失败恢复 as-built**：自动 Agent / Tool 节点失败会向节点 Owner 投影 Card 2.0，可选择“重新执行”或“人工接管”。卡片回调先进入耐久 IM 命令队列，并立即尝试撤下按钮、显示“处理中”；凭据侧随后重新校验当前企业成员，领域侧精确校验 Owner、Instance version、Node version 与 Attempt 编号，最终卡片显示成功或拒绝。重试创建新自动 Attempt；人工接管创建 `waiting_human` Attempt 和飞书 Task；原失败 Attempt、结果与审计均保留。该能力已在开发服务器与测试组织完成真实闭环：两个不同失败卡片分别创建 Attempt 2 和 3，人工接管创建 Attempt 4 与真实飞书 Task，完成 Task 后 Instance 与 Attempt 4 进入 `done`，前三次失败历史、审计和投影全部保留。新一轮恢复卡真实点击的首个服务端反馈耗时为 0.990 秒，飞书服务端读回终态标题为“恢复操作已处理”且不再包含按钮。
 - **legacy 原型**：LangGraph + SQLite + lark-cli 路径继续保留，用于回归已验证的飞书投影、打回、幂等和恢复机制。
-- **飞书入口 as-built**：已实现 `/larkflow help`、`/larkflow start`、`/larkflow draft`、`/larkflow confirm`、`/larkflow status`、`/larkflow list`、`/larkflow restart`、`/larkflow restart-all`、`/larkflow restart-confirm`、`/larkflow edit`、`/larkflow edit-confirm` 十一个窄命令，以及命令回执、Agent / Tool 结果消息、完成文档和最终通知。`start` 从启用模板创建草稿；`draft <JSON定义>` 是最多 100 个节点的结构化高级入口；裸 `draft` 打开 Card 2.0 自然语言引导，收集目标、可选背景和一名协作者，再由中央 Agent 生成最多八个 Human / Agent 节点的受限候选图。自然语言回调复用现有耐久动作链，重新校验操作人和冻结候选人；服务端覆盖模型返回的输入，限制 Owner 角色，拒绝 Tool、服务配置与 Personal Edge capability，并在最终卡片上展示无按钮图预览。首次候选校验失败时只允许同一中央 Agent 有界重生成一次，第二次失败仍拒绝，绝不绕过确定性校验。`start` 与两种 `draft` 都只创建草稿，`confirm` 才启动实例。人员选择卡、自然语言引导卡与失败恢复卡在动作耐久落库后立即尝试显示无按钮的“处理中”，最终再替换为成功或拒绝状态；服务端用单调时钟记录有效回调被接受到直接更新返回的耗时，不把它误写为客户端渲染耗时。`status` 只向 Instance Owner 返回单实例有界状态摘要，`list` 只返回本人拥有的最近十个实例摘要，restart 和 edit 命令只创建短期影响预览，对应 confirm 命令才执行原子变更。模板、结构化无模板、自然语言引导和跨人员正向分工均已在开发测试组织完成真实闭环。
-- **尚未实现**：上述十一类命令之外的通用飞书控制面、更多业务 Tool adapter、图形化编辑体验和生产装配。企业目录草稿 Owner 全量校验已落码并部署但默认关闭；IM 命令发送者、mention 角色成员和 Card 2.0 候选人的活跃成员校验已完成开发真栈验证。Edge 已具备版本化开发安装、回滚、Keychain、哈希锁定离线 bundle 与依赖清单，但正式员工分发仍为 No-Go：当前没有 Apple Developer ID 身份与公证凭据，员工端仍携带完整中央依赖栈，目录级读取隔离和可复现构建证明也未完成。当前设计不提供操作系统级守护或隐藏后台常驻。可持续使用的公网 HTTPS 入口还必须先完成 ICP 接入备案，或迁移到合规的非中国内地环境。真实 Agent、确定性内容检查、模板入口和飞书 IM / Card / Doc 投影只在开发环境和测试组织验证，不能据此描述为生产上线。
+- **飞书入口 as-built**：已实现 `/larkflow help`、`/larkflow start`、`/larkflow draft`、`/larkflow confirm`、`/larkflow status`、`/larkflow list`、`/larkflow pause`、`/larkflow resume`、`/larkflow cancel`、`/larkflow cancel-confirm`、`/larkflow restart`、`/larkflow restart-all`、`/larkflow restart-confirm`、`/larkflow edit`、`/larkflow edit-confirm` 十五个窄命令，以及命令回执、Agent / Tool 结果消息、完成文档和最终通知。`start` 从启用模板创建草稿；`draft <JSON定义>` 是最多 100 个节点的结构化高级入口；裸 `draft` 打开 Card 2.0 自然语言引导，收集目标、可选背景和一名协作者，再由中央 Agent 生成最多八个 Human / Agent 节点的受限候选图。自然语言回调复用现有耐久动作链，重新校验操作人和冻结候选人；服务端覆盖模型返回的输入，限制 Owner 角色，拒绝 Tool、服务配置与 Personal Edge capability，并在最终卡片上展示无按钮图预览。首次候选校验失败时只允许同一中央 Agent 有界重生成一次，第二次失败仍拒绝，绝不绕过确定性校验。`start` 与两种 `draft` 都只创建草稿，`confirm` 才启动实例。人员选择卡、自然语言引导卡与失败恢复卡在动作耐久落库后立即尝试显示无按钮的“处理中”，最终再替换为成功或拒绝状态；服务端用单调时钟记录有效回调被接受到直接更新返回的耗时，不把它误写为客户端渲染耗时。`status` 只向 Instance Owner 返回单实例有界状态摘要，`list` 只返回本人拥有的最近十个实例摘要，restart 和 edit 命令只创建短期影响预览，对应 confirm 命令才执行原子变更。模板、结构化无模板、自然语言引导和跨人员正向分工均已在开发测试组织完成真实闭环。
+- **尚未实现**：上述十五类命令之外的通用飞书控制面、更多业务 Tool adapter、图形化编辑体验和生产装配。本轮新增的暂停、继续和取消已完成本地离线验证、开发服务器部署与真实 PostgreSQL 双连接竞争；真实飞书命令、普通 Human Task 和决定卡取消收口仍待单独验收。企业目录草稿 Owner 全量校验已落码并部署但默认关闭；IM 命令发送者、mention 角色成员和 Card 2.0 候选人的活跃成员校验已完成开发真栈验证。Edge 已具备版本化开发安装、回滚、Keychain、哈希锁定离线 bundle 与依赖清单，但正式员工分发仍为 No-Go：当前没有 Apple Developer ID 身份与公证凭据，员工端仍携带完整中央依赖栈，目录级读取隔离和可复现构建证明也未完成。当前设计不提供操作系统级守护或隐藏后台常驻。可持续使用的公网 HTTPS 入口还必须先完成 ICP 接入备案，或迁移到合规的非中国内地环境。真实 Agent、确定性内容检查、模板入口和飞书 IM / Card / Doc 投影只在开发环境和测试组织验证，不能据此描述为生产上线。
 - **证据边界**：本轮完成的是既有设计简化与一致性核验，不是访谈、市场或商业验证。
 - **重要边界**：`alicloud-sh` 已运行 Target Runtime、Projection、两个凭据侧 Interactive、凭据侧入站校验、领域侧入站、Draft Generation Worker、loopback Edge Gateway 和 Owner Console 九个 Target 服务，并保留一个 legacy 事件消费者，共十个 Python 服务。七条 PostgreSQL `LISTEN` 连接分属 `lf-dev` 四条和 `lf_target_dev` 三条。Caddy 仍因备案阻断处于 disabled / inactive，服务器只有 SSH 对公网监听。Projection 只负责飞书投影与 Task 状态读取；两个 Interactive 副本持有受限 bot profile；Draft Generation Worker 不持有飞书 profile。凭据侧重新读取外部资源后只写已验证 Inbox，领域侧不能读取 lark-cli profile。legacy 服务继续使用 SQLite，并仅作为事件桥接时写入 Target Inbox，不能把 checkpointer 或全局 LangGraph state 扩展为新产品领域模型。
 
@@ -42,11 +42,12 @@ Personal Agent Edge 的 macOS 客户端现已接入登录 Keychain：设备密�
 2. 系统展示节点、依赖、唯一人类 Owner、执行器和验收条件。
 3. 用户明确确认启动或丢弃，草稿不会自动执行。
 4. 中央 Scheduler 按依赖调度 Human、Agent 和 Tool 节点，并把责任入口投影到飞书。
-5. 项目 Owner 可以预览并确认只影响未来节点的编辑。
-6. 节点重启会重置该节点及全部可达下游，历史通过 Attempt 保留。
-7. 完整实例重启会为全图创建新 Attempt，从所有根节点重新调度，历史 Attempt 和交付物保留。
-8. 自动节点失败后，责任人可以重试或人工接管，两条路径都创建新 Attempt 并保留原失败记录。
-9. PostgreSQL 保存业务状态、revision、投影记录和审计，飞书对象可以对账和重建。
+5. 项目 Owner 可以暂停新调度、继续流程，或在版本绑定的影响预览后取消未完成工作。
+6. 项目 Owner 可以预览并确认只影响未来节点的编辑。
+7. 节点重启会重置该节点及全部可达下游，历史通过 Attempt 保留。
+8. 完整实例重启会为全图创建新 Attempt，从所有根节点重新调度，历史 Attempt 和交付物保留。
+9. 自动节点失败后，责任人可以重试或人工接管，两条路径都创建新 Attempt 并保留原失败记录。
+10. PostgreSQL 保存业务状态、revision、投影记录和审计，飞书对象可以对账和重建。
 
 既有设计的取舍记录见 [research/design-simplification.md](research/design-simplification.md)。
 
@@ -60,6 +61,7 @@ Personal Agent Edge 的 macOS 客户端现已接入登录 Keychain：设备密�
 6. 中央数据库是业务真相源，飞书是交互入口和可恢复投影。
 7. 权限、责任、状态和图修改合法性由服务端计算。
 8. LangGraph 只可用于单个复杂 Agent 节点内部。
+9. 暂停只阻止新调度，取消必须二次确认，并保留已经形成的历史与外部副作用说明。
 
 ## MVP 明确不包含
 
