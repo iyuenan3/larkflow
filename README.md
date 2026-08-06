@@ -16,6 +16,8 @@ larkflow 已开始按收敛后的产品设计重建中央工作流，目前完�
 
 内容提交 `0dc5359e990635c7b6aa16ec0bcd798eb8df39d0` 修复受控内部试用暴露的返工上下文缺口，内容提交 `f6125331aa541e824675e25f9cd2d756cd4c6b56` 又修正真实 Card 2.0 原生表单提交不携带 `action_value` 时的服务端绑定。决定卡继续允许一键接受，但退回必须填写不超过 1000 字的具体意见；服务端重新校验、裁剪空白，并把意见写入 Human Attempt 结果、质量证据和追加型审计。Instance Owner 确认 `reject_target` 节点重启后，意见只进入该目标节点的新 Attempt 输入快照，节点真正激活时仍会保留并交给 Agent；影响集合之外的上游节点、旧 Attempt 和冻结 Instance Snapshot 均不改写。接受路径忽略客户端额外提交的意见。完整离线套件为 `910 passed, 18 skipped`，实现复用既有 JSONB 字段，不增加 migration。开发服务器已部署 `f6125331aa541e824675e25f9cd2d756cd4c6b56`；真实实例 `im_5717aa5b9480d146239907d5` 已把具体退回意见写入 Human Attempt、质量证据和审计，卡片回调进入 `processed / human_decision_rejected / sent / updated`，首个服务端反馈为 1155 ms。节点重启只影响 Agent、Tool 与最终 Human，来源确认保持 Attempt 1；退回意见只进入 Agent Attempt 2，Agent 补出问题与验收条件后，确定性 Tool 从首轮失败变为 `pass`，新的 Attempt 2 决定卡已从飞书服务端读回。实例当前停在最终人工复核，不把本次开发验收外推为内容质量规模化、市场价值、生产容量或生产上线。
 
+首批三项真实项目小样本现已覆盖直接退回、带具体意见返工和直接接受。第三项 `pilot_console_value_20260806_164925` 使用固定版本路线图作为来源，Human-Agent-Tool-Human 四节点均在 Attempt 1 完成，Tool 覆盖 5/5 条来源事实与 3/3 个开放问题，Owner 接受首次结果；从确认到接受用时 12 分 41 秒，完成文档、通知和其他外部投影均保持唯一。该小样本说明流程能记录结果可用性、返工与人工干预，不证明稳定模型质量、市场价值或生产容量。本轮状态仍由开发操作者通过 PostgreSQL 与聊天追踪，没有证明用户独立使用中央控制台能降低追踪成本，下一门槛见 [`AIREADME/ROADMAP.md`](AIREADME/ROADMAP.md)。
+
 Personal Agent Edge 的 macOS 客户端现已接入登录 Keychain：设备密钥只写入系统钥匙串，`0600` 元数据文件只保存服务器地址和设备 ID。除隔离合成项外，这台员工 Mac 已通过临时 SSH 隧道，以真实流程 Owner 身份完成默认 Keychain 槽位的一次性配对；随后 `run-once` 返回 `no_work`，服务器回读设备为 active、配对审计存在且认证后的 `last_seen_at` 已推进。隧道已关闭，设备凭据和非敏感元数据继续保留，重新建立受控隧道后可再次使用。该证据关闭真实设备 Keychain 配对缺口，但不等于员工安装分发、安全评审、可持续公网链路或生产上线。
 
 - **目标产品**：单企业、单层 DAG 的最小闭环，支持模板可选、草稿确认、Human / Agent / Tool 节点、受控编辑、重启、审计和飞书投影。

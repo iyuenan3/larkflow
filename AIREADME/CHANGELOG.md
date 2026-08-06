@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.50.0-draft · 2026-08-06 · 首批真实内部试用小样本基线
+
+- Acceptance：第三个真实项目样本 `pilot_console_value_20260806_164925` 以固定版本路线图为来源，Human、Agent、Tool、Human 四节点均在 Attempt 1 完成。Tool 覆盖 5/5 条来源事实与 3/3 个开放问题，Owner 直接接受首次结果，实例从确认到接受用时 12 分 41 秒。
+- Evidence：接受命令进入 `processed / human_decision_accepted / sent / updated`，首个服务端反馈为 1235 ms。Task、两条自动结果消息、决定卡、完成文档和最终通知均为唯一外部绑定；没有重启、例外人工干预或已观察到的重复外部副作用。
+- Outcome：首批三项小样本覆盖直接退回、带具体意见返工和直接接受。它证明流程可以保留结果可用性、返工和人工干预信号，不证明模型质量规模化、市场价值或生产容量。
+- Boundary：本轮状态跟踪仍由开发操作者通过 PostgreSQL 和聊天更新完成，未形成用户独立使用中央控制台的证据。控制台降低状态追踪成本仍是待验证假设，下一轮先做受控 Console 使用，不新增可写前端。
+
 ## v0.49.0-draft · 2026-08-06 · Owner 中央只读控制台
 
 - Added：新增独立 `larkflow-console`、Owner 范围读取服务、loopback HTTP 边界和静态页面。列表展示本人最近流程，详情展示 DAG、节点状态、历史 Attempt 结果与最近审计；首版不提供确认、重启、编辑或其他写操作。
