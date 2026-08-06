@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.53.0-draft · 2026-08-06 · Console 拖动缩放与节点点击组合验收
+
+- Fixed：内容提交 `b153c5311771eaa5b98d964fe6ffd448b62cf49d` 为真实依赖图增加空白区域拖动平移、50% 到 160% 缩放、100% 重置、适配、键盘操作和点击后视口保持。内容提交 `c3e23fcbf3bf9e66eeb9cf97bf8bbbc1bb2eefc3` 把节点卡片排除在平移手势启动范围之外，避免鼠标细微位移吞掉节点点击。
+- Verified：完整离线套件为 `922 passed, 18 skipped`，Console 聚焦套件为 `10 passed`，JavaScript 语法检查通过。最终 wheel SHA-256 为 `5b1009c95fa493b1f583ea9ee63ee4a61190840b700efb151802f283e7b67dec`；wheel、本地源码与服务器安装态 `app.js` SHA-256 均为 `399cb70a72d2291ede7532cc6421f0d31a95d8c018b8b57a8d6309b67f0cb482`。
+- Deployment：升级前备份 `/var/backups/larkflow-postgres/larkflow_target_dev-20260806T193753+0800.dump` 成功，大小 222118 bytes，权限为 `0600 lf_target_dev:lf_target_dev`。migration runner 返回 `versions=[]`，长期库仍为十九份 migration。本次只重启 Console；十个 Python 服务均为 `active / running / NRestarts=0`，5432、8765、8780 只监听 loopback，未认证 API 返回 401，部署窗口 Console warning 为 0。
+- Acceptance：真实 Chrome 在 `source_grounded_reject_20260806_001940` 上把画布从阶段 01 拖到阶段 02 至 04，再用鼠标选中 Tool 节点；蓝色选中态和右侧“检查来源归因契约”Attempt 面板立即切换，视口保持。缩小从 100% 变为 90%，适配结果为 57%。
+- Boundary：Console 继续只读，文字回复发生在当前 Agent 对话。第一次 Owner 独立使用暴露的操作缺口已经修复，但修复后的 Owner 再次独立使用尚未完成，不能据此宣称控制台已经降低状态追踪成本。
+
 ## v0.52.0-draft · 2026-08-06 · Console 真实 DAG 页面验收
 
 - Acceptance：真实 Chrome 标签页经 SSH 隧道刷新后加载当前静态资源，页面回读 4 条 SVG 依赖边和 4 条直接依赖标签。Agent 同时指向 Tool 与最终 Human，Tool 再汇入最终 Human；横向滚动可查看完整图，选中最终节点时两条关联边与节点同步高亮。
