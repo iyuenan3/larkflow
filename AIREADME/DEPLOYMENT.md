@@ -10,6 +10,8 @@
 - 升级前 PostgreSQL custom-format 备份 `/var/backups/larkflow-postgres/larkflow_target_dev-20260805T233536+0800.dump` 为 169991 bytes、`0600 lf_target_dev:lf_target_dev`，`pg_restore --list` 成功读取 125 个 TOC 条目。候选已同时安装到 Target 与 legacy 虚拟环境；migration runner 返回无待应用版本，长期库保持 `19 / 0019_draft_generation_progress`。
 - Runtime、Projection、两个 Interactive、凭据侧入站、领域侧入站、Draft Generation Worker、Edge 和 legacy 消费者共九个 Python 服务，均回读 `active / running / NRestarts=0`；部署窗口 warning 为 0。Caddy 因 ICP 边界继续保持 `disabled / inactive`。
 - `source_grounded_review:1` 已导入并启用。真实飞书实例 `source_grounded_20260805_234517` 使用公开软件需求材料完成 Human-Agent-Tool-Human 4/4；Agent、Tool 与两个 Human 节点均为 Attempt 1。Tool 回读 4/4 条事实、3/3 个开放问题、零违规和 `quality=pass`。Owner 点击“接受”后，决定命令进入 `processed / human_decision_accepted / sent / updated`，卡片反馈写入耗时为 1098 ms，Instance 进入 `done / version 9 / graph_revision 1`。
+- 第二个公开材料实例 `source_grounded_reject_20260806_001940` 首轮 Tool 回读 6/6 条事实、3/3 个开放问题与零违规。Owner 明确退回后，命令进入 `processed / human_decision_rejected / sent / updated`，卡片反馈写入耗时为 1041 ms，Instance 进入 `failed / version 9`。真实 `/larkflow restart` 预览只影响 Agent、Tool 与最终 Human 三个节点；确认后保留来源确认 Attempt 1，为三个受影响节点创建 Attempt 2。第二轮 Agent 与 Tool 均完成，Tool 仍为 6/6、3/3、零违规；新决定卡接受后 Instance 恢复为 `done / version 16 / graph_revision 1`。
+- 该返工实例保留 Agent 与 Tool 两轮结果、Human Attempt 1 的 `failed / quality=fail`、Human Attempt 2 的接受结果、一次退回审计、一次接受审计和恰好一次节点重启审计。两张决定卡与四条自动结果消息使用不同外部 ID，完成文档、最终通知与原 Human Task 均有外部绑定；九个 Python 服务在整段验收窗口内无 warning。
 - 该实例的 Task、Agent 消息、Tool 消息、决定卡、完成文档和最终通知均有外部投影绑定，追加型审计包含四次节点激活、两次自动完成、一次 Human 提交、一次明确接受和一次 Instance 完成。本条只证明开发测试组织中的接受路径和来源契约闭环，不证明外部事实真实、模型内容质量规模化、市场价值、生产容量或生产上线。
 
 ## Target PostgreSQL 开发验证状态（2026-08-06）

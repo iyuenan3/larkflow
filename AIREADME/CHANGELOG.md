@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.46.0-draft · 2026-08-06 · 真实退回、节点重启与 Attempt 2 恢复
+
+- Acceptance：第二个公开材料实例 `source_grounded_reject_20260806_001940` 首轮完成 Human-Agent-Tool-Human，Tool 回读 6/6 条事实、3/3 个开放问题、零违规。Owner 明确退回后，决定命令进入 `processed / human_decision_rejected / sent / updated`，卡片反馈写入耗时 1041 ms，Instance 进入 `failed / version 9`。
+- Recovery：真实节点重启预览只影响 Agent、Tool 与最终 Human 三个节点，保留来源确认 Attempt 1。确认命令只执行一次并创建三个 Attempt 2；第二轮 Agent 与 Tool 均完成，Tool 仍为 6/6、3/3、零违规。Owner 在新决定卡明确接受后，Instance 恢复为 `done / version 16 / graph_revision 1`。
+- Evidence：两轮 Agent 与 Tool 结果、Human Attempt 1 的退回结果与 `quality=fail`、Human Attempt 2 的接受结果、两张独立决定卡、四条独立自动结果消息、完成文档、最终通知和原 Human Task 均保留外部绑定。审计包含一次退回、一次接受、一次节点重启和一次 Instance 完成；九个 Python 服务在验收窗口内无 warning。
+- Changed：开发真栈已经覆盖直接接受与退回返工两条材料复核路径。根据 ADR-089，后续不再堆叠纯合成点击验收，转向 larkflow 项目真实工作的受控内部试用，记录完成、结果可用性、返工、人工干预、明确决定耗时和重复副作用。
+- Boundary：本次证据来自开发测试组织和公开材料，只证明状态机、投影与历史保护可用。它不证明外部事实真伪、模型质量规模化、市场收益、付费意愿、生产容量或生产上线。
+
 ## v0.45.0-draft · 2026-08-06 · 来源约束型材料复核真实接受闭环
 
 - Deployment：内容提交 `b7e589ba4af0398573ec995254dd61e9b1a4508c` 的 wheel SHA-256 为 `0dcccb7f674135dde8b44ab08d437ba397b92397b8456ede8a064f66f1eb2af1`，安装于 `/srv/larkflow/target/releases/20260805_233701_source_review_b7e589b/`，并同时更新 Target 与 legacy 虚拟环境。升级前 PostgreSQL 备份为 169991 bytes、`0600`，可由 `pg_restore --list` 读取 125 个 TOC 条目；长期库保持十九份 migration。

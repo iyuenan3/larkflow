@@ -16,7 +16,7 @@
 >
 > 内容提交 `81bd43983598ff319150344e779223cd03731eba` 新增哈希锁定离线 bundle、精确 wheel 清单、目标 Mac 与 Python 绑定、修复版 bootstrap pip 和安装时强制断网。故意注入无效索引与代理后，45-wheel 测试 bundle 仍完成安装与 `pip check`；pip 26.1 的 `CVE-2026-8643` 已通过先离线升级至 26.2.1 缓解，复扫无已知漏洞。正式分发安全评审结论仍为 No-Go：员工端依赖面尚未最小化，本机没有 Developer ID 身份或公证凭据，构建来源证明与目录级读取隔离也未完成。代码签名、公证和全新员工 Mac 验收尚未执行。
 >
-> 内容提交 `b7e589ba4af0398573ec995254dd61e9b1a4508c` 新增来源约束型材料复核：`source_claims.v1` 区分来源事实、推断和开放问题，`source_claims.check` 只校验确定性来源契约，最终 Human Owner 通过版本绑定 Card 2.0 明确接受或退回。完整离线套件为 `898 passed, 18 skipped`。该提交现已部署；候选 wheel SHA-256 为 `0dcccb7f674135dde8b44ab08d437ba397b92397b8456ede8a064f66f1eb2af1`，长期库保持十九份 migration，九个 Python 服务回读 `active / running / NRestarts=0`。公开软件需求材料实例 `source_grounded_20260805_234517` 已完成 4/4，确定性检查通过且 Human 明确接受；证据仅覆盖开发测试组织中的单次窄业务材料闭环。
+> 内容提交 `b7e589ba4af0398573ec995254dd61e9b1a4508c` 新增来源约束型材料复核：`source_claims.v1` 区分来源事实、推断和开放问题，`source_claims.check` 只校验确定性来源契约，最终 Human Owner 通过版本绑定 Card 2.0 明确接受或退回。完整离线套件为 `898 passed, 18 skipped`。该提交现已部署；候选 wheel SHA-256 为 `0dcccb7f674135dde8b44ab08d437ba397b92397b8456ede8a064f66f1eb2af1`，长期库保持十九份 migration，九个 Python 服务回读 `active / running / NRestarts=0`。两个公开材料实例已分别完成直接接受，以及退回后从 Agent 节点重启、Attempt 2 重新执行和最终接受恢复；证据仅覆盖开发测试组织，下一阶段转向受控内部试用。
 >
 > last-synced: b7e589ba4af0398573ec995254dd61e9b1a4508c · 2026-08-06
 
@@ -40,12 +40,12 @@
 | DAG_TEMPLATE_SPEC | ✅ | v0.2 模板、mention 角色绑定、草稿预览、未来区域编辑和两类重启已实现 |
 | ARCHITECTURE | ✅ | Target 模块化单体、独立凭据侧 Interactive 双副本、无凭据 Draft Generation Worker、来源契约检查、人类决定卡、PostgreSQL 通知唤醒与轮询兜底、飞书投影、失败恢复、Edge Proof、macOS 版本化安装与剩余差距 |
 | RELATIONS | ✅ | Target 飞书、mention 与人员选择卡身份边界、中央 lark-cli、Edge HTTPS、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | Phase 1 已完成来源约束型材料复核接受路径与员工 Mac Edge 开发验证，下一门槛为真实退回后重启、第二份材料复测及 Edge 正式分发门禁 |
+| ROADMAP | ✅ | Phase 1 已完成来源约束型接受与退回重启路径，下一门槛为受控内部试用及 Edge 正式分发门禁 |
 | SPEC | ✅ | legacy 契约、Target CLI、独立 interact 与 draft generation Worker、数据库通知唤醒、来源声明与确定性检查、人类决定卡、十一个飞书窄命令、模板与无模板草稿、Task 入站、受控变化、完成投影与私有 Edge v1 HTTP、前台客户端、doctor 及 macOS manager |
 | DEPLOYMENT | ✅ | Legacy ECS 与当前 Target 八服务、十九份 migration、七条监听连接、来源约束型真实接受、独立草稿生成、Edge serve、macOS 版本化安装、PostgreSQL、备份与回滚实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
-| DECISIONS | ✅ | Append-only ADR 历史，最新记录来源约束结果、确定性检查与 Human 明确裁决边界 |
-| CHANGELOG | ✅ | Append-only 已实现变更，最新为来源约束型材料复核的开发部署与真实接受路径 |
+| DECISIONS | ✅ | Append-only ADR 历史，最新记录停止堆叠合成验收并转向受控内部试用 |
+| CHANGELOG | ✅ | Append-only 已实现变更，最新为真实退回、重启与 Attempt 2 恢复闭环 |
 | MEMORY | ⚑ | Append-only 经验，仍含语义占位，已记录回调漂移、通知边界、批次计时、虚拟环境、Keychain 上下文、bootstrap pip 与构建模块遮蔽风险 |
 
 ## 按任务读取
