@@ -211,11 +211,16 @@ class PostgresWorkflowRepository:
             rows = connection.execute(
                 """
                 WITH owner_instances AS (
-                    SELECT id, tenant_id, goal, status, created_at, snapshot
-                    FROM workflow_instances
-                    WHERE tenant_id = %s
-                      AND owner_person_id = %s
-                    ORDER BY created_at DESC, id DESC
+                    SELECT instance.id,
+                           instance.tenant_id,
+                           instance.goal,
+                           instance.status,
+                           instance.created_at,
+                           instance.snapshot
+                    FROM workflow_instances AS instance
+                    WHERE instance.tenant_id = %s
+                      AND instance.owner_person_id = %s
+                    ORDER BY instance.created_at DESC, instance.id DESC
                     LIMIT %s
                 )
                 SELECT instance.id AS instance_id,

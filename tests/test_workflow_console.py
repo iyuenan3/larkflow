@@ -735,8 +735,9 @@ def test_postgres_attention_query_is_bounded_and_owner_scoped():
     assert candidates[0].reject_target == "generate_summary"
     assert calls[0][1] == (TENANT, OWNER, 30, OWNER)
     assert "WITH owner_instances AS" in calls[0][0]
-    assert "instance.owner_person_id = %s" not in calls[0][0]
-    assert "owner_person_id = %s" in calls[0][0]
+    assert "instance.tenant_id = %s" in calls[0][0]
+    assert "instance.owner_person_id = %s" in calls[0][0]
+    assert "node.owner_person_id = %s" in calls[0][0]
     assert "LIMIT %s" in calls[0][0]
     assert "node.status = 'failed'" in calls[0][0]
     with pytest.raises(ValueError):
