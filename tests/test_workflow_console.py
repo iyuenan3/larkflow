@@ -518,6 +518,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     page = application.handle("GET", "/console/")
     script = application.handle("GET", "/console/app.js")
     styles = application.handle("GET", "/console/styles.css")
+    auth = application.handle("GET", "/console/api/v1/auth")
     missing_auth = application.handle("GET", "/console/api/v1/instances")
     authorized = application.handle(
         "GET",
@@ -527,7 +528,9 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
 
     assert page.status == 200
     assert page.content_type == "text/html; charset=utf-8"
-    assert b"CENTRAL CONSOLE" in page.body
+    assert b"LARKFLOW WORKSPACE" in page.body
+    assert "我的工作台".encode() in page.body
+    assert "使用飞书身份进入".encode() in page.body
     assert script.status == 200
     assert b"innerHTML" not in script.body
     assert b"topologicalLayers" in script.body
@@ -537,6 +540,9 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"renderInsights" in script.body
     assert b"renderAttention" in script.body
     assert b"copyCommand" in script.body
+    assert b"loadAuthConfiguration" in script.body
+    assert b"credentials: \"same-origin\"" in script.body
+    assert b"sessionStorage.setItem(\"larkflow.console.token\"" in script.body
     assert "复制中".encode() in script.body
     assert "已复制".encode() in script.body
     assert b'addEventListener("pointerdown"' in script.body
@@ -551,6 +557,12 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"attention-center" in page.body
     assert b"graph-zoom-in" in page.body
     assert b"graph-fit" in page.body
+    assert _json(auth) == {
+        "mode": "static",
+        "authenticated": False,
+        "login_url": None,
+        "logout_available": False,
+    }
     assert missing_auth.status == 401
     assert missing_auth.headers["WWW-Authenticate"] == "Bearer"
     assert authorized.status == 200

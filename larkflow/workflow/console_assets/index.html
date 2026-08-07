@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
-    <title>larkflow 中央控制台</title>
+    <title>larkflow 我的工作台</title>
     <link rel="stylesheet" href="/console/styles.css">
   </head>
   <body>
@@ -14,18 +14,19 @@
     <section id="unlock" class="unlock" aria-labelledby="unlock-title">
       <div class="unlock-card">
         <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
-        <p class="eyebrow">CENTRAL CONSOLE</p>
-        <h1 id="unlock-title">看清协作如何前进</h1>
-        <p class="unlock-copy">输入本机控制台访问令牌，只读取由你发起的流程、节点执行和审计记录。</p>
+        <p class="eyebrow">LARKFLOW WORKSPACE</p>
+        <h1 id="unlock-title">进入你的工作台</h1>
+        <p id="unlock-copy" class="unlock-copy">正在确认当前登录方式。</p>
         <form id="unlock-form">
           <label for="access-token">访问令牌</label>
           <div class="token-row">
             <input id="access-token" type="password" autocomplete="current-password" required minlength="32" placeholder="LARKFLOW_CONSOLE_ACCESS_TOKEN">
             <button type="submit">进入控制台</button>
           </div>
-          <p id="unlock-error" class="form-error" role="alert"></p>
         </form>
-        <p class="local-note"><span></span>只连接当前 loopback 服务，令牌仅保存在本标签页。</p>
+        <button id="feishu-login" class="feishu-login-button" type="button" hidden>使用飞书身份进入</button>
+        <p id="unlock-error" class="form-error" role="alert"></p>
+        <p id="auth-note" class="local-note"><span></span>身份和流程权限均由中央节点校验。</p>
       </div>
     </section>
 
@@ -35,7 +36,7 @@
           <div class="brand-mark small" aria-hidden="true"><span></span><span></span><span></span></div>
           <div>
             <strong>larkflow</strong>
-            <span>中央控制台</span>
+            <span>我的工作台</span>
           </div>
         </div>
         <div class="top-actions">

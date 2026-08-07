@@ -9,14 +9,19 @@ from importlib.resources import files
 import ipaddress
 import json
 import re
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import parse_qs, urlsplit
 
 from .console import (
     ConsoleReadService,
+    ConsolePrincipal,
     ConsoleResourceNotFoundError,
     InvalidConsoleCredentialError,
-    StaticConsoleAuthenticator,
+)
+from .console_auth import (
+    ConsoleOAuthAccessDeniedError,
+    ConsoleOAuthError,
+    FeishuConsoleOAuthFlow,
 )
 
 
@@ -44,16 +49,30 @@ class ConsoleHttpResponse:
     headers: Mapping[str, str] = field(default_factory=dict)
 
 
+class ConsoleAuthenticator(Protocol):
+    mode: str
+
+    def authenticate(self, headers: Mapping[str, str]) -> ConsolePrincipal:
+        """Resolve request credentials to a server-side principal."""
+
+
 class ConsoleHttpApplication:
     """Serve immutable UI assets and authenticated, read-only JSON routes."""
 
     def __init__(
         self,
         service: ConsoleReadService,
-        authenticator: StaticConsoleAuthenticator,
+        authenticator: ConsoleAuthenticator,
+        *,
+        oauth: FeishuConsoleOAuthFlow | None = None,
     ) -> None:
         self.service = service
         self.authenticator = authenticator
+        self.oauth = oauth
+        if authenticator.mode not in {"static", "feishu"}:
+            raise ValueError("console authenticator mode is unsupported")
+        if (authenticator.mode == "feishu") != (oauth is not None):
+            raise ValueError("Feishu authentication requires one OAuth flow")
 
     def handle(
         self,
@@ -63,18 +82,114 @@ class ConsoleHttpApplication:
         headers: Mapping[str, str] | None = None,
     ) -> ConsoleHttpResponse:
         method = method.upper()
-        if method not in {"GET", "HEAD"}:
-            return self._error(
-                405,
-                "method_not_allowed",
-                "console routes are read-only",
-                headers={"Allow": "GET, HEAD"},
-            )
         parsed = urlsplit(target)
         if parsed.scheme or parsed.netloc:
             return self._error(400, "invalid_request", "absolute URLs are not accepted")
         if parsed.fragment:
             return self._error(400, "invalid_request", "URL fragments are not accepted")
+        request_headers = headers or {}
+
+        if parsed.path == "/console/api/v1/auth":
+            if method not in {"GET", "HEAD"}:
+                return self._method_not_allowed("GET, HEAD")
+            if parsed.query:
+                return self._error(400, "invalid_request", "auth query is not accepted")
+            authenticated = False
+            if self.authenticator.mode == "feishu":
+                try:
+                    self.authenticator.authenticate(request_headers)
+                    authenticated = True
+                except InvalidConsoleCredentialError:
+                    pass
+            return self._json(
+                200,
+                {
+                    "mode": self.authenticator.mode,
+                    "authenticated": authenticated,
+                    "login_url": (
+                        "/console/auth/login"
+                        if self.authenticator.mode == "feishu"
+                        else None
+                    ),
+                    "logout_available": self.authenticator.mode == "feishu",
+                },
+            )
+
+        if parsed.path == "/console/auth/login":
+            if method != "GET":
+                return self._method_not_allowed("GET")
+            if parsed.query or self.oauth is None:
+                return self._error(404, "not_found", "resource does not exist")
+            try:
+                self.authenticator.authenticate(request_headers)
+                return ConsoleHttpResponse(
+                    status=302,
+                    headers={"Location": "/console/"},
+                )
+            except InvalidConsoleCredentialError:
+                start = self.oauth.begin()
+                return ConsoleHttpResponse(
+                    status=302,
+                    headers={
+                        "Location": start.location,
+                        "Set-Cookie": start.state_cookie,
+                    },
+                )
+
+        if parsed.path == "/console/auth/callback":
+            if method != "GET":
+                return self._method_not_allowed("GET")
+            if self.oauth is None:
+                return self._error(404, "not_found", "resource does not exist")
+            try:
+                query = _single_value_query(
+                    parsed.query,
+                    allowed={"code", "state", "error"},
+                )
+                if bool(query.get("code")) == bool(query.get("error")):
+                    raise ConsoleOAuthError(
+                        "OAuth callback requires exactly one code or error"
+                    )
+                finish = self.oauth.finish(
+                    code=query.get("code"),
+                    state=query.get("state"),
+                    error=query.get("error"),
+                    headers=request_headers,
+                )
+                return ConsoleHttpResponse(
+                    status=302,
+                    headers={
+                        "Location": finish.location,
+                        "Set-Cookie": finish.session_cookie,
+                    },
+                )
+            except ConsoleOAuthAccessDeniedError:
+                return ConsoleHttpResponse(
+                    status=302,
+                    headers={"Location": "/console/?auth_error=access_denied"},
+                )
+            except (ConsoleOAuthError, ValueError):
+                return ConsoleHttpResponse(
+                    status=302,
+                    headers={"Location": "/console/?auth_error=login_failed"},
+                )
+
+        if parsed.path == "/console/auth/logout":
+            if method != "POST":
+                return self._method_not_allowed("POST")
+            if parsed.query or self.oauth is None:
+                return self._error(404, "not_found", "resource does not exist")
+            self.oauth.sessions.revoke(request_headers)
+            return ConsoleHttpResponse(
+                status=204,
+                body=b"",
+                headers={
+                    "Set-Cookie": self.oauth.sessions.clear_session_cookie(),
+                },
+            )
+
+        if method not in {"GET", "HEAD"}:
+            return self._method_not_allowed("GET, HEAD")
 
         if parsed.path in {"/", "/console"}:
             return ConsoleHttpResponse(
@@ -99,7 +214,7 @@ class ConsoleHttpApplication:
         if not parsed.path.startswith("/console/api/"):
             return self._error(404, "not_found", "resource does not exist")
         try:
-            principal = self.authenticator.authenticate(headers or {})
+            principal = self.authenticator.authenticate(request_headers)
             if parsed.path == "/console/api/v1/instances":
                 query = parse_qs(parsed.query, keep_blank_values=True)
                 if set(query) - {"limit"}:
@@ -120,11 +235,16 @@ class ConsoleHttpApplication:
                 return self._json(200, payload)
             return self._error(404, "not_found", "resource does not exist")
         except InvalidConsoleCredentialError:
+            challenge = (
+                {"WWW-Authenticate": "Bearer"}
+                if self.authenticator.mode == "static"
+                else {}
+            )
             return self._error(
                 401,
                 "invalid_credential",
                 "console credential is invalid",
-                headers={"WWW-Authenticate": "Bearer"},
+                headers=challenge,
             )
         except ConsoleResourceNotFoundError:
             return self._error(404, "not_found", "resource does not exist")
@@ -165,6 +285,15 @@ class ConsoleHttpApplication:
             headers=headers or {},
         )
 
+    @classmethod
+    def _method_not_allowed(cls, allow: str) -> ConsoleHttpResponse:
+        return cls._error(
+            405,
+            "method_not_allowed",
+            "method is not allowed for this console route",
+            headers={"Allow": allow},
+        )
+
 
 def build_console_http_server(
     application: ConsoleHttpApplication,
@@ -190,15 +319,15 @@ def build_console_http_server(
                 include_body=False,
             )
 
-        def _reject_write(self) -> None:
+        def _handle_write(self) -> None:
             self.close_connection = True
             self._send(application.handle(self.command, self.path, headers=self.headers))
 
-        do_DELETE = _reject_write  # type: ignore[assignment]  # noqa: N815
-        do_OPTIONS = _reject_write  # type: ignore[assignment]  # noqa: N815
-        do_PATCH = _reject_write  # type: ignore[assignment]  # noqa: N815
-        do_POST = _reject_write  # type: ignore[assignment]  # noqa: N815
-        do_PUT = _reject_write  # type: ignore[assignment]  # noqa: N815
+        do_DELETE = _handle_write  # type: ignore[assignment]  # noqa: N815
+        do_OPTIONS = _handle_write  # type: ignore[assignment]  # noqa: N815
+        do_PATCH = _handle_write  # type: ignore[assignment]  # noqa: N815
+        do_POST = _handle_write  # type: ignore[assignment]  # noqa: N815
+        do_PUT = _handle_write  # type: ignore[assignment]  # noqa: N815
 
         def _send(
             self,
@@ -234,6 +363,22 @@ def _require_loopback(host: str) -> None:
         raise ValueError("console host must be a loopback IP or localhost") from exc
     if not address.is_loopback:
         raise ValueError("console can only bind to loopback")
+
+
+def _single_value_query(
+    raw_query: str,
+    *,
+    allowed: set[str],
+) -> dict[str, str]:
+    query = parse_qs(raw_query, keep_blank_values=True)
+    if set(query) - allowed:
+        raise ValueError("OAuth callback contains unsupported parameters")
+    values: dict[str, str] = {}
+    for key, items in query.items():
+        if len(items) != 1:
+            raise ValueError("OAuth callback parameters must be supplied once")
+        values[key] = items[0]
+    return values
 
 
 @lru_cache(maxsize=3)

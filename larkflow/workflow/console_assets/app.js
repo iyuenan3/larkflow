@@ -2,6 +2,8 @@
 
 const state = {
   token: sessionStorage.getItem("larkflow.console.token") || "",
+  authMode: "unknown",
+  loginUrl: "/console/auth/login",
   instances: [],
   attention: [],
   detail: null,
@@ -15,6 +17,9 @@ const app = el("app");
 const unlockForm = el("unlock-form");
 const tokenInput = el("access-token");
 const unlockError = el("unlock-error");
+const unlockCopy = el("unlock-copy");
+const feishuLogin = el("feishu-login");
+const authNote = el("auth-note");
 const instanceList = el("instance-list");
 const emptyState = el("empty-state");
 const detailView = el("detail");
@@ -94,10 +99,15 @@ function setConnection(mode, text) {
 async function request(path) {
   setConnection("loading", "同步中");
   let response;
+  const headers = {};
+  if (state.authMode === "static" && state.token) {
+    headers.Authorization = `Bearer ${state.token}`;
+  }
   try {
     response = await fetch(path, {
-      headers: { Authorization: `Bearer ${state.token}` },
+      headers,
       cache: "no-store",
+      credentials: "same-origin",
     });
   } catch (error) {
     setConnection("error", "连接失败");
@@ -105,8 +115,15 @@ async function request(path) {
   }
   const payload = await response.json();
   if (response.status === 401) {
-    lockConsole();
-    throw new Error("访问令牌无效或已经更新");
+    const error = new Error(
+      state.authMode === "feishu"
+        ? "飞书登录已过期，请重新进入"
+        : "访问令牌无效或已经更新",
+    );
+    error.authentication = true;
+    if (state.authMode === "feishu") showFeishuLogin(error.message);
+    else lockConsole();
+    throw error;
   }
   if (!response.ok) {
     setConnection("error", "读取失败");
@@ -679,20 +696,131 @@ function lockConsole() {
   tokenInput.focus();
 }
 
+function showStaticLogin(message = "") {
+  state.authMode = "static";
+  unlockCopy.textContent = "输入开发控制台访问令牌，只读取由你发起的流程、节点执行和审计记录。";
+  authNote.lastChild.textContent = "开发令牌只保存在当前标签页。";
+  unlockForm.hidden = false;
+  feishuLogin.hidden = true;
+  unlockError.textContent = message;
+  app.hidden = true;
+  unlock.hidden = false;
+  tokenInput.focus();
+}
+
+function showFeishuLogin(message = "") {
+  state.authMode = "feishu";
+  state.token = "";
+  sessionStorage.removeItem("larkflow.console.token");
+  unlockCopy.textContent = "使用当前飞书身份进入，只展示你有权查看的流程和待处理事项。";
+  authNote.lastChild.textContent = "身份和流程权限均由中央节点校验。";
+  unlockForm.hidden = true;
+  feishuLogin.hidden = false;
+  feishuLogin.disabled = false;
+  feishuLogin.textContent = "使用飞书身份进入";
+  unlockError.textContent = message;
+  app.hidden = true;
+  unlock.hidden = false;
+  feishuLogin.focus();
+}
+
+function showConsole() {
+  unlock.hidden = true;
+  app.hidden = false;
+  requestAnimationFrame(layoutGraphCanvas);
+}
+
+function beginFeishuLogin() {
+  feishuLogin.disabled = true;
+  feishuLogin.textContent = "正在连接飞书";
+  window.location.assign(state.loginUrl);
+}
+
+async function logoutConsole() {
+  const button = el("lock");
+  button.disabled = true;
+  button.textContent = "退出中";
+  try {
+    await fetch("/console/auth/logout", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+  } finally {
+    window.location.replace(state.loginUrl);
+  }
+}
+
+async function loadAuthConfiguration() {
+  const response = await fetch("/console/api/v1/auth", {
+    cache: "no-store",
+    credentials: "same-origin",
+  });
+  if (!response.ok) throw new Error("无法读取登录配置");
+  const payload = await response.json();
+  if (!["static", "feishu"].includes(payload.mode)) {
+    throw new Error("登录配置无效");
+  }
+  state.authMode = payload.mode;
+  if (payload.mode === "feishu") {
+    if (typeof payload.login_url !== "string" || !payload.login_url.startsWith("/console/")) {
+      throw new Error("飞书登录入口无效");
+    }
+    state.loginUrl = payload.login_url;
+  }
+  return payload;
+}
+
+async function bootstrap() {
+  const auth = await loadAuthConfiguration();
+  if (auth.mode === "feishu") {
+    el("lock").textContent = "退出";
+    const authError = new URLSearchParams(window.location.search).get("auth_error");
+    if (authError) {
+      const message = authError === "access_denied"
+        ? "你已取消飞书授权，可以重新进入"
+        : "飞书登录没有完成，请重试";
+      showFeishuLogin(message);
+      window.history.replaceState({}, "", "/console/");
+      return;
+    }
+    if (!auth.authenticated) {
+      showFeishuLogin();
+      beginFeishuLogin();
+      return;
+    }
+    showConsole();
+    await loadInstances();
+    return;
+  }
+
+  el("lock").textContent = "锁定";
+  if (!state.token) {
+    showStaticLogin();
+    return;
+  }
+  showConsole();
+  try {
+    await loadInstances();
+  } catch (error) {
+    unlockError.textContent = error.message;
+    lockConsole();
+  }
+}
+
 function showWorkspaceError(error) {
   setConnection("error", error.message || "读取失败");
 }
 
 unlockForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (state.authMode !== "static") return;
   unlockError.textContent = "";
   state.token = tokenInput.value.trim();
   try {
     await loadInstances();
     sessionStorage.setItem("larkflow.console.token", state.token);
-    unlock.hidden = true;
-    app.hidden = false;
-    requestAnimationFrame(layoutGraphCanvas);
+    showConsole();
   } catch (error) {
     unlockError.textContent = error.message;
     unlock.hidden = false;
@@ -700,10 +828,18 @@ unlockForm.addEventListener("submit", async (event) => {
   }
 });
 
+feishuLogin.addEventListener("click", beginFeishuLogin);
+
 el("refresh").addEventListener("click", () => {
   loadInstances(state.detail?.instance.id || null).catch(showWorkspaceError);
 });
-el("lock").addEventListener("click", lockConsole);
+el("lock").addEventListener("click", () => {
+  if (state.authMode === "feishu") {
+    logoutConsole().catch(showWorkspaceError);
+  } else {
+    lockConsole();
+  }
+});
 el("graph-zoom-out").addEventListener("click", () => setGraphScale(state.graphScale - GRAPH_SCALE_STEP));
 el("graph-zoom-reset").addEventListener("click", () => setGraphScale(1));
 el("graph-zoom-in").addEventListener("click", () => setGraphScale(state.graphScale + GRAPH_SCALE_STEP));
@@ -789,13 +925,11 @@ window.addEventListener("resize", () => {
   if (state.detail) layoutGraphCanvas();
 });
 
-if (state.token) {
-  unlock.hidden = true;
-  app.hidden = false;
-  loadInstances().catch((error) => {
-    unlockError.textContent = error.message;
-    lockConsole();
-  });
-} else {
-  tokenInput.focus();
-}
+bootstrap().catch((error) => {
+  unlockCopy.textContent = "工作台暂时无法初始化。";
+  unlockForm.hidden = true;
+  feishuLogin.hidden = true;
+  unlockError.textContent = error.message;
+  app.hidden = true;
+  unlock.hidden = false;
+});

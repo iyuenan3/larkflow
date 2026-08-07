@@ -134,5 +134,11 @@ def test_console_service_is_loopback_only_and_owner_scoped():
         "postgresql:///larkflow_target_dev"
     )
     assert environment["LARKFLOW_TARGET_TENANT"] == "dev"
+    assert environment["LARKFLOW_CONSOLE_AUTH_MODE"] == "static"
     assert environment["LARKFLOW_CONSOLE_PERSON_ID"] == ""
     assert environment["LARKFLOW_CONSOLE_ACCESS_TOKEN"] == ""
+    assert environment["LARKFLOW_CONSOLE_FEISHU_APP_ID"] == ""
+    assert environment["LARKFLOW_CONSOLE_FEISHU_APP_SECRET"] == ""
+    assert environment["LARKFLOW_CONSOLE_FEISHU_TENANT_KEY"] == ""
+    assert environment["LARKFLOW_CONSOLE_PUBLIC_BASE_URL"] == ""
+    assert environment["LARKFLOW_CONSOLE_SESSION_TTL_SECONDS"] == "28800"

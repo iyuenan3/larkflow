@@ -47,6 +47,8 @@ class ConsolePrincipal:
 class StaticConsoleAuthenticator:
     """Resolve one loopback bearer credential to one server-side principal."""
 
+    mode = "static"
+
     def __init__(self, access_token: str, principal: ConsolePrincipal) -> None:
         token = access_token.strip()
         if len(token) < 32:

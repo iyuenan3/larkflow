@@ -28,7 +28,7 @@ Personal Agent Edge 的 macOS 客户端现已接入登录 Keychain：设备密�
 
 - **目标产品**：单企业、单层 DAG 的最小闭环，支持模板可选、草稿确认、Human / Agent / Tool 节点、受控编辑、重启、审计和飞书投影。
 - **新内核**：`larkflow/workflow/` 已实现模板生命周期和不可变版本、角色绑定和冻结 Instance Snapshot、草稿预览与确认、DAG 校验、节点状态迁移、依赖解锁、Human / Agent / Tool Node Runner、Attempt、claim、过期认领恢复、节点与完整实例重启预览及原子确认、未来区域编辑预览及原子确认、Runtime / Projection / Interactive / Inbound / Draft Generation Worker、PostgreSQL 通知唤醒与轮询兜底、乐观并发、PostgreSQL 仓储、追加型审计、事务 outbox 与耐久 Inbox。慢模型生成与凭据侧卡片更新使用不同领取车道和 revision 栅栏；普通人员分工 Worker 不再认领自然语言草稿动作。凭据侧 Task 验证默认最多尝试 24 次，超限进入不可再认领的 `exhausted` 终态并保留终止时间、失败阶段、结果和最后错误。
-- **Owner Console**：开发期 loopback 只读页面已提供本人流程列表、真实 DAG、跨轮次 Attempt、追加型审计、返工摘要和待处理提示。待处理项只从现有 PostgreSQL 状态派生，当前只建议或复制已存在的飞书命令，不在浏览器执行领域写操作。静态 Bearer token 只适合受控开发，不是生产登录方案。
+- **员工工作台**：开发期 loopback 只读页面已提供本人流程列表、真实 DAG、跨轮次 Attempt、追加型审计、返工摘要和待处理提示。待处理项只从现有 PostgreSQL 状态派生，当前只建议或复制已存在的飞书命令，不在浏览器执行领域写操作。代码现已增加飞书 OAuth v3、PKCE、tenant 显式映射和服务端不透明 HttpOnly 会话；应用内打开授权页时可由飞书免确认回跳。该登录基础仍未部署或完成真实飞书应用入口验收，静态 Bearer token 继续作为 loopback 开发回退。
 - **Edge Proof v0**：已实现一次性配对、设备哈希凭据、撤销、Owner 与 `personal.readonly` 双重过滤、租约续期、迟到结果拒绝、loopback Gateway、手工 `run-once`、前台 `serve` 和 Codex 只读适配器。`serve` 在一个用户主动启动的会话中固定单工作区，使用长轮询、有界退避、应用心跳、单设备锁和信号安全停止；续租失败会取消整个 Codex 进程组，不回传失去租约的结果。内容提交 `fd6933a` 构建的 wheel 已部署到 `alicloud-sh`，并以同一候选件的临时安装态在员工 Mac 上完成前台真机验收。实例在 37 次空闲心跳后被领取，真实 Codex 执行期间产生 18 次续租并完成；同凭据第二个 Worker 被拒绝，SIGTERM 安全退出，设备撤销后再次领取返回 403。临时凭据和隧道均已删除。专用 DNS 记录、Caddy、Let’s Encrypt 证书、源站反向代理和未认证 401 已验证；公网 TLS 随后被 ICP 接入备案阻断，因此公网配对、领取、续租和回传仍未完成。
 - **失败恢复 as-built**：自动 Agent / Tool 节点失败会向节点 Owner 投影 Card 2.0，可选择“重新执行”或“人工接管”。卡片回调先进入耐久 IM 命令队列，并立即尝试撤下按钮、显示“处理中”；凭据侧随后重新校验当前企业成员，领域侧精确校验 Owner、Instance version、Node version 与 Attempt 编号，最终卡片显示成功或拒绝。重试创建新自动 Attempt；人工接管创建 `waiting_human` Attempt 和飞书 Task；原失败 Attempt、结果与审计均保留。该能力已在开发服务器与测试组织完成真实闭环：两个不同失败卡片分别创建 Attempt 2 和 3，人工接管创建 Attempt 4 与真实飞书 Task，完成 Task 后 Instance 与 Attempt 4 进入 `done`，前三次失败历史、审计和投影全部保留。新一轮恢复卡真实点击的首个服务端反馈耗时为 0.990 秒，飞书服务端读回终态标题为“恢复操作已处理”且不再包含按钮。
 - **legacy 原型**：LangGraph + SQLite + lark-cli 路径继续保留，用于回归已验证的飞书投影、打回、幂等和恢复机制。
@@ -175,16 +175,20 @@ larkflow-target --env-file /etc/larkflow-target.env show <instance>
 larkflow-target --env-file /etc/larkflow-target.env serve
 ```
 
-中央控制台 v0 是独立的 Owner 只读入口，用于查看本人发起的最近流程、DAG 状态、历史 Attempt 结果和审计时间线。内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6` 修正了首版把所有节点画成线性链的问题：浏览器现在依据服务端 `deps` 计算拓扑层级、绘制真实依赖箭头，并在节点上标注直接依赖。它不提供确认、重启或改图操作，也不复用 Personal Agent Edge API。服务强制绑定 loopback，当前开发鉴权把一个至少 32 字符的 Bearer token 映射到服务端配置的 tenant 与 person；令牌只在浏览器当前标签页保存。代码、wheel、服务与 API 技术回读已通过；真实 Chrome 页面刷新后又确认 4 条依赖边、分叉汇合、关联高亮、依赖标签和横向滚动均可见。生产部署前仍需替换为飞书登录态或企业 SSO，并重新设计反向代理边界。
+员工工作台 v0 是独立的 Owner 只读入口，用于查看本人发起的最近流程、DAG 状态、历史 Attempt 结果和审计时间线。内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6` 修正了首版把所有节点画成线性链的问题：浏览器现在依据服务端 `deps` 计算拓扑层级、绘制真实依赖箭头，并在节点上标注直接依赖。它不提供确认、重启或改图操作，也不复用 Personal Agent Edge API。服务继续强制绑定 loopback，并提供两种互斥鉴权模式：`static` 把至少 32 字符的开发 Bearer token 映射到固定 tenant 与 person；`feishu` 使用 OAuth v3 授权码、PKCE 和显式 tenant_key 映射取得当前用户 open_id，再签发最长一天的服务端不透明 HttpOnly 会话。登录只读取身份所需字段，不请求用户业务 scope，不保存 user_access_token 或 refresh_token；当前进程内会话会在 Console 重启时失效。飞书模式必须位于已登记的 HTTPS origin 后方，代码实现不能替代公网、重定向 URL、应用主页和真实多用户验收。
 
 ```bash
-# env 文件同时提供 LARKFLOW_TARGET_DSN、LARKFLOW_TARGET_TENANT、
-# LARKFLOW_CONSOLE_PERSON_ID 与 LARKFLOW_CONSOLE_ACCESS_TOKEN
+# static 模式额外提供 LARKFLOW_CONSOLE_PERSON_ID 与
+# LARKFLOW_CONSOLE_ACCESS_TOKEN
 larkflow-console --env-file /etc/larkflow-target-console.env \
   --host 127.0.0.1 --port 8780
 
 # 仅在本机浏览器打开
 # http://127.0.0.1:8780/console/
+
+# feishu 模式改为配置 LARKFLOW_CONSOLE_AUTH_MODE=feishu，以及 App ID、
+# App Secret、允许的 tenant_key 和已登记的 HTTPS public base URL。
+# Console 仍只监听 loopback，由 HTTPS 反向代理提供员工入口。
 ```
 
 `reconcile-projections` 会只读查询并可能重建飞书 Task，因此只能使用持有开发 profile 的 Projection env 显式执行：`larkflow-target --env-file /etc/larkflow-target-projection.env reconcile-projections`。`reconcile-completions` 使用同一身份立即扫描当前 Human Task，只把已完成状态写入耐久 Inbox，不直接提交节点。`reconcile-instance-completion <instance_id>` 只修复一个已完成实例缺失的完成文档或最终通知，依赖稳定幂等键，重复执行不会复制外部资源。
