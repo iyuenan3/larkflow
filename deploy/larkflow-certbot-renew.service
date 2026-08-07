@@ -1,0 +1,26 @@
+[Unit]
+Description=Renew larkflow public IP TLS certificate
+Documentation=https://letsencrypt.org/2026/03/11/shorter-certs-certbot
+After=network-online.target caddy.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/larkflow-certbot/venv/bin/certbot renew --quiet --deploy-hook /usr/local/sbin/larkflow-install-ip-certificate
+UMask=0077
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/etc/letsencrypt /var/lib/letsencrypt /var/log/letsencrypt /etc/caddy/certs/larkflow-console /var/lib/larkflow-certbot-webroot

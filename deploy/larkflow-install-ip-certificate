@@ -1,0 +1,71 @@
+#!/bin/sh
+set -eu
+
+CERT_LINEAGE=${RENEWED_LINEAGE:-${1:-}}
+CERT_ROOT=/etc/caddy/certs/larkflow-console
+CERT_RELEASES=$CERT_ROOT/releases
+CERT_STAGE=
+CERT_LINK=
+
+case "$CERT_LINEAGE" in
+    /etc/letsencrypt/live/*) ;;
+    *)
+        echo "expected a Certbot lineage under /etc/letsencrypt/live" >&2
+        exit 2
+        ;;
+esac
+
+for CERT_FILE in fullchain.pem privkey.pem; do
+    if [ ! -r "$CERT_LINEAGE/$CERT_FILE" ]; then
+        echo "missing readable certificate file: $CERT_FILE" >&2
+        exit 2
+    fi
+done
+
+install -d -o root -g caddy -m 0750 "$CERT_ROOT" "$CERT_RELEASES"
+CERT_STAGE=$(mktemp -d "$CERT_RELEASES/.staging.XXXXXX")
+CERT_LINK=$CERT_ROOT/.current.$$
+
+cleanup() {
+    case "$CERT_STAGE" in
+        "$CERT_RELEASES"/.staging.*)
+            rm -f -- "$CERT_STAGE/fullchain.pem" "$CERT_STAGE/privkey.pem"
+            rmdir "$CERT_STAGE" 2>/dev/null || true
+            ;;
+    esac
+    case "$CERT_LINK" in
+        "$CERT_ROOT"/.current.*) rm -f -- "$CERT_LINK" ;;
+    esac
+}
+trap cleanup EXIT HUP INT TERM
+
+install -o root -g caddy -m 0644 \
+    "$CERT_LINEAGE/fullchain.pem" "$CERT_STAGE/fullchain.pem"
+install -o root -g caddy -m 0640 \
+    "$CERT_LINEAGE/privkey.pem" "$CERT_STAGE/privkey.pem"
+
+openssl x509 -in "$CERT_STAGE/fullchain.pem" -noout -checkend 86400
+CERT_FINGERPRINT=$(openssl x509 -in "$CERT_STAGE/fullchain.pem" \
+    -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':')
+if [ -z "$CERT_FINGERPRINT" ]; then
+    echo "certificate fingerprint is empty" >&2
+    exit 2
+fi
+
+CERT_RELEASE=$CERT_RELEASES/$CERT_FINGERPRINT
+if [ -e "$CERT_RELEASE" ]; then
+    cmp -s "$CERT_STAGE/fullchain.pem" "$CERT_RELEASE/fullchain.pem"
+    cmp -s "$CERT_STAGE/privkey.pem" "$CERT_RELEASE/privkey.pem"
+else
+    mv "$CERT_STAGE" "$CERT_RELEASE"
+    CERT_STAGE=
+fi
+
+ln -s "releases/$CERT_FINGERPRINT" "$CERT_LINK"
+mv -Tf "$CERT_LINK" "$CERT_ROOT/current"
+CERT_LINK=
+
+if systemctl is-active --quiet caddy; then
+    caddy validate --config /etc/caddy/Caddyfile
+    systemctl reload caddy
+fi

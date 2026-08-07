@@ -142,3 +142,39 @@ def test_console_service_is_loopback_only_and_owner_scoped():
     assert environment["LARKFLOW_CONSOLE_FEISHU_TENANT_KEY"] == ""
     assert environment["LARKFLOW_CONSOLE_PUBLIC_BASE_URL"] == ""
     assert environment["LARKFLOW_CONSOLE_SESSION_TTL_SECONDS"] == "28800"
+
+
+def test_console_public_ip_tls_uses_certbot_without_logging_oauth_codes():
+    caddyfile = (
+        ROOT / "deploy" / "larkflow-console-ip.Caddyfile.example"
+    ).read_text(encoding="utf-8")
+    installer = (
+        ROOT / "deploy" / "larkflow-install-ip-certificate"
+    ).read_text(encoding="utf-8")
+    service = (
+        ROOT / "deploy" / "larkflow-certbot-renew.service"
+    ).read_text(encoding="utf-8")
+    timer = (
+        ROOT / "deploy" / "larkflow-certbot-renew.timer"
+    ).read_text(encoding="utf-8")
+
+    assert "PUBLIC_IP" in caddyfile
+    assert "auto_https off" in caddyfile
+    assert "/var/lib/larkflow-certbot-webroot" in caddyfile
+    assert "/etc/caddy/certs/larkflow-console/current/fullchain.pem" in caddyfile
+    assert "reverse_proxy 127.0.0.1:8780" in caddyfile
+    assert "\n\tlog" not in caddyfile
+
+    assert "RENEWED_LINEAGE" in installer
+    assert "/etc/letsencrypt/live/*" in installer
+    assert "openssl x509" in installer
+    assert "mv -Tf" in installer
+    assert "caddy validate" in installer
+    assert "systemctl reload caddy" in installer
+
+    assert "certbot renew --quiet" in service
+    assert "--deploy-hook /usr/local/sbin/larkflow-install-ip-certificate" in service
+    assert "NoNewPrivileges=yes" in service
+    assert "OnCalendar=*-*-* 03,15:00:00" in timer
+    assert "RandomizedDelaySec=30m" in timer
+    assert "Persistent=true" in timer

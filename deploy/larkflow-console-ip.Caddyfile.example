@@ -1,0 +1,38 @@
+# Replace PUBLIC_IP with the server's public IPv4 address.
+# Certbot owns certificate issuance. Caddy only serves the ACME webroot,
+# redirects HTTP, terminates TLS, and proxies to the loopback Console.
+# Do not enable access logs: the OAuth callback query contains a one-time code.
+
+{
+	admin 127.0.0.1:2019
+	auto_https off
+}
+
+http://PUBLIC_IP {
+	@acme_challenge path /.well-known/acme-challenge/*
+	handle @acme_challenge {
+		root * /var/lib/larkflow-certbot-webroot
+		file_server
+	}
+
+	handle {
+		redir https://PUBLIC_IP{uri} 308
+	}
+}
+
+https://PUBLIC_IP {
+	tls /etc/caddy/certs/larkflow-console/current/fullchain.pem /etc/caddy/certs/larkflow-console/current/privkey.pem
+
+	request_body {
+		max_size 64KB
+	}
+
+	reverse_proxy 127.0.0.1:8780
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}
