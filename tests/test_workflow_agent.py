@@ -225,6 +225,58 @@ def test_agent_executor_rejects_non_json_and_duplicate_source_claims():
         ).execute(structured_request)
 
 
+def test_agent_executor_answers_source_decision_questions_with_visible_provenance():
+    document = {
+        "priority": {
+            "text": "先完成 Owner 独立处理一项真实工作",
+            "source_ids": ["F1", "F2"],
+        },
+        "rationale": [
+            {"text": "当前门槛是内部试用", "source_ids": ["F1"]}
+        ],
+        "acceptance_criteria": [
+            {"text": "形成一条明确决定", "source_ids": ["F1", "F2"]}
+        ],
+        "not_now": [
+            {
+                "text": "本周不扩展管理员能力",
+                "reconsider_when": "出现第二名管理员的明确需求",
+                "source_ids": ["F2"],
+            }
+        ],
+        "risks": [
+            {"text": "单个样本不能证明稳定价值", "source_ids": ["F1"]}
+        ],
+        "answers": [
+            {
+                "question_id": "Q1",
+                "text": "唯一优先级是完成真实内部工作",
+                "source_ids": ["F1", "F2"],
+            }
+        ],
+        "source_url": "https://example.invalid/work-item/1",
+    }
+    completion = RecordingCompletion(json.dumps(document, ensure_ascii=False))
+
+    result = LLMAgentExecutor(completion).execute(
+        request(result_format="source_decision.v1")
+    )
+
+    assert to_json_value(result.result["source_decision"]) == document
+    assert result.result["result_format"] == "source_decision.v1"
+    assert "唯一优先级" in result.result["content"]
+    assert "[回答 Q1，建议推断，依据 F1, F2]" in result.result["content"]
+    assert "重新评估：出现第二名管理员的明确需求" in result.result["content"]
+    assert "每个 Q 编号必须在 answers 中恰好回答一次" in completion.calls[0]["prompt"]
+
+
+def test_agent_executor_rejects_duplicate_source_decision_fields():
+    with pytest.raises(ValueError, match="source decision must be valid JSON"):
+        LLMAgentExecutor(
+            RecordingCompletion('{"priority":{},"priority":{}}')
+        ).execute(request(result_format="source_decision.v1"))
+
+
 def test_runtime_assembles_agent_only_with_a_safe_lease_budget():
     environment = {
         "LLM_BASE_URL": "https://llm.example.invalid/v1",

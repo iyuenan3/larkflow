@@ -1418,12 +1418,7 @@ def _dependency_context(instance: WorkflowInstance, node_key: str) -> str:
         if isinstance(content, str) and content.strip():
             rendered = content.strip()
         else:
-            rendered = json.dumps(
-                to_json_value(attempt.result),
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
+            rendered = _markdown_json_block(attempt.result)
         sections.append(f"[{dependency.title} / {dependency_key}]\n{rendered}")
     text = "\n\n".join(sections)
     if len(text) <= MAX_DEPENDENCY_CONTEXT_CHARS:
@@ -1455,12 +1450,7 @@ def _instance_input_context(instance: WorkflowInstance, node_key: str) -> str:
         if isinstance(value, str):
             rendered = value
         else:
-            rendered = json.dumps(
-                to_json_value(value),
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
+            rendered = _markdown_json_block(value)
         sections.append(f"[{path}]\n{rendered}")
     text = "\n\n".join(sections)
     if len(text) <= MAX_DEPENDENCY_CONTEXT_CHARS:
@@ -1470,6 +1460,19 @@ def _instance_input_context(instance: WorkflowInstance, node_key: str) -> str:
         text[:MAX_DEPENDENCY_CONTEXT_CHARS].rstrip()
         + f"\n\n[内容过长，任务描述省略 {omitted} 个字符，完整输入保存在流程记录中]"
     )
+
+
+def _markdown_json_block(value: object) -> str:
+    """Keep JSON quotes out of Card markdown's automatic URL parser."""
+
+    rendered = json.dumps(
+        to_json_value(value),
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+    rendered = rendered.replace("```", "``\u200b`")
+    return f"```json\n{rendered}\n```"
 
 
 def _lookup_path(root: Mapping[str, Any], path: str) -> tuple[bool, Any]:

@@ -1,0 +1,107 @@
+schema_version: "0.2"
+template:
+  id: source_grounded_decision
+  version: 1
+  name: 来源约束型优先级决策
+  status: draft
+  locked: false
+goal: 人工确认决策来源，Agent 回答登记问题并形成唯一优先级建议，Tool 检查来源与完整性，人工接受或退回
+parameters:
+  source_registry:
+    type: object
+    required: true
+nodes:
+  - id: confirm_decision_source
+    title: 确认决策来源登记
+    owner_role: project_owner
+    executor: human
+    deps: []
+    work:
+      objective: 确认来源事实和决策问题可以交给 Agent 分析
+      inputs:
+        - instance_inputs.source_registry
+      outputs:
+        - id: confirmation
+          type: data
+      acceptance:
+        - 已核对来源 URL
+        - 已确认 F 编号是来源事实，Q 编号是本次必须回答的决策问题
+
+  - id: propose_source_decision
+    title: 生成来源约束型优先级建议
+    owner_role: project_owner
+    executor: agent
+    deps:
+      - confirm_decision_source
+    work:
+      objective: 只依据来源登记回答全部决策问题并形成唯一优先级建议
+      inputs:
+        - instance_inputs.source_registry
+        - dependencies.confirm_decision_source
+      outputs:
+        - id: source_decision
+          type: data
+        - id: content
+          type: text
+      acceptance:
+        - 只给出一项最高优先级并引用 F 编号
+        - 逐一回答全部 Q 编号
+        - 给出 3 到 5 条可判定完成标准、本周不做事项及重新评估条件
+        - 所有结论都明确属于基于来源事实的分析推断
+      agent:
+        kind: llm.generate
+        model_role: default
+        result_format: source_decision.v1
+        instructions: 只依据 source_registry 形成未来一个工作周期的优先级决策建议。必须直接回答每个 Q 编号，不得把问题继续保留为待确认。只能给出一项最高优先级，并给出可判定完成标准、本周不做事项、每项重新评估条件和风险。所有建议都是由 F 编号支持的分析推断，不得虚构已经发生的事实、生产状态或承诺，source_url 必须原样返回。
+
+  - id: check_source_decision
+    title: 检查决策来源与完整性
+    owner_role: project_owner
+    executor: tool
+    deps:
+      - propose_source_decision
+    work:
+      objective: 确定性检查唯一优先级、全部问题回答、完成标准、暂缓事项、来源覆盖和来源 URL
+      inputs:
+        - instance_inputs.source_registry
+        - dependencies.propose_source_decision
+      outputs:
+        - id: verdict
+          type: data
+        - id: evidence
+          type: text
+        - id: suggestion
+          type: text
+      acceptance:
+        - 返回 pass 或 fail
+        - 返回来源事实与决策问题覆盖证据
+        - 不把结构通过解释为业务建议已经正确
+      tool:
+        kind: source_decision.check
+        args:
+          document: dependencies.propose_source_decision.source_decision
+          source_registry: instance_inputs.source_registry
+
+  - id: review_source_decision
+    title: 复核优先级决策建议
+    owner_role: project_owner
+    executor: human
+    deps:
+      - propose_source_decision
+      - check_source_decision
+    work:
+      objective: 结合来源登记、Agent 建议和 Tool 证据，明确接受或退回当前优先级决策
+      inputs:
+        - instance_inputs.source_registry
+        - dependencies.propose_source_decision
+        - dependencies.check_source_decision
+      outputs:
+        - id: decision
+          type: data
+      acceptance:
+        - 已核对唯一优先级与全部问题回答是否符合当前工作
+        - 已核对完成标准、不做事项和重新评估条件是否可执行
+        - 已明确选择接受或退回
+      decision:
+        kind: accept_reject
+        reject_target: propose_source_decision

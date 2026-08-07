@@ -24,6 +24,7 @@ class LLMAgentExecutor:
 
     KIND = "llm.generate"
     SOURCE_CLAIMS_FORMAT = "source_claims.v1"
+    SOURCE_DECISION_FORMAT = "source_decision.v1"
 
     def __init__(
         self,
@@ -52,7 +53,11 @@ class LLMAgentExecutor:
         if not isinstance(instructions, str) or not instructions.strip():
             raise ValueError("Agent instructions are required")
         result_format = agent.get("result_format", "plain_text")
-        if result_format not in {"plain_text", self.SOURCE_CLAIMS_FORMAT}:
+        if result_format not in {
+            "plain_text",
+            self.SOURCE_CLAIMS_FORMAT,
+            self.SOURCE_DECISION_FORMAT,
+        }:
             raise ValueError(f"unsupported Agent result_format: {result_format!r}")
 
         prompt = self._prompt(
@@ -87,6 +92,11 @@ class LLMAgentExecutor:
             result["content"] = render_source_claims(claims)
             result["source_claims"] = claims
             result["result_format"] = result_format
+        elif result_format == self.SOURCE_DECISION_FORMAT:
+            decision = self._source_decision(content)
+            result["content"] = render_source_decision(decision)
+            result["source_decision"] = decision
+            result["result_format"] = result_format
         return ExecutionResult(result=result)
 
     def accepts(self, *, executor: ExecutorKind, work: Mapping[str, object]) -> bool:
@@ -117,17 +127,33 @@ class LLMAgentExecutor:
         acceptance = "\n".join(
             f"- {item}" for item in request.work.get("acceptance", ())
         )
-        final_instruction = (
-            "请只返回一个 JSON 对象，不要返回 Markdown 代码块或其他文字。JSON 必须包含 "
-            "problem、target_users、functional_requirements、acceptance_criteria、"
-            "risks、open_questions、source_url。前六项是数组，每项只含 text、"
-            "claim_type、source_ids。claim_type 只能是 source_fact、inference、"
-            "open_question。source_fact 与 inference 只能引用输入 source_registry "
-            "中的 F 编号；open_question 只能放在 open_questions 并引用 Q 编号。"
-            if request.work.get("agent", {}).get("result_format")
-            == LLMAgentExecutor.SOURCE_CLAIMS_FORMAT
-            else "请直接给出可供下一人工节点审阅的正文，不要返回 JSON、代码块或字段包装。"
-        )
+        result_format = request.work.get("agent", {}).get("result_format")
+        if result_format == LLMAgentExecutor.SOURCE_CLAIMS_FORMAT:
+            final_instruction = (
+                "请只返回一个 JSON 对象，不要返回 Markdown 代码块或其他文字。JSON 必须包含 "
+                "problem、target_users、functional_requirements、acceptance_criteria、"
+                "risks、open_questions、source_url。前六项是数组，每项只含 text、"
+                "claim_type、source_ids。claim_type 只能是 source_fact、inference、"
+                "open_question。source_fact 与 inference 只能引用输入 source_registry "
+                "中的 F 编号；open_question 只能放在 open_questions 并引用 Q 编号。"
+            )
+        elif result_format == LLMAgentExecutor.SOURCE_DECISION_FORMAT:
+            final_instruction = (
+                "请只返回一个 JSON 对象，不要返回 Markdown 代码块或其他文字。JSON 只能包含 "
+                "priority、rationale、acceptance_criteria、not_now、risks、answers、"
+                "source_url。priority 只含 text、source_ids；rationale、"
+                "risks 的每项只含 text、source_ids；acceptance_criteria 必须包含 3 到 5 项，"
+                "每项只含 text、source_ids；not_now 的每项"
+                "只含 text、reconsider_when、source_ids；answers 的每项只含 "
+                "question_id、text、source_ids。source_ids 只能引用 source_registry 中的 "
+                "F 编号。每个 Q 编号必须在 answers 中恰好回答一次，不得继续保留为待确认问题。"
+                "所有建议、标准、暂缓事项、风险和回答都属于基于来源事实的分析推断，不得写成"
+                "已经发生的事实。source_url 必须原样返回。"
+            )
+        else:
+            final_instruction = (
+                "请直接给出可供下一人工节点审阅的正文，不要返回 JSON、代码块或字段包装。"
+            )
         return (
             "你是企业协作工作流中的 Agent 节点。只完成当前节点，不执行外部操作，"
             "不虚构未提供的事实。\n\n"
@@ -174,12 +200,26 @@ class LLMAgentExecutor:
 
     @staticmethod
     def _source_claims(content: str) -> Mapping[str, object]:
+        return LLMAgentExecutor._strict_json_object(
+            content,
+            label="source claims",
+        )
+
+    @staticmethod
+    def _source_decision(content: str) -> Mapping[str, object]:
+        return LLMAgentExecutor._strict_json_object(
+            content,
+            label="source decision",
+        )
+
+    @staticmethod
+    def _strict_json_object(content: str, *, label: str) -> Mapping[str, object]:
         def strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
             value: dict[str, object] = {}
             for key, item in pairs:
                 if key in value:
                     raise ValueError(
-                        f"Agent source claims contain duplicate field: {key}"
+                        f"Agent {label} contains duplicate field: {key}"
                     )
                 value[key] = item
             return value
@@ -193,9 +233,9 @@ class LLMAgentExecutor:
                 ),
             )
         except (TypeError, ValueError) as exc:
-            raise ValueError("Agent source claims must be valid JSON") from exc
+            raise ValueError(f"Agent {label} must be valid JSON") from exc
         if not isinstance(value, Mapping):
-            raise ValueError("Agent source claims must be a JSON object")
+            raise ValueError(f"Agent {label} must be a JSON object")
         return to_json_value(value)
 
 
@@ -396,6 +436,20 @@ SOURCE_CLAIM_LABELS = {
     "open_questions": "待确认",
 }
 SOURCE_ID_RE = re.compile(r"^[FQ][1-9][0-9]{0,2}$")
+SOURCE_DECISION_LIST_SECTIONS = (
+    "rationale",
+    "acceptance_criteria",
+    "not_now",
+    "risks",
+    "answers",
+)
+SOURCE_DECISION_LABELS = {
+    "rationale": "决策依据",
+    "acceptance_criteria": "完成标准",
+    "not_now": "本周不做",
+    "risks": "风险",
+    "answers": "问题回答",
+}
 
 
 def render_source_claims(document: Mapping[str, object]) -> str:
@@ -435,6 +489,72 @@ def render_source_claims(document: Mapping[str, object]) -> str:
         "来源\n" + (source_url.strip() if isinstance(source_url, str) else "[结构无效]")
     )
     return "\n\n".join(sections)
+
+
+def render_source_decision(document: Mapping[str, object]) -> str:
+    """Render a source-grounded decision as recommendations, never facts."""
+
+    sections: list[str] = []
+    priority = document.get("priority")
+    if isinstance(priority, Mapping):
+        priority_text = priority.get("text")
+        priority_ids = priority.get("source_ids")
+        rendered_text = (
+            priority_text.strip()
+            if isinstance(priority_text, str)
+            else str(priority_text)
+        )
+        sections.append(
+            "唯一优先级\n"
+            f"- [建议推断，依据 {_render_source_ids(priority_ids)}] {rendered_text}"
+        )
+    else:
+        sections.append("唯一优先级\n- [结构无效] priority 不是对象")
+
+    for section in SOURCE_DECISION_LIST_SECTIONS:
+        lines = [SOURCE_DECISION_LABELS[section]]
+        raw_items = document.get(section)
+        if not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes)):
+            lines.append("- [结构无效] 该章节不是数组")
+            sections.append("\n".join(lines))
+            continue
+        for raw_item in raw_items:
+            if not isinstance(raw_item, Mapping):
+                lines.append("- [结构无效] 该条目不是对象")
+                continue
+            text = raw_item.get("text")
+            rendered_text = text.strip() if isinstance(text, str) else str(text)
+            ids = _render_source_ids(raw_item.get("source_ids"))
+            if section == "answers":
+                question_id = raw_item.get("question_id")
+                label = f"回答 {question_id}，建议推断，依据 {ids}"
+                lines.append(f"- [{label}] {rendered_text}")
+            elif section == "not_now":
+                reconsider_when = raw_item.get("reconsider_when")
+                rendered_trigger = (
+                    reconsider_when.strip()
+                    if isinstance(reconsider_when, str)
+                    else str(reconsider_when)
+                )
+                lines.append(
+                    f"- [建议推断，依据 {ids}] {rendered_text}\n"
+                    f"  重新评估：{rendered_trigger}"
+                )
+            else:
+                lines.append(f"- [建议推断，依据 {ids}] {rendered_text}")
+        sections.append("\n".join(lines))
+
+    source_url = document.get("source_url")
+    sections.append(
+        "来源\n" + (source_url.strip() if isinstance(source_url, str) else "[结构无效]")
+    )
+    return "\n\n".join(sections)
+
+
+def _render_source_ids(value: object) -> str:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return "?"
+    return ", ".join(str(item) for item in value)
 
 
 class SourceClaimsCheckToolExecutor:
@@ -671,6 +791,315 @@ class SourceClaimsCheckToolExecutor:
         if missing_questions:
             violations.append("未覆盖待确认问题：" + "、".join(missing_questions))
         return violations, fact_ids, question_ids, used_facts, used_questions
+
+
+class SourceDecisionCheckToolExecutor:
+    """Check one source-grounded decision and complete answers deterministically."""
+
+    KIND = "source_decision.check"
+    EXPECTED_FIELDS = {
+        "priority",
+        "rationale",
+        "acceptance_criteria",
+        "not_now",
+        "risks",
+        "answers",
+        "source_url",
+    }
+
+    def __init__(self, *, max_source_chars: int = 50_000) -> None:
+        if max_source_chars < 1:
+            raise ValueError("max_source_chars must be positive")
+        self.max_source_chars = max_source_chars
+
+    def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        tool = request.work.get("tool")
+        if not self.accepts(executor=request.executor, work=request.work):
+            raise ValueError(f"unsupported source decision contract: {tool!r}")
+        assert isinstance(tool, Mapping)
+        args = tool.get("args") or {}
+        if not isinstance(args, Mapping):
+            raise ValueError("source_decision.check args must be an object")
+        if set(args) != {"document", "source_registry"}:
+            raise ValueError(
+                "source_decision.check args require only document and source_registry"
+            )
+        document = self._resolved_mapping(
+            request.input_snapshot,
+            args.get("document"),
+            "document",
+        )
+        registry = self._resolved_mapping(
+            request.input_snapshot,
+            args.get("source_registry"),
+            "source_registry",
+        )
+        violations, fact_ids, question_ids, used_facts, answered_questions = (
+            self._violations(document, registry)
+        )
+        passed = not violations
+        evidence = (
+            f"来源事实 {len(used_facts)}/{len(fact_ids)}、决策问题 "
+            f"{len(answered_questions)}/{len(question_ids)} 均已覆盖"
+            if passed
+            else "；".join(violations[:20])
+        )
+        suggestion = (
+            ""
+            if passed
+            else "修正唯一优先级、问题回答、完成标准、暂缓事项或来源编号后，再交由节点 Owner 做语义复核。"
+        )
+        verdict = QualityVerdict.PASS if passed else QualityVerdict.FAIL
+        return ExecutionResult(
+            result={
+                "verdict": verdict.value,
+                "evidence": evidence,
+                "suggestion": suggestion,
+                "fact_coverage": {
+                    "used": len(used_facts),
+                    "total": len(fact_ids),
+                    "missing": sorted(fact_ids - used_facts),
+                },
+                "question_coverage": {
+                    "used": len(answered_questions),
+                    "total": len(question_ids),
+                    "missing": sorted(question_ids - answered_questions),
+                },
+                "violations": violations[:20],
+                "request_id": request.idempotency_key,
+            },
+            quality_result=QualityResult(
+                verdict=verdict,
+                evidence=evidence,
+                suggestion=suggestion,
+            ),
+        )
+
+    def accepts(self, *, executor: ExecutorKind, work: Mapping[str, object]) -> bool:
+        tool = work.get("tool")
+        return (
+            executor == ExecutorKind.TOOL
+            and isinstance(tool, Mapping)
+            and tool.get("kind") == self.KIND
+        )
+
+    def _resolved_mapping(
+        self,
+        root: Mapping[str, object],
+        path: object,
+        field_name: str,
+    ) -> Mapping[str, object]:
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError(f"source_decision.check {field_name} path is required")
+        found, value = ContentCheckToolExecutor._lookup(root, path.strip())
+        if not found:
+            raise ValueError(
+                f"source_decision.check {field_name} was not found: {path}"
+            )
+        if not isinstance(value, Mapping):
+            raise ValueError(
+                f"source_decision.check {field_name} must resolve to an object"
+            )
+        length = len(json.dumps(to_json_value(value), ensure_ascii=False))
+        if length > self.max_source_chars:
+            raise ValueError(
+                f"source_decision.check {field_name} exceeds "
+                f"{self.max_source_chars} characters"
+            )
+        return value
+
+    @classmethod
+    def _violations(
+        cls,
+        document: Mapping[str, object],
+        registry: Mapping[str, object],
+    ) -> tuple[list[str], set[str], set[str], set[str], set[str]]:
+        violations: list[str] = []
+        if set(registry) != {"source_url", "facts", "open_questions"}:
+            violations.append("source_registry 只允许 source_url、facts、open_questions")
+        source_url = registry.get("source_url")
+        if not isinstance(source_url, str) or not source_url.strip():
+            violations.append("source_registry.source_url 无效")
+            source_url = ""
+        fact_ids = SourceClaimsCheckToolExecutor._registry_ids(
+            registry,
+            "facts",
+            "F",
+            1,
+            violations,
+        )
+        question_ids = SourceClaimsCheckToolExecutor._registry_ids(
+            registry,
+            "open_questions",
+            "Q",
+            1,
+            violations,
+        )
+        if set(document) != cls.EXPECTED_FIELDS:
+            violations.append("source_decision 文档字段不完整或包含未知字段")
+        if document.get("source_url") != source_url:
+            violations.append("source_decision.source_url 与来源登记不一致")
+
+        used_facts: set[str] = set()
+        priority = document.get("priority")
+        cls._claim(priority, "priority", fact_ids, used_facts, violations)
+        for section, minimum, maximum in (
+            ("rationale", 1, 10),
+            ("acceptance_criteria", 3, 5),
+            ("risks", 0, 10),
+        ):
+            cls._claim_list(
+                document.get(section),
+                section,
+                fact_ids,
+                used_facts,
+                violations,
+                minimum=minimum,
+                maximum=maximum,
+            )
+
+        raw_not_now = document.get("not_now")
+        if not isinstance(raw_not_now, Sequence) or isinstance(
+            raw_not_now,
+            (str, bytes),
+        ):
+            violations.append("not_now 必须是数组")
+        else:
+            if not 1 <= len(raw_not_now) <= 10:
+                violations.append("not_now 必须包含 1 到 10 项")
+            for index, item in enumerate(raw_not_now):
+                location = f"not_now[{index}]"
+                if not isinstance(item, Mapping) or set(item) != {
+                    "text",
+                    "reconsider_when",
+                    "source_ids",
+                }:
+                    violations.append(f"{location} 结构无效")
+                    continue
+                reconsider_when = item.get("reconsider_when")
+                if (
+                    not isinstance(reconsider_when, str)
+                    or not reconsider_when.strip()
+                    or len(reconsider_when) > 1000
+                ):
+                    violations.append(f"{location}.reconsider_when 无效")
+                cls._claim(
+                    item,
+                    location,
+                    fact_ids,
+                    used_facts,
+                    violations,
+                    allowed_extra={"reconsider_when"},
+                )
+
+        answered_questions: set[str] = set()
+        raw_answers = document.get("answers")
+        if not isinstance(raw_answers, Sequence) or isinstance(
+            raw_answers,
+            (str, bytes),
+        ):
+            violations.append("answers 必须是数组")
+        else:
+            if not 1 <= len(raw_answers) <= 50:
+                violations.append("answers 必须包含 1 到 50 项")
+            for index, item in enumerate(raw_answers):
+                location = f"answers[{index}]"
+                if not isinstance(item, Mapping) or set(item) != {
+                    "question_id",
+                    "text",
+                    "source_ids",
+                }:
+                    violations.append(f"{location} 结构无效")
+                    continue
+                question_id = item.get("question_id")
+                if not isinstance(question_id, str) or question_id not in question_ids:
+                    violations.append(f"{location}.question_id 不是登记的 Q 编号")
+                elif question_id in answered_questions:
+                    violations.append(f"{location}.question_id 重复：{question_id}")
+                else:
+                    answered_questions.add(question_id)
+                cls._claim(
+                    item,
+                    location,
+                    fact_ids,
+                    used_facts,
+                    violations,
+                    allowed_extra={"question_id"},
+                )
+
+        missing_facts = sorted(fact_ids - used_facts)
+        missing_questions = sorted(question_ids - answered_questions)
+        if missing_facts:
+            violations.append("未覆盖来源事实：" + "、".join(missing_facts))
+        if missing_questions:
+            violations.append("未回答决策问题：" + "、".join(missing_questions))
+        return violations, fact_ids, question_ids, used_facts, answered_questions
+
+    @classmethod
+    def _claim_list(
+        cls,
+        value: object,
+        section: str,
+        fact_ids: set[str],
+        used_facts: set[str],
+        violations: list[str],
+        *,
+        minimum: int,
+        maximum: int,
+    ) -> None:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            violations.append(f"{section} 必须是数组")
+            return
+        if not minimum <= len(value) <= maximum:
+            violations.append(f"{section} 必须包含 {minimum} 到 {maximum} 项")
+        for index, item in enumerate(value):
+            cls._claim(
+                item,
+                f"{section}[{index}]",
+                fact_ids,
+                used_facts,
+                violations,
+            )
+
+    @staticmethod
+    def _claim(
+        value: object,
+        location: str,
+        fact_ids: set[str],
+        used_facts: set[str],
+        violations: list[str],
+        *,
+        allowed_extra: set[str] | None = None,
+    ) -> None:
+        if not isinstance(value, Mapping):
+            violations.append(f"{location} 结构无效")
+            return
+        required = {"text", "source_ids"}
+        if set(value) != required | (allowed_extra or set()):
+            violations.append(f"{location} 结构无效")
+            return
+        text = value.get("text")
+        if not isinstance(text, str) or not text.strip() or len(text) > 1000:
+            violations.append(f"{location}.text 无效")
+        source_ids = value.get("source_ids")
+        if not isinstance(source_ids, Sequence) or isinstance(
+            source_ids,
+            (str, bytes),
+        ):
+            violations.append(f"{location}.source_ids 必须是数组")
+            return
+        normalized = [str(item) for item in source_ids]
+        if (
+            not normalized
+            or len(normalized) > 10
+            or len(set(normalized)) != len(normalized)
+        ):
+            violations.append(f"{location}.source_ids 数量或唯一性无效")
+            return
+        invalid = sorted(set(normalized) - fact_ids)
+        if invalid:
+            violations.append(f"{location} 引用了非 F 编号：{', '.join(invalid)}")
+        used_facts.update(set(normalized) & fact_ids)
 
 
 class DevelopmentToolExecutor:

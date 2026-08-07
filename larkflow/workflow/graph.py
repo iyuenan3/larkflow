@@ -98,7 +98,11 @@ def _validate_work(
         if not isinstance(model_role, str) or not model_role.strip():
             raise GraphValidationError(f"agent model_role is invalid: {node_key}")
         result_format = agent.get("result_format", "plain_text")
-        if result_format not in {"plain_text", "source_claims.v1"}:
+        if result_format not in {
+            "plain_text",
+            "source_claims.v1",
+            "source_decision.v1",
+        }:
             raise GraphValidationError(f"agent result_format is invalid: {node_key}")
 
     decision = work.get("decision")

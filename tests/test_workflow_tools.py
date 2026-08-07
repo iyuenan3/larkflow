@@ -20,6 +20,7 @@ from larkflow.workflow import (
     NodeStatus,
     QualityVerdict,
     SourceClaimsCheckToolExecutor,
+    SourceDecisionCheckToolExecutor,
     TargetRuntimeSettings,
     TemplateService,
     ToolExecutorRouter,
@@ -176,6 +177,84 @@ def source_claims_request(
     )
 
 
+def source_decision_request(*, document: dict | None = None) -> ExecutionRequest:
+    registry = {
+        "source_url": "https://example.invalid/roadmap/1",
+        "facts": [
+            {"id": "F1", "text": "当前门槛是真实内部试用"},
+            {"id": "F2", "text": "第二名管理员只在有明确需求时验证"},
+        ],
+        "open_questions": [
+            {"id": "Q1", "text": "未来一周唯一优先级是什么"}
+        ],
+    }
+    valid_document = {
+        "priority": {
+            "text": "完成一项真实内部工作",
+            "source_ids": ["F1", "F2"],
+        },
+        "rationale": [
+            {"text": "当前门槛要求真实使用", "source_ids": ["F1"]}
+        ],
+        "acceptance_criteria": [
+            {"text": "Owner 形成明确决定", "source_ids": ["F1"]},
+            {"text": "记录首次结果可用性", "source_ids": ["F1"]},
+            {"text": "记录人工干预次数", "source_ids": ["F1"]},
+        ],
+        "not_now": [
+            {
+                "text": "暂不扩展管理员能力",
+                "reconsider_when": "出现第二名管理员的明确需求",
+                "source_ids": ["F2"],
+            }
+        ],
+        "risks": [
+            {"text": "单个样本不能证明稳定价值", "source_ids": ["F1"]}
+        ],
+        "answers": [
+            {
+                "question_id": "Q1",
+                "text": "未来一周只完成真实内部工作",
+                "source_ids": ["F1", "F2"],
+            }
+        ],
+        "source_url": registry["source_url"],
+    }
+    return ExecutionRequest(
+        tenant_id="tenant_tools",
+        instance_id="instance_source_decision",
+        node_key="check_source_decision",
+        attempt_id="attempt_source_decision",
+        attempt_no=1,
+        owner_person_id="person_owner",
+        executor="tool",
+        work={
+            "objective": "检查来源约束型决策",
+            "inputs": [],
+            "outputs": [{"id": "verdict", "type": "data"}],
+            "acceptance": ["返回可审计证据"],
+            "tool": {
+                "kind": "source_decision.check",
+                "args": {
+                    "document": "dependencies.proposal.source_decision",
+                    "source_registry": "instance_inputs.source_registry",
+                },
+            },
+        },
+        input_snapshot={
+            "instance_inputs": {"source_registry": registry},
+            "dependencies": {
+                "proposal": {
+                    "source_decision": valid_document if document is None else document
+                }
+            },
+        },
+        expected_node_version=1,
+        claim_token="claim-source-decision",
+        claim_expires_at=NOW + timedelta(minutes=5),
+    )
+
+
 def test_content_check_returns_a_structured_pass_quality_result():
     result = ContentCheckToolExecutor().execute(request())
 
@@ -216,6 +295,66 @@ def test_source_claims_check_does_not_force_an_unfounded_open_question():
         "total": 0,
         "missing": (),
     }
+
+
+def test_source_decision_check_requires_one_priority_and_answers_every_question():
+    result = SourceDecisionCheckToolExecutor().execute(source_decision_request())
+
+    assert result.result["verdict"] == "pass"
+    assert result.result["fact_coverage"] == {
+        "used": 2,
+        "total": 2,
+        "missing": (),
+    }
+    assert result.result["question_coverage"] == {
+        "used": 1,
+        "total": 1,
+        "missing": (),
+    }
+    assert result.quality_result is not None
+    assert result.quality_result.verdict == QualityVerdict.PASS
+
+
+def test_source_decision_check_rejects_unanswered_questions_and_missing_triggers():
+    request_with_valid_document = source_decision_request()
+    valid = request_with_valid_document.input_snapshot["dependencies"]["proposal"][
+        "source_decision"
+    ]
+    document = {key: value for key, value in valid.items()}
+    document["answers"] = []
+    document["not_now"] = [
+        {
+            "text": "暂不扩展管理员能力",
+            "reconsider_when": " ",
+            "source_ids": ["F2"],
+        }
+    ]
+
+    result = SourceDecisionCheckToolExecutor().execute(
+        source_decision_request(document=document)
+    )
+
+    assert result.result["verdict"] == "fail"
+    assert "未回答决策问题：Q1" in result.result["evidence"]
+    assert "reconsider_when 无效" in result.result["evidence"]
+
+
+def test_source_decision_check_rejects_too_few_criteria_and_duplicate_answers():
+    request_with_valid_document = source_decision_request()
+    valid = request_with_valid_document.input_snapshot["dependencies"]["proposal"][
+        "source_decision"
+    ]
+    document = {key: value for key, value in valid.items()}
+    document["acceptance_criteria"] = list(valid["acceptance_criteria"][:2])
+    document["answers"] = [valid["answers"][0], valid["answers"][0]]
+
+    result = SourceDecisionCheckToolExecutor().execute(
+        source_decision_request(document=document)
+    )
+
+    assert result.result["verdict"] == "fail"
+    assert "acceptance_criteria 必须包含 3 到 5 项" in result.result["evidence"]
+    assert "question_id 重复：Q1" in result.result["evidence"]
 
 
 def test_source_claims_check_rejects_q_ids_disguised_as_facts():
@@ -305,6 +444,7 @@ def test_tool_router_selects_one_explicit_adapter_and_rejects_unknown_kinds():
         [
             ContentCheckToolExecutor(),
             SourceClaimsCheckToolExecutor(),
+            SourceDecisionCheckToolExecutor(),
             DevelopmentToolExecutor(sleep=lambda _: None),
         ]
     )
@@ -312,6 +452,7 @@ def test_tool_router_selects_one_explicit_adapter_and_rejects_unknown_kinds():
     assert router.accepts(executor=ExecutorKind.TOOL, work=request().work)
     assert router.execute(request()).result["verdict"] == "pass"
     assert router.execute(source_claims_request()).result["verdict"] == "pass"
+    assert router.execute(source_decision_request()).result["verdict"] == "pass"
     with pytest.raises(ValueError, match="unsupported Tool contract"):
         router.execute(request(kind="unknown.tool"))
 
@@ -333,6 +474,7 @@ def test_runtime_can_enable_content_check_without_enabling_development_echo():
     router = registry[ExecutorKind.TOOL]
     assert isinstance(router, ToolExecutorRouter)
     assert router.execute(request()).result["verdict"] == "pass"
+    assert router.execute(source_decision_request()).result["verdict"] == "pass"
 
 
 def test_packaged_human_agent_tool_human_template_matches_the_target_contract():
@@ -421,6 +563,59 @@ def test_packaged_source_grounded_template_has_explicit_provenance_and_decision_
     assert snapshot.node("review_engineering_brief").work["decision"] == {
         "kind": "accept_reject",
         "reject_target": "draft_engineering_brief",
+    }
+
+
+def test_packaged_source_grounded_decision_answers_questions_before_human_gate():
+    path = (
+        Path(__file__).parents[1]
+        / "larkflow"
+        / "templates"
+        / "source_grounded_decision.yaml"
+    )
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    templates = TemplateService(InMemoryTemplateStore(), clock=lambda: NOW)
+    templates.create_template(
+        tenant_id="tenant_tools",
+        actor_person_id="person_owner",
+        document=document,
+    )
+    templates.enable(
+        "tenant_tools",
+        "source_grounded_decision",
+        actor_person_id="person_owner",
+    )
+    snapshot = templates.instantiate(
+        "tenant_tools",
+        "source_grounded_decision",
+        inputs={
+            "source_registry": {
+                "source_url": "https://example.invalid/roadmap/1",
+                "facts": [{"id": "F1", "text": "先做真实内部工作"}],
+                "open_questions": [{"id": "Q1", "text": "本周做什么"}],
+            }
+        },
+        owner_bindings={"project_owner": "person_owner"},
+    )
+    validate_snapshot(snapshot)
+
+    assert tuple(node.executor.value for node in snapshot.nodes) == (
+        "human",
+        "agent",
+        "tool",
+        "human",
+    )
+    assert (
+        snapshot.node("propose_source_decision").work["agent"]["result_format"]
+        == "source_decision.v1"
+    )
+    assert (
+        snapshot.node("check_source_decision").work["tool"]["kind"]
+        == "source_decision.check"
+    )
+    assert snapshot.node("review_source_decision").work["decision"] == {
+        "kind": "accept_reject",
+        "reject_target": "propose_source_decision",
     }
 
 

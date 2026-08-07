@@ -67,8 +67,10 @@ from .executors import (
     DevelopmentToolExecutor,
     LLMAgentExecutor,
     SourceClaimsCheckToolExecutor,
+    SourceDecisionCheckToolExecutor,
     ToolExecutorRouter,
     render_source_claims,
+    render_source_decision,
 )
 from .decision import (
     HUMAN_DECISION_ACTION_NAME,
@@ -342,6 +344,7 @@ __all__ = [
     "CompletionPollReport",
     "ContentCheckToolExecutor",
     "SourceClaimsCheckToolExecutor",
+    "SourceDecisionCheckToolExecutor",
     "CandidateDirectory",
     "CliFeishuDirectory",
     "CliFeishuDocumentProjection",
@@ -558,6 +561,7 @@ __all__ = [
     "reachable_downstream",
     "ready_node_keys",
     "render_source_claims",
+    "render_source_decision",
     "role_binding_card",
     "role_binding_instance_id",
     "topological_order",

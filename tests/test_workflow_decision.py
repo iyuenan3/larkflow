@@ -69,7 +69,13 @@ def decision_snapshot() -> InstanceSnapshot:
     }
     return InstanceSnapshot(
         goal="Review a source-grounded brief",
-        inputs={"source_url": "https://example.invalid/issues/42"},
+        inputs={
+            "source_registry": {
+                "source_url": "https://example.invalid/issues/42",
+                "facts": [{"id": "F1", "text": "来源事实"}],
+                "open_questions": [],
+            }
+        },
         nodes=(
             NodeSpec(
                 "draft",
@@ -86,7 +92,10 @@ def decision_snapshot() -> InstanceSnapshot:
                 deps=("draft",),
                 work={
                     **common,
-                    "inputs": ["dependencies.draft"],
+                    "inputs": [
+                        "instance_inputs.source_registry",
+                        "dependencies.draft",
+                    ],
                     "decision": {
                         "kind": "accept_reject",
                         "reject_target": "draft",
@@ -459,6 +468,14 @@ def test_decision_node_projects_a_card_instead_of_a_second_task():
     assert "填写意见并退回" in rendered
     assert "human_decision_accept" in rendered
     assert "human_decision_reject" in rendered
+    context = next(
+        element["content"]
+        for element in card["body"]["elements"]
+        if element.get("tag") == "markdown" and "**流程输入**" in element["content"]
+    )
+    assert "```json" in context
+    assert '"source_url": "https://example.invalid/issues/42"' in context
+    assert "](https://example.invalid/issues/42%22)" not in context
     reject_form = next(
         element
         for element in card["body"]["elements"]
