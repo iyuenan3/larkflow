@@ -83,7 +83,7 @@
 - 入站校验服务：`systemctl status larkflow-target-inbound-adapter.service`；日志看 `journalctl -u larkflow-target-inbound-adapter.service`。
 - 领域入站服务：`systemctl status larkflow-target-inbound.service`；日志看 `journalctl -u larkflow-target-inbound.service`。
 - Edge Gateway：`systemctl status larkflow-target-edge.service`；日志看 `journalctl -u larkflow-target-edge.service`。服务只允许 loopback。
-- Owner Console：`systemctl status larkflow-target-console.service`；日志看 `journalctl -u larkflow-target-console.service`。服务只允许 loopback，开发期通过 `ssh -N -L 127.0.0.1:18780:127.0.0.1:8780 alicloud-sh` 临时访问。仓库 unit 与 env 模板为 `deploy/larkflow-target-console.service`、`deploy/larkflow-target-console.env.example`；env 由 larkflow 自己解析，禁止在 shell 中 source。
+- Owner Console：`systemctl status larkflow-target-console.service`；日志看 `journalctl -u larkflow-target-console.service`。服务只允许 loopback，开发期通过 `ssh -N -L 127.0.0.1:18780:127.0.0.1:8780 alicloud-sh` 临时访问。仓库 unit 与 env 模板为 `deploy/larkflow-target-console.service`、`deploy/larkflow-target-console.env.example`；env 由 larkflow 自己解析，禁止在 shell 中 source。仓库模板现支持 `static` 与 `feishu` 两种模式，但开发服务器仍运行已部署版本的 `static` 模式。启用 `feishu` 前必须由 HTTPS 反向代理提供与 `LARKFLOW_CONSOLE_PUBLIC_BASE_URL` 完全一致的公开 origin，在飞书应用登记同一 origin 下的 `/console/auth/callback` 和工作台主页，并把 app secret、飞书 `tenant_key` 与 Target tenant 映射保存在受限 env。当前进程内会话会在 Console 重启时失效。
 - Edge HTTPS：当前 Caddy 为 `disabled / inactive`。完成接入备案或迁移后，先验证配置和 DNS，再执行 `systemctl enable --now caddy`；证书与挑战日志看 `journalctl -u caddy`。公网可用性必须从员工设备实测，源站 loopback 成功不能替代 ICP 接入与外部链路验收。
 - 手工只读连接：`sudo -u lf_target_dev env --chdir=/ psql -X --dbname=larkflow_target_dev`。
 - migration：由目标应用启动入口调用 package-data migration runner。长期库的十九份 migration 已落地，后续不得手工改 schema 后跳过 migration ledger。

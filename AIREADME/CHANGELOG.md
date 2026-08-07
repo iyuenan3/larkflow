@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.57.0-draft · 2026-08-07 · 飞书应用内员工工作台登录
+
+- Added：Owner Console 新增 `feishu` 鉴权模式，使用 OAuth v3 authorization code、PKCE S256、浏览器绑定 state、飞书 tenant 显式映射和不透明服务端会话。飞书 `open_id` 映射为当前 person；用户 access token 只在服务端读取一次用户信息，随后丢弃，不进入浏览器、日志或流程数据，也不依赖 `lark-cli` 用户登录。
+- Security：OAuth state 单次且五分钟有效，回调只允许配置的 HTTPS origin。会话 cookie 使用 `Secure + HttpOnly + SameSite=Lax + __Host-`，服务端仅保存随机 token 的 SHA-256 摘要。用户 OAuth 不申请业务 scope，不保存 refresh token；其他飞书 tenant 拒绝映射。现有静态 Bearer 模式继续保留为 loopback 开发兼容路径。
+- UX：页面改为“我的工作台”。`feishu` 模式下未登录用户自动进入授权链路，登录失败可重试，注销只结束当前 Console 会话；`static` 模式继续显示开发 token 入口。领域数据和可写边界不变。
+- Verified：内容提交 `c2e9db99f4b463a895450371dde9b176d6c31ef1`。OAuth、会话、HTTP、CLI 与静态资源聚焦套件为 `31 passed`，JavaScript 语法与 Python 编译检查通过。移除本机代理后完整离线套件除沙箱禁止 `ps` 的单项外为 `952 passed, 18 skipped`，该进程树用例在沙箱外单独通过，因此完整等价结果为 `953 passed, 18 skipped`。候选 wheel SHA-256 为 `a0ce523fff41bd60004cb21c8f33689e7f979a45df2509c10c565c3cb8677669`，已确认包含新鉴权模块、CLI、HTTP 和三份前端静态资源。
+- Boundary：本提交尚未推送或部署，开发服务器仍运行静态模式。当前没有可用公网 HTTPS、飞书应用主页与回调配置，也没有真实应用内登录、多成员 Owner 隔离或注销验收。会话存储是单进程内存，Console 重启会要求重新登录；管理员后台尚未实现。
+
 ## v0.56.0-draft · 2026-08-07 · Owner 待处理中心 v0
 
 - Added：Owner Console 列表响应新增 `attention` 读模型，从同一 PostgreSQL 聚合派生失败恢复、本人 Human 待办、暂停继续和草稿确认四类提示。失败优先；多个失败节点统一建议完整实例重启。

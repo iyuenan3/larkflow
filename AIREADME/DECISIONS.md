@@ -809,3 +809,13 @@
 - Alternatives(否决)：把待处理项保存为独立表；浏览器直接确认草稿、继续或重启；对列表中的每个实例调用完整 `get`；展示所有协作者 Human 节点；把原始错误正文和审计 payload 交给前端判断；先做通用可写 DAG 画布。
 - Tradeoff：Owner 获得更明确的下一步，但仍需要转到飞书执行命令或完成责任卡。当前列表上限内的提示不是全量工作箱，也没有分页、筛选、协作者视图、跨轮次比较或生产身份。复制命令减少输入错误，但不能消除飞书侧二次确认。
 - Evidence：内容提交 `30dc7ee` 新增 Owner 范围的仓储候选模型、服务端 DTO、响应式待处理卡和即时按钮反馈；`b6eda8c` 收紧 PostgreSQL Instance Owner 与节点 Owner 查询边界断言。Console 聚焦套件为 `16 passed`；移除本机代理后完整离线套件为 `943 passed, 18 skipped`，沙箱外进程树单项另行通过。没有新增 migration。该内容已部署到开发服务器，真实认证 API 回读最近 30 个本人流程和 22 条待处理项，PostgreSQL 直接查询返回两条失败节点与一条本人 Human 等待节点，响应不含配置的人员 ID。十个服务保持 `active / running / NRestarts=0`，loopback 边界不变；同发布内容浏览器功能验收确认“查看流程”进入“已打开”且无横向溢出或控制台错误。真实开发 token 未进入自动化浏览器，Owner 独立使用仍是下一门槛。
+
+## ADR-094 · 2026-08-07 · 飞书应用内员工工作台使用 OAuth v3 服务端会话，不复用 lark-cli 用户登录
+
+- **Status：Accepted · Local implementation, development deployment pending。**
+- Problem：每名员工点击飞书应用后应进入只展示本人 Owner 流程的工作台。现有静态 Bearer token 只能支持开发隧道，不能识别真实员工；服务器上的 bot profile 和员工电脑上的 `lark-cli auth login` 又分别属于应用凭据与个人工具上下文，不应成为网页会话身份。
+- Constraint：浏览器不能声明 tenant、person 或 Owner；app secret 与用户 token 不能进入前端；飞书身份和 Target tenant 必须显式映射；非 Owner 与不存在实例继续返回相同 404；员工登录不得申请无关业务权限；现阶段仍保持单企业、只读 Console 和 loopback 应用服务。
+- Decision：使用飞书 OAuth v3 authorization code 作为统一网页入口。授权请求同时使用单次服务端 state、浏览器绑定 cookie 与 PKCE S256；回调只接受配置的 HTTPS origin，并由服务端用 app secret 换取用户 access token。服务端立即调用一次用户信息接口，要求 `tenant_key` 等于配置的飞书 tenant，再把 `open_id` 映射为 Target person；用户 access token 随即丢弃，不申请业务 scope，不保存 refresh token。浏览器只获得随机不透明的 Secure、HttpOnly、SameSite=Lax、`__Host-` 会话 cookie，服务端只保存其 SHA-256 摘要。现有静态 token 保留为 loopback 开发回退。
+- Alternatives(否决)：让中央服务器登录每名员工的 `lark-cli` profile；继续向多人分发共享静态 token；把用户 access token 保存在浏览器；以邮箱或手机号自行建立第二套账号；把 H5 JSAPI 授权作为第一入口；在员工登录和可见性尚未稳定前同步建设完整管理员后台。
+- Tradeoff：真实启用需要稳定公网 HTTPS、准确的飞书回调与应用主页配置，并要求 app secret 只存在于受限服务器 env。当前会话存储为单进程内存，Console 重启会要求重新登录，不支持跨副本或集中吊销；单企业映射不等于完整多租户身份系统。员工工作台仍只展示 Instance Owner 视角，没有协作者视图或管理员后台。
+- Evidence：内容提交 `c2e9db99f4b463a895450371dde9b176d6c31ef1`。OAuth、会话、HTTP、CLI 与静态资源聚焦套件为 `31 passed`；完整等价结果为 `953 passed, 18 skipped`。候选 wheel SHA-256 为 `a0ce523fff41bd60004cb21c8f33689e7f979a45df2509c10c565c3cb8677669`，包含鉴权模块和员工工作台静态资源。该证据只证明本地实现、打包和离线边界，尚未部署，也没有真实飞书应用入口或多用户验收。
