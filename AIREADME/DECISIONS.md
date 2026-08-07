@@ -829,3 +829,13 @@
 - Alternatives(否决)：继续使用单进程内存并要求部署后全员重登；把原始 session token 保存到数据库；把飞书 user access token 当长期网页会话；使用可自解码且不能集中失效的浏览器 JWT；在没有管理员产品边界时先建设通用身份服务；让浏览器提交 tenant 或 person。
 - Tradeoff：每次已登录请求增加一次 PostgreSQL 摘要查询，签发时的全局 advisory lock 会串行化低频登录，但换来跨进程重建的一致失效语义。全局数量上限会逐出最早会话，当前没有按 tenant 或用户配额、管理员级集中撤销界面、密钥轮换面板或跨区域容灾。OAuth 授权中途重启仍需重新开始，已完成会话则不受影响。
 - Evidence：内容提交 `a6f5babb07623590e9be2a2b8c523857cce56ff7`；完整离线套件等价结果为 `955 passed, 19 skipped`。一次性真实 PostgreSQL 应用二十份 migration，并验证认证器重建后会话有效、原始凭据不落库、注销立即失效和过期记录清理。wheel SHA-256 为 `a3b680c0a76545ab25a6c62ad500c9a2db0e24b2aac890eb4a1b708bc5fea729`，长期库已应用 `0020_console_sessions`。真实成员重新授权后，Console 重启前后同一摘要记录保持有效；公网与 loopback 均返回 200，用户直接刷新仍保持登录。Console 与 Caddy 均为 `active / NRestarts=0`，验收窗口无 warning。
+
+## ADR-096 · 2026-08-07 · 最小管理员后台先只读聚合，不建立旁路控制面
+
+- **Status：Accepted · Development deployment and HTTP authorization acceptance verified。**
+- Problem：员工工作台已经解决每名 Owner 查看本人流程的问题，但开发运营仍需判断中央节点是否积压、会话是否临近过期、migration 是否对齐。继续依赖 SSH 与临时 SQL 会让运营判断不可复用；直接建设可写管理员后台又会同时引入会话吊销、队列重放、配置管理与新的高风险授权面。
+- Constraint：PostgreSQL 继续是业务与运行状态权威；管理员身份不能由浏览器声明；查询必须限制在当前 tenant；普通成员不能通过状态码枚举管理员能力；页面不能泄露人员 ID、原始错误、payload、claim 或单条敏感记录；任何流程、会话、配置或队列写操作仍保持后置。
+- Decision：复用现有飞书 OAuth 和 PostgreSQL 耐久会话，以受限服务器 env 中的 `tenant + person` allowlist 计算管理员资格。`GET /console/api/v1/auth` 只返回服务端计算的 `admin` 布尔值；未授权成员访问 `GET /console/api/v1/admin/overview` 时返回与未知路由相同的 404。管理员读模型只聚合当前企业的流程状态、不同 Owner 数、会话状态、migration 对齐，以及 Outbox、Inbox、IM 命令、IM 回复、人员分工动作、人员分工回复和人员分工进度七条耐久队列。页面只在授权后显示“管理概览”，不提供撤销、重放、配置或流程写操作。
+- Alternatives(否决)：继续让管理员 SSH 登录后手工查询；让浏览器提交 `admin=true` 或 person ID；把全部队列明细与原始错误返回前端；为管理员单独建立账号密码；第一版同时加入会话撤销、队列重放与配置编辑；把管理员面与 Owner 数据读取合并为不区分权限的接口。
+- Tradeoff：服务端 allowlist 简单、可审计且适合当前单企业开发试用，但修改需要受控更新 env 并重启 Console，尚无委派、到期、审批或自助管理。聚合只能回答“哪里需要关注”，不能直接处置；管理员仍需使用既有运维入口。HTTP 和真实 PostgreSQL 已验收，真实登录浏览器的页签视觉验收仍待完成。
+- Evidence：内容提交 `e15f47942fcc01bc85ecbbfa822acd00558c06f0`；完整离线套件为 `960 passed, 20 skipped`。wheel SHA-256 为 `fbdd2e325d57fb595362c4aac8c32b10ae734843014c4bbef2da71480bbe418b`，已部署到 `/srv/larkflow/target/releases/20260807_204031_admin_e15f479/`。升级前备份成功，本次只重启 Console。真实 HTTP 验收回读管理员 200、普通成员 404、七条队列、55 个流程和二十份已对齐 migration；响应不含人员 ID、原始错误或 payload。短期验收会话已撤销，原有真实登录会话仍为一条；十个 Python 服务与 Caddy 保持 `active / NRestarts=0`，验收窗口无 warning。

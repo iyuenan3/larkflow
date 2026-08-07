@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.60.0-draft · 2026-08-07 · 管理员只读概览
+
+- Added：内容提交 `e15f47942fcc01bc85ecbbfa822acd00558c06f0` 在现有飞书身份与 PostgreSQL 耐久会话上增加当前企业管理员只读概览。`GET /console/api/v1/auth` 返回服务端计算的 `admin` 布尔值；授权后页面显示“管理概览”，读取流程状态、会话、migration 和七条耐久队列聚合。
+- Safety：管理员资格只由受限服务器 env 中的 `tenant + person` allowlist 计算，浏览器不能提交身份或权限。普通成员访问管理员路由与未知路由同样返回 404。仓储查询全部绑定当前 tenant，响应不含人员 ID、原始错误、payload、claim 或单条敏感记录；页面没有会话撤销、队列重放、配置修改和流程写操作。
+- Verified：Console 管理、HTTP、CLI 与 PostgreSQL 聚焦套件为 `44 passed`，JavaScript 语法与 Git whitespace 检查通过；清除本机代理并取得进程树检查所需权限后，完整离线套件为 `960 passed, 20 skipped`。候选 wheel 已确认包含 `console_admin.py`、静态资源和 migration `0020_console_sessions`。
+- Deployment：升级前数据库备份返回 `Result=success / ExecMainStatus=0`，env 备份为 `/etc/larkflow-target-console.env.bak.20260807_204031_admin_e15f479`。wheel SHA-256 为 `fbdd2e325d57fb595362c4aac8c32b10ae734843014c4bbef2da71480bbe418b`，保存在 `/srv/larkflow/target/releases/20260807_204031_admin_e15f479/`。本次只重启 Console，十个 Python 服务与 Caddy 均保持 `active / NRestarts=0`，公网工作台返回 200，验收窗口无 warning。
+- Acceptance：真实 HTTP 验收回读管理员 200、普通成员 404、`read_only=true`、`scope=current_tenant`、七条队列、55 个流程和二十份已对齐 migration。两条短期验收会话已撤销，原有真实登录会话仍为一条；聚合响应不含真实 person ID。真实登录浏览器中的管理员页签视觉验收仍待完成。
+- Boundary：当前只关闭开发环境管理员观察面和 HTTP 权限隔离，不等于管理员会话治理或生产发布。allowlist 自助管理、集中会话撤销、队列处置、正式域名、生产限流、安全响应头回归、跨区域容灾与容量验证仍未完成。设计理由见 ADR-096。
+
 ## v0.59.0-draft · 2026-08-07 · PostgreSQL 耐久员工工作台会话
 
 - Changed：内容提交 `a6f5babb07623590e9be2a2b8c523857cce56ff7` 把完成登录后的 Console 会话从单进程内存迁入 PostgreSQL。浏览器继续只持有随机不透明 HttpOnly 凭据；migration `0020_console_sessions` 只保存 SHA-256 摘要、tenant、person、创建时间和过期时间，不保存原始凭据或飞书用户 token。
