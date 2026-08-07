@@ -1,5 +1,15 @@
 # CHANGELOG · larkflow
 
+## v0.61.0-draft · 2026-08-07 · 管理员会话治理 v0
+
+- Added：内容提交 `8ba0ab9d93554b7958a650492e0282ad40db0d2e` 为管理员增加当前企业有效 Console 会话列表，以及其他会话撤销的五分钟耐久预览和显式确认。列表只返回安全会话 ID、`you / member` 关系、创建时间、过期时间与当前会话标记；当前浏览器会话只能注销。
+- Safety：确认在同一 PostgreSQL 事务中锁定预览与目标会话，原子删除目标、消费预览并追加不可变事件。状态漂移、过期和目标缺失返回 409；已消费预览重复确认返回相同成功结果。飞书会话的管理 POST 拒绝 query、请求体、`Content-Length` 和 `Transfer-Encoding`，并要求精确同源 `Origin` 与专用动作头。普通成员与不存在路由同样返回 404。
+- UI：会话治理按钮在发出请求前立即进入“创建预览中”或“正在撤销”，随后明确显示等待确认、已撤销或错误。该面板不显示人员 ID、凭据或会话摘要，也不扩展到 allowlist、队列、配置或流程领域写操作。
+- Verified：会话治理聚焦套件为 `29 passed`，JavaScript 语法、Python 编译与 Git whitespace 检查通过；清除本机代理并取得进程树检查所需权限后，完整离线套件为 `965 passed, 21 skipped`。一次性真实 PostgreSQL 应用二十一份 migration，双连接竞争同一预览得到一路执行、一路幂等回放，审计只有一条且更新删除均被拒绝；测试数据库与临时文件随后清理并回读为零。
+- Deployment：候选 wheel SHA-256 为 `b2cff677a419f7151f6ceb6dc8986fcd061999406cbd8212ac2cdde7504fecc8`，保存在 `/srv/larkflow/target/releases/20260807_212230_session_gov_8ba0ab9/`。升级前备份 `/var/backups/larkflow-postgres/larkflow_target_dev-20260807T212320+0800.dump` 成功，大小 230122 bytes，模式 `0600`。长期库已应用 `0021_console_session_governance`，本次只重启 Console；十个 Python 服务与 Caddy 均保持 `active / NRestarts=0`，部署窗口无 warning。
+- Acceptance：真实 HTTP 验收返回列表 200、当前会话撤销拒绝 409、预览 201、确认 200、重复确认幂等、被撤销会话 401、普通成员 404 和一条撤销审计。短期验收会话已清理，原有真实登录会话仍保留。新面板的真实登录浏览器视觉验收仍待完成。
+- Boundary：该版本只关闭开发环境的单会话集中撤销与审计缺口，不等于通用可写管理员后台或生产发布。allowlist 自助管理、批量撤销、设备命名、队列处置、正式域名、生产限流、安全响应头回归、跨区域容灾和容量验证仍未完成。设计理由见 ADR-097。
+
 ## v0.60.0-draft · 2026-08-07 · 管理员只读概览
 
 - Added：内容提交 `e15f47942fcc01bc85ecbbfa822acd00558c06f0` 在现有飞书身份与 PostgreSQL 耐久会话上增加当前企业管理员只读概览。`GET /console/api/v1/auth` 返回服务端计算的 `admin` 布尔值；授权后页面显示“管理概览”，读取流程状态、会话、migration 和七条耐久队列聚合。

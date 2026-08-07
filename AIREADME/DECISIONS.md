@@ -839,3 +839,13 @@
 - Alternatives(否决)：继续让管理员 SSH 登录后手工查询；让浏览器提交 `admin=true` 或 person ID；把全部队列明细与原始错误返回前端；为管理员单独建立账号密码；第一版同时加入会话撤销、队列重放与配置编辑；把管理员面与 Owner 数据读取合并为不区分权限的接口。
 - Tradeoff：服务端 allowlist 简单、可审计且适合当前单企业开发试用，但修改需要受控更新 env 并重启 Console，尚无委派、到期、审批或自助管理。聚合只能回答“哪里需要关注”，不能直接处置；管理员仍需使用既有运维入口。HTTP 和真实 PostgreSQL 已验收，真实登录浏览器的页签视觉验收仍待完成。
 - Evidence：内容提交 `e15f47942fcc01bc85ecbbfa822acd00558c06f0`；完整离线套件为 `960 passed, 20 skipped`。wheel SHA-256 为 `fbdd2e325d57fb595362c4aac8c32b10ae734843014c4bbef2da71480bbe418b`，已部署到 `/srv/larkflow/target/releases/20260807_204031_admin_e15f479/`。升级前备份成功，本次只重启 Console。真实 HTTP 验收回读管理员 200、普通成员 404、七条队列、55 个流程和二十份已对齐 migration；响应不含人员 ID、原始错误或 payload。短期验收会话已撤销，原有真实登录会话仍为一条；十个 Python 服务与 Caddy 保持 `active / NRestarts=0`，验收窗口无 warning。
+
+## ADR-097 · 2026-08-07 · 首个管理员写操作只撤销其他浏览器会话
+
+- **Status：Accepted · Development deployment, PostgreSQL competition and HTTP acceptance verified。**
+- Problem：PostgreSQL 耐久会话关闭了 Console 重启丢失登录态的问题，也让遗失设备或离职成员的浏览器会话持续有效至过期。只读管理员概览只能发现会话数量，不能处置单个风险会话；让管理员通过 SSH 手工删除摘要既不可复用，也缺少预览、身份关系与产品级审计。
+- Constraint：Owner 流程、DAG、Attempt、队列、配置与 allowlist 仍不能从浏览器写入；管理员资格必须由服务端当前 tenant 与 person allowlist 计算；浏览器不能看到或提交原始凭据、摘要、person ID 或 tenant；当前会话必须通过注销结束，避免管理员误撤销正在操作的唯一入口；撤销必须有短期预览、显式确认、版本漂移拒绝、竞争幂等和不可变审计；飞书 cookie 写请求必须抵抗跨站触发。
+- Decision：把其他浏览器会话撤销作为首个且唯一的管理员写操作。migration `0021_console_session_governance` 为每个会话增加独立安全 ID，并保存五分钟耐久预览和追加型撤销事件。管理员列表只返回 `you / member` 关系、安全 ID、创建与过期时间。预览绑定当前 tenant、管理员主体、当前会话和目标会话状态；确认事务锁定预览与目标，删除目标、消费预览并追加事件。已消费预览重复确认返回相同结果，不新增事件。飞书会话的两个管理 POST 拒绝 query 和 body，并要求精确同源 `Origin` 与专用动作头。
+- Alternatives(否决)：一键直接撤销而无预览；允许管理面撤销当前会话；把凭据摘要或 person ID 返回前端；继续依赖手工 SQL；改用无服务端失效能力的长时 JWT；第一版同时加入批量撤销、allowlist 编辑、队列重放、配置修改或流程写命令；为管理员另建账号密码体系。
+- Tradeoff：该能力能处理单个遗失或遗留浏览器会话，但不能按人员、设备或风险批量处置。person 仍只在服务端内部用于授权和审计关联，浏览器无法解释 `member` 对应的具体人员；预览与事件会持续占用少量 PostgreSQL 空间。allowlist 变更仍需受控修改服务器 env 并重启 Console。新面板的真实用户视觉验收尚未完成，也没有证明生产安全或组织采用。
+- Evidence：内容提交 `8ba0ab9d93554b7958a650492e0282ad40db0d2e`；聚焦套件为 `29 passed`，完整离线套件为 `965 passed, 21 skipped`。wheel SHA-256 为 `b2cff677a419f7151f6ceb6dc8986fcd061999406cbd8212ac2cdde7504fecc8`，已部署到 `/srv/larkflow/target/releases/20260807_212230_session_gov_8ba0ab9/`。一次性真实 PostgreSQL 双连接确认只有一路执行，另一路幂等回放，审计只有一条且不可更新删除。长期库应用第二十一份 migration，升级前备份成功。真实 HTTP 验收覆盖列表 200、当前会话拒绝 409、预览 201、确认 200、重复确认幂等、撤销后 401、普通成员 404 和响应脱敏；十个 Python 服务与 Caddy 保持 `active / NRestarts=0`，验收窗口无 warning。
