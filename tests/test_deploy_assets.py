@@ -160,6 +160,7 @@ def test_console_public_ip_tls_uses_certbot_without_logging_oauth_codes():
 
     assert "PUBLIC_IP" in caddyfile
     assert "auto_https off" in caddyfile
+    assert "default_sni PUBLIC_IP" in caddyfile
     assert "/var/lib/larkflow-certbot-webroot" in caddyfile
     assert "/etc/caddy/certs/larkflow-console/current/fullchain.pem" in caddyfile
     assert "reverse_proxy 127.0.0.1:8780" in caddyfile

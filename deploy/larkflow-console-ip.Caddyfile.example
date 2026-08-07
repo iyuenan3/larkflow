@@ -6,6 +6,7 @@
 {
 	admin 127.0.0.1:2019
 	auto_https off
+	default_sni PUBLIC_IP
 }
 
 http://PUBLIC_IP {
