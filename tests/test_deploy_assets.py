@@ -198,3 +198,21 @@ def test_console_public_ip_tls_uses_certbot_without_logging_oauth_codes():
     assert "OnCalendar=*-*-* 03,15:00:00" in timer
     assert "RandomizedDelaySec=30m" in timer
     assert "Persistent=true" in timer
+
+
+def test_console_admin_allowlist_tool_is_server_side_and_does_not_source_env():
+    tool = (
+        ROOT / "deploy" / "larkflow-console-admin-allowlist.py"
+    ).read_text(encoding="utf-8")
+
+    assert tool.startswith("#!/usr/bin/env python3\n")
+    assert "preview" in tool
+    assert "confirm" in tool
+    assert "rollback" in tool
+    assert "workflow_console_sessions" in tool
+    assert "expires_at > CURRENT_TIMESTAMP" in tool
+    assert "cannot remove the last Console administrator" in tool
+    assert "os.replace" in tool
+    assert "ProxyHandler({})" in tool
+    assert "shell=True" not in tool
+    assert "source " not in tool
