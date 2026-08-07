@@ -2,7 +2,7 @@
 
 ## v0.62.0-draft · 2026-08-08 · 公网 Console 边界加固 v0
 
-- Added：内容提交 `66b2c1294f3a0f0590b6a41564fe970765ace7a5` 为 `feishu` Console 增加读取、认证、管理员写入和全局四类有界令牌桶。来源地址只以进程随机密钥生成的 BLAKE2s 摘要保存在最多 10000 个 LRU key 中；429 返回固定安全 JSON 与 `Retry-After`。
+- Added：内容提交 `66b2c12d3ea27a61e5a1cdc21332ed03adb516ac` 为 `feishu` Console 增加读取、认证、管理员写入和全局四类有界令牌桶。来源地址只以进程随机密钥生成的 BLAKE2s 摘要保存在最多 10000 个 LRU key 中；429 返回固定安全 JSON 与 `Retry-After`。
 - Security：Caddy 无条件覆盖 `X-Larkflow-Client-IP`，Console 只在 immediate peer 为 loopback 时信任该头，且来源绝不参与身份或授权。Caddy 同时限制 64 KB 请求体、32 KB 请求头，设置 10 秒请求头、15 秒请求体、30 秒写入和 2 分钟空闲超时，关闭 0-RTT，并补齐 HSTS、CSP、Permissions-Policy、COOP、CORP、拒绝 framing、`nosniff` 与 `no-referrer`。OAuth callback 仍不启用访问日志。
 - Verified：限流与部署聚焦套件为 `14 passed`，完整离线套件为 `972 passed, 21 skipped`。故意移除 loopback 代理头信任后，定向测试按预期失败；恢复实现后通过。最终 wheel 已确认包含 `console_rate_limit.py`、Console 静态资源和全部模板，安装态导入与资源读取通过。
 - Deployment：wheel SHA-256 为 `3ff1d97317bf4c72e4040622e747bc16d7ca98709ecf2525371f894b9fa1b9df`，保存在 `/srv/larkflow/target/releases/20260808_004500_console_public_66b2c12/`。env、Caddyfile 和 systemd unit 均创建带同一发布标记的可恢复备份，上一版 wheel 继续保留。本次没有 migration，只重启 Console 并 reload Caddy；十个 Python 服务与 Caddy 均保持 `active / NRestarts=0`，部署窗口 warning 为 0。

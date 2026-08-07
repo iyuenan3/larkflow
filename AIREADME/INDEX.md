@@ -16,7 +16,7 @@
 
 > 内容提交 `8ba0ab9d93554b7958a650492e0282ad40db0d2e` 增加管理员会话治理 v0。有效会话列表只返回安全 ID、`you / member` 关系、创建与过期时间；当前会话只能注销，其他会话必须先创建五分钟耐久预览，再显式确认撤销。确认在同一事务中删除目标、消费预览并追加不可变审计，竞争确认只有一路执行，重复回放保持幂等。完整离线套件为 `965 passed, 21 skipped`，wheel SHA-256 为 `b2cff677a419f7151f6ceb6dc8986fcd061999406cbd8212ac2cdde7504fecc8`，已部署到 `/srv/larkflow/target/releases/20260807_212230_session_gov_8ba0ab9/`；长期库应用 `0021_console_session_governance`。真实 HTTP 验收覆盖列表 200、当前会话拒绝 409、预览 201、确认 200、重复确认幂等、被撤销会话 401 和普通成员 404。原有真实登录会话仍保留，十个 Python 服务与 Caddy 保持 `active / NRestarts=0`，验收窗口无 warning。用户随后在真实登录浏览器中完成新面板视觉验收。
 
-> 内容提交 `66b2c1294f3a0f0590b6a41564fe970765ace7a5` 完成公网 Console 边界加固 v0。Caddy 覆盖 `X-Larkflow-Client-IP`，loopback Console 只把该值用于限流公平性，不用于身份或授权；应用用带进程随机密钥的 BLAKE2s 摘要区分来源，不保存原始 IP。默认预算为每个来源每分钟 300 次读取、30 次认证、30 次管理员写入，以及每分钟 3000 次全局请求。完整离线套件为 `972 passed, 21 skipped`，wheel SHA-256 为 `3ff1d97317bf4c72e4040622e747bc16d7ca98709ecf2525371f894b9fa1b9df`，已部署到 `/srv/larkflow/target/releases/20260808_004500_console_public_66b2c12/`。真实公网并发验收用 31 个不同伪造来源值仍只得到 30 次 200 和 1 次 429，429 携带 `Retry-After`；公网安全响应头、Caddy 运行时超时、loopback 200、未认证管理员 401、十个 Python 服务与 Caddy `active / NRestarts=0`、零 warning 和一条原有真实登录会话均已回读。该开发证据不等于生产容量、分布式限流、正式域名或生产发布。
+> 内容提交 `66b2c12d3ea27a61e5a1cdc21332ed03adb516ac` 完成公网 Console 边界加固 v0。Caddy 覆盖 `X-Larkflow-Client-IP`，loopback Console 只把该值用于限流公平性，不用于身份或授权；应用用带进程随机密钥的 BLAKE2s 摘要区分来源，不保存原始 IP。默认预算为每个来源每分钟 300 次读取、30 次认证、30 次管理员写入，以及每分钟 3000 次全局请求。完整离线套件为 `972 passed, 21 skipped`，wheel SHA-256 为 `3ff1d97317bf4c72e4040622e747bc16d7ca98709ecf2525371f894b9fa1b9df`，已部署到 `/srv/larkflow/target/releases/20260808_004500_console_public_66b2c12/`。真实公网并发验收用 31 个不同伪造来源值仍只得到 30 次 200 和 1 次 429，429 携带 `Retry-After`；公网安全响应头、Caddy 运行时超时、loopback 200、未认证管理员 401、十个 Python 服务与 Caddy `active / NRestarts=0`、零 warning 和一条原有真实登录会话均已回读。该开发证据不等于生产容量、分布式限流、正式域名或生产发布。
 
 > 内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6` 修正 Console 把 DAG 误画为线性链的问题。页面现在依据 `deps` 计算拓扑层级，以 SVG 绘制真实依赖边并标注每个节点的直接依赖；选中节点时同步突出关联边，窗口变化后重绘。完整离线套件为 `922 passed, 18 skipped`，Console 与部署相关聚焦套件为 `22 passed`，JavaScript 语法检查通过。候选 wheel SHA-256 为 `6b8faed6eb5a4f32d695e40fdc495480585e53d9058e28e7ca7d2ece32421f8d`，安装后静态资源 SHA-256 与源码、wheel 均一致。升级前备份成功，migration runner 返回 `versions=[]`；本次只重启 Console，十个 Python 服务仍为 `active / NRestarts=0`，loopback、401/200 与部署窗口 warning 边界均已回读。真实 Chrome 标签页刷新后回读 4 条依赖边和 4 条依赖标签，分叉、汇合、关联高亮与横向滚动均完成目视确认。
 >
@@ -44,7 +44,7 @@
 >
 > 内容提交 `770243a02b116e12583ceebdb8362fd40b7fe0a7` 增加暂停、继续和版本绑定取消，真实飞书验收现已关闭最后的外部投影缺口。实例 `im_c1c472a12a8ea4a7c8d63480` 依次完成确认、暂停、继续、取消预览和确认，普通 Human Task 从飞书服务端回读为 `done`；实例 `im_516c59e4082e82ab74b8bd14` 进入决定节点后取消，原 Card 2.0 被原位更新为无控件“复核已取消”。两个实例的 PostgreSQL Instance、Node、Attempt、Projection 与追加型审计均和飞书终态一致。十个服务保持 `active / NRestarts=0`，验收窗口 warning 为 0。该证据只关闭开发测试组织中的生命周期链路，不构成生产上线或业务价值证明。
 >
-> last-synced: 8135ce47d26780a140a9b46e305cd1aab3044d09 · 2026-08-08
+> last-synced: 6a29eb5c95837149fc7417e7f0a34395fef94895 · 2026-08-08
 
 ## 阅读顺序
 
