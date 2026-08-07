@@ -4,6 +4,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 import os
 from threading import Barrier
 from uuid import uuid4
@@ -48,6 +49,14 @@ from larkflow.workflow import (
     WorkflowWorker,
     apply_migrations,
     postgres_connection_factory,
+)
+from larkflow.workflow.console import (
+    ConsolePrincipal,
+    InvalidConsoleCredentialError,
+)
+from larkflow.workflow.console_auth import (
+    PostgresConsoleSessionAuthenticator,
+    SESSION_COOKIE_NAME,
 )
 
 
@@ -136,6 +145,69 @@ class BarrierGraphEditRepository(PostgresWorkflowRepository):
     def save_graph_edit(self, *args, **kwargs):
         self.barrier.wait(timeout=5)
         return super().save_graph_edit(*args, **kwargs)
+
+
+def test_postgres_console_session_survives_recreation_and_revokes():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    principal = ConsolePrincipal(
+        tenant_id=f"tenant_console_{suffix}",
+        person_id=f"person_console_{suffix}",
+    )
+    now = [1_800_000_000.0]
+    first_process = PostgresConsoleSessionAuthenticator(
+        connection_factory,
+        ttl_seconds=300,
+        clock=lambda: now[0],
+    )
+    credential = first_process.issue(principal)
+    headers = {"Cookie": f"{SESSION_COOKIE_NAME}={credential}"}
+
+    second_process = PostgresConsoleSessionAuthenticator(
+        connection_factory,
+        ttl_seconds=300,
+        clock=lambda: now[0],
+    )
+    assert second_process.authenticate(headers) == principal
+    digest = sha256(credential.encode("utf-8")).hexdigest()
+    with connection_factory() as connection:
+        row = connection.execute(
+            """
+            SELECT credential_digest, tenant_id, person_id
+            FROM workflow_console_sessions
+            WHERE credential_digest = %s
+            """,
+            (digest,),
+        ).fetchone()
+    assert row == {
+        "credential_digest": digest,
+        "tenant_id": principal.tenant_id,
+        "person_id": principal.person_id,
+    }
+    assert credential not in repr(row)
+
+    second_process.revoke(headers)
+    with pytest.raises(InvalidConsoleCredentialError):
+        first_process.authenticate(headers)
+
+    expiring = second_process.issue(principal)
+    now[0] += 301
+    with pytest.raises(InvalidConsoleCredentialError):
+        first_process.authenticate(
+            {"Cookie": f"{SESSION_COOKIE_NAME}={expiring}"}
+        )
+    with connection_factory() as connection:
+        remaining = connection.execute(
+            """
+            SELECT count(*) AS count
+            FROM workflow_console_sessions
+            WHERE tenant_id = %s AND person_id = %s
+            """,
+            (principal.tenant_id, principal.person_id),
+        ).fetchone()
+    assert remaining["count"] == 0
 
 
 def test_postgres_committed_queue_insert_wakes_listener():

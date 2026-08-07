@@ -197,6 +197,30 @@ def test_opaque_session_is_http_only_expiring_and_revocable():
         )
 
 
+def test_opaque_session_store_evicts_the_oldest_digest_at_its_bound():
+    now = [1_000.0]
+    sessions = InMemoryConsoleSessionAuthenticator(
+        ttl_seconds=300,
+        max_sessions=1,
+        clock=lambda: now[0],
+    )
+    first = sessions.issue(ConsolePrincipal(WORKFLOW_TENANT, OWNER))
+    now[0] += 1
+    second_principal = ConsolePrincipal(
+        WORKFLOW_TENANT,
+        "ou_second_console",
+    )
+    second = sessions.issue(second_principal)
+
+    with pytest.raises(InvalidConsoleCredentialError):
+        sessions.authenticate(
+            {"Cookie": f"{SESSION_COOKIE_NAME}={first}"}
+        )
+    assert sessions.authenticate(
+        {"Cookie": f"{SESSION_COOKIE_NAME}={second}"}
+    ) == second_principal
+
+
 def test_oauth_flow_binds_state_uses_pkce_and_maps_only_the_allowed_tenant():
     flow, provider, sessions = _flow()
     start = flow.begin()

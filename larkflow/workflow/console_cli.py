@@ -16,7 +16,7 @@ from .console import ConsolePrincipal, ConsoleReadService, StaticConsoleAuthenti
 from .console_auth import (
     FeishuConsoleOAuthFlow,
     FeishuOAuthClient,
-    InMemoryConsoleSessionAuthenticator,
+    PostgresConsoleSessionAuthenticator,
 )
 from .console_http import ConsoleHttpApplication, build_console_http_server
 from .migrate import postgres_connection_factory, verify_migrations
@@ -115,7 +115,8 @@ def _run(namespace: argparse.Namespace) -> int:
             minimum=300,
             maximum=86_400,
         )
-        sessions = InMemoryConsoleSessionAuthenticator(
+        sessions = PostgresConsoleSessionAuthenticator(
+            connection_factory,
             ttl_seconds=session_ttl,
         )
         oauth = FeishuConsoleOAuthFlow(

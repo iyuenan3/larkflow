@@ -4,13 +4,14 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from http.cookies import CookieError, SimpleCookie
 import base64
 import secrets
 from threading import Lock
 import time
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlencode, urlsplit
 
 import httpx
@@ -26,6 +27,7 @@ FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
 FEISHU_USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
 SESSION_COOKIE_NAME = "__Host-larkflow_console_session"
 OAUTH_STATE_COOKIE_NAME = "__Host-larkflow_console_oauth_state"
+_SESSION_ISSUE_LOCK_KEY = "larkflow.console.sessions.v1"
 
 
 class ConsoleOAuthError(RuntimeError):
@@ -162,17 +164,197 @@ class FeishuOAuthClient:
 @dataclass(frozen=True)
 class _StoredSession:
     principal: ConsolePrincipal
-    created_at: float
-    expires_at: float
+    created_at: datetime
+    expires_at: datetime
 
 
-class InMemoryConsoleSessionAuthenticator:
-    """Keep opaque session credentials server-side for one Console process."""
+class _ConsoleSessionStore(Protocol):
+    def create(
+        self,
+        digest: str,
+        record: _StoredSession,
+        *,
+        max_sessions: int,
+        now: datetime,
+    ) -> bool:
+        """Store one digest after bounded cleanup."""
+
+    def get_active(
+        self,
+        digest: str,
+        *,
+        now: datetime,
+    ) -> ConsolePrincipal | None:
+        """Return an unexpired principal without exposing the credential."""
+
+    def delete(self, digest: str) -> None:
+        """Revoke one digest if present."""
+
+
+class _InMemoryConsoleSessionStore:
+    def __init__(self) -> None:
+        self._sessions: dict[str, _StoredSession] = {}
+        self._lock = Lock()
+
+    def create(
+        self,
+        digest: str,
+        record: _StoredSession,
+        *,
+        max_sessions: int,
+        now: datetime,
+    ) -> bool:
+        with self._lock:
+            self._discard_expired(now)
+            if digest in self._sessions:
+                return False
+            if len(self._sessions) >= max_sessions:
+                oldest = min(
+                    self._sessions,
+                    key=lambda item: (
+                        self._sessions[item].created_at,
+                        item,
+                    ),
+                )
+                self._sessions.pop(oldest, None)
+            self._sessions[digest] = record
+            return True
+
+    def get_active(
+        self,
+        digest: str,
+        *,
+        now: datetime,
+    ) -> ConsolePrincipal | None:
+        with self._lock:
+            record = self._sessions.get(digest)
+            if record is None or record.expires_at <= now:
+                self._sessions.pop(digest, None)
+                return None
+            return record.principal
+
+    def delete(self, digest: str) -> None:
+        with self._lock:
+            self._sessions.pop(digest, None)
+
+    def _discard_expired(self, now: datetime) -> None:
+        expired = [
+            digest
+            for digest, record in self._sessions.items()
+            if record.expires_at <= now
+        ]
+        for digest in expired:
+            self._sessions.pop(digest, None)
+
+
+class _PostgresConsoleSessionStore:
+    def __init__(self, connection_factory: Callable[[], Any]) -> None:
+        self.connection_factory = connection_factory
+
+    def create(
+        self,
+        digest: str,
+        record: _StoredSession,
+        *,
+        max_sessions: int,
+        now: datetime,
+    ) -> bool:
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (_SESSION_ISSUE_LOCK_KEY,),
+                )
+                connection.execute(
+                    "DELETE FROM workflow_console_sessions WHERE expires_at <= %s",
+                    (now,),
+                )
+                row = connection.execute(
+                    "SELECT count(*) AS count FROM workflow_console_sessions"
+                ).fetchone()
+                current_count = int(row["count"] if row is not None else 0)
+                evict_count = max(0, current_count - max_sessions + 1)
+                if evict_count:
+                    connection.execute(
+                        """
+                        DELETE FROM workflow_console_sessions
+                        WHERE credential_digest IN (
+                            SELECT credential_digest
+                            FROM workflow_console_sessions
+                            ORDER BY created_at, credential_digest
+                            LIMIT %s
+                        )
+                        """,
+                        (evict_count,),
+                    )
+                inserted = connection.execute(
+                    """
+                    INSERT INTO workflow_console_sessions (
+                        credential_digest, tenant_id, person_id,
+                        created_at, expires_at
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (credential_digest) DO NOTHING
+                    RETURNING credential_digest
+                    """,
+                    (
+                        digest,
+                        record.principal.tenant_id,
+                        record.principal.person_id,
+                        record.created_at,
+                        record.expires_at,
+                    ),
+                ).fetchone()
+                return inserted is not None
+
+    def get_active(
+        self,
+        digest: str,
+        *,
+        now: datetime,
+    ) -> ConsolePrincipal | None:
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                connection.execute(
+                    """
+                    DELETE FROM workflow_console_sessions
+                    WHERE credential_digest = %s AND expires_at <= %s
+                    """,
+                    (digest, now),
+                )
+                row = connection.execute(
+                    """
+                    SELECT tenant_id, person_id
+                    FROM workflow_console_sessions
+                    WHERE credential_digest = %s AND expires_at > %s
+                    """,
+                    (digest, now),
+                ).fetchone()
+        if row is None:
+            return None
+        return ConsolePrincipal(
+            tenant_id=row["tenant_id"],
+            person_id=row["person_id"],
+        )
+
+    def delete(self, digest: str) -> None:
+        with self.connection_factory() as connection:
+            connection.execute(
+                """
+                DELETE FROM workflow_console_sessions
+                WHERE credential_digest = %s
+                """,
+                (digest,),
+            )
+
+
+class OpaqueConsoleSessionAuthenticator:
+    """Issue opaque cookies while storing only credential digests server-side."""
 
     mode = "feishu"
 
     def __init__(
         self,
+        store: _ConsoleSessionStore,
         *,
         ttl_seconds: int = 28_800,
         max_sessions: int = 10_000,
@@ -185,48 +367,42 @@ class InMemoryConsoleSessionAuthenticator:
         self.ttl_seconds = ttl_seconds
         self.max_sessions = max_sessions
         self._clock = clock
-        self._sessions: dict[str, _StoredSession] = {}
-        self._lock = Lock()
+        self._store = store
 
     def issue(self, principal: ConsolePrincipal) -> str:
-        now = self._clock()
-        credential = secrets.token_urlsafe(48)
-        digest = _credential_digest(credential)
+        now = self._now()
         record = _StoredSession(
             principal=principal,
             created_at=now,
-            expires_at=now + self.ttl_seconds,
+            expires_at=now + timedelta(seconds=self.ttl_seconds),
         )
-        with self._lock:
-            self._discard_expired(now)
-            if len(self._sessions) >= self.max_sessions:
-                oldest = min(
-                    self._sessions,
-                    key=lambda item: self._sessions[item].created_at,
-                )
-                self._sessions.pop(oldest, None)
-            self._sessions[digest] = record
-        return credential
+        for _ in range(3):
+            credential = secrets.token_urlsafe(48)
+            if self._store.create(
+                _credential_digest(credential),
+                record,
+                max_sessions=self.max_sessions,
+                now=now,
+            ):
+                return credential
+        raise RuntimeError("could not allocate a unique Console session")
 
     def authenticate(self, headers: Mapping[str, str]) -> ConsolePrincipal:
         credential = _cookie_value(headers, SESSION_COOKIE_NAME)
         if not credential:
             raise InvalidConsoleCredentialError("console session is missing")
-        digest = _credential_digest(credential)
-        now = self._clock()
-        with self._lock:
-            record = self._sessions.get(digest)
-            if record is None or record.expires_at <= now:
-                self._sessions.pop(digest, None)
-                raise InvalidConsoleCredentialError("console session is invalid")
-            return record.principal
+        principal = self._store.get_active(
+            _credential_digest(credential),
+            now=self._now(),
+        )
+        if principal is None:
+            raise InvalidConsoleCredentialError("console session is invalid")
+        return principal
 
     def revoke(self, headers: Mapping[str, str]) -> None:
         credential = _cookie_value(headers, SESSION_COOKIE_NAME)
-        if not credential:
-            return
-        with self._lock:
-            self._sessions.pop(_credential_digest(credential), None)
+        if credential:
+            self._store.delete(_credential_digest(credential))
 
     def session_cookie(self, credential: str) -> str:
         return _cookie_header(
@@ -239,14 +415,45 @@ class InMemoryConsoleSessionAuthenticator:
     def clear_session_cookie() -> str:
         return _cookie_header(SESSION_COOKIE_NAME, "", max_age=0)
 
-    def _discard_expired(self, now: float) -> None:
-        expired = [
-            digest
-            for digest, record in self._sessions.items()
-            if record.expires_at <= now
-        ]
-        for digest in expired:
-            self._sessions.pop(digest, None)
+    def _now(self) -> datetime:
+        return datetime.fromtimestamp(float(self._clock()), timezone.utc)
+
+
+class InMemoryConsoleSessionAuthenticator(OpaqueConsoleSessionAuthenticator):
+    """Keep opaque session credentials server-side for one Console process."""
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: int = 28_800,
+        max_sessions: int = 10_000,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        super().__init__(
+            _InMemoryConsoleSessionStore(),
+            ttl_seconds=ttl_seconds,
+            max_sessions=max_sessions,
+            clock=clock,
+        )
+
+
+class PostgresConsoleSessionAuthenticator(OpaqueConsoleSessionAuthenticator):
+    """Persist opaque Console sessions in the authoritative PostgreSQL store."""
+
+    def __init__(
+        self,
+        connection_factory: Callable[[], Any],
+        *,
+        ttl_seconds: int = 28_800,
+        max_sessions: int = 10_000,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        super().__init__(
+            _PostgresConsoleSessionStore(connection_factory),
+            ttl_seconds=ttl_seconds,
+            max_sessions=max_sessions,
+            clock=clock,
+        )
 
 
 @dataclass(frozen=True)
@@ -278,7 +485,7 @@ class FeishuConsoleOAuthFlow:
         workflow_tenant_id: str,
         allowed_feishu_tenant_key: str,
         identity_provider: FeishuIdentityProvider,
-        sessions: InMemoryConsoleSessionAuthenticator,
+        sessions: OpaqueConsoleSessionAuthenticator,
         state_ttl_seconds: int = 300,
         max_pending_states: int = 1_000,
         clock: Callable[[], float] = time.time,
