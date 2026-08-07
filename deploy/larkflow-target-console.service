@@ -1,5 +1,5 @@
 [Unit]
-Description=larkflow Target owner-scoped read-only console
+Description=larkflow Target owner console and audited session governance
 Documentation=https://github.com/iyuenan3/larkflow
 After=network-online.target postgresql.service
 Wants=network-online.target

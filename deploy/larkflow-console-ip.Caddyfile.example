@@ -2,11 +2,20 @@
 # Certbot owns certificate issuance. Caddy only serves the ACME webroot,
 # redirects HTTP, terminates TLS, and proxies to the loopback Console.
 # Do not enable access logs: the OAuth callback query contains a one-time code.
-
 {
 	admin 127.0.0.1:2019
 	auto_https off
 	default_sni PUBLIC_IP
+	servers {
+		timeouts {
+			read_body 15s
+			read_header 10s
+			write 30s
+			idle 2m
+		}
+		max_header_size 32KB
+		0rtt off
+	}
 }
 
 http://PUBLIC_IP {
@@ -28,12 +37,21 @@ https://PUBLIC_IP {
 		max_size 64KB
 	}
 
-	reverse_proxy 127.0.0.1:8780
+	reverse_proxy 127.0.0.1:8780 {
+		# Overwrite any client-supplied value. The loopback Console trusts this
+		# header only for rate-limit fairness, never for identity or authorization.
+		header_up X-Larkflow-Client-IP {http.request.remote.host}
+	}
 
 	header {
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		X-Permitted-Cross-Domain-Policies "none"
 		Referrer-Policy "no-referrer"
+		Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
 		-Server
 	}
 }

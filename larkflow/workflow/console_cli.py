@@ -24,6 +24,7 @@ from .console_admin_sessions import (
     PostgresConsoleAdminSessionRepository,
 )
 from .console_http import ConsoleHttpApplication, build_console_http_server
+from .console_rate_limit import ConsoleRequestRateLimiter
 from .migrate import postgres_connection_factory, verify_migrations
 from .postgres import PostgresWorkflowRepository
 
@@ -31,7 +32,7 @@ from .postgres import PostgresWorkflowRepository
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="larkflow-console",
-        description="Owner-scoped read-only workflow console",
+        description="Owner workflow console and audited session governance",
     )
     parser.add_argument(
         "--env-file",
@@ -101,6 +102,7 @@ def _run(namespace: argparse.Namespace) -> int:
         if admin_service is not None
         else None
     )
+    rate_limiter = None
     if namespace.auth_mode == "static":
         person_id = _required(
             namespace.person,
@@ -165,11 +167,13 @@ def _run(namespace: argparse.Namespace) -> int:
             admin_service=admin_service,
             admin_session_service=admin_session_service,
         )
+        rate_limiter = _build_rate_limiter()
         access = "Feishu OAuth with an opaque HttpOnly session"
     server = build_console_http_server(
         application,
         host=namespace.host,
         port=namespace.port,
+        rate_limiter=rate_limiter,
     )
 
     stop_event = Event()
@@ -188,6 +192,7 @@ def _run(namespace: argparse.Namespace) -> int:
             "auth_mode": namespace.auth_mode,
             "mode": "owner_read_admin_session_governance",
             "admin_overview": "enabled" if admin_service is not None else "disabled",
+            "rate_limit": "enabled" if rate_limiter is not None else "disabled",
         }
     )
     serving_errors: list[BaseException] = []
@@ -258,6 +263,46 @@ def _person_id_list(value: Any, *, label: str) -> tuple[str, ...]:
     if len(unique) > 100:
         raise ValueError(f"{label} accepts at most 100 person IDs")
     return unique
+
+
+def _build_rate_limiter() -> ConsoleRequestRateLimiter:
+    window_seconds = _bounded_integer(
+        os.environ.get("LARKFLOW_CONSOLE_RATE_LIMIT_WINDOW_SECONDS", "60"),
+        label="LARKFLOW_CONSOLE_RATE_LIMIT_WINDOW_SECONDS",
+        minimum=10,
+        maximum=3_600,
+    )
+    requests_per_client = _bounded_integer(
+        os.environ.get("LARKFLOW_CONSOLE_RATE_LIMIT_REQUESTS_PER_CLIENT", "300"),
+        label="LARKFLOW_CONSOLE_RATE_LIMIT_REQUESTS_PER_CLIENT",
+        minimum=10,
+        maximum=10_000,
+    )
+    auth_requests_per_client = _bounded_integer(
+        os.environ.get("LARKFLOW_CONSOLE_RATE_LIMIT_AUTH_REQUESTS_PER_CLIENT", "30"),
+        label="LARKFLOW_CONSOLE_RATE_LIMIT_AUTH_REQUESTS_PER_CLIENT",
+        minimum=5,
+        maximum=1_000,
+    )
+    admin_writes_per_client = _bounded_integer(
+        os.environ.get("LARKFLOW_CONSOLE_RATE_LIMIT_ADMIN_WRITES_PER_CLIENT", "30"),
+        label="LARKFLOW_CONSOLE_RATE_LIMIT_ADMIN_WRITES_PER_CLIENT",
+        minimum=5,
+        maximum=1_000,
+    )
+    global_requests = _bounded_integer(
+        os.environ.get("LARKFLOW_CONSOLE_RATE_LIMIT_GLOBAL_REQUESTS", "3000"),
+        label="LARKFLOW_CONSOLE_RATE_LIMIT_GLOBAL_REQUESTS",
+        minimum=100,
+        maximum=100_000,
+    )
+    return ConsoleRequestRateLimiter(
+        window_seconds=window_seconds,
+        requests_per_client=requests_per_client,
+        auth_requests_per_client=auth_requests_per_client,
+        admin_writes_per_client=admin_writes_per_client,
+        global_requests=global_requests,
+    )
 
 
 def _print(payload: dict[str, Any], *, stream: Any = sys.stdout) -> None:

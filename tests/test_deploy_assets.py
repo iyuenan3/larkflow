@@ -142,6 +142,11 @@ def test_console_service_is_loopback_only_and_owner_scoped():
     assert environment["LARKFLOW_CONSOLE_FEISHU_TENANT_KEY"] == ""
     assert environment["LARKFLOW_CONSOLE_PUBLIC_BASE_URL"] == ""
     assert environment["LARKFLOW_CONSOLE_SESSION_TTL_SECONDS"] == "28800"
+    assert environment["LARKFLOW_CONSOLE_RATE_LIMIT_WINDOW_SECONDS"] == "60"
+    assert environment["LARKFLOW_CONSOLE_RATE_LIMIT_REQUESTS_PER_CLIENT"] == "300"
+    assert environment["LARKFLOW_CONSOLE_RATE_LIMIT_AUTH_REQUESTS_PER_CLIENT"] == "30"
+    assert environment["LARKFLOW_CONSOLE_RATE_LIMIT_ADMIN_WRITES_PER_CLIENT"] == "30"
+    assert environment["LARKFLOW_CONSOLE_RATE_LIMIT_GLOBAL_REQUESTS"] == "3000"
 
 
 def test_console_public_ip_tls_uses_certbot_without_logging_oauth_codes():
@@ -161,9 +166,20 @@ def test_console_public_ip_tls_uses_certbot_without_logging_oauth_codes():
     assert "PUBLIC_IP" in caddyfile
     assert "auto_https off" in caddyfile
     assert "default_sni PUBLIC_IP" in caddyfile
+    assert "read_body 15s" in caddyfile
+    assert "read_header 10s" in caddyfile
+    assert "write 30s" in caddyfile
+    assert "idle 2m" in caddyfile
+    assert "max_header_size 32KB" in caddyfile
+    assert "0rtt off" in caddyfile
     assert "/var/lib/larkflow-certbot-webroot" in caddyfile
     assert "/etc/caddy/certs/larkflow-console/current/fullchain.pem" in caddyfile
     assert "reverse_proxy 127.0.0.1:8780" in caddyfile
+    assert "header_up X-Larkflow-Client-IP {http.request.remote.host}" in caddyfile
+    assert 'X-Frame-Options "DENY"' in caddyfile
+    assert 'Cross-Origin-Opener-Policy "same-origin"' in caddyfile
+    assert 'Cross-Origin-Resource-Policy "same-origin"' in caddyfile
+    assert 'Permissions-Policy "accelerometer=()' in caddyfile
     assert "\n\tlog" not in caddyfile
 
     assert "RENEWED_LINEAGE" in installer

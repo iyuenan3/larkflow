@@ -33,6 +33,7 @@ from .console_admin_sessions import (
     ConsoleAdminSessionPreviewStaleError,
     ConsoleAdminSessionService,
 )
+from .console_rate_limit import ConsoleRequestRateLimiter
 
 
 LOGGER = logging.getLogger(__name__)
@@ -57,9 +58,17 @@ _SECURITY_HEADERS = {
         "form-action 'self'; frame-ancestors 'none'"
     ),
     "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": (
+        "accelerometer=(), camera=(), geolocation=(), gyroscope=(), "
+        "microphone=(), payment=(), usb=()"
+    ),
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
+    "X-Permitted-Cross-Domain-Policies": "none",
 }
+_TRUSTED_CLIENT_SOURCE_HEADER = "x-larkflow-client-ip"
 
 
 class _AdminWriteRequestError(PermissionError):
@@ -504,6 +513,7 @@ def build_console_http_server(
     *,
     host: str = "127.0.0.1",
     port: int = 8780,
+    rate_limiter: ConsoleRequestRateLimiter | None = None,
 ) -> ThreadingHTTPServer:
     """Build a console server that cannot bind to a non-loopback address."""
 
@@ -515,23 +525,35 @@ def build_console_http_server(
         protocol_version = "HTTP/1.1"
 
         def do_GET(self) -> None:  # noqa: N802
-            self._send(application.handle("GET", self.path, headers=self.headers))
+            self._dispatch("GET")
 
         def do_HEAD(self) -> None:  # noqa: N802
-            self._send(
-                application.handle("HEAD", self.path, headers=self.headers),
-                include_body=False,
-            )
+            self._dispatch("HEAD", include_body=False)
 
         def _handle_write(self) -> None:
             self.close_connection = True
-            self._send(application.handle(self.command, self.path, headers=self.headers))
+            self._dispatch(self.command)
 
         do_DELETE = _handle_write  # type: ignore[assignment]  # noqa: N815
         do_OPTIONS = _handle_write  # type: ignore[assignment]  # noqa: N815
         do_PATCH = _handle_write  # type: ignore[assignment]  # noqa: N815
         do_POST = _handle_write  # type: ignore[assignment]  # noqa: N815
         do_PUT = _handle_write  # type: ignore[assignment]  # noqa: N815
+
+        def _dispatch(self, method: str, *, include_body: bool = True) -> None:
+            limited = _rate_limit_response(
+                rate_limiter,
+                method=method,
+                target=self.path,
+                headers=self.headers,
+                peer_address=self.client_address[0],
+            )
+            response = limited or application.handle(
+                method,
+                self.path,
+                headers=self.headers,
+            )
+            self._send(response, include_body=include_body)
 
         def _send(
             self,
@@ -558,6 +580,31 @@ def build_console_http_server(
     return server
 
 
+def _rate_limit_response(
+    rate_limiter: ConsoleRequestRateLimiter | None,
+    *,
+    method: str,
+    target: str,
+    headers: Mapping[str, str],
+    peer_address: str,
+) -> ConsoleHttpResponse | None:
+    if rate_limiter is None:
+        return None
+    source = peer_address
+    if _is_loopback(peer_address):
+        source = _header(headers, _TRUSTED_CLIENT_SOURCE_HEADER) or peer_address
+    decision = rate_limiter.check(method, target, source)
+    if decision.allowed:
+        return None
+    response = ConsoleHttpApplication._error(
+        429,
+        "rate_limited",
+        "request rate limit exceeded",
+        headers={"Retry-After": str(decision.retry_after_seconds)},
+    )
+    return response
+
+
 def _require_loopback(host: str) -> None:
     if host == "localhost":
         return
@@ -567,6 +614,13 @@ def _require_loopback(host: str) -> None:
         raise ValueError("console host must be a loopback IP or localhost") from exc
     if not address.is_loopback:
         raise ValueError("console can only bind to loopback")
+
+
+def _is_loopback(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _single_value_query(
