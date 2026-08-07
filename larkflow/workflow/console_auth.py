@@ -17,6 +17,7 @@ from urllib.parse import urlencode, urlsplit
 import httpx
 
 from .console import (
+    ConsoleAuthentication,
     ConsolePrincipal,
     InvalidConsoleCredentialError,
 )
@@ -163,6 +164,7 @@ class FeishuOAuthClient:
 
 @dataclass(frozen=True)
 class _StoredSession:
+    id: str
     principal: ConsolePrincipal
     created_at: datetime
     expires_at: datetime
@@ -184,8 +186,8 @@ class _ConsoleSessionStore(Protocol):
         digest: str,
         *,
         now: datetime,
-    ) -> ConsolePrincipal | None:
-        """Return an unexpired principal without exposing the credential."""
+    ) -> _StoredSession | None:
+        """Return an unexpired session without exposing the credential."""
 
     def delete(self, digest: str) -> None:
         """Revoke one digest if present."""
@@ -208,6 +210,8 @@ class _InMemoryConsoleSessionStore:
             self._discard_expired(now)
             if digest in self._sessions:
                 return False
+            if any(item.id == record.id for item in self._sessions.values()):
+                return False
             if len(self._sessions) >= max_sessions:
                 oldest = min(
                     self._sessions,
@@ -225,13 +229,13 @@ class _InMemoryConsoleSessionStore:
         digest: str,
         *,
         now: datetime,
-    ) -> ConsolePrincipal | None:
+    ) -> _StoredSession | None:
         with self._lock:
             record = self._sessions.get(digest)
             if record is None or record.expires_at <= now:
                 self._sessions.pop(digest, None)
                 return None
-            return record.principal
+            return record
 
     def delete(self, digest: str) -> None:
         with self._lock:
@@ -290,13 +294,14 @@ class _PostgresConsoleSessionStore:
                 inserted = connection.execute(
                     """
                     INSERT INTO workflow_console_sessions (
-                        credential_digest, tenant_id, person_id,
+                        id, credential_digest, tenant_id, person_id,
                         created_at, expires_at
-                    ) VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (credential_digest) DO NOTHING
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
                     RETURNING credential_digest
                     """,
                     (
+                        record.id,
                         digest,
                         record.principal.tenant_id,
                         record.principal.person_id,
@@ -311,7 +316,7 @@ class _PostgresConsoleSessionStore:
         digest: str,
         *,
         now: datetime,
-    ) -> ConsolePrincipal | None:
+    ) -> _StoredSession | None:
         with self.connection_factory() as connection:
             with connection.transaction():
                 connection.execute(
@@ -323,7 +328,7 @@ class _PostgresConsoleSessionStore:
                 )
                 row = connection.execute(
                     """
-                    SELECT tenant_id, person_id
+                    SELECT id, tenant_id, person_id, created_at, expires_at
                     FROM workflow_console_sessions
                     WHERE credential_digest = %s AND expires_at > %s
                     """,
@@ -331,9 +336,14 @@ class _PostgresConsoleSessionStore:
                 ).fetchone()
         if row is None:
             return None
-        return ConsolePrincipal(
-            tenant_id=row["tenant_id"],
-            person_id=row["person_id"],
+        return _StoredSession(
+            id=row["id"],
+            principal=ConsolePrincipal(
+                tenant_id=row["tenant_id"],
+                person_id=row["person_id"],
+            ),
+            created_at=row["created_at"],
+            expires_at=row["expires_at"],
         )
 
     def delete(self, digest: str) -> None:
@@ -371,12 +381,13 @@ class OpaqueConsoleSessionAuthenticator:
 
     def issue(self, principal: ConsolePrincipal) -> str:
         now = self._now()
-        record = _StoredSession(
-            principal=principal,
-            created_at=now,
-            expires_at=now + timedelta(seconds=self.ttl_seconds),
-        )
         for _ in range(3):
+            record = _StoredSession(
+                id=secrets.token_hex(16),
+                principal=principal,
+                created_at=now,
+                expires_at=now + timedelta(seconds=self.ttl_seconds),
+            )
             credential = secrets.token_urlsafe(48)
             if self._store.create(
                 _credential_digest(credential),
@@ -388,16 +399,25 @@ class OpaqueConsoleSessionAuthenticator:
         raise RuntimeError("could not allocate a unique Console session")
 
     def authenticate(self, headers: Mapping[str, str]) -> ConsolePrincipal:
+        return self.authenticate_context(headers).principal
+
+    def authenticate_context(
+        self,
+        headers: Mapping[str, str],
+    ) -> ConsoleAuthentication:
         credential = _cookie_value(headers, SESSION_COOKIE_NAME)
         if not credential:
             raise InvalidConsoleCredentialError("console session is missing")
-        principal = self._store.get_active(
+        record = self._store.get_active(
             _credential_digest(credential),
             now=self._now(),
         )
-        if principal is None:
+        if record is None:
             raise InvalidConsoleCredentialError("console session is invalid")
-        return principal
+        return ConsoleAuthentication(
+            principal=record.principal,
+            session_id=record.id,
+        )
 
     def revoke(self, headers: Mapping[str, str]) -> None:
         credential = _cookie_value(headers, SESSION_COOKIE_NAME)

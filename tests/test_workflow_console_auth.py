@@ -172,6 +172,10 @@ def test_opaque_session_is_http_only_expiring_and_revocable():
     assert "HttpOnly" in cookie_header
     assert "SameSite=Lax" in cookie_header
     assert sessions.authenticate(request_headers) == principal
+    context = sessions.authenticate_context(request_headers)
+    assert context.principal == principal
+    assert context.session_id is not None
+    assert len(context.session_id) == 32
     assert credential not in repr(sessions.__dict__)
 
     collaborator = ConsolePrincipal(WORKFLOW_TENANT, "ou_collaborator_console")

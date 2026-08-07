@@ -178,8 +178,8 @@
             <p>只读查看当前企业的流程、登录会话、耐久队列和数据库版本状态。</p>
           </div>
           <div class="admin-boundary">
-            <strong>只读边界</strong>
-            <span>不提供流程修改、用户管理或会话撤销</span>
+            <strong>受控运营边界</strong>
+            <span>只有会话撤销可写，且必须预览、确认并追加审计</span>
           </div>
         </section>
 
@@ -207,6 +207,26 @@
             <div id="admin-migrations" class="admin-migration-detail"></div>
           </section>
         </div>
+
+        <section class="panel admin-panel admin-session-panel" aria-labelledby="admin-session-title">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">SESSION GOVERNANCE</p>
+              <h2 id="admin-session-title">登录会话治理</h2>
+              <p class="muted">不显示人员 ID 或登录凭据。当前浏览器请使用顶部“退出”，其他会话撤销需要二次确认。</p>
+            </div>
+            <span id="admin-session-count" class="count">0</span>
+          </div>
+          <div id="admin-session-preview" class="admin-session-preview" hidden></div>
+          <div id="admin-session-list" class="admin-session-list"></div>
+          <div class="admin-session-audit">
+            <div class="admin-session-audit-heading">
+              <strong>最近撤销审计</strong>
+              <span>只显示人员关系、会话尾号和操作时间</span>
+            </div>
+            <div id="admin-session-audit-list" class="admin-session-audit-list"></div>
+          </div>
+        </section>
 
         <section class="panel admin-panel admin-queue-panel" aria-labelledby="admin-queue-title">
           <div class="panel-heading">

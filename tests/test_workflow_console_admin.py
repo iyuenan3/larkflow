@@ -55,7 +55,7 @@ class FakeAdminRepository:
                     oldest_ready_at=NOW,
                 ),
             ),
-            applied_migrations=tuple(f"{number:04d}_test" for number in range(1, 21)),
+            applied_migrations=tuple(f"{number:04d}_test" for number in range(1, 22)),
         )
 
 
@@ -231,7 +231,9 @@ def test_postgres_admin_queries_keep_every_aggregate_inside_the_tenant():
                     ]
                 )
             if "FROM workflow_schema_migrations" in normalized:
-                return Cursor(rows=[{"version": "0020_console_sessions"}])
+                return Cursor(
+                    rows=[{"version": "0021_console_session_governance"}]
+                )
             raise AssertionError(normalized)
 
     snapshot = PostgresConsoleAdminRepository(Connection).read_admin_snapshot(

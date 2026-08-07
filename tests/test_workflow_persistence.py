@@ -103,6 +103,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0018_worker_wakeups",
         "0019_draft_generation_progress",
         "0020_console_sessions",
+        "0021_console_session_governance",
     ]
     sql = migrations[0][1]
     for table in (
@@ -136,6 +137,10 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "CREATE TABLE workflow_console_sessions" in migrations[19][1]
     assert "workflow_console_sessions_expiry_idx" in migrations[19][1]
     assert "credential_digest ~ '^[0-9a-f]{64}$'" in migrations[19][1]
+    assert "ADD COLUMN id text" in migrations[20][1]
+    assert "CREATE TABLE workflow_console_session_revocation_previews" in migrations[20][1]
+    assert "CREATE TABLE workflow_console_session_events" in migrations[20][1]
+    assert "workflow_console_session_events_append_only" in migrations[20][1]
     assert "CREATE TABLE workflow_im_commands" in migrations[7][1]
     wakeup_sql = migrations[17][1]
     assert "pg_notify('larkflow_work_available', '')" in wakeup_sql

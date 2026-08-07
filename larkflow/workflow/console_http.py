@@ -10,10 +10,12 @@ import ipaddress
 import json
 import logging
 import re
+import secrets
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlsplit
 
 from .console import (
+    ConsoleAuthentication,
     ConsoleReadService,
     ConsolePrincipal,
     ConsoleResourceNotFoundError,
@@ -25,6 +27,12 @@ from .console_auth import (
     FeishuConsoleOAuthFlow,
 )
 from .console_admin import ConsoleAdminReadService
+from .console_admin_sessions import (
+    ConsoleAdminSessionConflictError,
+    ConsoleAdminSessionPreviewExpiredError,
+    ConsoleAdminSessionPreviewStaleError,
+    ConsoleAdminSessionService,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -33,6 +41,14 @@ LOGGER = logging.getLogger(__name__)
 _INSTANCE_ROUTE = re.compile(
     r"^/console/api/v1/instances/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})$"
 )
+_ADMIN_SESSION_PREVIEW_ROUTE = re.compile(
+    r"^/console/api/v1/admin/sessions/([0-9a-f]{32})/revoke-preview$"
+)
+_ADMIN_SESSION_CONFIRM_ROUTE = re.compile(
+    r"^/console/api/v1/admin/session-revocations/([0-9a-f]{32})/confirm$"
+)
+_ADMIN_ACTION_HEADER = "x-larkflow-console-action"
+_ADMIN_ACTION_VALUE = "session-governance-v1"
 _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Content-Security-Policy": (
@@ -44,6 +60,10 @@ _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
 }
+
+
+class _AdminWriteRequestError(PermissionError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -60,9 +80,15 @@ class ConsoleAuthenticator(Protocol):
     def authenticate(self, headers: Mapping[str, str]) -> ConsolePrincipal:
         """Resolve request credentials to a server-side principal."""
 
+    def authenticate_context(
+        self,
+        headers: Mapping[str, str],
+    ) -> ConsoleAuthentication:
+        """Resolve the principal and opaque current-session reference."""
+
 
 class ConsoleHttpApplication:
-    """Serve immutable UI assets and authenticated, read-only JSON routes."""
+    """Serve immutable UI assets and narrowly scoped authenticated routes."""
 
     def __init__(
         self,
@@ -71,15 +97,19 @@ class ConsoleHttpApplication:
         *,
         oauth: FeishuConsoleOAuthFlow | None = None,
         admin_service: ConsoleAdminReadService | None = None,
+        admin_session_service: ConsoleAdminSessionService | None = None,
     ) -> None:
         self.service = service
         self.authenticator = authenticator
         self.oauth = oauth
         self.admin_service = admin_service
+        self.admin_session_service = admin_session_service
         if authenticator.mode not in {"static", "feishu"}:
             raise ValueError("console authenticator mode is unsupported")
         if (authenticator.mode == "feishu") != (oauth is not None):
             raise ValueError("Feishu authentication requires one OAuth flow")
+        if admin_session_service is not None and admin_service is None:
+            raise ValueError("admin session governance requires admin overview")
 
     def handle(
         self,
@@ -104,7 +134,10 @@ class ConsoleHttpApplication:
             authenticated = False
             admin = False
             try:
-                principal = self.authenticator.authenticate(request_headers)
+                authentication = self.authenticator.authenticate_context(
+                    request_headers
+                )
+                principal = authentication.principal
                 authenticated = True
                 admin = (
                     self.admin_service is not None
@@ -207,6 +240,15 @@ class ConsoleHttpApplication:
                 },
             )
 
+        if method == "POST" and parsed.path.startswith(
+            "/console/api/v1/admin/"
+        ):
+            return self._handle_admin_write(
+                parsed.path,
+                parsed.query,
+                request_headers,
+            )
+
         if method not in {"GET", "HEAD"}:
             return self._method_not_allowed("GET, HEAD")
 
@@ -245,11 +287,35 @@ class ConsoleHttpApplication:
         if not parsed.path.startswith("/console/api/"):
             return self._error(404, "not_found", "resource does not exist")
         try:
-            principal = self.authenticator.authenticate(request_headers)
+            authentication = self.authenticator.authenticate_context(
+                request_headers
+            )
+            principal = authentication.principal
             if parsed.path == "/console/api/v1/admin/overview":
                 if parsed.query or self.admin_service is None:
                     raise ConsoleResourceNotFoundError("admin overview")
                 return self._json(200, self.admin_service.overview(principal))
+            if parsed.path == "/console/api/v1/admin/sessions":
+                if self.admin_session_service is None:
+                    raise ConsoleResourceNotFoundError("admin sessions")
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                if set(query) - {"limit"}:
+                    raise ValueError("only the limit query parameter is accepted")
+                values = query.get("limit", ["100"])
+                if len(values) != 1:
+                    raise ValueError("limit must be supplied once")
+                try:
+                    limit = int(values[0])
+                except ValueError as exc:
+                    raise ValueError("limit must be an integer") from exc
+                return self._json(
+                    200,
+                    self.admin_session_service.list_sessions(
+                        principal,
+                        current_session_id=authentication.session_id,
+                        limit=limit,
+                    ),
+                )
             if parsed.path == "/console/api/v1/instances":
                 query = parse_qs(parsed.query, keep_blank_values=True)
                 if set(query) - {"limit"}:
@@ -287,6 +353,109 @@ class ConsoleHttpApplication:
             return self._error(400, "invalid_request", str(exc))
         except Exception:
             return self._error(500, "internal_error", "internal server error")
+
+    def _handle_admin_write(
+        self,
+        path: str,
+        query: str,
+        headers: Mapping[str, str],
+    ) -> ConsoleHttpResponse:
+        try:
+            authentication = self.authenticator.authenticate_context(headers)
+            principal = authentication.principal
+            if (
+                self.admin_session_service is None
+                or not self.admin_session_service.authorizer.is_admin(principal)
+            ):
+                raise ConsoleResourceNotFoundError("admin session governance")
+            self._validate_admin_write_request(query, headers)
+            preview_match = _ADMIN_SESSION_PREVIEW_ROUTE.fullmatch(path)
+            if preview_match is not None:
+                return self._json(
+                    201,
+                    self.admin_session_service.preview_revocation(
+                        principal,
+                        preview_match.group(1),
+                        current_session_id=authentication.session_id,
+                    ),
+                )
+            confirm_match = _ADMIN_SESSION_CONFIRM_ROUTE.fullmatch(path)
+            if confirm_match is not None:
+                return self._json(
+                    200,
+                    self.admin_session_service.confirm_revocation(
+                        principal,
+                        confirm_match.group(1),
+                        current_session_id=authentication.session_id,
+                    ),
+                )
+            raise ConsoleResourceNotFoundError("admin session governance")
+        except InvalidConsoleCredentialError:
+            challenge = (
+                {"WWW-Authenticate": "Bearer"}
+                if self.authenticator.mode == "static"
+                else {}
+            )
+            return self._error(
+                401,
+                "invalid_credential",
+                "console credential is invalid",
+                headers=challenge,
+            )
+        except ConsoleResourceNotFoundError:
+            return self._error(404, "not_found", "resource does not exist")
+        except _AdminWriteRequestError:
+            return self._error(
+                403,
+                "request_rejected",
+                "admin action request was rejected",
+            )
+        except ConsoleAdminSessionConflictError as exc:
+            return self._error(409, "session_conflict", str(exc))
+        except ConsoleAdminSessionPreviewExpiredError:
+            return self._error(
+                409,
+                "preview_expired",
+                "session revocation preview expired",
+            )
+        except ConsoleAdminSessionPreviewStaleError:
+            return self._error(
+                409,
+                "preview_stale",
+                "session changed after revocation preview",
+            )
+        except (TypeError, ValueError) as exc:
+            return self._error(400, "invalid_request", str(exc))
+        except Exception:
+            return self._error(500, "internal_error", "internal server error")
+
+    def _validate_admin_write_request(
+        self,
+        query: str,
+        headers: Mapping[str, str],
+    ) -> None:
+        if query:
+            raise ValueError("admin action query is not accepted")
+        content_length = _header(headers, "content-length")
+        if content_length not in {None, "", "0"}:
+            raise ValueError("admin action body is not accepted")
+        if _header(headers, "transfer-encoding") is not None:
+            raise ValueError("admin action body is not accepted")
+        if not secrets.compare_digest(
+            _header(headers, _ADMIN_ACTION_HEADER) or "",
+            _ADMIN_ACTION_VALUE,
+        ):
+            raise _AdminWriteRequestError(
+                "admin action request header is invalid"
+            )
+        if self.authenticator.mode == "feishu":
+            if self.oauth is None or not secrets.compare_digest(
+                _header(headers, "origin") or "",
+                self.oauth.public_base_url,
+            ):
+                raise _AdminWriteRequestError(
+                    "admin action origin is invalid"
+                )
 
     @staticmethod
     def _json(status: int, payload: Mapping[str, Any]) -> ConsoleHttpResponse:
@@ -414,6 +583,13 @@ def _single_value_query(
             raise ValueError("OAuth callback parameters must be supplied once")
         values[key] = items[0]
     return values
+
+
+def _header(headers: Mapping[str, str], name: str) -> str | None:
+    return next(
+        (value.strip() for key, value in headers.items() if key.lower() == name),
+        None,
+    )
 
 
 @lru_cache(maxsize=3)

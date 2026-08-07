@@ -58,7 +58,14 @@ from larkflow.workflow.console_auth import (
     PostgresConsoleSessionAuthenticator,
     SESSION_COOKIE_NAME,
 )
-from larkflow.workflow.console_admin import PostgresConsoleAdminRepository
+from larkflow.workflow.console_admin import (
+    ConsoleAdminReadService,
+    PostgresConsoleAdminRepository,
+)
+from larkflow.workflow.console_admin_sessions import (
+    ConsoleAdminSessionService,
+    PostgresConsoleAdminSessionRepository,
+)
 
 
 POSTGRES_DSN = os.environ.get("LARKFLOW_TEST_POSTGRES_DSN")
@@ -172,7 +179,80 @@ def test_postgres_admin_overview_reads_all_tenant_scoped_operational_lanes():
         "role_progress",
     }
     assert all(lane.total == 0 for lane in snapshot.queue_lanes)
-    assert snapshot.applied_migrations[-1] == "0020_console_sessions"
+    assert snapshot.applied_migrations[-1] == "0021_console_session_governance"
+
+
+def test_postgres_competing_session_revocations_are_idempotent_and_audited_once():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_session_governance_{suffix}"
+    admin_person_id = f"person_admin_{suffix}"
+    target_person_id = f"person_target_{suffix}"
+    now = datetime(2026, 8, 7, 13, 0, tzinfo=timezone.utc)
+    sessions = PostgresConsoleSessionAuthenticator(
+        connection_factory,
+        ttl_seconds=300,
+        clock=lambda: now.timestamp(),
+    )
+    admin_credential = sessions.issue(
+        ConsolePrincipal(tenant_id, admin_person_id)
+    )
+    target_credential = sessions.issue(
+        ConsolePrincipal(tenant_id, target_person_id)
+    )
+    admin_headers = {
+        "Cookie": f"{SESSION_COOKIE_NAME}={admin_credential}"
+    }
+    target_headers = {
+        "Cookie": f"{SESSION_COOKIE_NAME}={target_credential}"
+    }
+    admin_context = sessions.authenticate_context(admin_headers)
+    target_context = sessions.authenticate_context(target_headers)
+    assert admin_context.session_id is not None
+    assert target_context.session_id is not None
+    authorizer = ConsoleAdminReadService(
+        PostgresConsoleAdminRepository(connection_factory),
+        tenant_id=tenant_id,
+        allowed_person_ids=(admin_person_id,),
+        clock=lambda: now,
+    )
+    service = ConsoleAdminSessionService(
+        PostgresConsoleAdminSessionRepository(connection_factory),
+        authorizer,
+        clock=lambda: now,
+    )
+    preview = service.preview_revocation(
+        admin_context.principal,
+        target_context.session_id,
+        current_session_id=admin_context.session_id,
+    )
+
+    def confirm():
+        return service.confirm_revocation(
+            admin_context.principal,
+            preview["preview_id"],
+            current_session_id=admin_context.session_id,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _index: confirm(), range(2)))
+
+    assert sorted(result["already_applied"] for result in results) == [False, True]
+    with pytest.raises(InvalidConsoleCredentialError):
+        sessions.authenticate(target_headers)
+    assert sessions.authenticate(admin_headers) == admin_context.principal
+    with connection_factory() as connection:
+        audit = connection.execute(
+            """
+            SELECT count(*)::integer AS count
+            FROM workflow_console_session_events
+            WHERE tenant_id = %s AND preview_id = %s
+            """,
+            (tenant_id, preview["preview_id"]),
+        ).fetchone()
+    assert audit["count"] == 1
 
 
 def test_postgres_console_session_survives_recreation_and_revokes():

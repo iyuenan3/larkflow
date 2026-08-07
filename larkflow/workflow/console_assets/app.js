@@ -10,6 +10,8 @@ const state = {
   isAdmin: false,
   view: "owner",
   adminOverview: null,
+  adminSessions: null,
+  adminSessionPreview: null,
   selectedNode: null,
   graphScale: 1,
 };
@@ -60,6 +62,10 @@ const QUEUE_LANE = {
   role_actions: "人员分工动作",
   role_replies: "人员分工回复",
   role_progress: "草稿生成进度",
+};
+const SESSION_RELATION = {
+  you: "你的会话",
+  member: "其他成员会话",
 };
 const EVENT = {
   "instance.draft_created": "流程草稿已创建",
@@ -112,15 +118,20 @@ function setConnection(mode, text) {
   connection.querySelector("span").textContent = text;
 }
 
-async function request(path) {
+async function request(path, options = {}) {
   setConnection("loading", "同步中");
   let response;
-  const headers = {};
+  const method = options.method || "GET";
+  const headers = { ...(options.headers || {}) };
   if (state.authMode === "static" && state.token) {
     headers.Authorization = `Bearer ${state.token}`;
   }
+  if (method !== "GET" && method !== "HEAD") {
+    headers["X-Larkflow-Console-Action"] = "session-governance-v1";
+  }
   try {
     response = await fetch(path, {
+      method,
       headers,
       cache: "no-store",
       credentials: "same-origin",
@@ -143,7 +154,9 @@ async function request(path) {
   }
   if (!response.ok) {
     setConnection("error", "读取失败");
-    throw new Error(payload.error?.message || "读取失败");
+    const error = new Error(payload.error?.message || "读取失败");
+    error.code = payload.error?.code;
+    throw error;
   }
   setConnection("ready", "已连接");
   return payload;
@@ -165,9 +178,14 @@ async function loadInstances(selectId = null) {
 
 async function loadAdminOverview() {
   if (!state.isAdmin) return;
-  const payload = await request("/console/api/v1/admin/overview");
-  state.adminOverview = payload;
-  renderAdminOverview(payload);
+  const [overview, sessions] = await Promise.all([
+    request("/console/api/v1/admin/overview"),
+    request("/console/api/v1/admin/sessions?limit=100"),
+  ]);
+  state.adminOverview = overview;
+  state.adminSessions = sessions;
+  renderAdminOverview(overview);
+  renderAdminSessions(sessions);
 }
 
 function renderAdminOverview(payload) {
@@ -236,6 +254,159 @@ function renderAdminOverview(payload) {
   });
   el("admin-queue-attention").textContent = queues.attention_total || 0;
   el("admin-generated-at").textContent = `数据生成于 ${formatDate(payload.generated_at)}`;
+}
+
+function renderAdminSessions(payload) {
+  const list = el("admin-session-list");
+  const auditList = el("admin-session-audit-list");
+  list.replaceChildren();
+  auditList.replaceChildren();
+  el("admin-session-count").textContent = payload.total || 0;
+
+  (payload.sessions || []).forEach((session) => {
+    const item = node("article", "admin-session-item");
+    item.dataset.current = String(session.current === true);
+    const copy = node("div", "admin-session-copy");
+    const heading = node("div", "admin-session-heading");
+    heading.append(
+      node("strong", "", SESSION_RELATION[session.relation] || "企业成员会话"),
+      node("span", "mono", `尾号 ${session.id.slice(-8)}`),
+    );
+    const details = node("div", "admin-session-details");
+    details.append(
+      fact("创建", formatDate(session.created_at)),
+      fact("到期", formatDate(session.expires_at)),
+    );
+    copy.append(heading, details);
+    const action = node(
+      "button",
+      session.current ? "admin-session-current" : "admin-session-revoke",
+      session.current ? "当前会话" : "撤销会话",
+    );
+    action.type = "button";
+    action.disabled = session.current || session.revocable !== true;
+    if (!action.disabled) {
+      action.addEventListener("click", () => createSessionRevocationPreview(session, action));
+    }
+    item.append(copy, action);
+    list.append(item);
+  });
+  if ((payload.sessions || []).length === 0) {
+    list.append(node("p", "admin-session-empty", "当前企业没有有效登录会话。"));
+  }
+
+  (payload.recent_revocations || []).forEach((event) => {
+    const item = node("div", "admin-session-audit-item");
+    item.append(
+      node(
+        "span",
+        "",
+        `${event.actor_relation === "you" ? "你" : "另一管理员"}撤销了${event.target_relation === "you" ? "你的" : "其他成员的"}会话`,
+      ),
+      node("code", "", event.target_session_id.slice(-8)),
+      node("time", "", formatDate(event.occurred_at)),
+    );
+    auditList.append(item);
+  });
+  if ((payload.recent_revocations || []).length === 0) {
+    auditList.append(node("p", "admin-session-empty", "还没有管理员会话撤销记录。"));
+  }
+}
+
+async function createSessionRevocationPreview(session, button) {
+  button.disabled = true;
+  button.dataset.state = "working";
+  button.textContent = "创建预览中";
+  try {
+    const preview = await request(
+      `/console/api/v1/admin/sessions/${encodeURIComponent(session.id)}/revoke-preview`,
+      { method: "POST" },
+    );
+    state.adminSessionPreview = preview;
+    renderSessionRevocationPreview(preview);
+    button.dataset.state = "done";
+    button.textContent = "等待确认";
+  } catch (error) {
+    button.dataset.state = "error";
+    button.textContent = sessionActionError(error);
+    setTimeout(() => {
+      button.dataset.state = "idle";
+      button.textContent = "撤销会话";
+      button.disabled = false;
+    }, 1800);
+  }
+}
+
+function renderSessionRevocationPreview(preview) {
+  const panel = el("admin-session-preview");
+  panel.replaceChildren();
+  const copy = node("div", "admin-session-preview-copy");
+  copy.append(
+    node("strong", "", "确认撤销这条登录会话？"),
+    node(
+      "p",
+      "",
+      `${SESSION_RELATION[preview.target.relation] || "企业成员会话"}，尾号 ${preview.target.id.slice(-8)}，到期时间 ${formatDate(preview.target.expires_at)}。确认后该浏览器需要重新登录。`,
+    ),
+    node("small", "", `预览有效至 ${formatDate(preview.expires_at)}`),
+  );
+  const actions = node("div", "admin-session-preview-actions");
+  const cancel = node("button", "admin-session-preview-cancel", "取消");
+  cancel.type = "button";
+  cancel.addEventListener("click", clearSessionRevocationPreview);
+  const confirm = node("button", "admin-session-preview-confirm", "确认撤销");
+  confirm.type = "button";
+  confirm.addEventListener("click", () => confirmSessionRevocation(preview, confirm, cancel));
+  actions.append(cancel, confirm);
+  panel.append(copy, actions);
+  panel.hidden = false;
+  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function clearSessionRevocationPreview() {
+  state.adminSessionPreview = null;
+  const panel = el("admin-session-preview");
+  panel.hidden = true;
+  panel.replaceChildren();
+  if (state.adminSessions) renderAdminSessions(state.adminSessions);
+}
+
+async function confirmSessionRevocation(preview, confirm, cancel) {
+  confirm.disabled = true;
+  cancel.disabled = true;
+  confirm.dataset.state = "working";
+  confirm.textContent = "正在撤销";
+  try {
+    await request(
+      `/console/api/v1/admin/session-revocations/${encodeURIComponent(preview.preview_id)}/confirm`,
+      { method: "POST" },
+    );
+    confirm.dataset.state = "done";
+    confirm.textContent = "已撤销";
+    state.adminSessionPreview = null;
+    await loadAdminOverview();
+    setTimeout(() => {
+      const panel = el("admin-session-preview");
+      panel.hidden = true;
+      panel.replaceChildren();
+    }, 900);
+  } catch (error) {
+    confirm.dataset.state = "error";
+    confirm.textContent = sessionActionError(error);
+    cancel.disabled = false;
+    setTimeout(() => {
+      confirm.dataset.state = "idle";
+      confirm.textContent = "重新确认";
+      confirm.disabled = false;
+    }, 1800);
+  }
+}
+
+function sessionActionError(error) {
+  if (["preview_expired", "preview_stale"].includes(error.code)) return "状态已变化";
+  if (error.code === "session_conflict") return "当前会话不可撤销";
+  if (error.code === "request_rejected") return "请求已拒绝";
+  return "操作失败";
 }
 
 function showOwnerView() {
@@ -812,6 +983,8 @@ function lockConsole() {
   state.detail = null;
   state.isAdmin = false;
   state.adminOverview = null;
+  state.adminSessions = null;
+  state.adminSessionPreview = null;
   state.view = "owner";
   sessionStorage.removeItem("larkflow.console.token");
   adminViewButton.hidden = true;
@@ -819,6 +992,8 @@ function lockConsole() {
   app.hidden = true;
   unlock.hidden = false;
   tokenInput.value = "";
+  el("admin-session-preview").hidden = true;
+  el("admin-session-preview").replaceChildren();
   tokenInput.focus();
 }
 
@@ -839,6 +1014,8 @@ function showFeishuLogin(message = "") {
   state.token = "";
   state.isAdmin = false;
   state.adminOverview = null;
+  state.adminSessions = null;
+  state.adminSessionPreview = null;
   state.view = "owner";
   sessionStorage.removeItem("larkflow.console.token");
   adminViewButton.hidden = true;
@@ -849,6 +1026,8 @@ function showFeishuLogin(message = "") {
   feishuLogin.disabled = false;
   feishuLogin.textContent = "使用飞书身份进入";
   unlockError.textContent = message;
+  el("admin-session-preview").hidden = true;
+  el("admin-session-preview").replaceChildren();
   app.hidden = true;
   unlock.hidden = false;
   feishuLogin.focus();

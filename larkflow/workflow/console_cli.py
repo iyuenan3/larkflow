@@ -19,6 +19,10 @@ from .console_auth import (
     PostgresConsoleSessionAuthenticator,
 )
 from .console_admin import ConsoleAdminReadService, PostgresConsoleAdminRepository
+from .console_admin_sessions import (
+    ConsoleAdminSessionService,
+    PostgresConsoleAdminSessionRepository,
+)
 from .console_http import ConsoleHttpApplication, build_console_http_server
 from .migrate import postgres_connection_factory, verify_migrations
 from .postgres import PostgresWorkflowRepository
@@ -89,6 +93,14 @@ def _run(namespace: argparse.Namespace) -> int:
         if admin_people
         else None
     )
+    admin_session_service = (
+        ConsoleAdminSessionService(
+            PostgresConsoleAdminSessionRepository(connection_factory),
+            admin_service,
+        )
+        if admin_service is not None
+        else None
+    )
     if namespace.auth_mode == "static":
         person_id = _required(
             namespace.person,
@@ -105,6 +117,7 @@ def _run(namespace: argparse.Namespace) -> int:
                 ConsolePrincipal(tenant_id=tenant_id, person_id=person_id),
             ),
             admin_service=admin_service,
+            admin_session_service=admin_session_service,
         )
         access = "enter LARKFLOW_CONSOLE_ACCESS_TOKEN in the browser"
     else:
@@ -150,6 +163,7 @@ def _run(namespace: argparse.Namespace) -> int:
             sessions,
             oauth=oauth,
             admin_service=admin_service,
+            admin_session_service=admin_session_service,
         )
         access = "Feishu OAuth with an opaque HttpOnly session"
     server = build_console_http_server(
@@ -172,7 +186,7 @@ def _run(namespace: argparse.Namespace) -> int:
             "principal": "configured_server_side",
             "access": access,
             "auth_mode": namespace.auth_mode,
-            "mode": "owner_scoped_read_only",
+            "mode": "owner_read_admin_session_governance",
             "admin_overview": "enabled" if admin_service is not None else "disabled",
         }
     )

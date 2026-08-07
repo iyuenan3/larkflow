@@ -44,6 +44,14 @@ class ConsolePrincipal:
             raise ValueError("console principal requires tenant and person")
 
 
+@dataclass(frozen=True)
+class ConsoleAuthentication:
+    """Server-resolved principal and optional opaque session reference."""
+
+    principal: ConsolePrincipal
+    session_id: str | None = None
+
+
 class StaticConsoleAuthenticator:
     """Resolve one loopback bearer credential to one server-side principal."""
 
@@ -57,6 +65,12 @@ class StaticConsoleAuthenticator:
         self._principal = principal
 
     def authenticate(self, headers: Mapping[str, str]) -> ConsolePrincipal:
+        return self.authenticate_context(headers).principal
+
+    def authenticate_context(
+        self,
+        headers: Mapping[str, str],
+    ) -> ConsoleAuthentication:
         authorization = next(
             (
                 value
@@ -72,7 +86,7 @@ class StaticConsoleAuthenticator:
             or not secrets.compare_digest(credential.strip(), self._access_token)
         ):
             raise InvalidConsoleCredentialError("console credential is invalid")
-        return self._principal
+        return ConsoleAuthentication(principal=self._principal)
 
 
 class ConsoleReadService:
