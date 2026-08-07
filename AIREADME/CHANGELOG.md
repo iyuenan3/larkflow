@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.58.0-draft · 2026-08-07 · 公网 IP 员工工作台与多成员隔离验收
+
+- Deployment：内容提交 `fdbead1`、`ad13711` 与 `3916e24` 建立公网 IP TLS 入口并兼容无 SNI 客户端；`3fe8cd5` 使用飞书官方 OAuth v2 token 端点完成回调，`bc961b6` 在保持 Console loopback 监听的同时允许最小 OAuth 出站。Caddy 与 Console 均为 `active / NRestarts=0`，公网 `/console/` 返回 200，8780 继续只监听 `127.0.0.1`。
+- Acceptance：飞书应用已同时发布网页应用与机器人能力，网页应用成为工作台默认入口。至少两名真实成员完成授权登录、本人 Owner 数据读取和跨 Owner 隔离验证；消息中的机器人命令入口继续可用。
+- Security：飞书应用凭证已由官方令牌端点在服务器内验证；修复过程不输出 App Secret、用户 token、授权 code 或 cookie。Console env 保持 `0640 root:lf_target_dev`，公网反向代理不直接暴露应用监听端口。
+- Boundary：该结果只关闭开发环境员工身份、网页入口和 Owner 可见性门槛。当前无正式域名，会话仍存于 Console 进程内存，服务重启后需要重新登录；管理员后台、跨副本会话、生产限流与生产发布均未完成。
+
 ## v0.57.0-draft · 2026-08-07 · 飞书应用内员工工作台登录
 
 - Added：Owner Console 新增 `feishu` 鉴权模式，使用 OAuth v3 authorization code、PKCE S256、浏览器绑定 state、飞书 tenant 显式映射和不透明服务端会话。飞书 `open_id` 映射为当前 person；用户 access token 只在服务端读取一次用户信息，随后丢弃，不进入浏览器、日志或流程数据，也不依赖 `lark-cli` 用户登录。
