@@ -126,6 +126,7 @@ def test_confirm_atomically_applies_and_replays_without_second_restart(tmp_path:
     )
 
     assert report["status"] == "applied"
+    assert report["health_checked"] is True
     assert report["service_active"] is True
     assert replay["replayed"] is True
     assert len(calls) == 1
@@ -156,6 +157,8 @@ def test_existing_admin_confirmation_is_noop_without_restart_or_backup(tmp_path:
 
     assert report["status"] == "confirmed_no_change"
     assert report["change_required"] is False
+    assert report["health_checked"] is False
+    assert report["service_active"] is None
     assert env_file.read_text(encoding="utf-8").count(PERSON_ONE) == 1
     assert not list(tmp_path.glob("console.env.bak.*.admin-*"))
 

@@ -675,6 +675,7 @@ def _public_preview(record: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _public_confirmation(record: Mapping[str, Any], *, replayed: bool) -> dict[str, Any]:
+    health = record.get("health")
     return {
         "event": "console_admin_allowlist_confirmed",
         "operation_id": record["id"],
@@ -683,7 +684,12 @@ def _public_confirmation(record: Mapping[str, Any], *, replayed: bool) -> dict[s
         "change_required": bool(record.get("change_required")),
         "before_count": len(record["current_admin_ids"]),
         "after_count": len(record["desired_admin_ids"]),
-        "service_active": bool((record.get("health") or {}).get("service_active")),
+        "health_checked": health is not None,
+        "service_active": (
+            bool(health.get("service_active"))
+            if isinstance(health, Mapping)
+            else None
+        ),
         "replayed": replayed,
     }
 
