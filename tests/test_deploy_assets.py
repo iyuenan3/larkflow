@@ -168,6 +168,9 @@ def test_console_public_ip_tls_uses_certbot_without_logging_oauth_codes():
     assert "RENEWED_LINEAGE" in installer
     assert "/etc/letsencrypt/live/*" in installer
     assert "openssl x509" in installer
+    assert 'chown root:caddy "$CERT_STAGE"' in installer
+    assert 'chmod 0750 "$CERT_STAGE"' in installer
+    assert 'chmod 0750 "$CERT_RELEASE"' in installer
     assert "mv -Tf" in installer
     assert "caddy validate" in installer
     assert "systemctl reload caddy" in installer

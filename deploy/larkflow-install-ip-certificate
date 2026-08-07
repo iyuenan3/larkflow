@@ -43,6 +43,8 @@ install -o root -g caddy -m 0644 \
     "$CERT_LINEAGE/fullchain.pem" "$CERT_STAGE/fullchain.pem"
 install -o root -g caddy -m 0640 \
     "$CERT_LINEAGE/privkey.pem" "$CERT_STAGE/privkey.pem"
+chown root:caddy "$CERT_STAGE"
+chmod 0750 "$CERT_STAGE"
 
 openssl x509 -in "$CERT_STAGE/fullchain.pem" -noout -checkend 86400
 CERT_FINGERPRINT=$(openssl x509 -in "$CERT_STAGE/fullchain.pem" \
@@ -60,6 +62,8 @@ else
     mv "$CERT_STAGE" "$CERT_RELEASE"
     CERT_STAGE=
 fi
+chown root:caddy "$CERT_RELEASE"
+chmod 0750 "$CERT_RELEASE"
 
 ln -s "releases/$CERT_FINGERPRINT" "$CERT_LINK"
 mv -Tf "$CERT_LINK" "$CERT_ROOT/current"
