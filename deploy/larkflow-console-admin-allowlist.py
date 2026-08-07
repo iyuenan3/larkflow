@@ -357,7 +357,7 @@ def _resolve_session(
     query = (
         "SELECT person_id FROM workflow_console_sessions "
         "WHERE tenant_id = :'tenant_id' AND id = :'session_id' "
-        "AND expires_at > CURRENT_TIMESTAMP"
+        "AND expires_at > CURRENT_TIMESTAMP;\n"
     )
     command = [
         "/usr/sbin/runuser",
@@ -376,8 +376,6 @@ def _resolve_session(
         f"session_id={session_id}",
         "--dbname",
         dsn,
-        "--command",
-        query,
     ]
     completed = subprocess.run(
         command,
@@ -385,6 +383,8 @@ def _resolve_session(
         capture_output=True,
         text=True,
         timeout=10,
+        input=query,
+        cwd="/",
         env={**os.environ, "PGCONNECT_TIMEOUT": "5"},
     )
     if completed.returncode != 0:

@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 import stat
+from types import SimpleNamespace
 
 import pytest
 
@@ -284,3 +285,23 @@ def test_expired_preview_is_rejected(tmp_path: Path):
             health_url="http://127.0.0.1:8780",
             now=NOW + timedelta(minutes=11),
         )
+
+
+def test_session_lookup_uses_psql_stdin_for_variable_substitution(monkeypatch):
+    seen: dict[str, object] = {}
+
+    def run(command, **kwargs):
+        seen.update({"command": command, **kwargs})
+        return SimpleNamespace(returncode=0, stdout=f"{PERSON_TWO}\n", stderr="")
+
+    monkeypatch.setattr(ops.subprocess, "run", run)
+
+    assert ops._resolve_session(
+        "dev",
+        "postgresql:///larkflow_target_dev",
+        SESSION_TWO,
+        run_as_user="lf_target_dev",
+    ) == PERSON_TWO
+    assert "--command" not in seen["command"]
+    assert "WHERE tenant_id = :'tenant_id'" in seen["input"]
+    assert seen["cwd"] == "/"
