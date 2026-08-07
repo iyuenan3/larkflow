@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.63.0-draft · 2026-08-08 · 管理员 allowlist 运维与会话恢复门禁
+
+- Added：内容提交 `c1340ca21f13ed3f543df8f1411b94e46d9e6b7e` 增加 root 侧 `larkflow-console-admin-allowlist`。操作者只能用当前租户内仍有效的 Console 会话创建十分钟预览，不能直接提交 person ID；确认时重新校验会话、tenant、env SHA-256 和 allowlist。`abc4f5e7ad8c3617cef641efc01523055e9b695e` 修正 `psql --command` 不执行变量替换的问题，`00b3c8f920e6b856d11d9d4a91678959de3da6a5` 区分未检查健康与服务异常。
+- Safety：工具拒绝移除最后一名管理员，以同目录临时文件、`fsync` 和 `os.replace` 原子更新 env，并保留原权限、所有者和独立备份。实际变更后重启 Console，回读页面、鉴权和未认证管理员端点；任何失败都会恢复原 env 并再次验证，已应用操作还可在 env 指纹未漂移时显式回滚。预览与历史为 `0700 / 0600 root:root`，公开输出和追加型审计不含人员 ID。
+- Verified：定向套件为 `17 passed`，清除本机代理并允许进程树检查后的完整离线套件为 `982 passed, 21 skipped`。回归覆盖实际添加、无变化确认、重复确认、最后一名管理员保护、陈旧和过期预览、健康失败自动恢复、显式回滚，以及生产 `psql` 标准输入适配器。
+- Deployment：服务器脚本 `/usr/local/sbin/larkflow-console-admin-allowlist` 的 SHA-256 为 `072dc2c6e6f1d144fb2783f11c580af0dfe2892091455f452ccebb19f3f68f2c`。当前真实管理员的重复添加返回 `confirmed_no_change`，env 指纹和 Console 重启计数保持不变；移除唯一管理员被拒绝。loopback 与公网页面均返回 200。本轮没有给其他成员提权，因此真实服务器上的实际变更、重启与人工回滚路径仍待明确授权对象出现时验证。
+- Recovery：新备份 `/var/backups/larkflow-postgres/larkflow_target_dev-20260808T021324+0800.dump` 为 238220 bytes，SHA-256 为 `8ca267b7e1f28fefb2ef030aab8668e49c1fc64af637e86e8282efb8400612e4`。固定名称隔离库恢复后，21 份 migration、22 张表、55 个流程实例、1 条有效 Console 会话、1 条撤销预览和 1 条撤销事件与源库一致；对象所有者、PUBLIC ACL、UTC 和三项 timeout 全部通过。暴露前清空会话后，撤销审计、流程与 migration 均保留；隔离库随后已删除，源库和备份未改变。
+- Boundary：备份会原样保留仍有效的 Console 会话。恢复副本接入任何服务前默认必须清空会话并强制重新登录；若要作为同一安全域的权威替换保留会话，必须单独做事故决策。备份仍只在同一系统盘，没有 PITR、异机副本或生产容灾。本版本不增加员工前台提权入口，也不代表产品已生产上线。
+
 ## v0.62.0-draft · 2026-08-08 · 公网 Console 边界加固 v0
 
 - Added：内容提交 `66b2c12d3ea27a61e5a1cdc21332ed03adb516ac` 为 `feishu` Console 增加读取、认证、管理员写入和全局四类有界令牌桶。来源地址只以进程随机密钥生成的 BLAKE2s 摘要保存在最多 10000 个 LRU key 中；429 返回固定安全 JSON 与 `Retry-After`。
