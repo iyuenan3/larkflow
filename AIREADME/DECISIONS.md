@@ -849,3 +849,14 @@
 - Alternatives(否决)：一键直接撤销而无预览；允许管理面撤销当前会话；把凭据摘要或 person ID 返回前端；继续依赖手工 SQL；改用无服务端失效能力的长时 JWT；第一版同时加入批量撤销、allowlist 编辑、队列重放、配置修改或流程写命令；为管理员另建账号密码体系。
 - Tradeoff：该能力能处理单个遗失或遗留浏览器会话，但不能按人员、设备或风险批量处置。person 仍只在服务端内部用于授权和审计关联，浏览器无法解释 `member` 对应的具体人员；预览与事件会持续占用少量 PostgreSQL 空间。allowlist 变更仍需受控修改服务器 env 并重启 Console。新面板的真实用户视觉验收尚未完成，也没有证明生产安全或组织采用。
 - Evidence：内容提交 `8ba0ab9d93554b7958a650492e0282ad40db0d2e`；聚焦套件为 `29 passed`，完整离线套件为 `965 passed, 21 skipped`。wheel SHA-256 为 `b2cff677a419f7151f6ceb6dc8986fcd061999406cbd8212ac2cdde7504fecc8`，已部署到 `/srv/larkflow/target/releases/20260807_212230_session_gov_8ba0ab9/`。一次性真实 PostgreSQL 双连接确认只有一路执行，另一路幂等回放，审计只有一条且不可更新删除。长期库应用第二十一份 migration，升级前备份成功。真实 HTTP 验收覆盖列表 200、当前会话拒绝 409、预览 201、确认 200、重复确认幂等、撤销后 401、普通成员 404 和响应脱敏；十个 Python 服务与 Caddy 保持 `active / NRestarts=0`，验收窗口无 warning。
+- Status addendum · 2026-08-08：用户已在真实飞书登录浏览器中完成会话治理面板视觉验收。该条只关闭开发环境面板展示门槛，不改变 allowlist 自助管理、批量撤销、设备命名、生产容量与正式上线仍未完成的边界。
+
+## ADR-098 · 2026-08-08 · 公网 Console 由 Caddy 固定来源边界，应用实施有界令牌桶
+
+- **Status：Accepted · Development deployed and public HTTP acceptance verified。**
+- Problem：员工工作台已经通过公网 IP HTTPS 提供真实登录和管理员会话治理，但此前只有请求体上限，缺少分路由请求预算、连接超时和完整浏览器安全响应头。若直接信任客户端来源头，攻击者可以通过伪造来源绕过预算；若把来源用于身份授权，则会引入新的身份旁路。
+- Constraint：Console 必须继续只监听 loopback；飞书 OAuth、tenant、person、Owner 和管理员资格仍由现有服务端身份链决定；原始客户端 IP 不得持久化或进入业务日志；来源 churn 不能无界增长内存；单个来源更换地址不能绕过全局保护；当前服务器使用标准 Caddy 2.11.4，安装模块中没有限流插件；OAuth 回调 query 含一次性 code，因此 Caddy 访问日志继续关闭；本轮不引入未审计第三方 Caddy 模块或外部限流基础设施。
+- Decision：Caddy 在反向代理时无条件覆盖 `X-Larkflow-Client-IP` 为直接客户端地址，应用仅在 immediate peer 为 loopback 时读取该头，并只用于限流公平性。`feishu` 模式在 HTTP server 入口使用线程安全令牌桶，分别限制读取、认证、管理员 POST 和全局请求；来源先规范化为 IP，再用进程随机密钥生成 BLAKE2s 摘要，最多保存 10000 个 LRU key。无效来源统一进入 `unknown` 桶。超限返回固定安全 429 JSON 与 `Retry-After`。Caddy 同时设置请求体和请求头上限、读写空闲超时、关闭 0-RTT，并补齐浏览器隔离与能力禁用响应头。`static` loopback 开发回退保持不限流，避免把公网策略误施加到隔离诊断入口。
+- Alternatives(否决)：信任浏览器提交的 `X-Forwarded-For` 或自定义来源头；把 IP 当 OAuth 或 Owner 身份；在应用中保存原始 IP；只做每来源限制而没有全局预算；安装第三方 Caddy 限流模块；依赖 Caddy 访问日志记录 OAuth callback；立即引入 Redis 或分布式网关；把静态 loopback 开发回退也纳入公网预算。
+- Tradeoff：单进程令牌桶简单、无新依赖且能保护当前开发入口，但 Console 重启会清空预算，多副本之间不共享状态，也不能替代上游 DDoS 防护、生产容量测试或正式 WAF。Caddy 覆盖头把来源信任边界固定在 loopback 代理关系，任何未来新增直连代理都必须重新验证 immediate peer 和 header overwrite。关闭访问日志减少 OAuth code 泄漏面，也意味着当前只依赖应用安全日志和主动验收判断限流状态。
+- Evidence：内容提交 `66b2c1294f3a0f0590b6a41564fe970765ace7a5`。完整离线套件为 `972 passed, 21 skipped`；故意移除 loopback 代理头信任后，定向测试按预期失败，恢复实现后通过。候选 wheel SHA-256 为 `3ff1d97317bf4c72e4040622e747bc16d7ca98709ecf2525371f894b9fa1b9df`，Caddy 2.11.4 对候选配置的 adapt 与 validate 均通过，发布件保存在 `/srv/larkflow/target/releases/20260808_004500_console_public_66b2c12/`。真实公网 31 次并发请求分别携带不同伪造来源值，结果仍为 30 次 200 和 1 次 429，429 携带 `Retry-After: 2`。公网响应回读 HSTS、CSP、Permissions-Policy、COOP、CORP、拒绝 framing、`nosniff` 与 `no-referrer`；Caddy 管理 API 回读两个 server 的 10 秒请求头、15 秒请求体、30 秒写入、2 分钟空闲和 32000 bytes 请求头限制。十个 Python 服务与 Caddy 均为 `active / NRestarts=0`，部署窗口 warning 为 0，原有一条真实登录会话仍有效。

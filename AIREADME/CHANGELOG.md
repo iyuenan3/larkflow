@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.62.0-draft · 2026-08-08 · 公网 Console 边界加固 v0
+
+- Added：内容提交 `66b2c1294f3a0f0590b6a41564fe970765ace7a5` 为 `feishu` Console 增加读取、认证、管理员写入和全局四类有界令牌桶。来源地址只以进程随机密钥生成的 BLAKE2s 摘要保存在最多 10000 个 LRU key 中；429 返回固定安全 JSON 与 `Retry-After`。
+- Security：Caddy 无条件覆盖 `X-Larkflow-Client-IP`，Console 只在 immediate peer 为 loopback 时信任该头，且来源绝不参与身份或授权。Caddy 同时限制 64 KB 请求体、32 KB 请求头，设置 10 秒请求头、15 秒请求体、30 秒写入和 2 分钟空闲超时，关闭 0-RTT，并补齐 HSTS、CSP、Permissions-Policy、COOP、CORP、拒绝 framing、`nosniff` 与 `no-referrer`。OAuth callback 仍不启用访问日志。
+- Verified：限流与部署聚焦套件为 `14 passed`，完整离线套件为 `972 passed, 21 skipped`。故意移除 loopback 代理头信任后，定向测试按预期失败；恢复实现后通过。最终 wheel 已确认包含 `console_rate_limit.py`、Console 静态资源和全部模板，安装态导入与资源读取通过。
+- Deployment：wheel SHA-256 为 `3ff1d97317bf4c72e4040622e747bc16d7ca98709ecf2525371f894b9fa1b9df`，保存在 `/srv/larkflow/target/releases/20260808_004500_console_public_66b2c12/`。env、Caddyfile 和 systemd unit 均创建带同一发布标记的可恢复备份，上一版 wheel 继续保留。本次没有 migration，只重启 Console 并 reload Caddy；十个 Python 服务与 Caddy 均保持 `active / NRestarts=0`，部署窗口 warning 为 0。
+- Acceptance：公网与 loopback `/console/` 均返回 200，未认证管理员接口返回 401。31 个并发认证请求分别携带不同伪造来源值，仍共享 Caddy 覆盖后的预算，结果为 30 次 200 和 1 次 429，`Retry-After: 2`。公网安全响应头和 Caddy 运行时超时均已回读，原有真实登录会话仍为一条。上一版本待完成的会话治理面板也已由用户在真实登录浏览器中完成视觉验收。
+- Boundary：该版本只关闭单机开发入口的基础滥用防护与浏览器响应头缺口。进程内预算会随重启重置，也不跨副本共享，不能替代生产容量测试、上游 DDoS 防护、正式域名、跨区域容灾或生产发布。下一步转向 allowlist 变更运维和包含 Console 会话表的恢复演练。设计理由见 ADR-098。
+
 ## v0.61.0-draft · 2026-08-07 · 管理员会话治理 v0
 
 - Added：内容提交 `8ba0ab9d93554b7958a650492e0282ad40db0d2e` 为管理员增加当前企业有效 Console 会话列表，以及其他会话撤销的五分钟耐久预览和显式确认。列表只返回安全会话 ID、`you / member` 关系、创建时间、过期时间与当前会话标记；当前浏览器会话只能注销。
