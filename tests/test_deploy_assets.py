@@ -127,8 +127,8 @@ def test_console_service_is_loopback_only_and_owner_scoped():
     assert "--env-file /etc/larkflow-target-console.env" in unit
     assert "--host 127.0.0.1 --port 8780" in unit
     assert "ProtectSystem=strict" in unit
-    assert "IPAddressAllow=localhost" in unit
-    assert "IPAddressDeny=any" in unit
+    assert "IPAddressAllow=" not in unit
+    assert "IPAddressDeny=" not in unit
     assert "EnvironmentFile=" not in unit
     assert environment["LARKFLOW_TARGET_DSN"] == (
         "postgresql:///larkflow_target_dev"

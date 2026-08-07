@@ -35,8 +35,8 @@ RestrictNamespaces=yes
 LockPersonality=yes
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-IPAddressAllow=localhost
-IPAddressDeny=any
+# Feishu OAuth requires outbound HTTPS. The process still binds only to loopback,
+# enforced by both ExecStart and the application server.
 
 [Install]
 WantedBy=multi-user.target
