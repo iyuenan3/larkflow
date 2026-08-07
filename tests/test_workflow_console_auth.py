@@ -88,12 +88,12 @@ def _flow(
     )
 
 
-def test_feishu_oauth_client_uses_v3_and_discards_the_user_token():
+def test_feishu_oauth_client_uses_official_v2_and_discards_the_user_token():
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if request.url.path == "/oauth/v3/token":
+        if request.url.path == "/open-apis/authen/v2/oauth/token":
             body = json.loads(request.content)
             assert body == {
                 "grant_type": "authorization_code",
@@ -106,7 +106,7 @@ def test_feishu_oauth_client_uses_v3_and_discards_the_user_token():
             return httpx.Response(
                 200,
                 json={
-                    "code": 0,
+                    "code": "0",
                     "access_token": "user-access-token-for-test",
                     "expires_in": 7200,
                     "token_type": "Bearer",
@@ -149,7 +149,7 @@ def test_feishu_oauth_client_uses_v3_and_discards_the_user_token():
         open_id=OWNER,
     )
     assert [request.url.host for request in requests] == [
-        "accounts.feishu.cn",
+        "open.feishu.cn",
         "open.feishu.cn",
     ]
     assert "user-access-token-for-test" not in repr(client.__dict__)

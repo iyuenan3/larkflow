@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 import ipaddress
 import json
+import logging
 import re
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlsplit
@@ -23,6 +24,9 @@ from .console_auth import (
     ConsoleOAuthError,
     FeishuConsoleOAuthFlow,
 )
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 _INSTANCE_ROUTE = re.compile(
@@ -168,7 +172,14 @@ class ConsoleHttpApplication:
                     status=302,
                     headers={"Location": "/console/?auth_error=access_denied"},
                 )
-            except (ConsoleOAuthError, ValueError):
+            except ConsoleOAuthError as exc:
+                LOGGER.warning("Console OAuth callback rejected: %s", exc)
+                return ConsoleHttpResponse(
+                    status=302,
+                    headers={"Location": "/console/?auth_error=login_failed"},
+                )
+            except ValueError:
+                LOGGER.warning("Console OAuth callback rejected: invalid query")
                 return ConsoleHttpResponse(
                     status=302,
                     headers={"Location": "/console/?auth_error=login_failed"},
@@ -203,7 +214,19 @@ class ConsoleHttpApplication:
         }.get(parsed.path)
         if asset is not None:
             if parsed.query:
-                return self._error(400, "invalid_request", "asset query is not accepted")
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                auth_error = query.get("auth_error", [])
+                if (
+                    asset[0] != "index.html"
+                    or set(query) != {"auth_error"}
+                    or len(auth_error) != 1
+                    or auth_error[0] not in {"access_denied", "login_failed"}
+                ):
+                    return self._error(
+                        400,
+                        "invalid_request",
+                        "asset query is not accepted",
+                    )
             name, content_type = asset
             return ConsoleHttpResponse(
                 status=200,

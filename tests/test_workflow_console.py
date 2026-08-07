@@ -516,6 +516,14 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     application = _application()
 
     page = application.handle("GET", "/console/")
+    failed_login_page = application.handle(
+        "GET",
+        "/console/?auth_error=login_failed",
+    )
+    denied_login_page = application.handle(
+        "GET",
+        "/console/?auth_error=access_denied",
+    )
     script = application.handle("GET", "/console/app.js")
     styles = application.handle("GET", "/console/styles.css")
     auth = application.handle("GET", "/console/api/v1/auth")
@@ -527,6 +535,8 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     )
 
     assert page.status == 200
+    assert failed_login_page.status == 200
+    assert denied_login_page.status == 200
     assert page.content_type == "text/html; charset=utf-8"
     assert b"LARKFLOW WORKSPACE" in page.body
     assert "我的工作台".encode() in page.body
@@ -577,6 +587,16 @@ def test_console_http_rejects_writes_bad_queries_and_resource_enumeration():
     headers = {"Authorization": f"Bearer {TOKEN}"}
 
     assert application.handle("POST", "/console/api/v1/instances").status == 405
+    assert application.handle("GET", "/console/?unexpected=true").status == 400
+    assert application.handle(
+        "GET",
+        "/console/?auth_error=unexpected",
+    ).status == 400
+    assert application.handle(
+        "GET",
+        "/console/?auth_error=login_failed&auth_error=access_denied",
+    ).status == 400
+    assert application.handle("GET", "/console/app.js?v=1").status == 400
     assert application.handle(
         "GET",
         "/console/api/v1/instances?limit=0",

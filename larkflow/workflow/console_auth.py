@@ -22,7 +22,7 @@ from .console import (
 
 
 FEISHU_AUTHORIZE_URL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
-FEISHU_TOKEN_URL = "https://accounts.feishu.cn/oauth/v3/token"
+FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
 FEISHU_USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
 SESSION_COOKIE_NAME = "__Host-larkflow_console_session"
 OAUTH_STATE_COOKIE_NAME = "__Host-larkflow_console_oauth_state"
@@ -115,12 +115,14 @@ class FeishuOAuthClient:
                 access_token = token_document.get("access_token")
                 if (
                     token_response.status_code != 200
-                    or token_document.get("code") != 0
+                    or token_document.get("code") not in {0, "0"}
                     or not isinstance(access_token, str)
                     or not access_token.strip()
                 ):
                     raise ConsoleOAuthProviderError(
-                        "Feishu did not issue a user access token"
+                        "Feishu did not issue a user access token "
+                        f"(status={token_response.status_code}, "
+                        f"code={_provider_code(token_document)})"
                     )
 
                 user_response = active_client.get(
@@ -131,11 +133,13 @@ class FeishuOAuthClient:
                 user = user_document.get("data")
                 if (
                     user_response.status_code != 200
-                    or user_document.get("code") != 0
+                    or user_document.get("code") not in {0, "0"}
                     or not isinstance(user, dict)
                 ):
                     raise ConsoleOAuthProviderError(
-                        "Feishu did not return a valid user identity"
+                        "Feishu did not return a valid user identity "
+                        f"(status={user_response.status_code}, "
+                        f"code={_provider_code(user_document)})"
                     )
                 tenant_key = user.get("tenant_key")
                 open_id = user.get("open_id")
@@ -412,6 +416,17 @@ def _json_object(response: httpx.Response) -> dict[str, object]:
     if not isinstance(document, dict):
         raise ConsoleOAuthProviderError("Feishu returned an invalid response")
     return document
+
+
+def _provider_code(document: Mapping[str, object]) -> str:
+    code = document.get("code")
+    if isinstance(code, bool):
+        return "unknown"
+    if isinstance(code, int):
+        return str(code)
+    if isinstance(code, str) and code.isdigit() and len(code) <= 16:
+        return code
+    return "unknown"
 
 
 def _credential_digest(credential: str) -> str:
