@@ -40,6 +40,10 @@
           </div>
         </div>
         <div class="top-actions">
+          <div id="view-switch" class="view-switch" role="group" aria-label="控制台视图">
+            <button id="owner-view" type="button" data-active="true">我的流程</button>
+            <button id="admin-view" type="button" data-active="false" hidden>管理概览</button>
+          </div>
           <div id="connection" class="connection"><i></i><span>已连接</span></div>
           <button id="refresh" class="icon-button" type="button" title="刷新" aria-label="刷新">↻</button>
           <button id="lock" class="quiet-button" type="button">锁定</button>
@@ -165,6 +169,75 @@
           </section>
         </main>
       </div>
+
+      <main id="admin-console" class="admin-console" hidden>
+        <section class="admin-hero">
+          <div>
+            <p class="eyebrow">TENANT OPERATIONS</p>
+            <h1>管理概览</h1>
+            <p>只读查看当前企业的流程、登录会话、耐久队列和数据库版本状态。</p>
+          </div>
+          <div class="admin-boundary">
+            <strong>只读边界</strong>
+            <span>不提供流程修改、用户管理或会话撤销</span>
+          </div>
+        </section>
+
+        <section id="admin-metrics" class="admin-metrics" aria-label="关键运行指标"></section>
+
+        <div class="admin-grid">
+          <section class="panel admin-panel" aria-labelledby="admin-workflow-title">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">WORKFLOWS</p>
+                <h2 id="admin-workflow-title">流程状态</h2>
+              </div>
+            </div>
+            <div id="admin-workflow-statuses" class="admin-statuses"></div>
+          </section>
+
+          <section class="panel admin-panel" aria-labelledby="admin-schema-title">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">DATABASE</p>
+                <h2 id="admin-schema-title">数据库版本</h2>
+              </div>
+              <span id="admin-migration-state" class="status-pill"></span>
+            </div>
+            <div id="admin-migrations" class="admin-migration-detail"></div>
+          </section>
+        </div>
+
+        <section class="panel admin-panel admin-queue-panel" aria-labelledby="admin-queue-title">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">DURABLE QUEUES</p>
+              <h2 id="admin-queue-title">耐久队列健康</h2>
+              <p class="muted">只显示聚合数量和最早可领取时间，不显示消息、人员或错误正文。</p>
+            </div>
+            <span id="admin-queue-attention" class="count">0</span>
+          </div>
+          <div class="admin-queue-scroll">
+            <table class="admin-queue-table">
+              <thead>
+                <tr>
+                  <th scope="col">队列</th>
+                  <th scope="col">总记录</th>
+                  <th scope="col">可领取</th>
+                  <th scope="col">处理中</th>
+                  <th scope="col">失败</th>
+                  <th scope="col">已耗尽</th>
+                  <th scope="col">过期租约</th>
+                  <th scope="col">最早可领取</th>
+                </tr>
+              </thead>
+              <tbody id="admin-queue-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <p id="admin-generated-at" class="admin-generated-at"></p>
+      </main>
     </div>
 
     <script src="/console/app.js" defer></script>

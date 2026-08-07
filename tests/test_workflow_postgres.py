@@ -58,6 +58,7 @@ from larkflow.workflow.console_auth import (
     PostgresConsoleSessionAuthenticator,
     SESSION_COOKIE_NAME,
 )
+from larkflow.workflow.console_admin import PostgresConsoleAdminRepository
 
 
 POSTGRES_DSN = os.environ.get("LARKFLOW_TEST_POSTGRES_DSN")
@@ -145,6 +146,33 @@ class BarrierGraphEditRepository(PostgresWorkflowRepository):
     def save_graph_edit(self, *args, **kwargs):
         self.barrier.wait(timeout=5)
         return super().save_graph_edit(*args, **kwargs)
+
+
+def test_postgres_admin_overview_reads_all_tenant_scoped_operational_lanes():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    snapshot = PostgresConsoleAdminRepository(
+        connection_factory
+    ).read_admin_snapshot(
+        f"tenant_admin_{uuid4().hex}",
+        now=datetime(2026, 8, 7, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert sum(snapshot.instance_counts.values()) == 0
+    assert snapshot.distinct_owners == 0
+    assert snapshot.active_sessions == 0
+    assert {lane.key for lane in snapshot.queue_lanes} == {
+        "outbox",
+        "inbox",
+        "im_commands",
+        "im_replies",
+        "role_actions",
+        "role_replies",
+        "role_progress",
+    }
+    assert all(lane.total == 0 for lane in snapshot.queue_lanes)
+    assert snapshot.applied_migrations[-1] == "0020_console_sessions"
 
 
 def test_postgres_console_session_survives_recreation_and_revokes():

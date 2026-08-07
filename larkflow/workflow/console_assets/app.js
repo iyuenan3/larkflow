@@ -7,6 +7,9 @@ const state = {
   instances: [],
   attention: [],
   detail: null,
+  isAdmin: false,
+  view: "owner",
+  adminOverview: null,
   selectedNode: null,
   graphScale: 1,
 };
@@ -23,6 +26,10 @@ const authNote = el("auth-note");
 const instanceList = el("instance-list");
 const emptyState = el("empty-state");
 const detailView = el("detail");
+const workspace = document.querySelector(".workspace");
+const adminConsole = el("admin-console");
+const ownerViewButton = el("owner-view");
+const adminViewButton = el("admin-view");
 
 const STATUS = {
   draft: "草稿",
@@ -44,6 +51,15 @@ const ATTENTION = {
   complete_human: "等待你处理",
   resume_flow: "已暂停",
   confirm_draft: "待确认",
+};
+const QUEUE_LANE = {
+  outbox: "外部投影",
+  inbox: "任务事件入站",
+  im_commands: "飞书命令",
+  im_replies: "命令回复",
+  role_actions: "人员分工动作",
+  role_replies: "人员分工回复",
+  role_progress: "草稿生成进度",
 };
 const EVENT = {
   "instance.draft_created": "流程草稿已创建",
@@ -144,6 +160,111 @@ async function loadInstances(selectId = null) {
   } else if (!state.detail && state.instances.length > 0) {
     const active = state.instances.find((item) => ["running", "paused", "failed"].includes(item.status));
     await loadDetail((active || state.instances[0]).id);
+  }
+}
+
+async function loadAdminOverview() {
+  if (!state.isAdmin) return;
+  const payload = await request("/console/api/v1/admin/overview");
+  state.adminOverview = payload;
+  renderAdminOverview(payload);
+}
+
+function renderAdminOverview(payload) {
+  const metrics = el("admin-metrics");
+  metrics.replaceChildren();
+  const workflow = payload.workflows || {};
+  const sessions = payload.sessions || {};
+  const queues = payload.queues || {};
+  [
+    ["流程总数", workflow.total || 0, `${workflow.distinct_owners || 0} 位发起人`],
+    ["有效会话", sessions.active || 0, `${sessions.active_people || 0} 位登录成员`],
+    ["一小时内到期", sessions.expiring_within_hour || 0, "完成登录的浏览器会话"],
+    ["需关注信号", queues.attention_total || 0, "失败、耗尽或过期租约"],
+  ].forEach(([label, value, detail]) => {
+    const card = node("article", "admin-metric-card");
+    card.append(
+      node("span", "admin-metric-label", label),
+      node("strong", "admin-metric-value", value),
+      node("small", "admin-metric-detail", detail),
+    );
+    metrics.append(card);
+  });
+
+  const statuses = el("admin-workflow-statuses");
+  statuses.replaceChildren();
+  Object.entries(workflow.by_status || {}).forEach(([status, count]) => {
+    const item = node("div", "admin-status-row");
+    item.append(statusBadge(status), node("strong", "", count));
+    statuses.append(item);
+  });
+
+  const migrations = payload.migrations || {};
+  const migrationState = el("admin-migration-state");
+  migrationState.className = `status-pill ${migrations.up_to_date ? "status-done" : "status-failed"}`;
+  migrationState.textContent = migrations.up_to_date ? "版本一致" : "需要检查";
+  const migrationDetail = el("admin-migrations");
+  migrationDetail.replaceChildren(
+    fact("已应用", `${migrations.applied_count || 0}/${migrations.expected_count || 0}`),
+    fact("最新版本", migrations.latest_applied || "无"),
+    fact("缺失", migrations.missing_count || 0),
+    fact("非预期", migrations.unexpected_count || 0),
+  );
+
+  const queueBody = el("admin-queue-body");
+  queueBody.replaceChildren();
+  (queues.lanes || []).forEach((lane) => {
+    const row = node("tr", "");
+    row.dataset.attention = String(
+      lane.failed > 0 || lane.exhausted > 0 || lane.expired_claims > 0,
+    );
+    [
+      QUEUE_LANE[lane.key] || lane.key,
+      lane.total,
+      lane.ready,
+      lane.in_flight,
+      lane.failed,
+      lane.exhausted,
+      lane.expired_claims,
+      lane.oldest_ready_at ? formatDate(lane.oldest_ready_at) : "无",
+    ].forEach((value, index) => {
+      const cell = node(index === 0 ? "th" : "td", "", value);
+      if (index === 0) cell.scope = "row";
+      row.append(cell);
+    });
+    queueBody.append(row);
+  });
+  el("admin-queue-attention").textContent = queues.attention_total || 0;
+  el("admin-generated-at").textContent = `数据生成于 ${formatDate(payload.generated_at)}`;
+}
+
+function showOwnerView() {
+  state.view = "owner";
+  workspace.hidden = false;
+  adminConsole.hidden = true;
+  ownerViewButton.dataset.active = "true";
+  adminViewButton.dataset.active = "false";
+  requestAnimationFrame(layoutGraphCanvas);
+}
+
+async function showAdminView() {
+  if (!state.isAdmin) return;
+  adminViewButton.disabled = true;
+  adminViewButton.textContent = "读取中";
+  try {
+    await loadAdminOverview();
+    state.view = "admin";
+    workspace.hidden = true;
+    adminConsole.hidden = false;
+    ownerViewButton.dataset.active = "false";
+    adminViewButton.dataset.active = "true";
+    adminViewButton.textContent = "管理概览";
+  } catch (error) {
+    adminViewButton.textContent = "读取失败";
+    showWorkspaceError(error);
+    setTimeout(() => { adminViewButton.textContent = "管理概览"; }, 1600);
+  } finally {
+    adminViewButton.disabled = false;
   }
 }
 
@@ -689,7 +810,12 @@ function lockConsole() {
   state.token = "";
   state.attention = [];
   state.detail = null;
+  state.isAdmin = false;
+  state.adminOverview = null;
+  state.view = "owner";
   sessionStorage.removeItem("larkflow.console.token");
+  adminViewButton.hidden = true;
+  showOwnerView();
   app.hidden = true;
   unlock.hidden = false;
   tokenInput.value = "";
@@ -711,7 +837,11 @@ function showStaticLogin(message = "") {
 function showFeishuLogin(message = "") {
   state.authMode = "feishu";
   state.token = "";
+  state.isAdmin = false;
+  state.adminOverview = null;
+  state.view = "owner";
   sessionStorage.removeItem("larkflow.console.token");
+  adminViewButton.hidden = true;
   unlockCopy.textContent = "使用当前飞书身份进入，只展示你有权查看的流程和待处理事项。";
   authNote.lastChild.textContent = "身份和流程权限均由中央节点校验。";
   unlockForm.hidden = true;
@@ -727,6 +857,8 @@ function showFeishuLogin(message = "") {
 function showConsole() {
   unlock.hidden = true;
   app.hidden = false;
+  adminViewButton.hidden = !state.isAdmin;
+  if (!state.isAdmin && state.view === "admin") showOwnerView();
   requestAnimationFrame(layoutGraphCanvas);
 }
 
@@ -752,7 +884,10 @@ async function logoutConsole() {
 }
 
 async function loadAuthConfiguration() {
+  const headers = {};
+  if (state.token) headers.Authorization = `Bearer ${state.token}`;
   const response = await fetch("/console/api/v1/auth", {
+    headers,
     cache: "no-store",
     credentials: "same-origin",
   });
@@ -768,6 +903,8 @@ async function loadAuthConfiguration() {
     }
     state.loginUrl = payload.login_url;
   }
+  state.isAdmin = payload.admin === true;
+  adminViewButton.hidden = !state.isAdmin;
   return payload;
 }
 
@@ -818,6 +955,7 @@ unlockForm.addEventListener("submit", async (event) => {
   unlockError.textContent = "";
   state.token = tokenInput.value.trim();
   try {
+    await loadAuthConfiguration();
     await loadInstances();
     sessionStorage.setItem("larkflow.console.token", state.token);
     showConsole();
@@ -831,7 +969,14 @@ unlockForm.addEventListener("submit", async (event) => {
 feishuLogin.addEventListener("click", beginFeishuLogin);
 
 el("refresh").addEventListener("click", () => {
-  loadInstances(state.detail?.instance.id || null).catch(showWorkspaceError);
+  const operation = state.view === "admin"
+    ? loadAdminOverview()
+    : loadInstances(state.detail?.instance.id || null);
+  operation.catch(showWorkspaceError);
+});
+ownerViewButton.addEventListener("click", showOwnerView);
+adminViewButton.addEventListener("click", () => {
+  showAdminView().catch(showWorkspaceError);
 });
 el("lock").addEventListener("click", () => {
   if (state.authMode === "feishu") {

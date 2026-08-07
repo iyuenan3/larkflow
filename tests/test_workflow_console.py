@@ -551,6 +551,8 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"renderAttention" in script.body
     assert b"copyCommand" in script.body
     assert b"loadAuthConfiguration" in script.body
+    assert b"loadAdminOverview" in script.body
+    assert b"renderAdminOverview" in script.body
     assert b"credentials: \"same-origin\"" in script.body
     assert b"sessionStorage.setItem(\"larkflow.console.token\"" in script.body
     assert "复制中".encode() in script.body
@@ -565,11 +567,14 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b".insight-grid" in styles.body
     assert b"instance-insights" in page.body
     assert b"attention-center" in page.body
+    assert b"admin-console" in page.body
+    assert b"admin-view" in page.body
     assert b"graph-zoom-in" in page.body
     assert b"graph-fit" in page.body
     assert _json(auth) == {
         "mode": "static",
         "authenticated": False,
+        "admin": False,
         "login_url": None,
         "logout_available": False,
     }

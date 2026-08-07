@@ -24,6 +24,7 @@ from .console_auth import (
     ConsoleOAuthError,
     FeishuConsoleOAuthFlow,
 )
+from .console_admin import ConsoleAdminReadService
 
 
 LOGGER = logging.getLogger(__name__)
@@ -69,10 +70,12 @@ class ConsoleHttpApplication:
         authenticator: ConsoleAuthenticator,
         *,
         oauth: FeishuConsoleOAuthFlow | None = None,
+        admin_service: ConsoleAdminReadService | None = None,
     ) -> None:
         self.service = service
         self.authenticator = authenticator
         self.oauth = oauth
+        self.admin_service = admin_service
         if authenticator.mode not in {"static", "feishu"}:
             raise ValueError("console authenticator mode is unsupported")
         if (authenticator.mode == "feishu") != (oauth is not None):
@@ -99,17 +102,22 @@ class ConsoleHttpApplication:
             if parsed.query:
                 return self._error(400, "invalid_request", "auth query is not accepted")
             authenticated = False
-            if self.authenticator.mode == "feishu":
-                try:
-                    self.authenticator.authenticate(request_headers)
-                    authenticated = True
-                except InvalidConsoleCredentialError:
-                    pass
+            admin = False
+            try:
+                principal = self.authenticator.authenticate(request_headers)
+                authenticated = True
+                admin = (
+                    self.admin_service is not None
+                    and self.admin_service.is_admin(principal)
+                )
+            except InvalidConsoleCredentialError:
+                pass
             return self._json(
                 200,
                 {
                     "mode": self.authenticator.mode,
                     "authenticated": authenticated,
+                    "admin": admin,
                     "login_url": (
                         "/console/auth/login"
                         if self.authenticator.mode == "feishu"
@@ -238,6 +246,10 @@ class ConsoleHttpApplication:
             return self._error(404, "not_found", "resource does not exist")
         try:
             principal = self.authenticator.authenticate(request_headers)
+            if parsed.path == "/console/api/v1/admin/overview":
+                if parsed.query or self.admin_service is None:
+                    raise ConsoleResourceNotFoundError("admin overview")
+                return self._json(200, self.admin_service.overview(principal))
             if parsed.path == "/console/api/v1/instances":
                 query = parse_qs(parsed.query, keep_blank_values=True)
                 if set(query) - {"limit"}:

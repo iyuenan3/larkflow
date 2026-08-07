@@ -18,6 +18,7 @@ from .console_auth import (
     FeishuOAuthClient,
     PostgresConsoleSessionAuthenticator,
 )
+from .console_admin import ConsoleAdminReadService, PostgresConsoleAdminRepository
 from .console_http import ConsoleHttpApplication, build_console_http_server
 from .migrate import postgres_connection_factory, verify_migrations
 from .postgres import PostgresWorkflowRepository
@@ -75,6 +76,19 @@ def _run(namespace: argparse.Namespace) -> int:
     verify_migrations(connection_factory)
     repository = PostgresWorkflowRepository(connection_factory)
     service = ConsoleReadService(repository)
+    admin_people = _person_id_list(
+        os.environ.get("LARKFLOW_CONSOLE_ADMIN_PERSON_IDS", ""),
+        label="LARKFLOW_CONSOLE_ADMIN_PERSON_IDS",
+    )
+    admin_service = (
+        ConsoleAdminReadService(
+            PostgresConsoleAdminRepository(connection_factory),
+            tenant_id=tenant_id,
+            allowed_person_ids=admin_people,
+        )
+        if admin_people
+        else None
+    )
     if namespace.auth_mode == "static":
         person_id = _required(
             namespace.person,
@@ -90,6 +104,7 @@ def _run(namespace: argparse.Namespace) -> int:
                 access_token,
                 ConsolePrincipal(tenant_id=tenant_id, person_id=person_id),
             ),
+            admin_service=admin_service,
         )
         access = "enter LARKFLOW_CONSOLE_ACCESS_TOKEN in the browser"
     else:
@@ -134,6 +149,7 @@ def _run(namespace: argparse.Namespace) -> int:
             service,
             sessions,
             oauth=oauth,
+            admin_service=admin_service,
         )
         access = "Feishu OAuth with an opaque HttpOnly session"
     server = build_console_http_server(
@@ -157,6 +173,7 @@ def _run(namespace: argparse.Namespace) -> int:
             "access": access,
             "auth_mode": namespace.auth_mode,
             "mode": "owner_scoped_read_only",
+            "admin_overview": "enabled" if admin_service is not None else "disabled",
         }
     )
     serving_errors: list[BaseException] = []
@@ -209,6 +226,24 @@ def _bounded_integer(
     if number < minimum or number > maximum:
         raise ValueError(f"{label} must be between {minimum} and {maximum}")
     return number
+
+
+def _person_id_list(value: Any, *, label: str) -> tuple[str, ...]:
+    raw_items = [item.strip() for item in str(value or "").split(",")]
+    if raw_items == [""]:
+        return ()
+    if any(not item for item in raw_items):
+        raise ValueError(f"{label} contains an empty person ID")
+    if any(
+        len(item) > 256
+        or any(character.isspace() for character in item)
+        for item in raw_items
+    ):
+        raise ValueError(f"{label} contains an invalid person ID")
+    unique = tuple(dict.fromkeys(raw_items))
+    if len(unique) > 100:
+        raise ValueError(f"{label} accepts at most 100 person IDs")
+    return unique
 
 
 def _print(payload: dict[str, Any], *, stream: Any = sys.stdout) -> None:
