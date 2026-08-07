@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.59.0-draft · 2026-08-07 · PostgreSQL 耐久员工工作台会话
+
+- Changed：内容提交 `a6f5babb07623590e9be2a2b8c523857cce56ff7` 把完成登录后的 Console 会话从单进程内存迁入 PostgreSQL。浏览器继续只持有随机不透明 HttpOnly 凭据；migration `0020_console_sessions` 只保存 SHA-256 摘要、tenant、person、创建时间和过期时间，不保存原始凭据或飞书用户 token。
+- Safety：签发事务使用 advisory lock 串行化过期清理、全局 10000 条容量约束和新摘要写入；摘要冲突不会覆盖旧主体。认证只接受未过期摘要，过期记录会被删除；注销删除当前摘要。五分钟 OAuth 发起态仍为短期进程内状态，Console 在授权中途重启时需要重新发起授权，但不影响已经完成的登录会话。
+- Verified：完整离线套件等价结果为 `955 passed, 19 skipped`。一次性真实 PostgreSQL 应用二十份 migration，验证认证器重建后会话有效、数据库不含原始凭据、注销立即失效和过期记录清理；一次性数据库与远端临时文件随后删除并回读为零。
+- Deployment：升级前备份 `/var/backups/larkflow-postgres/larkflow_target_dev-20260807T195221+0800.dump` 成功，大小 227704 bytes。wheel SHA-256 为 `a3b680c0a76545ab25a6c62ad500c9a2db0e24b2aac890eb4a1b708bc5fea729`，保存在 `/srv/larkflow/target/releases/20260807_195154_console_sessions_a6f5bab/`。长期库应用 `0020_console_sessions` 后回读二十份 migration、三个会话表索引和正确所有者；本次只重启 Console。
+- Acceptance：真实成员重新授权后，PostgreSQL 回读一条有效且符合 64 位摘要约束的会话。Console 重启后同一记录仍有效，公网与 loopback `/console/` 均返回 200；用户直接刷新当前工作台仍保持登录。Console 与 Caddy 均为 `active / running / NRestarts=0`，验收窗口无 warning。
+- Boundary：该结果关闭开发环境的单进程重启丢失登录态，不等于正式员工或生产发布。正式域名、生产限流、完整安全响应头、管理员后台、管理员级集中撤销、跨区域容灾与生产容量仍未完成。设计理由见 ADR-095。
+
 ## v0.58.0-draft · 2026-08-07 · 公网 IP 员工工作台与多成员隔离验收
 
 - Deployment：内容提交 `fdbead1`、`ad13711` 与 `3916e24` 建立公网 IP TLS 入口并兼容无 SNI 客户端；`3fe8cd5` 使用飞书官方 OAuth v2 token 端点完成回调，`bc961b6` 在保持 Console loopback 监听的同时允许最小 OAuth 出站。Caddy 与 Console 均为 `active / NRestarts=0`，公网 `/console/` 返回 200，8780 继续只监听 `127.0.0.1`。

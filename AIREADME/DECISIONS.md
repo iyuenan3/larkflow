@@ -819,3 +819,13 @@
 - Alternatives(否决)：让中央服务器登录每名员工的 `lark-cli` profile；继续向多人分发共享静态 token；把用户 access token 保存在浏览器；以邮箱或手机号自行建立第二套账号；把 H5 JSAPI 授权作为第一入口；在员工登录和可见性尚未稳定前同步建设完整管理员后台。
 - Tradeoff：真实启用需要稳定公网 HTTPS、准确的飞书回调与应用主页配置，并要求 app secret 只存在于受限服务器 env。当前会话存储为单进程内存，Console 重启会要求重新登录，不支持跨副本或集中吊销；单企业映射不等于完整多租户身份系统。员工工作台仍只展示 Instance Owner 视角，没有协作者视图或管理员后台。
 - Evidence：内容提交 `c2e9db99f4b463a895450371dde9b176d6c31ef1`。OAuth、会话、HTTP、CLI 与静态资源聚焦套件为 `31 passed`；完整等价结果为 `953 passed, 18 skipped`。候选 wheel SHA-256 为 `a0ce523fff41bd60004cb21c8f33689e7f979a45df2509c10c565c3cb8677669`，包含鉴权模块和员工工作台静态资源。该证据只证明本地实现、打包和离线边界，尚未部署，也没有真实飞书应用入口或多用户验收。
+
+## ADR-095 · 2026-08-07 · 完成员工登录后只在 PostgreSQL 保存会话凭据摘要
+
+- **Status：Accepted · Development deployment and restart acceptance verified。**
+- Problem：飞书 OAuth、网页应用入口和多成员 Owner 隔离已经完成开发验收，但完成登录后的随机会话只保存在 Console 进程内存。任何部署或故障重启都会让全部员工重新登录，也无法由多个 Console 副本共享已完成会话。
+- Constraint：浏览器不能获得服务端主体或可伪造身份；数据库不能保存原始会话凭据、飞书用户 token 或 refresh token；登录态不能形成第二套用户目录；过期和注销必须立即失效；容量约束在并发签发时仍要成立；短期 OAuth state 与完成登录后的长期会话必须分离；现阶段不顺带扩大为管理员后台或完整多租户身份系统。
+- Decision：保留现有随机不透明 `__Host-` HttpOnly cookie，把完成登录后的 SHA-256 凭据摘要、Target tenant、person、创建时间和过期时间写入 `workflow_console_sessions`。签发在事务级 advisory lock 内先删除过期记录，再按创建时间逐出超过全局上限的最早会话，最后使用冲突不覆盖的插入。认证只按摘要返回未过期主体，并顺手删除命中的过期记录；注销按摘要删除当前会话。OAuth 发起 state 继续作为五分钟有效的单进程短期状态，Console 在授权中途重启时重新发起授权即可，它不承担已完成登录态。
+- Alternatives(否决)：继续使用单进程内存并要求部署后全员重登；把原始 session token 保存到数据库；把飞书 user access token 当长期网页会话；使用可自解码且不能集中失效的浏览器 JWT；在没有管理员产品边界时先建设通用身份服务；让浏览器提交 tenant 或 person。
+- Tradeoff：每次已登录请求增加一次 PostgreSQL 摘要查询，签发时的全局 advisory lock 会串行化低频登录，但换来跨进程重建的一致失效语义。全局数量上限会逐出最早会话，当前没有按 tenant 或用户配额、管理员级集中撤销界面、密钥轮换面板或跨区域容灾。OAuth 授权中途重启仍需重新开始，已完成会话则不受影响。
+- Evidence：内容提交 `a6f5babb07623590e9be2a2b8c523857cce56ff7`；完整离线套件等价结果为 `955 passed, 19 skipped`。一次性真实 PostgreSQL 应用二十份 migration，并验证认证器重建后会话有效、原始凭据不落库、注销立即失效和过期记录清理。wheel SHA-256 为 `a3b680c0a76545ab25a6c62ad500c9a2db0e24b2aac890eb4a1b708bc5fea729`，长期库已应用 `0020_console_sessions`。真实成员重新授权后，Console 重启前后同一摘要记录保持有效；公网与 loopback 均返回 200，用户直接刷新仍保持登录。Console 与 Caddy 均为 `active / NRestarts=0`，验收窗口无 warning。

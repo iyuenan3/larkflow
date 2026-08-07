@@ -2,13 +2,15 @@
 
 > 飞书原生的企业协作 DAG：把多人流程拆成有依赖、有唯一责任人、可验收和可追溯的节点。
 >
-> 文档状态：2026-08-07 Phase 1 中央工作流基础实现。飞书 IM 窄命令、Human-Agent-Tool-Human、完成投影、Owner 查询、两类重启、未来区域编辑、失败恢复、跨人员分工、自然语言草稿和来源约束型材料复核均已在开发环境闭环。首批三项真实项目小样本已覆盖直接退回、带意见返工和直接接受，但尚未证明稳定内容质量或市场价值。Owner 只读中央控制台 v0 已通过真实 PostgreSQL、SSH 隧道和 Chrome 页面验收，页面按真实 `deps` 绘制拓扑层级与依赖箭头，提供拖动、缩放、适配和点击后视口保持，并在详情顶部直接汇总最终状态、返工节点、最近重启和派生待处理提示。待处理中心已完成开发部署、真实认证 API、PostgreSQL 查询和同发布内容浏览器功能验收。员工工作台的飞书 OAuth v3、PKCE、tenant 映射和不透明服务端会话已通过公网 IP HTTPS 部署；至少两名真实成员已从飞书工作台网页入口完成授权登录、本人 Owner 可见性和跨 Owner 隔离验证，机器人入口继续可用。九个 Target 服务与一个 legacy 事件消费者组成十个 Python 服务；十九份 migration 和七条 PostgreSQL 通知连接已回读。自然语言草稿生成已隔离到无飞书 profile 的 Draft Generation Worker，回调首次反馈使用延时 token，后续阶段与终态按原消息 ID 更新。Personal Agent Edge 已完成员工 Mac 前台、Keychain 与离线安装机制验证，但正式签名分发、全新员工 Mac 和可持续公网链路仍未完成。Edge 公网设备链路仍受 ICP 接入备案阻断；当前重新启用的 Caddy 只为公网 IP 员工工作台提供开发 HTTPS。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+> 文档状态：2026-08-07 Phase 1 中央工作流基础实现。飞书 IM 窄命令、Human-Agent-Tool-Human、完成投影、Owner 查询、两类重启、未来区域编辑、失败恢复、跨人员分工、自然语言草稿和来源约束型材料复核均已在开发环境闭环。首批三项真实项目小样本已覆盖直接退回、带意见返工和直接接受，但尚未证明稳定内容质量或市场价值。Owner 只读中央控制台 v0 已通过真实 PostgreSQL、SSH 隧道和 Chrome 页面验收，页面按真实 `deps` 绘制拓扑层级与依赖箭头，提供拖动、缩放、适配和点击后视口保持，并在详情顶部直接汇总最终状态、返工节点、最近重启和派生待处理提示。待处理中心已完成开发部署、真实认证 API、PostgreSQL 查询和同发布内容浏览器功能验收。员工工作台的飞书 OAuth v3、PKCE、tenant 映射和不透明服务端会话已通过公网 IP HTTPS 部署；至少两名真实成员已完成授权登录、本人 Owner 可见性和跨 Owner 隔离验证，机器人入口继续可用。会话摘要现由 PostgreSQL 耐久保存，真实浏览器登录态已跨 Console 重启保持。九个 Target 服务与一个 legacy 事件消费者组成十个 Python 服务；二十份 migration 和七条 PostgreSQL 通知连接已回读。自然语言草稿生成已隔离到无飞书 profile 的 Draft Generation Worker，回调首次反馈使用延时 token，后续阶段与终态按原消息 ID 更新。Personal Agent Edge 已完成员工 Mac 前台、Keychain 与离线安装机制验证，但正式签名分发、全新员工 Mac 和可持续公网链路仍未完成。Edge 公网设备链路仍受 ICP 接入备案阻断；当前重新启用的 Caddy 只为公网 IP 员工工作台提供开发 HTTPS。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
 > 内容提交 `ee2fa9439594d765cd08f2caa0f7ecb20d30d78b` 新增 Owner 范围的中央只读控制台。浏览器只能读取服务端映射身份本人发起的最近流程、DAG、历史 Attempt 和追加型审计，不提供确认、重启、编辑或其他写操作。开发鉴权使用至少 32 字符的随机 Bearer token，服务强制监听 loopback；非 Owner 与不存在实例统一返回 404。完整离线套件为 `922 passed, 18 skipped`。wheel SHA-256 为 `58b27648ccaf3f863cf4bb0ca820b3e2209523b58b0574af626aa303c0e4ff5c`，长期库 migration runner 回读 `19 / 0019_draft_generation_progress` 且无待应用版本。控制台及其余九个 Python 服务统一重启后均为 `active / NRestarts=0`，部署窗口 warning 为 0。真实 Owner 浏览器回读 30 条流程，并验证运行中、草稿、DAG、Attempt、审计和锁定状态；其他 Owner 的真实实例返回 404。该入口只供开发试用，生产前仍需飞书登录态或企业 SSO、反向代理授权和更完整的可见性策略。
 
-> 内容提交 `c2e9db99f4b463a895450371dde9b176d6c31ef1` 在不改变领域只读边界的前提下增加飞书应用内员工工作台登录基础。`feishu` 模式使用 OAuth v3、PKCE S256、浏览器绑定 state、显式飞书 tenant 到 Target tenant 映射和不透明 HttpOnly 会话；用户 access token 只在服务端读取一次用户信息后丢弃，不复用 `lark-cli` 用户登录。聚焦套件为 `31 passed`，完整等价结果为 `953 passed, 18 skipped`，候选 wheel SHA-256 为 `a0ce523fff41bd60004cb21c8f33689e7f979a45df2509c10c565c3cb8677669`。该实现尚未推送或部署，真实启用仍需稳定公网 HTTPS、飞书应用主页和精确回调配置、多成员 Owner 隔离验收，以及替换当前进程内会话；管理员后台仍为后置范围。
+> 内容提交 `c2e9db99f4b463a895450371dde9b176d6c31ef1` 在不改变领域只读边界的前提下增加飞书应用内员工工作台登录基础。`feishu` 模式使用 OAuth v3、PKCE S256、浏览器绑定 state、显式飞书 tenant 到 Target tenant 映射和不透明 HttpOnly 会话；用户 access token 只在服务端读取一次用户信息后丢弃，不复用 `lark-cli` 用户登录。聚焦套件为 `31 passed`，完整等价结果为 `953 passed, 18 skipped`，候选 wheel SHA-256 为 `a0ce523fff41bd60004cb21c8f33689e7f979a45df2509c10c565c3cb8677669`。该实现提交时尚未推送或部署，待完成公网 HTTPS、飞书应用配置、多成员 Owner 隔离和进程内会话替换；这些开发门槛现已由后续提交关闭，管理员后台仍为后置范围。
 
-> 后续内容提交 `fdbead1`、`ad13711` 与 `3916e24` 建立公网 IP HTTPS 入口，`3fe8cd5` 修正 OAuth 回调换取令牌，`bc961b6` 允许 Console 访问飞书 OAuth 端点。飞书应用已同时发布网页应用与机器人能力，网页应用作为工作台默认入口。至少两名真实成员完成授权登录、本人 Owner 数据读取和跨 Owner 隔离验证；Caddy 与 Console 均为 `active / NRestarts=0`，公网 `/console/` 返回 200，Console 继续只监听 `127.0.0.1:8780`。该证据关闭开发环境身份与可见性门槛；当前进程内会话仍会随 Console 重启失效，公网 IP 入口也不构成正式域名或生产发布。
+> 后续内容提交 `fdbead1`、`ad13711` 与 `3916e24` 建立公网 IP HTTPS 入口，`3fe8cd5` 修正 OAuth 回调换取令牌，`bc961b6` 允许 Console 访问飞书 OAuth 端点。飞书应用已同时发布网页应用与机器人能力，网页应用作为工作台默认入口。至少两名真实成员完成授权登录、本人 Owner 数据读取和跨 Owner 隔离验证；Caddy 与 Console 均为 `active / NRestarts=0`，公网 `/console/` 返回 200，Console 继续只监听 `127.0.0.1:8780`。该证据关闭开发环境身份与可见性门槛；该部署时点的进程内会话缺口已由后续 PostgreSQL 会话提交关闭，公网 IP 入口仍不构成正式域名或生产发布。
+>
+> 内容提交 `a6f5babb07623590e9be2a2b8c523857cce56ff7` 增加 migration `0020_console_sessions`，只在 PostgreSQL 保存不透明凭据的 SHA-256 摘要、服务端主体与有效期。完整离线套件等价结果为 `955 passed, 19 skipped`；一次性真实 PostgreSQL 验证认证器重建、原始凭据不落库、注销和过期清理。wheel SHA-256 为 `a3b680c0a76545ab25a6c62ad500c9a2db0e24b2aac890eb4a1b708bc5fea729`，已部署到开发服务器。真实成员重新授权后，Console 重启前后的 PostgreSQL 会话记录保持有效，公网与 loopback 均返回 200，浏览器直接刷新仍保持登录；Console 与 Caddy 均为 `active / NRestarts=0`，验收窗口无 warning。
 
 > 内容提交 `623b9b6228caa52b4680eb30ad2fee723e8921b6` 修正 Console 把 DAG 误画为线性链的问题。页面现在依据 `deps` 计算拓扑层级，以 SVG 绘制真实依赖边并标注每个节点的直接依赖；选中节点时同步突出关联边，窗口变化后重绘。完整离线套件为 `922 passed, 18 skipped`，Console 与部署相关聚焦套件为 `22 passed`，JavaScript 语法检查通过。候选 wheel SHA-256 为 `6b8faed6eb5a4f32d695e40fdc495480585e53d9058e28e7ca7d2ece32421f8d`，安装后静态资源 SHA-256 与源码、wheel 均一致。升级前备份成功，migration runner 返回 `versions=[]`；本次只重启 Console，十个 Python 服务仍为 `active / NRestarts=0`，loopback、401/200 与部署窗口 warning 边界均已回读。真实 Chrome 标签页刷新后回读 4 条依赖边和 4 条依赖标签，分叉、汇合、关联高亮与横向滚动均完成目视确认。
 >
@@ -36,7 +38,7 @@
 >
 > 内容提交 `770243a02b116e12583ceebdb8362fd40b7fe0a7` 增加暂停、继续和版本绑定取消，真实飞书验收现已关闭最后的外部投影缺口。实例 `im_c1c472a12a8ea4a7c8d63480` 依次完成确认、暂停、继续、取消预览和确认，普通 Human Task 从飞书服务端回读为 `done`；实例 `im_516c59e4082e82ab74b8bd14` 进入决定节点后取消，原 Card 2.0 被原位更新为无控件“复核已取消”。两个实例的 PostgreSQL Instance、Node、Attempt、Projection 与追加型审计均和飞书终态一致。十个服务保持 `active / NRestarts=0`，验收窗口 warning 为 0。该证据只关闭开发测试组织中的生命周期链路，不构成生产上线或业务价值证明。
 >
-> last-synced: 432e0e816fb49cee17570124e4338a1332152ebe · 2026-08-07
+> last-synced: 29c16c763aa3fdb5dbbc6ee9e27a566095e9e895 · 2026-08-07
 
 ## 阅读顺序
 
@@ -54,16 +56,16 @@
 |---|:--:|---|
 | CORE | ✅ | Target 身份、简化边界、Edge Proof 和不变量 |
 | PRODUCT_STRATEGY | ✅ | 范围收敛取舍、窄 Edge 实验，明确未做市场验证 |
-| PRD | ✅ | Target 单层 DAG MVP、飞书应用内本人工作台身份边界、来源约束型结果、带具体意见的人类决定与 Edge Proof 功能契约 |
+| PRD | ✅ | Target 单层 DAG MVP、飞书应用内本人工作台身份与耐久会话边界、来源约束型结果、带具体意见的人类决定与 Edge Proof 功能契约 |
 | DAG_TEMPLATE_SPEC | ✅ | v0.2 模板、mention 角色绑定、草稿预览、未来区域编辑和两类重启已实现 |
-| ARCHITECTURE | ✅ | Target 模块化单体、飞书 OAuth 服务端会话与 Owner 只读工作台、独立凭据侧 Interactive 双副本、无凭据 Draft Generation Worker、来源契约检查、带返工上下文的人类决定卡、PostgreSQL 通知唤醒与轮询兜底、飞书投影、失败恢复、Edge Proof、macOS 版本化安装与剩余差距 |
+| ARCHITECTURE | ✅ | Target 模块化单体、飞书 OAuth 与 PostgreSQL 耐久会话的 Owner 只读工作台、独立凭据侧 Interactive 双副本、无凭据 Draft Generation Worker、来源契约检查、带返工上下文的人类决定卡、PostgreSQL 通知唤醒与轮询兜底、飞书投影、失败恢复、Edge Proof、macOS 版本化安装与剩余差距 |
 | RELATIONS | ✅ | Target 飞书、mention 与人员选择卡身份边界、中央 lark-cli、Edge HTTPS、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | 首批三项真实工作小样本已建立，员工工作台登录基础本地完成，下一门槛为公网 HTTPS、真实应用内多用户验收、运维告警及 Edge 正式分发门禁 |
-| SPEC | ✅ | legacy 契约、Target CLI、Owner 只读 Console HTTP、OAuth v3 与双鉴权模式、独立 interact 与 draft generation Worker、数据库通知唤醒、来源声明与确定性检查、必填退回意见的人类决定卡、十五个飞书窄命令、模板与无模板草稿、暂停继续取消、Task 入站、受控变化、完成投影与私有 Edge v1 HTTP、前台客户端、doctor 及 macOS manager |
-| DEPLOYMENT | ✅ | Legacy ECS 与当前 Target 九服务、十九份 migration、七条通知连接、静态 Console 实况与飞书登录待部署前置、暂停继续取消的真实飞书收口、独立草稿生成、Edge serve、macOS 安装、备份与回滚实录 |
+| ROADMAP | ✅ | 首批三项真实工作小样本已建立，员工工作台 OAuth、多用户隔离与耐久会话已完成，下一门槛为最小管理员后台、正式域名、生产限流及 Edge 正式分发门禁 |
+| SPEC | ✅ | legacy 契约、Target CLI、Owner 只读 Console HTTP、OAuth v3、PostgreSQL 耐久会话与双鉴权模式、独立 interact 与 draft generation Worker、数据库通知唤醒、来源声明与确定性检查、必填退回意见的人类决定卡、十五个飞书窄命令、模板与无模板草稿、暂停继续取消、Task 入站、受控变化、完成投影与私有 Edge v1 HTTP、前台客户端、doctor 及 macOS manager |
+| DEPLOYMENT | ✅ | Legacy ECS 与当前 Target 九服务、二十份 migration、七条通知连接、公网 IP Console、真实飞书登录与重启后会话保持、暂停继续取消的真实飞书收口、独立草稿生成、Edge serve、macOS 安装、备份与回滚实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
-| DECISIONS | ✅ | Append-only ADR 历史，最新为员工工作台使用飞书 OAuth v3 服务端会话且不复用 lark-cli 登录 |
-| CHANGELOG | ✅ | Append-only 已实现变更，最新为员工工作台飞书登录基础的本地实现与未部署边界 |
+| DECISIONS | ✅ | Append-only ADR 历史，最新为员工工作台已完成会话只存 PostgreSQL 摘要并跨 Console 重启保持 |
+| CHANGELOG | ✅ | Append-only 已实现变更，最新为 PostgreSQL 耐久 Console 会话部署与真实重启回归 |
 | MEMORY | ⚑ | Append-only 经验，仍含语义占位，已记录流程图操作可发现性、手势竞争、静态页面旧标签页、回调漂移、通知边界、批次计时、虚拟环境、Keychain 上下文、bootstrap pip 与构建模块遮蔽风险 |
 
 ## 按任务读取
