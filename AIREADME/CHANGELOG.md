@@ -8,6 +8,7 @@
 - Verified：工作流操作、Console、限流、鉴权、管理员会话与部署聚焦套件为 `53 passed`；清除本机代理变量并允许进程树检查后的完整离线套件为 `995 passed, 21 skipped`。JavaScript 语法、Git whitespace、敏感文字扫描均通过。干净 wheel SHA-256 为 `fca2eee16d3af57dcfb4bb78409a0b6f9e23b7d3d29aa7d7435cc1f26dd3063a`，wheel、临时安装、服务器安装与公网下载后的操作服务和三项静态资源哈希逐项一致。
 - Deployment：发布件位于 `/srv/larkflow/target/releases/20260808_235309_console_actions_da94891/`。升级前备份 `/var/backups/larkflow-postgres/larkflow_target_dev-20260808T235220+0800.dump` 为 259098 bytes，SHA-256 为 `459ecac443e2eb6cad9034691fa07b21dec947b7944213ed6e88f5cdbca4db7e`，权限为 `0600 lf_target_dev:lf_target_dev`；migration runner 返回空集，ledger 保持 21 份。本次只重启 Console，九个 Target 服务、legacy 消费者与 Caddy 均为 `active / NRestarts=0`，公网和 loopback 页面返回 200，未认证读取与工作流 POST 返回 401，公网安全响应头齐全，部署窗口 warning 为 0。
 - Boundary：本轮关闭的是开发环境中“复制命令再去飞书发送”的交互绕行和服务端写入边界。尚未使用真实登录 Owner 对已部署版本执行首轮确认、暂停或继续，以及取消或重启；也不包含 Human 正文提交、运行中图编辑、协作者视图、生产容量、正式域名或生产发布。
+- Acceptance addendum · 2026-08-09：真实登录 Owner 已在公网工作台直接确认并启动 `internal_trial_20260808_155244`。三个节点均在 Attempt 1 完成，实例终态为 `done / version 7`；两个飞书 Task、Agent 结果消息、完成文档与最终通知均已外部绑定。该补充证据只关闭首个真实登录 Owner 写操作门槛，不改写本版本发布时的 Boundary，也不宣称其他网页操作已逐项验收。
 
 ## v0.65.0-draft · 2026-08-08 · Owner 工作台重构与双主题
 

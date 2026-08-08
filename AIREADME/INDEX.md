@@ -4,7 +4,7 @@
 >
 > 文档状态：2026-08-08 Phase 1 中央工作流基础实现。飞书 IM 窄命令、Human-Agent-Tool-Human、完成投影、Owner 查询、两类重启、未来区域编辑、失败恢复、跨人员分工、自然语言草稿和来源约束型材料复核均已在开发环境闭环。首批三项真实项目小样本已覆盖直接退回、带意见返工和直接接受，但尚未证明稳定内容质量或市场价值。Owner 中央控制台 v1 已通过真实 PostgreSQL、SSH 隧道和 Chrome 页面验收，页面按真实 `deps` 绘制拓扑层级与依赖箭头，提供拖动、缩放、适配和点击后视口保持，并在详情顶部直接汇总最终状态、返工节点、最近重启和派生待处理提示。Owner 现在可以在工作台直接确认草稿、暂停和继续；取消与节点或完整实例重启必须先预览再确认。Human 输入与决定仍在飞书责任入口完成。员工工作台的飞书 OAuth v3、PKCE、tenant 映射和不透明服务端会话已通过公网 IP HTTPS 部署；至少两名真实成员已完成授权登录、本人 Owner 可见性和跨 Owner 隔离验证，机器人入口继续可用。会话摘要由 PostgreSQL 耐久保存，真实浏览器登录态已跨 Console 重启保持。最小管理员聚合和其他浏览器会话撤销已复用同一会话；当前会话只能注销，其他会话必须通过耐久预览、显式确认和追加型审计撤销。真实 PostgreSQL 竞争、管理员授权、普通成员 404、撤销失效、幂等、服务部署与会话治理面板真实浏览器视觉验收均已完成。公网入口现由 Caddy 覆盖来源头并限制请求大小与连接时间，loopback Console 使用不保存原始 IP 的有界令牌桶，完整浏览器安全响应头已完成真实回读。root 侧管理员 allowlist 运维工具已提供活跃会话解析、短期预览、原子更新、健康回读、失败自动恢复和显式回滚；真实服务器只完成无变化确认与唯一管理员保护，没有给其他成员提权。包含 Console 会话表的二十一份 migration 已完成隔离恢复，并验证暴露前清空会话可保留撤销审计与流程数据。九个 Target 服务与一个 legacy 事件消费者组成十个 Python 服务；二十一份 migration 和七条 PostgreSQL 通知连接已回读。自然语言草稿生成已隔离到无飞书 profile 的 Draft Generation Worker，回调首次反馈使用延时 token，后续阶段与终态按原消息 ID 更新。Personal Agent Edge 已完成员工 Mac 前台、Keychain 与离线安装机制验证，但正式签名分发、全新员工 Mac 和可持续公网链路仍未完成。Edge 公网设备链路仍受 ICP 接入备案阻断；当前重新启用的 Caddy 只为公网 IP 员工工作台提供开发 HTTPS。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
-> 内容提交 `da94891f5e6d01ecee6082a98bab6148abba12ee` 为 Owner 工作台增加受控流程操作。确认草稿、暂停和继续直接复用既有领域服务；取消使用 aggregate version 预览确认，节点与完整实例重启复用耐久 RestartPreview。所有操作继续由服务端重新校验飞书会话、tenant、Instance Owner 与当前状态，跨 Owner 和不存在实例统一返回 404；`feishu` 写请求要求精确同源 `Origin`、专用动作头、空 query 与空 body。按钮会在请求发出前立即显示处理中，高风险操作在同页展示影响节点后再确认。完整离线套件为 `995 passed, 21 skipped`，wheel SHA-256 为 `fca2eee16d3af57dcfb4bb78409a0b6f9e23b7d3d29aa7d7435cc1f26dd3063a`，已部署到 `/srv/larkflow/target/releases/20260808_235309_console_actions_da94891/`。升级前备份、二十一份 migration、`pip check`、公网静态资源哈希、401 边界、安全响应头、全部服务 `active / NRestarts=0` 与零 warning 均已读回。真实登录 Owner 的首次写操作浏览器验收仍待完成。
+> 内容提交 `da94891f5e6d01ecee6082a98bab6148abba12ee` 为 Owner 工作台增加受控流程操作。确认草稿、暂停和继续直接复用既有领域服务；取消使用 aggregate version 预览确认，节点与完整实例重启复用耐久 RestartPreview。所有操作继续由服务端重新校验飞书会话、tenant、Instance Owner 与当前状态，跨 Owner 和不存在实例统一返回 404；`feishu` 写请求要求精确同源 `Origin`、专用动作头、空 query 与空 body。按钮会在请求发出前立即显示处理中，高风险操作在同页展示影响节点后再确认。完整离线套件为 `995 passed, 21 skipped`，wheel SHA-256 为 `fca2eee16d3af57dcfb4bb78409a0b6f9e23b7d3d29aa7d7435cc1f26dd3063a`，已部署到 `/srv/larkflow/target/releases/20260808_235309_console_actions_da94891/`。升级前备份、二十一份 migration、`pip check`、公网静态资源哈希、401 边界、安全响应头、全部服务 `active / NRestarts=0` 与零 warning 均已读回。真实登录 Owner 随后在公网工作台直接确认并启动 `internal_trial_20260808_155244`，三个节点均在 Attempt 1 完成，实例终态为 `done / version 7`。两个飞书 Task、Agent 结果消息、完成文档与最终通知均已外部绑定。该证据只关闭首个真实登录 Owner 写操作门槛，暂停、继续、取消和重启仍未逐项完成页面验收。
 >
 > 内容提交 `e3bd98d155a446a66bdb2c947e124f7ba7fc9c31` 把 Owner 中央工作台重构为本人待处理、全部流程和三页签详情的信息架构，增大正文与操作字号，并提供跟随系统、可本地记忆的浅色和深色主题。领域接口、飞书身份、Owner 隔离和只读边界不变。完整离线等价结果为 `988 passed, 21 skipped`，wheel SHA-256 为 `7b7b5318c4f94b096210629f5c94db1d2369ee2cb94f5e66cfc146ab8a2a5178`，已部署到 `/srv/larkflow/target/releases/20260808_231502_console_ui_e3bd98d/`。本次只重启 Console；九个 Target 服务、legacy 消费者与 Caddy 均为 active，公网与 loopback 页面返回 200，未认证 API 返回 401。该版本尚待真实登录浏览器刷新后完成新版视觉复验。
 >
@@ -52,7 +52,7 @@
 >
 > 内容提交 `db7651228e26055eb1229ae9f451e3e87c31df38` 把来源约束型材料复核与决策生成拆成独立结果契约，新增 `source_decision.v1`、`source_decision.check` 与 `source_grounded_decision`，并用 JSON 代码块消除结构化卡片 URL 的 `%22` 污染。完整离线等价结果为 `988 passed, 21 skipped`，干净 wheel SHA-256 为 `54a4bbf4c96834d7d69a3434d01b083d2467f5df6dd129c9ac6e35876efb49ff`，已部署到 `/srv/larkflow/target/releases/20260808_040000_source_decision_db76512/`。真实实例 `source_decision_20260808_0405` 的四个 Attempt 1 均完成，Agent 回答 Q1、Q2、Q3，Tool 覆盖 6/6 个 F 和 3/3 个 Q、零违规且 `verdict=pass`。Owner 明确接受后实例为 `done / version 9`，终态决定卡已从飞书服务端回读为已接受、无按钮且无 `%22`。九个 Target 服务均为 `active / NRestarts=0`，legacy 消费者与 Caddy 仍 active，部署窗口 warning 为 0。该开发证据不等于业务建议正确、生产容量或生产发布。
 >
-> last-synced: e6c51b4080357f1b74f03273d2d1baa9657d4432 · 2026-08-09
+> last-synced: 79c991a01d7e75ab92e87fa9629f4c64a3ce365c · 2026-08-09
 
 ## 阅读顺序
 
@@ -74,7 +74,7 @@
 | DAG_TEMPLATE_SPEC | ✅ | v0.2 模板、mention 角色绑定、草稿预览、未来区域编辑和两类重启已实现 |
 | ARCHITECTURE | ✅ | Target 模块化单体、飞书 OAuth 与 PostgreSQL 耐久会话的 Owner 工作台、复用领域服务的受控流程操作、服务端 allowlist 管理员聚合、受审计会话撤销、可信代理来源与有界令牌桶、独立凭据侧 Interactive 双副本、无凭据 Draft Generation Worker、来源契约检查、带返工上下文的人类决定卡、PostgreSQL 通知唤醒与轮询兜底、飞书投影、失败恢复、Edge Proof、macOS 版本化安装与剩余差距 |
 | RELATIONS | ✅ | Target 飞书、mention 与人员选择卡身份边界、中央 lark-cli、Edge HTTPS、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | 首批三项真实工作小样本已建立，员工工作台、受控流程操作、allowlist 运维与会话恢复演练已闭环，下一门槛为真实登录 Owner 的首轮工作流写操作验收及 Edge 正式分发 |
+| ROADMAP | ✅ | 首批三项真实工作小样本已建立，员工工作台、首个真实登录 Owner 写操作、allowlist 运维与会话恢复演练已闭环，下一门槛为网页 Human 责任入口、待办转交契约及 Edge 正式分发 |
 | SPEC | ✅ | legacy 契约、Target CLI、Owner Console 读取与工作流 POST、OAuth v3、PostgreSQL 耐久会话、服务端管理员 allowlist、聚合与受审计会话撤销、公网请求预算和 429 契约、独立 interact 与 draft generation Worker、数据库通知唤醒、来源声明与确定性检查、必填退回意见的人类决定卡、十五个飞书窄命令、模板与无模板草稿、暂停继续取消、Task 入站、受控变化、完成投影与私有 Edge v1 HTTP、前台客户端、doctor 及 macOS manager |
 | DEPLOYMENT | ✅ | Legacy ECS 与 Target 九服务、二十一份 migration、公网 IP Console、Owner 工作台双主题与受控流程操作、真实飞书登录、受控管理员 allowlist 运维、会话暴露前恢复门禁、Caddy 边界、Edge、备份与回滚实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
