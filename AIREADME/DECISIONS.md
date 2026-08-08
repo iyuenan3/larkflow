@@ -882,3 +882,13 @@
 - Tradeoff：Owner 常用操作减少一次应用切换，但 Console 从观察面扩展为受控写入口，需要独立的 CSRF 边界、工作流写入限流、状态冲突反馈和真实登录验收。当前操作只覆盖 Instance Owner，不增加协作者视图、管理员领域处置、运行中图编辑或 Human 正文提交。单进程限流仍不能替代生产级分布式防护。
 - Evidence：内容提交 `da94891f5e6d01ecee6082a98bab6148abba12ee`；聚焦套件为 `53 passed`，完整离线套件为 `995 passed, 21 skipped`。干净 wheel SHA-256 为 `fca2eee16d3af57dcfb4bb78409a0b6f9e23b7d3d29aa7d7435cc1f26dd3063a`，已部署到 `/srv/larkflow/target/releases/20260808_235309_console_actions_da94891/`。升级前备份成功，长期库保持二十一份 migration，服务器 `pip check` 通过。本次只重启 Console；全部服务与 Caddy 均为 `active / NRestarts=0`，公网静态资源哈希与源码一致，未认证写请求返回 401，部署窗口 warning 为 0。浅色与深色本地浏览器视觉检查无错误或告警；真实登录 Owner 对部署版本的首轮写操作验收仍待执行。
 - Status addendum · 2026-08-09：首个真实鉴权动作已验收。Owner 从公网工作台直接确认并启动 `internal_trial_20260808_155244`，最终三个节点均在 Attempt 1 完成，实例为 `done / version 7`。审计回读包含各一条 `instance.confirmed` 和 `instance.completed`；两个飞书 Task、Agent 结果消息、完成文档和最终通知均有外部绑定。本补充条目保留 ADR 原始状态和发布时证据，并只将“确认并启动”标记为真实登录通过。
+
+## ADR-101 · 2026-08-09 · 普通 Human Task 使用参与者任务面并允许运行时转交
+
+- **Status：Accepted · Development deployed, real browser transfer acceptance pending。**
+- Problem：节点参与者可能不是 Instance Owner，也可能在收到任务后判断另一位成员更适合执行。若页面仍只服务 Instance Owner，参与者必须回到机器人会话；若转交直接改写流程快照，历史设计责任、运行时责任和审计会混为一体。
+- Constraint：PostgreSQL 继续是唯一业务真相；任务参与不能扩大为完整协作者实例读取；浏览器不能声明可信身份、当前负责人、Attempt 或版本；转交目标必须属于同一 tenant 且为中央应用可见的活跃成员；旧 Attempt、结果、冻结 Snapshot 和审计必须保留；决定节点的接受或退回不能被普通正文提交绕过；飞书 Task 只是投影。
+- Decision：增加独立 `ConsoleTaskService` 和参与者任务路由。普通 Human Task 当前负责人可以读取有界任务上下文、提交结果或转交。提交与转交使用严格 JSON，并绑定 `attempt_no + expected_node_version`。转交事务只更新运行时 `NodeInstance.owner_person_id`，追加审计和 outbox；冻结 Snapshot 中的设计 Owner 不变。旧负责人随事务提交立即失权，Projection 更新既有飞书 Task 负责人。`accept_reject` 决定节点不进入普通任务接口，继续使用飞书决定卡。
+- Alternatives(否决)：让网页自动给机器人发送命令；把完整 Instance 详情开放给所有节点参与者；通过前端直接调用飞书 Task 转交而不改中央责任；转交时改写 Snapshot；保留旧负责人和新负责人同时可提交；把决定节点当普通文本任务；在同一版本同时建设自由文本流程控制台。
+- Tradeoff：页面成为更完整的工作入口，但授权必须同时维护 Owner 实例视图和参与者任务视图两套不同查询边界。成员目录读取增加一次服务端应用凭据调用，外部转交失败需要 outbox 重试。当前只支持单一运行时负责人转交，不支持多人会签、委托期限、自动退回或转交审批。
+- Evidence：内容提交 `3d438bb476ad9b9f98cd4c2873802a2894718fe4`；完整离线套件为 `1003 passed, 22 skipped`。真实 PostgreSQL 双连接竞争只有一路成功，审计和 outbox 均为一条，冻结 Snapshot 保持不变，运行时 Owner 已改变。wheel SHA-256 为 `8373a9f18377abf7068b53e362158714168078327934d44ab9d3b3330f75e736`，已部署到开发服务器。公网任务 API 未登录为 401，临时登录会话下任务和成员目录 API 均为 200，成员目录返回 4 人；临时会话撤销后失效。当前没有自然等待任务，因此真实浏览器提交与真实飞书 Task 转交保持待验收。

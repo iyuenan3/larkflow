@@ -44,6 +44,6 @@ larkflow 是基于飞书的企业协作 DAG 系统。它把一个多人协作目
 
 当前阶段是中央工作流基础实现。设计取舍见 [`research/design-simplification.md`](../research/design-simplification.md)。仓库中的 LangGraph + SQLite + lark-cli 代码仍是 legacy 机制原型，不是上述目标架构的已实现版本。
 
-当前前端边界是飞书责任入口加中央控制台。节点 Owner 继续在飞书完成工作；Instance Owner 可以查看本人流程、DAG、历史 Attempt 和审计。飞书 OAuth 与 PostgreSQL 耐久会话已经通过公网 IP HTTPS 开发部署；服务端 allowlist 命中的成员还可查看当前企业的流程、会话、migration 与耐久队列聚合，并通过五分钟耐久预览、显式确认和追加型审计撤销其他浏览器会话。当前会话必须注销，Owner 领域资源仍只读，普通成员也不能枚举管理员接口。正式域名、allowlist 自助管理、批量会话治理、可写领域控制面和生产装配仍未实现。
+当前前端边界是员工工作台加飞书责任投影。Instance Owner 可以查看本人流程、DAG、历史 Attempt 和审计，并执行受控流程操作；普通 Human Task 的当前负责人可以读取该任务的有界上下文、提交结果或转交给同一租户内的活跃成员，但不会因此获得完整实例可见性。需要明确接受或退回的决定仍使用飞书决定卡。飞书 OAuth 与 PostgreSQL 耐久会话已经通过公网 IP HTTPS 开发部署；服务端 allowlist 命中的成员还可查看当前企业聚合并治理其他浏览器会话。正式域名、通用流程输入框、allowlist 自助管理、批量会话治理、运行中图编辑和生产装配仍未实现。
 
 仓库允许一个不改变 MVP 主线的 Personal Agent Edge Proof v0：用户用一次性配对码注册本人设备，可手工运行一次只读 `personal.readonly` 节点，也可主动启动一个固定单工作区的前台领取会话。设备通过中央 HTTPS 边界领取短时执行租约并回传结果。前台会话不是操作系统后台服务，不改变配对 capability，也不构成产品化。中央 PostgreSQL、节点 Owner、Human gate 和服务端授权不变；设备不是责任主体，也不能经该通道修改文件、执行任意 shell、操作飞书或更改流程图。该 Proof 只验证架构可行性，不代表真实采用、市场需求或生产安全已经成立。

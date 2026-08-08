@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.67.0-draft · 2026-08-09 · Human Task 页面提交与转交
+
+- Added：内容提交 `3d438bb476ad9b9f98cd4c2873802a2894718fe4` 新增参与者范围的任务列表、任务详情、结果输入框、提交和转交接口。参与者只读取分配给自己的普通 Human Task 有界上下文，不能打开其他 Owner 的完整实例；明确接受或退回的决定节点继续使用飞书决定卡。
+- Domain：转交绑定当前 Attempt 与节点版本，服务端重新校验当前负责人和目标活跃成员。事务只修改运行时 `NodeInstance.owner_person_id`，不改写冻结 `InstanceSnapshot`；旧负责人立即失去提交权限，并追加 `node.human_task_transferred` 审计与 outbox。Projection 使用稳定幂等键更新既有飞书 Task 负责人。
+- UI：本人待处理页合并 Owner 关注项与参与者任务。任务弹窗展示目标、验收条件和有界上下文，允许填写结果或选择成员转交；按钮在请求发出前立即显示提交中、加载成员中或转交中。通用流程输入框仍保持后置。
+- Verified：聚焦测试与完整离线套件通过，完整结果为 `1003 passed, 22 skipped`。真实 PostgreSQL 双连接竞争只有一路转交成功，审计与 outbox 均恰好一条，冻结 Snapshot Owner 不变，运行时 Owner 已改变，新负责人可见任务。JavaScript 语法、Python 编译、Git whitespace 与敏感文字扫描通过。
+- Deployment：wheel SHA-256 为 `8373a9f18377abf7068b53e362158714168078327934d44ab9d3b3330f75e736`，位于 `/srv/larkflow/target/releases/20260809_0120_human_tasks_3d438bb/`。升级前备份 SHA-256 为 `3e6511c0e1a622e63ac53e08a3402709daaaa7095eca09eb7caca2438623e499`。migration ledger 保持二十一份；十个 Python 服务与 Caddy 均为 `active / NRestarts=0`，部署窗口 warning 为 0。公网静态资源哈希、安全响应头、未认证 401、登录态任务与成员目录 API 200、临时会话撤销失效均已读回。一次性 PostgreSQL 库与临时文件已删除。
+- Boundary：当前开发库没有自然等待中的普通 Human Task，所以本版本尚未完成真实浏览器结果提交和真实飞书 Task 转交。它不包含通用流程输入框、决定节点网页提交、完整协作者实例视图、生产容量、正式域名或生产发布。
+
 ## v0.66.0-draft · 2026-08-09 · Owner 工作台受控流程操作
 
 - Added：内容提交 `da94891f5e6d01ecee6082a98bab6148abba12ee` 新增 `ConsoleActionService`，把当前服务端鉴权主体映射到既有 `WorkflowService`。草稿确认、暂停和继续可以直接执行；取消使用 aggregate version 预览确认；节点与完整实例重启复用耐久 RestartPreview。Human 正文与最终判断仍在飞书责任入口完成。
