@@ -44,6 +44,8 @@ const state = {
   loginUrl: "/console/auth/login",
   instances: [],
   attention: [],
+  humanTasks: [],
+  activeTask: null,
   detail: null,
   isAdmin: false,
   view: "owner",
@@ -80,6 +82,7 @@ const workspace = document.querySelector(".workspace");
 const adminConsole = el("admin-console");
 const ownerViewButton = el("owner-view");
 const adminViewButton = el("admin-view");
+const humanTaskDialog = el("human-task-dialog");
 
 document.querySelectorAll(".theme-toggle").forEach((button) => {
   button.addEventListener("click", () => {
@@ -143,6 +146,7 @@ const EVENT = {
   "node.claim_recovered": "执行租约已恢复",
   "node.claim_renewed": "执行租约已续期",
   "node.human_submitted": "人工结果已提交",
+  "node.human_task_transferred": "人工待办已转交",
   "node.human_decision_accepted": "人工决定已接受",
   "node.human_decision_rejected": "人工决定已退回",
   "node.human_takeover_started": "人工接管已开始",
@@ -196,6 +200,7 @@ async function request(path, options = {}) {
     response = await fetch(path, {
       method,
       headers,
+      body: options.body,
       cache: "no-store",
       credentials: "same-origin",
     });
@@ -226,14 +231,54 @@ async function request(path, options = {}) {
 }
 
 async function loadInstances(selectId = null) {
-  const payload = await request("/console/api/v1/instances?limit=30");
+  const [payload, taskPayload] = await Promise.all([
+    request("/console/api/v1/instances?limit=30"),
+    request("/console/api/v1/tasks?limit=30"),
+  ]);
   state.instances = payload.instances;
-  state.attention = payload.attention?.items || [];
+  state.humanTasks = taskPayload.tasks || [];
+  const taskItems = state.humanTasks.map(humanTaskAttentionItem);
+  const taskKeys = new Set(taskItems.map((item) => item.id));
+  state.attention = [
+    ...(payload.attention?.items || []).filter((item) => !taskKeys.has(item.id)),
+    ...taskItems,
+  ].sort((left, right) => {
+    if (left.priority !== right.priority) return left.priority - right.priority;
+    return String(right.occurred_at).localeCompare(String(left.occurred_at));
+  });
+  const counts = Object.fromEntries(Object.keys(ATTENTION).map((kind) => [
+    kind,
+    state.attention.filter((item) => item.kind === kind).length,
+  ]));
+  const attention = {
+    items: state.attention,
+    counts,
+    total: state.attention.length,
+    instance_limit: payload.attention?.instance_limit || 30,
+  };
   renderInstances();
-  renderAttention(payload.attention || { items: [], counts: {}, instance_limit: 30 });
+  renderAttention(attention);
   if (selectId) {
     await loadDetail(selectId);
   }
+}
+
+function humanTaskAttentionItem(task) {
+  return {
+    id: `complete_human:${task.instance_id}:${task.node.key}`,
+    kind: "complete_human",
+    priority: 1,
+    instance_id: task.instance_id,
+    goal: task.goal,
+    instance_status: task.instance_status,
+    title: `完成待办：${task.node.title}`,
+    detail: task.instance_owner_relation === "you"
+      ? "该普通 Human 节点正在等待你的输入，可在本页提交或转交。"
+      : "你是该协作流程当前节点的负责人，可在本页提交或转交。",
+    occurred_at: task.started_at,
+    node: { key: task.node.key, title: task.node.title },
+    action: { kind: "human_task", node_key: task.node.key },
+  };
 }
 
 async function loadAdminOverview() {
@@ -548,7 +593,7 @@ function renderAttention(attention) {
   summary.replaceChildren();
   el("attention-count").textContent = attention.total ?? state.attention.length;
   el("attention-nav-count").textContent = attention.total ?? state.attention.length;
-  el("attention-scope").textContent = `基于最近 ${attention.instance_limit || 30} 个本人流程，只提供安全的下一步提示`;
+  el("attention-scope").textContent = `汇总最近 ${attention.instance_limit || 30} 个本人流程，以及当前分配给你的普通 Human 待办`;
 
   Object.entries(ATTENTION).forEach(([kind, label]) => {
     const count = attention.counts?.[kind] || 0;
@@ -637,29 +682,32 @@ function attentionCard(item) {
     actionButton.addEventListener("click", () => runAttentionAction(item, card, actionButton));
     actions.append(actionButton);
   }
-  const openButton = node("button", "attention-open-button", "查看详情");
-  openButton.type = "button";
-  openButton.addEventListener("click", async () => {
-    openButton.disabled = true;
-    openButton.dataset.state = "working";
-    openButton.textContent = "正在打开";
-    state.returnSection = "attention";
-    showDetailLoading(item.goal || item.title);
-    try {
-      await loadDetail(item.instance_id);
-      showToast("流程详情已打开");
-    } catch (error) {
-      showOwnerSection("attention");
-      showToast("流程读取失败，请稍后重试", "error");
-      showWorkspaceError(error);
-    }
-  });
-  actions.append(openButton);
+  if (item.action?.kind !== "human_task") {
+    const openButton = node("button", "attention-open-button", "查看详情");
+    openButton.type = "button";
+    openButton.addEventListener("click", async () => {
+      openButton.disabled = true;
+      openButton.dataset.state = "working";
+      openButton.textContent = "正在打开";
+      state.returnSection = "attention";
+      showDetailLoading(item.goal || item.title);
+      try {
+        await loadDetail(item.instance_id);
+        showToast("流程详情已打开");
+      } catch (error) {
+        showOwnerSection("attention");
+        showToast("流程读取失败，请稍后重试", "error");
+        showWorkspaceError(error);
+      }
+    });
+    actions.append(openButton);
+  }
   card.append(marker, copy, actions);
   return card;
 }
 
 function attentionActionLabel(action) {
+  if (action.kind === "human_task") return "处理待办";
   if (action.kind === "confirm_draft") return "确认并启动";
   if (action.kind === "resume") return "继续流程";
   if (action.kind === "restart") return "查看重启影响";
@@ -686,6 +734,11 @@ function attentionActionPath(item) {
 async function runAttentionAction(item, card, button) {
   button.disabled = true;
   button.dataset.state = "working";
+  if (item.action.kind === "human_task") {
+    button.textContent = "正在打开";
+    await openHumanTask(item, button);
+    return;
+  }
   button.textContent = item.action.kind === "restart" ? "正在生成预览" : "正在执行";
   try {
     const payload = await request(attentionActionPath(item), { method: "POST" });
@@ -708,6 +761,204 @@ async function runAttentionAction(item, card, button) {
       button.dataset.state = "idle";
       button.textContent = attentionActionLabel(item.action);
     }, 2600);
+  }
+}
+
+async function openHumanTask(item, sourceButton) {
+  const instanceId = encodeURIComponent(item.instance_id);
+  const nodeKey = encodeURIComponent(item.action.node_key);
+  state.activeTask = null;
+  el("human-task-title").textContent = item.node?.title || "处理待办";
+  el("human-task-goal").textContent = item.goal || "";
+  el("human-task-loading").textContent = "正在读取最新待办状态";
+  el("human-task-loading").hidden = false;
+  el("human-task-content").hidden = true;
+  resetHumanTaskControls();
+  if (!humanTaskDialog.open) humanTaskDialog.showModal();
+  try {
+    const payload = await request(
+      `/console/api/v1/tasks/${instanceId}/nodes/${nodeKey}`,
+    );
+    state.activeTask = payload.task;
+    renderHumanTask(payload.task);
+    sourceButton.disabled = false;
+    sourceButton.dataset.state = "idle";
+    sourceButton.textContent = attentionActionLabel(item.action);
+  } catch (error) {
+    el("human-task-loading").textContent = error.message || "待办读取失败，请稍后重试";
+    sourceButton.disabled = false;
+    sourceButton.dataset.state = "error";
+    sourceButton.textContent = "读取失败";
+    showToast(error.message || "待办读取失败，请稍后重试", "error");
+    setTimeout(() => {
+      sourceButton.dataset.state = "idle";
+      sourceButton.textContent = attentionActionLabel(item.action);
+    }, 2200);
+  }
+}
+
+function resetHumanTaskControls() {
+  el("human-task-result").value = "";
+  el("human-task-result").disabled = false;
+  el("human-task-result-count").textContent = "0";
+  el("human-task-error").textContent = "";
+  el("human-task-transfer-panel").hidden = true;
+  el("human-task-person").replaceChildren(node("option", "", "正在读取可选成员"));
+  el("human-task-person").value = "";
+  const submit = el("human-task-submit");
+  submit.disabled = false;
+  submit.dataset.state = "idle";
+  submit.textContent = "提交并推进流程";
+  const transferOpen = el("human-task-transfer-open");
+  transferOpen.disabled = false;
+  transferOpen.textContent = "转交给其他人";
+  const transfer = el("human-task-transfer-confirm");
+  transfer.disabled = false;
+  transfer.dataset.state = "idle";
+  transfer.textContent = "确认转交";
+}
+
+function renderHumanTask(task) {
+  el("human-task-title").textContent = task.node.title;
+  el("human-task-goal").textContent = task.goal;
+  el("human-task-objective").textContent = task.work.objective || "完成当前节点";
+  const acceptance = el("human-task-acceptance");
+  acceptance.replaceChildren();
+  const acceptanceItems = task.work.acceptance || [];
+  if (acceptanceItems.length === 0) {
+    acceptance.append(node("li", "", "提交明确、可复核的处理结果"));
+  } else {
+    acceptanceItems.forEach((item) => acceptance.append(node("li", "", item)));
+  }
+  el("human-task-context").textContent = JSON.stringify(task.work.context || {}, null, 2);
+  el("human-task-transfer-open").hidden = !task.actions.transfer;
+  el("human-task-loading").hidden = true;
+  el("human-task-content").hidden = false;
+  requestAnimationFrame(() => el("human-task-result").focus());
+}
+
+function currentTaskBinding() {
+  const task = state.activeTask;
+  if (!task) throw new Error("待办状态尚未载入");
+  return {
+    task,
+    instanceId: encodeURIComponent(task.instance_id),
+    nodeKey: encodeURIComponent(task.node.key),
+  };
+}
+
+function taskWriteOptions(document) {
+  return {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(document),
+  };
+}
+
+async function submitHumanTaskFromPage() {
+  const button = el("human-task-submit");
+  const transfer = el("human-task-transfer-open");
+  const content = el("human-task-result").value.trim();
+  el("human-task-error").textContent = "";
+  if (!content) {
+    el("human-task-error").textContent = "请先输入处理结果。";
+    el("human-task-result").focus();
+    return;
+  }
+  button.disabled = true;
+  transfer.disabled = true;
+  button.dataset.state = "working";
+  button.textContent = "正在提交";
+  try {
+    const { task, instanceId, nodeKey } = currentTaskBinding();
+    await request(
+      `/console/api/v1/tasks/${instanceId}/nodes/${nodeKey}/submit`,
+      taskWriteOptions({
+        attempt_no: task.node.attempt_no,
+        expected_node_version: task.node.version,
+        content,
+      }),
+    );
+    button.dataset.state = "done";
+    button.textContent = "已提交，流程已推进";
+    el("human-task-result").disabled = true;
+    showToast("待办已提交，中央工作流正在继续");
+    await loadInstances();
+    setTimeout(() => humanTaskDialog.open && humanTaskDialog.close(), 700);
+  } catch (error) {
+    button.disabled = false;
+    transfer.disabled = false;
+    button.dataset.state = "error";
+    button.textContent = "提交失败，请重试";
+    el("human-task-error").textContent = error.message || "提交失败，请刷新后重试。";
+    showToast(error.message || "提交失败，请重试", "error");
+  }
+}
+
+async function openHumanTaskTransfer() {
+  const button = el("human-task-transfer-open");
+  const panel = el("human-task-transfer-panel");
+  button.disabled = true;
+  button.textContent = "正在读取成员";
+  panel.hidden = false;
+  try {
+    const payload = await request("/console/api/v1/people?limit=100");
+    const select = el("human-task-person");
+    select.replaceChildren();
+    select.append(node("option", "", payload.people.length ? "请选择成员" : "没有可转交的成员"));
+    payload.people.forEach((person) => {
+      const option = node("option", "", person.name);
+      option.value = person.person_id;
+      select.append(option);
+    });
+    el("human-task-transfer-confirm").disabled = payload.people.length === 0;
+    button.textContent = "成员列表已打开";
+  } catch (error) {
+    panel.hidden = true;
+    button.disabled = false;
+    button.textContent = "转交给其他人";
+    el("human-task-error").textContent = error.message || "成员列表读取失败。";
+    showToast(error.message || "成员列表读取失败", "error");
+  }
+}
+
+async function transferHumanTaskFromPage() {
+  const button = el("human-task-transfer-confirm");
+  const submit = el("human-task-submit");
+  const newOwner = el("human-task-person").value;
+  el("human-task-error").textContent = "";
+  if (!newOwner) {
+    el("human-task-error").textContent = "请选择新的负责人。";
+    el("human-task-person").focus();
+    return;
+  }
+  button.disabled = true;
+  submit.disabled = true;
+  button.dataset.state = "working";
+  button.textContent = "正在转交";
+  try {
+    const { task, instanceId, nodeKey } = currentTaskBinding();
+    await request(
+      `/console/api/v1/tasks/${instanceId}/nodes/${nodeKey}/transfer`,
+      taskWriteOptions({
+        attempt_no: task.node.attempt_no,
+        expected_node_version: task.node.version,
+        new_owner_person_id: newOwner,
+      }),
+    );
+    button.dataset.state = "done";
+    button.textContent = "已转交给新负责人";
+    el("human-task-result").disabled = true;
+    showToast("待办已转交，新负责人将获得飞书待办和页面处理权限");
+    await loadInstances();
+    setTimeout(() => humanTaskDialog.open && humanTaskDialog.close(), 900);
+  } catch (error) {
+    button.disabled = false;
+    submit.disabled = false;
+    button.dataset.state = "error";
+    button.textContent = "转交失败，请重试";
+    el("human-task-error").textContent = error.message || "转交失败，请刷新后重试。";
+    showToast(error.message || "转交失败，请重试", "error");
   }
 }
 
@@ -1573,6 +1824,17 @@ el("lock").addEventListener("click", () => {
   } else {
     lockConsole();
   }
+});
+el("human-task-close").addEventListener("click", () => humanTaskDialog.close());
+el("human-task-result").addEventListener("input", (event) => {
+  el("human-task-result-count").textContent = event.target.value.length;
+});
+el("human-task-submit").addEventListener("click", submitHumanTaskFromPage);
+el("human-task-transfer-open").addEventListener("click", openHumanTaskTransfer);
+el("human-task-transfer-confirm").addEventListener("click", transferHumanTaskFromPage);
+humanTaskDialog.addEventListener("close", () => {
+  state.activeTask = null;
+  resetHumanTaskControls();
 });
 el("graph-zoom-out").addEventListener("click", () => setGraphScale(state.graphScale - GRAPH_SCALE_STEP));
 el("graph-zoom-reset").addEventListener("click", () => setGraphScale(1));

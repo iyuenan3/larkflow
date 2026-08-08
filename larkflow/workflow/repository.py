@@ -25,6 +25,10 @@ from .editing import (
     GraphEditPreviewNotFoundError,
 )
 from .model import (
+    ExecutorKind,
+    HumanTaskSummary,
+    InstanceStatus,
+    NodeStatus,
     TemplateAuditEvent,
     TemplateStatus,
     WorkflowAttentionCandidate,
@@ -102,6 +106,15 @@ class WorkflowRepository(Protocol):
         owner_person_id: str,
         limit: int = 30,
     ) -> tuple[WorkflowAttentionCandidate, ...]:
+        ...
+
+    def list_human_tasks_for_owner(
+        self,
+        tenant_id: str,
+        *,
+        owner_person_id: str,
+        limit: int = 30,
+    ) -> tuple[HumanTaskSummary, ...]:
         ...
 
     def recent_audit_log(
@@ -469,6 +482,49 @@ class InMemoryWorkflowRepository:
                     )
                 )
         return tuple(candidates)
+
+    def list_human_tasks_for_owner(
+        self,
+        tenant_id: str,
+        *,
+        owner_person_id: str,
+        limit: int = 30,
+    ) -> tuple[HumanTaskSummary, ...]:
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        tasks: list[HumanTaskSummary] = []
+        for (instance_tenant, _), instance in self._instances.items():
+            if instance_tenant != tenant_id or instance.created_at is None:
+                continue
+            if instance.status not in {InstanceStatus.RUNNING, InstanceStatus.PAUSED}:
+                continue
+            for node in instance.nodes.values():
+                if (
+                    node.executor != ExecutorKind.HUMAN
+                    or node.status != NodeStatus.WAITING_HUMAN
+                    or node.owner_person_id != owner_person_id
+                    or node.started_at is None
+                ):
+                    continue
+                spec = instance.snapshot.node(node.node_key)
+                tasks.append(
+                    HumanTaskSummary(
+                        instance_id=instance.id,
+                        goal=instance.snapshot.goal,
+                        instance_status=instance.status,
+                        instance_owner_person_id=instance.owner_person_id,
+                        node_key=node.node_key,
+                        node_title=spec.title,
+                        attempt_no=node.current_attempt_no,
+                        node_version=node.version,
+                        started_at=node.started_at,
+                    )
+                )
+        tasks.sort(
+            key=lambda item: (item.started_at, item.instance_id, item.node_key),
+            reverse=True,
+        )
+        return tuple(tasks[:limit])
 
     def add_restart_preview(self, preview: RestartPreview) -> None:
         key = (preview.tenant_id, preview.id)

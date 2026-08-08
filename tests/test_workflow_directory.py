@@ -1,12 +1,14 @@
 """Enterprise directory validation at the workflow trust boundary."""
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from larkflow.workflow.directory import (
     CliFeishuDirectory,
     DirectoryPerson,
     DirectoryValidationError,
+    FeishuAppDirectory,
 )
 from larkflow.workflow.model import InstanceSnapshot, NodeSpec
 from larkflow.workflow.repository import InMemoryWorkflowRepository
@@ -52,6 +54,64 @@ def test_cli_directory_requires_active_status_and_matching_open_id() -> None:
         active=True,
     )
     assert calls[0][-2:] == ["bot", "--json"]
+
+
+def test_app_directory_lists_scoped_active_people_with_names() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/tenant_access_token/internal"):
+            return httpx.Response(
+                200,
+                json={"code": 0, "tenant_access_token": "token", "expire": 7200},
+            )
+        if request.url.path.endswith("/contact/v3/scopes"):
+            assert request.headers["authorization"] == "Bearer token"
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "user_ids": ["person_active", "person_inactive"],
+                        "department_ids": [],
+                        "has_more": False,
+                    },
+                },
+            )
+        person_id = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    "user": {
+                        "open_id": person_id,
+                        "name": "Active Person" if person_id == "person_active" else "Inactive Person",
+                        "status": {"is_activated": person_id == "person_active"},
+                    }
+                },
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        people = FeishuAppDirectory(
+            app_id="app_id",
+            app_secret="app_secret",
+            client=client,
+        ).list_candidate_people("tenant", limit=10)
+
+    assert people == (
+        DirectoryPerson(
+            person_id="person_active",
+            active=True,
+            name="Active Person",
+        ),
+    )
+    assert sum(
+        request.url.path.endswith("/tenant_access_token/internal")
+        for request in requests
+    ) == 1
 
 
 @pytest.mark.parametrize(

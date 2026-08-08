@@ -35,6 +35,11 @@ from .console_admin_sessions import (
 )
 from .console_actions import ConsoleActionConflictError, ConsoleActionService
 from .console_rate_limit import ConsoleRequestRateLimiter
+from .console_tasks import (
+    ConsoleTaskConflictError,
+    ConsoleTaskNotFoundError,
+    ConsoleTaskService,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -59,6 +64,14 @@ _RESTART_CONFIRM_ROUTE = re.compile(
     r"^/console/api/v1/restart-previews/"
     r"([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/confirm$"
 )
+_TASK_ROUTE = re.compile(
+    r"^/console/api/v1/tasks/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/"
+    r"nodes/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})$"
+)
+_TASK_ACTION_ROUTE = re.compile(
+    r"^/console/api/v1/tasks/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/"
+    r"nodes/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/(submit|transfer)$"
+)
 _ADMIN_SESSION_PREVIEW_ROUTE = re.compile(
     r"^/console/api/v1/admin/sessions/([0-9a-f]{32})/revoke-preview$"
 )
@@ -68,6 +81,7 @@ _ADMIN_SESSION_CONFIRM_ROUTE = re.compile(
 _ADMIN_ACTION_HEADER = "x-larkflow-console-action"
 _ADMIN_ACTION_VALUE = "session-governance-v1"
 _WORKFLOW_ACTION_VALUE = "workflow-action-v1"
+_MAX_TASK_BODY_BYTES = 65_536
 _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Content-Security-Policy": (
@@ -130,6 +144,7 @@ class ConsoleHttpApplication:
         admin_service: ConsoleAdminReadService | None = None,
         admin_session_service: ConsoleAdminSessionService | None = None,
         action_service: ConsoleActionService | None = None,
+        task_service: ConsoleTaskService | None = None,
     ) -> None:
         self.service = service
         self.authenticator = authenticator
@@ -137,6 +152,7 @@ class ConsoleHttpApplication:
         self.admin_service = admin_service
         self.admin_session_service = admin_session_service
         self.action_service = action_service
+        self.task_service = task_service
         if authenticator.mode not in {"static", "feishu"}:
             raise ValueError("console authenticator mode is unsupported")
         if (authenticator.mode == "feishu") != (oauth is not None):
@@ -150,6 +166,7 @@ class ConsoleHttpApplication:
         target: str,
         *,
         headers: Mapping[str, str] | None = None,
+        body: bytes = b"",
     ) -> ConsoleHttpResponse:
         method = method.upper()
         parsed = urlsplit(target)
@@ -282,6 +299,16 @@ class ConsoleHttpApplication:
                 request_headers,
             )
 
+        if method == "POST" and parsed.path.startswith(
+            "/console/api/v1/tasks/"
+        ):
+            return self._handle_task_write(
+                parsed.path,
+                parsed.query,
+                request_headers,
+                body,
+            )
+
         if method == "POST" and (
             parsed.path.startswith("/console/api/v1/instances/")
             or parsed.path.startswith("/console/api/v1/restart-previews/")
@@ -373,6 +400,36 @@ class ConsoleHttpApplication:
                 payload = self.service.list_instances(principal, limit=limit)
                 return self._json(200, payload)
 
+            if parsed.path == "/console/api/v1/tasks":
+                if self.task_service is None:
+                    raise ConsoleTaskNotFoundError("tasks")
+                limit = _single_limit(parsed.query, default=30)
+                return self._json(
+                    200,
+                    self.task_service.list_tasks(principal, limit=limit),
+                )
+            if parsed.path == "/console/api/v1/people":
+                if self.task_service is None:
+                    raise ConsoleTaskNotFoundError("people")
+                limit = _single_limit(parsed.query, default=100)
+                return self._json(
+                    200,
+                    self.task_service.list_people(principal, limit=limit),
+                )
+
+            task_match = _TASK_ROUTE.fullmatch(parsed.path)
+            if task_match is not None and not parsed.query:
+                if self.task_service is None:
+                    raise ConsoleTaskNotFoundError("task")
+                return self._json(
+                    200,
+                    self.task_service.get_task(
+                        principal,
+                        task_match.group(1),
+                        task_match.group(2),
+                    ),
+                )
+
             match = _INSTANCE_ROUTE.fullmatch(parsed.path)
             if match is not None and not parsed.query:
                 payload = self.service.get_instance(principal, match.group(1))
@@ -390,8 +447,98 @@ class ConsoleHttpApplication:
                 "console credential is invalid",
                 headers=challenge,
             )
-        except ConsoleResourceNotFoundError:
+        except (ConsoleResourceNotFoundError, ConsoleTaskNotFoundError):
             return self._error(404, "not_found", "resource does not exist")
+        except ConsoleTaskConflictError as exc:
+            return self._error(409, exc.code, str(exc))
+        except (TypeError, ValueError) as exc:
+            return self._error(400, "invalid_request", str(exc))
+        except Exception:
+            return self._error(500, "internal_error", "internal server error")
+
+    def _handle_task_write(
+        self,
+        path: str,
+        query: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> ConsoleHttpResponse:
+        try:
+            principal = self.authenticator.authenticate_context(headers).principal
+            if self.task_service is None:
+                raise ConsoleTaskNotFoundError("task actions")
+            self._validate_task_write_request(query, headers, body)
+            match = _TASK_ACTION_ROUTE.fullmatch(path)
+            if match is None:
+                raise ConsoleTaskNotFoundError("task action")
+            instance_id, node_key, action = match.groups()
+            document = _json_object_body(body)
+            allowed = {
+                "submit": {"attempt_no", "expected_node_version", "content"},
+                "transfer": {
+                    "attempt_no",
+                    "expected_node_version",
+                    "new_owner_person_id",
+                },
+            }[action]
+            if set(document) != allowed:
+                raise ValueError("task action fields are invalid")
+            attempt_no = _positive_json_integer(document["attempt_no"], "attempt_no")
+            expected_node_version = _nonnegative_json_integer(
+                document["expected_node_version"],
+                "expected_node_version",
+            )
+            if action == "submit":
+                content = document["content"]
+                if not isinstance(content, str):
+                    raise ValueError("content must be a string")
+                return self._json(
+                    200,
+                    self.task_service.submit(
+                        principal,
+                        instance_id,
+                        node_key,
+                        attempt_no=attempt_no,
+                        expected_node_version=expected_node_version,
+                        content=content,
+                    ),
+                )
+            new_owner_person_id = document["new_owner_person_id"]
+            if not isinstance(new_owner_person_id, str):
+                raise ValueError("new_owner_person_id must be a string")
+            return self._json(
+                200,
+                self.task_service.transfer(
+                    principal,
+                    instance_id,
+                    node_key,
+                    attempt_no=attempt_no,
+                    expected_node_version=expected_node_version,
+                    new_owner_person_id=new_owner_person_id,
+                ),
+            )
+        except InvalidConsoleCredentialError:
+            challenge = (
+                {"WWW-Authenticate": "Bearer"}
+                if self.authenticator.mode == "static"
+                else {}
+            )
+            return self._error(
+                401,
+                "invalid_credential",
+                "console credential is invalid",
+                headers=challenge,
+            )
+        except ConsoleTaskNotFoundError:
+            return self._error(404, "not_found", "resource does not exist")
+        except _WorkflowWriteRequestError:
+            return self._error(
+                403,
+                "request_rejected",
+                "workflow action request was rejected",
+            )
+        except ConsoleTaskConflictError as exc:
+            return self._error(409, exc.code, str(exc))
         except (TypeError, ValueError) as exc:
             return self._error(400, "invalid_request", str(exc))
         except Exception:
@@ -638,6 +785,51 @@ class ConsoleHttpApplication:
                     "workflow action origin is invalid"
                 )
 
+    def _validate_task_write_request(
+        self,
+        query: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> None:
+        if query:
+            raise ValueError("task action query is not accepted")
+        if _header(headers, "transfer-encoding") is not None:
+            raise ValueError("task action transfer encoding is not accepted")
+        raw_length = _header(headers, "content-length")
+        if raw_length is None:
+            raise ValueError("task action content length is required")
+        try:
+            content_length = int(raw_length)
+        except ValueError as exc:
+            raise ValueError("task action content length is invalid") from exc
+        if (
+            content_length < 1
+            or content_length > _MAX_TASK_BODY_BYTES
+            or content_length != len(body)
+        ):
+            raise ValueError("task action body size is invalid")
+        content_type = (_header(headers, "content-type") or "").lower()
+        if content_type not in {
+            "application/json",
+            "application/json; charset=utf-8",
+        }:
+            raise ValueError("task action content type must be application/json")
+        if not secrets.compare_digest(
+            _header(headers, _ADMIN_ACTION_HEADER) or "",
+            _WORKFLOW_ACTION_VALUE,
+        ):
+            raise _WorkflowWriteRequestError(
+                "workflow action request header is invalid"
+            )
+        if self.authenticator.mode == "feishu":
+            if self.oauth is None or not secrets.compare_digest(
+                _header(headers, "origin") or "",
+                self.oauth.public_base_url,
+            ):
+                raise _WorkflowWriteRequestError(
+                    "workflow action origin is invalid"
+                )
+
     @staticmethod
     def _json(status: int, payload: Mapping[str, Any]) -> ConsoleHttpResponse:
         return ConsoleHttpResponse(
@@ -720,10 +912,34 @@ def build_console_http_server(
                 headers=self.headers,
                 peer_address=self.client_address[0],
             )
+            body = b""
+            if limited is None and method not in {"GET", "HEAD"}:
+                raw_length = self.headers.get("Content-Length", "0")
+                try:
+                    content_length = int(raw_length)
+                except ValueError:
+                    response = application._error(
+                        400,
+                        "invalid_request",
+                        "content length is invalid",
+                    )
+                    self._send(response, include_body=include_body)
+                    return
+                if content_length < 0 or content_length > _MAX_TASK_BODY_BYTES:
+                    response = application._error(
+                        413,
+                        "request_too_large",
+                        "request body is too large",
+                    )
+                    self._send(response, include_body=include_body)
+                    return
+                if content_length:
+                    body = self.rfile.read(content_length)
             response = limited or application.handle(
                 method,
                 self.path,
                 headers=self.headers,
+                body=body,
             )
             self._send(response, include_body=include_body)
 
@@ -809,6 +1025,48 @@ def _single_value_query(
             raise ValueError("OAuth callback parameters must be supplied once")
         values[key] = items[0]
     return values
+
+
+def _single_limit(raw_query: str, *, default: int) -> int:
+    query = parse_qs(raw_query, keep_blank_values=True)
+    if set(query) - {"limit"}:
+        raise ValueError("only the limit query parameter is accepted")
+    values = query.get("limit", [str(default)])
+    if len(values) != 1:
+        raise ValueError("limit must be supplied once")
+    try:
+        limit = int(values[0])
+    except ValueError as exc:
+        raise ValueError("limit must be an integer") from exc
+    if limit < 1 or limit > 100:
+        raise ValueError("limit must be between 1 and 100")
+    return limit
+
+
+def _json_object_body(body: bytes) -> dict[str, Any]:
+    try:
+        value = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("task action body must be valid UTF-8 JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError("task action body must be a JSON object")
+    return value
+
+
+def _positive_json_integer(value: Any, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{field_name} must be a positive integer")
+    if value > 2_147_483_647:
+        raise ValueError(f"{field_name} is out of range")
+    return value
+
+
+def _nonnegative_json_integer(value: Any, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field_name} must be a nonnegative integer")
+    if value > 9_223_372_036_854_775_807:
+        raise ValueError(f"{field_name} is out of range")
+    return value
 
 
 def _header(headers: Mapping[str, str], name: str) -> str | None:

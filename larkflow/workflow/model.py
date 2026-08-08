@@ -255,6 +255,21 @@ class WorkflowInstanceSummary:
 
 
 @dataclass(frozen=True)
+class HumanTaskSummary:
+    """One active Human assignment visible to its current runtime owner."""
+
+    instance_id: str
+    goal: str
+    instance_status: InstanceStatus
+    instance_owner_person_id: str
+    node_key: str
+    node_title: str
+    attempt_no: int
+    node_version: int
+    started_at: datetime
+
+
+@dataclass(frozen=True)
 class WorkflowAttentionCandidate:
     """Internal owner-scoped facts used to derive console attention items."""
 

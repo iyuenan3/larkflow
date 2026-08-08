@@ -113,6 +113,41 @@ class CliFeishuTaskProjection:
             raise ValueError("lark-cli task get returned a different guid")
         return True
 
+    def reassign_task(
+        self,
+        task_guid: str,
+        *,
+        previous_owner_person_id: str,
+        new_owner_person_id: str,
+        idempotency_key: str,
+    ) -> None:
+        if not all(
+            value.strip()
+            for value in (
+                task_guid,
+                previous_owner_person_id,
+                new_owner_person_id,
+                idempotency_key,
+            )
+        ):
+            raise ValueError("Feishu task reassignment requires complete bindings")
+        self._run(
+            [
+                "task",
+                "+assign",
+                "--task-id",
+                task_guid,
+                "--remove",
+                previous_owner_person_id,
+                "--add",
+                new_owner_person_id,
+                "--idempotency-key",
+                idempotency_key,
+                "--as",
+                self.identity,
+            ]
+        )
+
     def _run(self, args: list[str]) -> dict[str, Any]:
         argv = [self.executable, "--profile", self.profile, *args, "--json"]
         return self.runner(argv)

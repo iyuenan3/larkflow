@@ -99,6 +99,16 @@ class TaskProjectionAdapter(Protocol):
     def task_exists(self, task_guid: str) -> bool:
         ...
 
+    def reassign_task(
+        self,
+        task_guid: str,
+        *,
+        previous_owner_person_id: str,
+        new_owner_person_id: str,
+        idempotency_key: str,
+    ) -> None:
+        ...
+
 
 @dataclass(frozen=True)
 class MessageProjectionRequest:
@@ -141,6 +151,7 @@ class ProjectionWorkerReport:
     published: int = 0
     tasks_created: int = 0
     tasks_completed: int = 0
+    tasks_reassigned: int = 0
     messages_sent: int = 0
     cards_updated: int = 0
     documents_created: int = 0
@@ -221,6 +232,7 @@ class WorkflowProjectionWorker:
         published = 0
         tasks_created = 0
         tasks_completed = 0
+        tasks_reassigned = 0
         messages_sent = 0
         cards_updated = 0
         documents_created = 0
@@ -251,6 +263,7 @@ class WorkflowProjectionWorker:
             published += 1
             tasks_created += int(outcome.created)
             tasks_completed += int(outcome.completed)
+            tasks_reassigned += int(outcome.reassigned)
             messages_sent += int(outcome.message_sent)
             cards_updated += int(outcome.card_updated)
             documents_created += int(outcome.document_created)
@@ -260,6 +273,7 @@ class WorkflowProjectionWorker:
             published=published,
             tasks_created=tasks_created,
             tasks_completed=tasks_completed,
+            tasks_reassigned=tasks_reassigned,
             messages_sent=messages_sent,
             cards_updated=cards_updated,
             documents_created=documents_created,
@@ -396,7 +410,18 @@ class WorkflowProjectionWorker:
         node = instance.nodes[node_key]
         if node.id != event.aggregate_id:
             raise ValueError("projection event aggregate does not match the current node")
-        return self._project_node(instance, node_key, attempt_no, now=now)
+        transfer_from = event.payload.get("transfer_from_person_id")
+        return self._project_node(
+            instance,
+            node_key,
+            attempt_no,
+            now=now,
+            transfer_from_person_id=(
+                transfer_from
+                if isinstance(transfer_from, str) and transfer_from.strip()
+                else None
+            ),
+        )
 
     def _project_node(
         self,
@@ -406,6 +431,7 @@ class WorkflowProjectionWorker:
         *,
         now: datetime,
         verify_external: bool = False,
+        transfer_from_person_id: str | None = None,
     ) -> _ProjectionOutcome:
         node = instance.nodes[node_key]
         attempt = instance.attempts[(node_key, attempt_no)]
@@ -434,6 +460,7 @@ class WorkflowProjectionWorker:
                 attempt_no,
                 now=now,
                 verify_external=verify_external,
+                transfer_from_person_id=transfer_from_person_id,
             )
         if (
             not verify_external
@@ -573,6 +600,7 @@ class WorkflowProjectionWorker:
         *,
         now: datetime,
         verify_external: bool,
+        transfer_from_person_id: str | None = None,
     ) -> _ProjectionOutcome:
         node = instance.nodes[node_key]
         attempt = instance.attempts[(node_key, attempt_no)]
@@ -592,6 +620,7 @@ class WorkflowProjectionWorker:
         )
         created = False
         recreated = False
+        reassigned = False
         terminal = effective_status in {
             NodeStatus.DONE,
             NodeStatus.FAILED,
@@ -615,7 +644,15 @@ class WorkflowProjectionWorker:
                 external_url=external.url,
                 idempotency_key=request.idempotency_key,
                 sync_version=node.version,
-                state={"node_status": node.status.value, "completed": False},
+                state={
+                    "node_status": node.status.value,
+                    "completed": False,
+                    **(
+                        {"owner_person_id": node.owner_person_id}
+                        if transfer_from_person_id is not None
+                        else {}
+                    ),
+                },
                 created_at=now,
                 updated_at=now,
             )
@@ -638,14 +675,40 @@ class WorkflowProjectionWorker:
                 now=now,
             )
             recreated = True
+        if (
+            transfer_from_person_id is not None
+            and not created
+            and not recreated
+            and not terminal
+            and transfer_from_person_id != node.owner_person_id
+        ):
+            reassign = getattr(self.task_adapter, "reassign_task", None)
+            if not callable(reassign):
+                raise ValueError("Feishu task adapter cannot reassign a task")
+            reassign(
+                record.external_id,
+                previous_owner_person_id=transfer_from_person_id,
+                new_owner_person_id=node.owner_person_id,
+                idempotency_key=_projection_key(
+                    self.tenant_id,
+                    node.id,
+                    str(attempt_no),
+                    str(node.version),
+                    "transfer",
+                ),
+            )
+            reassigned = True
         completed = False
         if terminal and not bool(record.state.get("completed")):
             self.task_adapter.complete_task(record.external_id)
             completed = True
         desired_state = {
+            **dict(record.state),
             "node_status": effective_status.value,
             "completed": terminal,
         }
+        if reassigned:
+            desired_state["owner_person_id"] = node.owner_person_id
         repair_generation = _repair_generation(record.state)
         if repair_generation:
             desired_state["repair_generation"] = repair_generation
@@ -653,6 +716,7 @@ class WorkflowProjectionWorker:
             not created
             and not recreated
             and not completed
+            and not reassigned
             and record.sync_version >= node.version
             and dict(record.state) == desired_state
         ):
@@ -677,6 +741,7 @@ class WorkflowProjectionWorker:
             created=created,
             recreated=recreated,
             completed=completed,
+            reassigned=reassigned,
         )
 
     def _project_node_message(
@@ -1029,6 +1094,7 @@ class _ProjectionOutcome:
     created: bool = False
     recreated: bool = False
     completed: bool = False
+    reassigned: bool = False
     message_sent: bool = False
     card_updated: bool = False
     document_created: bool = False
@@ -1039,6 +1105,7 @@ class _ProjectionOutcome:
             "created": self.created,
             "recreated": self.recreated,
             "completed": self.completed,
+            "reassigned": self.reassigned,
             "message_sent": self.message_sent,
             "card_updated": self.card_updated,
             "document_created": self.document_created,

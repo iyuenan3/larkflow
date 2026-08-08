@@ -39,6 +39,7 @@ from .model import (
     AttemptStatus,
     ExecutorKind,
     FrozenDict,
+    HumanTaskSummary,
     InstanceStatus,
     NodeAttempt,
     NodeInstance,
@@ -296,6 +297,64 @@ class PostgresWorkflowRepository:
                 )
             )
         return tuple(candidates)
+
+    def list_human_tasks_for_owner(
+        self,
+        tenant_id: str,
+        *,
+        owner_person_id: str,
+        limit: int = 30,
+    ) -> tuple[HumanTaskSummary, ...]:
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        with self.connection_factory() as connection:
+            rows = connection.execute(
+                """
+                SELECT instance.id AS instance_id,
+                       instance.goal,
+                       instance.status AS instance_status,
+                       instance.owner_person_id AS instance_owner_person_id,
+                       node.node_key,
+                       COALESCE(spec.value ->> 'title', node.node_key)
+                           AS node_title,
+                       node.current_attempt_no AS attempt_no,
+                       node.version AS node_version,
+                       node.started_at
+                FROM workflow_node_instances AS node
+                JOIN workflow_instances AS instance
+                  ON instance.tenant_id = node.tenant_id
+                 AND instance.id = node.instance_id
+                JOIN LATERAL jsonb_array_elements(
+                    instance.snapshot -> 'nodes'
+                ) AS spec(value)
+                  ON spec.value ->> 'key' = node.node_key
+                WHERE node.tenant_id = %s
+                  AND node.owner_person_id = %s
+                  AND node.executor = 'human'
+                  AND node.status = 'waiting_human'
+                  AND instance.status IN ('running', 'paused')
+                  AND node.started_at IS NOT NULL
+                ORDER BY node.started_at DESC,
+                         instance.id DESC,
+                         node.node_key
+                LIMIT %s
+                """,
+                (tenant_id, owner_person_id, limit),
+            ).fetchall()
+        return tuple(
+            HumanTaskSummary(
+                instance_id=row["instance_id"],
+                goal=row["goal"],
+                instance_status=InstanceStatus(row["instance_status"]),
+                instance_owner_person_id=row["instance_owner_person_id"],
+                node_key=row["node_key"],
+                node_title=row["node_title"],
+                attempt_no=int(row["attempt_no"]),
+                node_version=int(row["node_version"]),
+                started_at=row["started_at"],
+            )
+            for row in rows
+        )
 
     def recent_audit_log(
         self,

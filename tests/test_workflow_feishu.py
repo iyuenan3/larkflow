@@ -89,6 +89,37 @@ def test_cli_adapter_completes_by_task_guid():
     ]
 
 
+def test_cli_adapter_reassigns_one_task_with_a_stable_operation_key():
+    calls = []
+    adapter = CliFeishuTaskProjection(
+        profile="dev",
+        runner=lambda argv: calls.append(argv) or {"ok": True},
+    )
+
+    adapter.reassign_task(
+        "task-guid",
+        previous_owner_person_id="person_old",
+        new_owner_person_id="person_new",
+        idempotency_key="lf-transfer-key",
+    )
+
+    assert calls[0][-13:] == [
+        "task",
+        "+assign",
+        "--task-id",
+        "task-guid",
+        "--remove",
+        "person_old",
+        "--add",
+        "person_new",
+        "--idempotency-key",
+        "lf-transfer-key",
+        "--as",
+        "bot",
+        "--json",
+    ]
+
+
 def test_cli_adapter_rejects_create_without_guid():
     adapter = CliFeishuTaskProjection(profile="dev", runner=lambda argv: {})
 

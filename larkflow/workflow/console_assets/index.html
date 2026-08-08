@@ -89,7 +89,7 @@
             <span class="sidebar-boundary-dot" aria-hidden="true"></span>
             <div>
               <strong>中央节点受控操作</strong>
-              <p>流程操作在本页完成，Human 输入与决定仍在飞书处理。</p>
+              <p>普通 Human 待办可在本页完成或转交，接受与退回决定仍在飞书处理。</p>
             </div>
           </div>
         </aside>
@@ -183,7 +183,7 @@
                     <p class="eyebrow">INSTANCE SUMMARY</p>
                     <h2 id="insight-title">实例摘要</h2>
                   </div>
-                  <span class="insight-boundary">流程操作由中央节点校验，Human 输入与决定仍在飞书完成</span>
+                  <span class="insight-boundary">流程操作与普通 Human 输入由中央节点校验，接受与退回决定仍在飞书完成</span>
                 </div>
                 <div class="insight-grid">
                   <article class="insight-card insight-status-card">
@@ -353,6 +353,60 @@
 
         <p id="admin-generated-at" class="admin-generated-at"></p>
       </main>
+
+      <dialog id="human-task-dialog" class="human-task-dialog" aria-labelledby="human-task-title">
+        <form method="dialog" class="human-task-shell">
+          <header class="human-task-header">
+            <div>
+              <p class="eyebrow">HUMAN TASK</p>
+              <h2 id="human-task-title">处理待办</h2>
+              <p id="human-task-goal" class="human-task-goal"></p>
+            </div>
+            <button id="human-task-close" class="human-task-close" type="button" aria-label="关闭待办">×</button>
+          </header>
+          <div id="human-task-loading" class="human-task-loading" role="status">正在读取最新待办状态</div>
+          <div id="human-task-content" class="human-task-content" hidden>
+            <div class="human-task-facts">
+              <article>
+                <span>任务目标</span>
+                <p id="human-task-objective"></p>
+              </article>
+              <article>
+                <span>验收条件</span>
+                <ul id="human-task-acceptance"></ul>
+              </article>
+            </div>
+            <section class="human-task-context" aria-labelledby="human-task-context-title">
+              <div>
+                <strong id="human-task-context-title">可用上下文</strong>
+                <span>只展示完成当前节点所需的输入快照</span>
+              </div>
+              <pre id="human-task-context"></pre>
+            </section>
+            <label class="human-task-input" for="human-task-result">
+              <span>处理结果</span>
+              <textarea id="human-task-result" maxlength="12000" rows="7" placeholder="输入本节点的处理结果。提交后会直接推进中央工作流。"></textarea>
+              <small><span id="human-task-result-count">0</span>/12000</small>
+            </label>
+            <p id="human-task-error" class="human-task-error" role="alert"></p>
+            <div class="human-task-actions">
+              <button id="human-task-transfer-open" class="human-task-secondary" type="button">转交给其他人</button>
+              <button id="human-task-submit" class="human-task-primary" type="button">提交并推进流程</button>
+            </div>
+            <section id="human-task-transfer-panel" class="human-task-transfer-panel" hidden>
+              <div>
+                <strong>转交待办</strong>
+                <p>新负责人会获得飞书待办和本页处理权限，你将不再能提交这个节点。</p>
+              </div>
+              <label for="human-task-person">选择企业成员</label>
+              <select id="human-task-person">
+                <option value="">正在读取可选成员</option>
+              </select>
+              <button id="human-task-transfer-confirm" class="human-task-transfer-confirm" type="button">确认转交</button>
+            </section>
+          </div>
+        </form>
+      </dialog>
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

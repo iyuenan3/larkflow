@@ -47,6 +47,7 @@ class RecordingTasks:
         self.tasks = {}
         self.next_task_number = 1
         self.existence_checks = []
+        self.reassignments = []
 
     def create_task(self, request):
         self.create_requests.append(request)
@@ -70,6 +71,23 @@ class RecordingTasks:
     def task_exists(self, task_guid):
         self.existence_checks.append(task_guid)
         return any(task.guid == task_guid for task in self.tasks.values())
+
+    def reassign_task(
+        self,
+        task_guid,
+        *,
+        previous_owner_person_id,
+        new_owner_person_id,
+        idempotency_key,
+    ):
+        self.reassignments.append(
+            {
+                "task_guid": task_guid,
+                "previous_owner_person_id": previous_owner_person_id,
+                "new_owner_person_id": new_owner_person_id,
+                "idempotency_key": idempotency_key,
+            }
+        )
 
     def delete_task(self, task_guid):
         self.tasks = {
@@ -247,6 +265,59 @@ def test_human_task_is_created_after_activation_and_completed_after_submission()
     assert completed.tasks_completed == 1
     assert tasks.completed == ["task-1"]
     assert worker.run_once().claimed == 0
+
+
+def test_runtime_transfer_reassigns_the_existing_feishu_task():
+    clock = Clock()
+    service, repository, tasks, worker = setup_human(clock)
+
+    class Directory:
+        def get_person(self, tenant_id, person_id):
+            from larkflow.workflow.directory import DirectoryPerson
+
+            assert tenant_id == TENANT
+            return DirectoryPerson(person_id=person_id, active=True)
+
+    service.directory = Directory()
+    worker.run_once()
+    activation = service.dispatch_due(
+        TENANT,
+        "instance_projection",
+        worker_id="runtime_1",
+    )[0]
+    assert worker.run_once().tasks_created == 1
+
+    service.transfer_human_task(
+        TENANT,
+        "instance_projection",
+        "approve",
+        actor_person_id="person_reviewer",
+        new_owner_person_id="person_reviewer_2",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+    )
+    report = worker.run_once()
+
+    assert report.tasks_reassigned == 1
+    assert tasks.reassignments == [
+        {
+            "task_guid": "task-1",
+            "previous_owner_person_id": "person_reviewer",
+            "new_owner_person_id": "person_reviewer_2",
+            "idempotency_key": tasks.reassignments[0]["idempotency_key"],
+        }
+    ]
+    assert tasks.reassignments[0]["idempotency_key"].startswith("lf-")
+    node = service.get(TENANT, "instance_projection").nodes["approve"]
+    projection = repository.get_projection(
+        TENANT,
+        node.id,
+        1,
+        FEISHU_TASK_KIND,
+    )
+    assert projection is not None
+    assert projection.external_id == "task-1"
+    assert projection.state["owner_person_id"] == "person_reviewer_2"
 
 
 def test_canceling_an_instance_completes_its_existing_human_task():

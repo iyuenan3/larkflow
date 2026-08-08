@@ -6,7 +6,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from .directory import PersonDirectory, validate_snapshot_owners
+from .directory import (
+    DirectoryValidationError,
+    PersonDirectory,
+    validate_snapshot_owners,
+)
 from .editing import (
     GraphEditConfirmation,
     GraphEditPreview,
@@ -54,9 +58,13 @@ from .restart import (
     affected_restart_node_keys,
     apply_restart,
 )
-from .runner import AuthorizationError, NodeRunner
+from .runner import AuthorizationError, NodeRunner, StaleAttemptError
 from .scheduler import Scheduler
 from .transitions import TransitionError, transition_instance
+
+
+class HumanTaskTransferNotAllowedError(RuntimeError):
+    """The current Human assignment cannot be transferred safely."""
 
 
 class WorkflowService:
@@ -626,6 +634,119 @@ class WorkflowService:
             expected_version=expected_version,
             audit_events=audit_events,
             outbox_events=outbox,
+        )
+        return self.repository.get(tenant_id, instance_id)
+
+    def transfer_human_task(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        node_key: str,
+        *,
+        actor_person_id: str,
+        new_owner_person_id: str,
+        attempt_no: int,
+        expected_node_version: int,
+        correlation_id: str | None = None,
+    ) -> WorkflowInstance:
+        """Transfer one active ordinary Human task without rewriting its Snapshot."""
+
+        if not new_owner_person_id.strip():
+            raise ValueError("new_owner_person_id is required")
+        instance = self.repository.get(tenant_id, instance_id)
+        expected_version = instance.version
+        self._require_active(instance)
+        try:
+            node = instance.nodes[node_key]
+            spec = instance.snapshot.node(node_key)
+        except KeyError as exc:
+            raise HumanTaskTransferNotAllowedError(
+                f"unknown Human task node: {node_key}"
+            ) from exc
+        if (
+            node.executor != ExecutorKind.HUMAN
+            or human_decision_config(spec.work) is not None
+        ):
+            raise HumanTaskTransferNotAllowedError(
+                "only ordinary Human tasks can be transferred"
+            )
+        if (
+            node.status != NodeStatus.WAITING_HUMAN
+            or instance.current_attempt(node_key).status
+            != AttemptStatus.WAITING_HUMAN
+        ):
+            raise HumanTaskTransferNotAllowedError(
+                "Human task is not waiting for its current owner"
+            )
+        if attempt_no != node.current_attempt_no:
+            raise StaleAttemptError(
+                f"node {node_key} is on attempt {node.current_attempt_no}, got {attempt_no}"
+            )
+        if node.version != expected_node_version:
+            raise StaleAttemptError(
+                f"node {node_key} expected version {expected_node_version}, found {node.version}"
+            )
+        if actor_person_id != node.owner_person_id:
+            raise AuthorizationError("only the current node owner may transfer the task")
+        new_owner_person_id = new_owner_person_id.strip()
+        if new_owner_person_id == node.owner_person_id:
+            raise HumanTaskTransferNotAllowedError(
+                "Human task is already assigned to that person"
+            )
+        if self.directory is None:
+            raise HumanTaskTransferNotAllowedError(
+                "tenant directory validation is unavailable"
+            )
+        try:
+            person = self.directory.get_person(tenant_id, new_owner_person_id)
+        except DirectoryValidationError as exc:
+            raise HumanTaskTransferNotAllowedError(
+                "new owner is not an active tenant member"
+            ) from exc
+        if person.person_id != new_owner_person_id or not person.active:
+            raise HumanTaskTransferNotAllowedError(
+                "new owner is not an active tenant member"
+            )
+
+        previous_owner_person_id = node.owner_person_id
+        node.owner_person_id = new_owner_person_id
+        node.version += 1
+        now = self.clock()
+        audit = self._audit(
+            instance,
+            "node.human_task_transferred",
+            actor_person_id=actor_person_id,
+            correlation_id=correlation_id or self.id_factory(),
+            aggregate_version=expected_version + 1,
+            now=now,
+            node_key=node_key,
+            attempt_no=attempt_no,
+            payload={
+                "from_owner_person_id": previous_owner_person_id,
+                "to_owner_person_id": new_owner_person_id,
+                "authored_owner_preserved": True,
+            },
+        )
+        outbox = self._outbox(
+            instance,
+            event_type="node.projection_sync_requested",
+            aggregate_type="node_instance",
+            aggregate_id=node.id,
+            aggregate_version=node.version,
+            payload={
+                "instance_id": instance.id,
+                "node_key": node_key,
+                "attempt_no": attempt_no,
+                "status": node.status.value,
+                "transfer_from_person_id": previous_owner_person_id,
+            },
+            now=now,
+        )
+        self.repository.save(
+            instance,
+            expected_version=expected_version,
+            audit_events=(audit,),
+            outbox_events=(outbox,),
         )
         return self.repository.get(tenant_id, instance_id)
 

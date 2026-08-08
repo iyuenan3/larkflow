@@ -66,6 +66,7 @@ from larkflow.workflow.console_admin_sessions import (
     ConsoleAdminSessionService,
     PostgresConsoleAdminSessionRepository,
 )
+from larkflow.workflow.directory import DirectoryPerson
 
 
 POSTGRES_DSN = os.environ.get("LARKFLOW_TEST_POSTGRES_DSN")
@@ -949,6 +950,87 @@ def test_postgres_owner_instance_list_is_isolated_ordered_and_bounded():
             """
         ).fetchone()
     assert index_row is not None
+
+
+def test_postgres_human_task_list_and_runtime_transfer_are_durable():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_task_transfer_{suffix}"
+    owner = f"person_owner_{suffix}"
+    assignee = f"person_assignee_{suffix}"
+    new_assignee = f"person_new_assignee_{suffix}"
+    instance_id = f"instance_task_transfer_{suffix}"
+    repository = PostgresWorkflowRepository(connection_factory)
+
+    class Directory:
+        def get_person(self, checked_tenant_id, person_id):
+            assert checked_tenant_id == tenant_id
+            return DirectoryPerson(person_id=person_id, active=True)
+
+    service = WorkflowService(
+        repository,
+        directory=Directory(),
+        clock=lambda: datetime(2026, 8, 9, 4, 0, tzinfo=timezone.utc),
+    )
+    service.create_draft(
+        instance_id=instance_id,
+        tenant_id=tenant_id,
+        owner_person_id=owner,
+        actor_person_id=owner,
+        snapshot=InstanceSnapshot(
+            goal="Durable Human task transfer",
+            nodes=(
+                NodeSpec(
+                    "review",
+                    "Review",
+                    assignee,
+                    "human",
+                    work={
+                        "objective": "Review the brief",
+                        "inputs": [],
+                        "outputs": [{"id": "content", "type": "data"}],
+                        "acceptance": ["A result exists"],
+                    },
+                ),
+            ),
+        ),
+    )
+    service.confirm_draft(tenant_id, instance_id, actor_person_id=owner)
+    activation = service.dispatch_ready(
+        tenant_id,
+        instance_id,
+        max_automated=0,
+    )[0]
+
+    before = repository.list_human_tasks_for_owner(
+        tenant_id,
+        owner_person_id=assignee,
+    )
+    service.transfer_human_task(
+        tenant_id,
+        instance_id,
+        "review",
+        actor_person_id=assignee,
+        new_owner_person_id=new_assignee,
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+    )
+
+    assert [item.instance_id for item in before] == [instance_id]
+    assert repository.list_human_tasks_for_owner(
+        tenant_id,
+        owner_person_id=assignee,
+    ) == ()
+    after = repository.list_human_tasks_for_owner(
+        tenant_id,
+        owner_person_id=new_assignee,
+    )
+    assert [item.instance_id for item in after] == [instance_id]
+    assert repository.get(tenant_id, instance_id).nodes[
+        "review"
+    ].owner_person_id == new_assignee
 
 
 @pytest.mark.parametrize("restart_scope", (RestartScope.NODE, RestartScope.INSTANCE))
