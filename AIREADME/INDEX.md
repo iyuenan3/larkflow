@@ -2,11 +2,13 @@
 
 > 飞书原生的企业协作 DAG：把多人流程拆成有依赖、有唯一责任人、可验收和可追溯的节点。
 >
-> 文档状态：2026-08-09 Phase 1 中央工作流基础实现。员工工作台已经覆盖 Owner 流程观察与受控操作，以及普通 Human Task 的参与者提交和运行时转交；决定节点继续使用飞书决定卡。参与任务不会扩大为完整协作者实例可见性，转交只移动运行时责任，冻结 Snapshot、旧 Attempt、结果和审计均保留。飞书 OAuth、PostgreSQL 耐久会话、管理员聚合、会话治理、公网 IP HTTPS 与安全响应头均已完成开发环境验证。十个 Python 服务、Caddy、二十二份 migration 和真实 PostgreSQL 转交及 outbox 终止竞争已回读。当前已有两个自然等待中的普通 Human Task，可继续进行真实浏览器提交与飞书 Task 转交验收；通用流程输入框、正式域名、生产容量、异机容灾和 Personal Agent Edge 正式分发仍缺。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+> 文档状态：2026-08-09 Phase 1 中央工作流基础实现。员工工作台已经覆盖 Owner 流程观察与受控操作，以及普通 Human Task 的参与者提交和运行时转交；决定节点继续使用飞书决定卡。参与任务不会扩大为完整协作者实例可见性，转交只移动运行时责任，冻结 Snapshot、旧 Attempt、结果和审计均保留。飞书 OAuth、PostgreSQL 耐久会话、管理员聚合、会话治理、公网 IP HTTPS 与安全响应头均已完成开发环境验证。十个 Python 服务、Caddy、二十二份 migration、真实浏览器任务提交、跨成员飞书 Task 转交、PostgreSQL 转交竞争和 outbox 终止竞争均已回读。下一产品门槛是受控流程输入框；正式域名、生产容量、异机容灾和 Personal Agent Edge 正式分发仍缺。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+>
+> 内容提交 `3fd42df8740825482eb3bbebd5cf69715f37df5b` 把转交后的中央事务状态和飞书异步投影状态分开显示。按钮立即进入“中央已转交，飞书同步中”，接口返回 `projection.status=queued`，失败继续由管理员异常队列承接。完整离线套件为 `1005 passed, 22 skipped`。真实浏览器已分别完成一次普通 Human 提交和一次跨成员转交；所需 Task 权限开通后，既有 outbox 在第 8 次尝试发布。飞书 Task 回读为 `todo / mode=1 / 单一负责人`，负责人和中央 NodeInstance、Projection 一致，`sync_version=2`。wheel SHA-256 为 `79ac572f4feb160db835d8a26b25d77b84e57916542367c347f0df0b65426ee1`，已部署到 `/srv/larkflow/target/releases/20260809_0259_transfer_sync_3fd42df/`；升级前备份、migration、服务、静态资源、公网边界和零 warning 均已回读。
 >
 > 内容提交 `ed118e7b3a9eeb5b5daed52e3d7b0296896f12f1` 为 Projection outbox 增加默认 24 次的有界重试终态。达到上限的事件进入 `exhausted` 后不再领取，同时保留 payload、累计次数、最后错误和终止时间；migration `0022_outbox_exhaustion` 不删除或覆写历史。完整离线套件为 `1005 passed, 22 skipped`，一次性真实 PostgreSQL 双连接竞争得到一路领取、一路跳过，终止后未来领取为 0。wheel SHA-256 为 `a9f68581294ac65e71b2eae5f97940618289194eedd77c5943c40f539e4f6245`，已部署到 `/srv/larkflow/target/releases/20260809_0201_outbox_exhaustion_ed118e7/`。长期库应用第二十二份 migration 后，两条历史永久无效投影从 1171 次失败进入 `exhausted / 1172`，日志为 `claimed=2 / failed=2 / exhausted=2`；全部服务和 Caddy 为 `active / NRestarts=0`。
 >
-> 内容提交 `3d438bb476ad9b9f98cd4c2873802a2894718fe4` 为工作台增加普通 Human Task 的有界详情、结果输入框和转交操作。当前负责人可提交结果，或把任务转交给同租户内、应用可见且活跃的成员；服务端同时校验 Attempt 与节点版本，旧负责人立即失权。转交只修改运行时 NodeInstance Owner，冻结 Snapshot 不变，并追加审计与 outbox、更新既有飞书 Task 负责人。决定节点不进入普通任务 API。完整离线套件为 `1003 passed, 22 skipped`；真实 PostgreSQL 双连接竞争、部署 wheel、升级前备份、二十一份 migration、十个 Python 服务、Caddy、公网静态资源、安全响应头、登录态任务与成员目录 API 和临时会话撤销均已读回。当前开发库没有自然等待中的普通 Human Task，真实浏览器提交与真实飞书 Task 转交仍待下一条自然任务验收。
+> 内容提交 `3d438bb476ad9b9f98cd4c2873802a2894718fe4` 为工作台增加普通 Human Task 的有界详情、结果输入框和转交操作。当前负责人可提交结果，或把任务转交给同租户内、应用可见且活跃的成员；服务端同时校验 Attempt 与节点版本，旧负责人立即失权。转交只修改运行时 NodeInstance Owner，冻结 Snapshot 不变，并追加审计与 outbox、更新既有飞书 Task 负责人。决定节点不进入普通任务 API。完整离线套件为 `1003 passed, 22 skipped`；真实 PostgreSQL 双连接竞争、部署 wheel、升级前备份、二十一份 migration、十个 Python 服务、Caddy、公网静态资源、安全响应头、登录态任务与成员目录 API 和临时会话撤销均已读回。后续真实浏览器提交与真实飞书 Task 转交已通过。
 >
 > 内容提交 `da94891f5e6d01ecee6082a98bab6148abba12ee` 为 Owner 工作台增加受控流程操作。确认草稿、暂停和继续直接复用既有领域服务；取消使用 aggregate version 预览确认，节点与完整实例重启复用耐久 RestartPreview。所有操作继续由服务端重新校验飞书会话、tenant、Instance Owner 与当前状态，跨 Owner 和不存在实例统一返回 404；`feishu` 写请求要求精确同源 `Origin`、专用动作头、空 query 与空 body。按钮会在请求发出前立即显示处理中，高风险操作在同页展示影响节点后再确认。完整离线套件为 `995 passed, 21 skipped`，wheel SHA-256 为 `fca2eee16d3af57dcfb4bb78409a0b6f9e23b7d3d29aa7d7435cc1f26dd3063a`，已部署到 `/srv/larkflow/target/releases/20260808_235309_console_actions_da94891/`。升级前备份、二十一份 migration、`pip check`、公网静态资源哈希、401 边界、安全响应头、全部服务 `active / NRestarts=0` 与零 warning 均已读回。真实登录 Owner 随后在公网工作台直接确认并启动 `internal_trial_20260808_155244`，三个节点均在 Attempt 1 完成，实例终态为 `done / version 7`。两个飞书 Task、Agent 结果消息、完成文档与最终通知均已外部绑定。该证据只关闭首个真实登录 Owner 写操作门槛，暂停、继续、取消和重启仍未逐项完成页面验收。
 >
@@ -56,7 +58,7 @@
 >
 > 内容提交 `db7651228e26055eb1229ae9f451e3e87c31df38` 把来源约束型材料复核与决策生成拆成独立结果契约，新增 `source_decision.v1`、`source_decision.check` 与 `source_grounded_decision`，并用 JSON 代码块消除结构化卡片 URL 的 `%22` 污染。完整离线等价结果为 `988 passed, 21 skipped`，干净 wheel SHA-256 为 `54a4bbf4c96834d7d69a3434d01b083d2467f5df6dd129c9ac6e35876efb49ff`，已部署到 `/srv/larkflow/target/releases/20260808_040000_source_decision_db76512/`。真实实例 `source_decision_20260808_0405` 的四个 Attempt 1 均完成，Agent 回答 Q1、Q2、Q3，Tool 覆盖 6/6 个 F 和 3/3 个 Q、零违规且 `verdict=pass`。Owner 明确接受后实例为 `done / version 9`，终态决定卡已从飞书服务端回读为已接受、无按钮且无 `%22`。九个 Target 服务均为 `active / NRestarts=0`，legacy 消费者与 Caddy 仍 active，部署窗口 warning 为 0。该开发证据不等于业务建议正确、生产容量或生产发布。
 >
-> last-synced: ed118e7b3a9eeb5b5daed52e3d7b0296896f12f1 · 2026-08-09
+> last-synced: 3fd42df8740825482eb3bbebd5cf69715f37df5b · 2026-08-09
 
 ## 阅读顺序
 
@@ -78,7 +80,7 @@
 | DAG_TEMPLATE_SPEC | ✅ | v0.2 模板、mention 角色绑定、草稿预览、未来区域编辑和两类重启已实现 |
 | ARCHITECTURE | ✅ | Target 模块化单体、飞书 OAuth 与 PostgreSQL 耐久会话工作台、Owner 受控流程操作、参与者任务面与运行时责任转交、管理员聚合与会话治理、独立 Worker、投影有界终止、来源契约检查、失败恢复、Edge Proof 与剩余差距 |
 | RELATIONS | ✅ | Target 飞书、mention 与人员选择卡身份边界、中央 lark-cli、Edge HTTPS、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | 网页普通 Human 责任入口与待办转交契约已开发部署，已有两个自然等待任务可用于真实页面提交与飞书 Task 转交，再建设受控流程输入框 |
+| ROADMAP | ✅ | 网页普通 Human 责任入口、真实页面提交和跨成员飞书 Task 转交已验证，下一步建设受控流程输入框 |
 | SPEC | ✅ | legacy 契约、Target CLI、Owner Console 读取与工作流 POST、OAuth v3、PostgreSQL 耐久会话、服务端管理员 allowlist、聚合与受审计会话撤销、公网请求预算和 429 契约、独立 interact 与 draft generation Worker、数据库通知唤醒、来源声明与确定性检查、必填退回意见的人类决定卡、十五个飞书窄命令、模板与无模板草稿、暂停继续取消、Task 入站、受控变化、完成投影与私有 Edge v1 HTTP、前台客户端、doctor 及 macOS manager |
 | DEPLOYMENT | ✅ | Legacy ECS 与 Target 九服务、二十二份 migration、投影永久失败终止、公网 IP Console、Owner 工作台、真实飞书登录、管理员运维、Caddy 边界、Edge、备份与回滚实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |

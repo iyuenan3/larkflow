@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.69.0-draft · 2026-08-09 · 真实 Human Task 转交与异步状态表达
+
+- Fixed：内容提交 `3fd42df8740825482eb3bbebd5cf69715f37df5b` 把中央转交事务与飞书 Task 投影分开表达。转交响应新增 `projection.kind=feishu_task / status=queued`；页面立即显示“中央已转交，飞书同步中”，不再把 outbox 入队描述为外部负责人已经更新。异步失败继续由既有有界重试和管理员异常聚合承接。
+- Acceptance：真实登录浏览器分别完成一次普通 Human 节点提交和一次跨成员转交。提交后中央流程继续调度；转交后旧负责人立即失权。精确所需 Task 权限开通后，既有同步事件在第 8 次尝试发布。飞书 Task 回读为 `todo / mode=1 / 单一负责人`，Task 负责人、中央 NodeInstance Owner 与 Projection Owner 一致，`sync_version=2`。
+- Verified：聚焦套件为 `41 passed`。首次全量运行暴露本机 SOCKS 代理注入和沙箱禁止 `ps` 的三个环境性失败；清空六项代理变量并允许进程树读取后，完整套件为 `1005 passed, 22 skipped`。Git whitespace 和 wheel 内外三项文件哈希一致。
+- Deployment：wheel SHA-256 为 `79ac572f4feb160db835d8a26b25d77b84e57916542367c347f0df0b65426ee1`，位于 `/srv/larkflow/target/releases/20260809_0259_transfer_sync_3fd42df/`。升级前备份为 285292 bytes，SHA-256 为 `f3593021322de5b87aace25b61b8b3edf711dbb42c9726efae054f2d7438357d`；migration runner 返回空集，ledger 保持 22 份。本次只重启 Console；十个 Python 服务与 Caddy 均为 `active / NRestarts=0`，公网与 loopback 200、未登录 401、安全响应头、静态资源哈希和零 warning 均已读回。
+- Boundary：这关闭开发测试组织中的普通 Human 页面提交和跨成员 Task 转交门槛，不等于生产容量、正式域名、异机容灾、分布式限流或完整协作者实例视图已经完成。
+
 ## v0.68.0-draft · 2026-08-09 · Projection outbox 有界终止
 
 - Fixed：内容提交 `ed118e7b3a9eeb5b5daed52e3d7b0296896f12f1` 为 Projection outbox 增加默认 24 次尝试上限。达到上限的外部投影失败原子进入 `exhausted`，停止再次领取，同时保留事件内容、累计尝试次数、最后错误和终止时间；临时失败继续使用原有指数退避。
