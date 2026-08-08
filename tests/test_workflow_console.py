@@ -559,6 +559,9 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"runAttentionAction" in script.body
     assert b"confirmWorkflowActionPreview" in script.body
     assert b"renderDetailActions" in script.body
+    assert b"submitDraftRequest" in script.body
+    assert b"pollDraftRequest" in script.body
+    assert b"openDraftInstance" in script.body
     assert b"loadAuthConfiguration" in script.body
     assert b"loadAdminOverview" in script.body
     assert b"renderAdminOverview" in script.body
@@ -589,6 +592,9 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"attention-center" in page.body
     assert b"attention-nav" in page.body
     assert b"workflow-library" in page.body
+    assert b"draft-studio" in page.body
+    assert "生成流程草稿".encode() in page.body
+    assert "草稿不会自动运行".encode() in page.body
     assert b"workflow-filters" in page.body
     assert b"detail-tabs" in page.body
     assert b"overview-nodes" in page.body

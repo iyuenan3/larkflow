@@ -610,6 +610,7 @@ def test_draft_generation_settings_are_single_claim_and_independent(monkeypatch)
     assert settings.claim_ttl == timedelta(seconds=700)
     assert settings.claim_limit == 1
     assert settings.claim_safety == timedelta(seconds=40)
+    assert settings.max_attempts == 5
     assert settings.loop == WorkerLoopSettings(0.5, 2.0)
 
     with pytest.raises(ValueError, match="claim_limit must be 1"):

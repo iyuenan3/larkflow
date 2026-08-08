@@ -220,6 +220,7 @@ def test_postgres_admin_queries_keep_every_aggregate_inside_the_tenant():
                             "oldest_ready_at": None,
                         }
                         for key in (
+                            "draft_requests",
                             "inbox",
                             "im_commands",
                             "im_replies",
@@ -242,7 +243,7 @@ def test_postgres_admin_queries_keep_every_aggregate_inside_the_tenant():
     )
 
     assert snapshot.instance_counts["running"] == 2
-    assert len(snapshot.queue_lanes) == 7
+    assert len(snapshot.queue_lanes) == 8
     assert "WHERE tenant_id = %s" in statements[0][0]
     assert statements[0][1] == (TENANT,)
     assert "WHERE tenant_id = %s" in statements[1][0]
@@ -250,8 +251,8 @@ def test_postgres_admin_queries_keep_every_aggregate_inside_the_tenant():
     assert "WHERE tenant_id = %s" in statements[2][0]
     assert statements[2][1][-1] == TENANT
     lane_parameters = statements[3][1]
-    assert lane_parameters.count(TENANT) == 7
-    assert len(lane_parameters) == 49
+    assert lane_parameters.count(TENANT) == 8
+    assert len(lane_parameters) == 56
 
 
 def test_admin_allowlist_parser_rejects_ambiguous_values_and_deduplicates():

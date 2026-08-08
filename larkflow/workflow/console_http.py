@@ -34,6 +34,11 @@ from .console_admin_sessions import (
     ConsoleAdminSessionService,
 )
 from .console_actions import ConsoleActionConflictError, ConsoleActionService
+from .console_drafts import (
+    ConsoleDraftConflictError,
+    ConsoleDraftNotFoundError,
+    ConsoleDraftService,
+)
 from .console_rate_limit import ConsoleRequestRateLimiter
 from .console_tasks import (
     ConsoleTaskConflictError,
@@ -71,6 +76,9 @@ _TASK_ROUTE = re.compile(
 _TASK_ACTION_ROUTE = re.compile(
     r"^/console/api/v1/tasks/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/"
     r"nodes/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/(submit|transfer)$"
+)
+_DRAFT_ROUTE = re.compile(
+    r"^/console/api/v1/drafts/([0-9a-f]{32})$"
 )
 _ADMIN_SESSION_PREVIEW_ROUTE = re.compile(
     r"^/console/api/v1/admin/sessions/([0-9a-f]{32})/revoke-preview$"
@@ -145,6 +153,7 @@ class ConsoleHttpApplication:
         admin_session_service: ConsoleAdminSessionService | None = None,
         action_service: ConsoleActionService | None = None,
         task_service: ConsoleTaskService | None = None,
+        draft_service: ConsoleDraftService | None = None,
     ) -> None:
         self.service = service
         self.authenticator = authenticator
@@ -153,6 +162,7 @@ class ConsoleHttpApplication:
         self.admin_session_service = admin_session_service
         self.action_service = action_service
         self.task_service = task_service
+        self.draft_service = draft_service
         if authenticator.mode not in {"static", "feishu"}:
             raise ValueError("console authenticator mode is unsupported")
         if (authenticator.mode == "feishu") != (oauth is not None):
@@ -309,6 +319,13 @@ class ConsoleHttpApplication:
                 body,
             )
 
+        if method == "POST" and parsed.path == "/console/api/v1/drafts":
+            return self._handle_draft_write(
+                parsed.query,
+                request_headers,
+                body,
+            )
+
         if method == "POST" and (
             parsed.path.startswith("/console/api/v1/instances/")
             or parsed.path.startswith("/console/api/v1/restart-previews/")
@@ -417,6 +434,24 @@ class ConsoleHttpApplication:
                     self.task_service.list_people(principal, limit=limit),
                 )
 
+            if parsed.path == "/console/api/v1/drafts":
+                if self.draft_service is None:
+                    raise ConsoleDraftNotFoundError("draft requests")
+                limit = _single_limit(parsed.query, default=10, maximum=20)
+                return self._json(
+                    200,
+                    self.draft_service.list(principal, limit=limit),
+                )
+
+            draft_match = _DRAFT_ROUTE.fullmatch(parsed.path)
+            if draft_match is not None and not parsed.query:
+                if self.draft_service is None:
+                    raise ConsoleDraftNotFoundError("draft request")
+                return self._json(
+                    200,
+                    self.draft_service.get(principal, draft_match.group(1)),
+                )
+
             task_match = _TASK_ROUTE.fullmatch(parsed.path)
             if task_match is not None and not parsed.query:
                 if self.task_service is None:
@@ -447,9 +482,13 @@ class ConsoleHttpApplication:
                 "console credential is invalid",
                 headers=challenge,
             )
-        except (ConsoleResourceNotFoundError, ConsoleTaskNotFoundError):
+        except (
+            ConsoleResourceNotFoundError,
+            ConsoleTaskNotFoundError,
+            ConsoleDraftNotFoundError,
+        ):
             return self._error(404, "not_found", "resource does not exist")
-        except ConsoleTaskConflictError as exc:
+        except (ConsoleTaskConflictError, ConsoleDraftConflictError) as exc:
             return self._error(409, exc.code, str(exc))
         except (TypeError, ValueError) as exc:
             return self._error(400, "invalid_request", str(exc))
@@ -538,6 +577,65 @@ class ConsoleHttpApplication:
                 "workflow action request was rejected",
             )
         except ConsoleTaskConflictError as exc:
+            return self._error(409, exc.code, str(exc))
+        except (TypeError, ValueError) as exc:
+            return self._error(400, "invalid_request", str(exc))
+        except Exception:
+            return self._error(500, "internal_error", "internal server error")
+
+    def _handle_draft_write(
+        self,
+        query: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> ConsoleHttpResponse:
+        try:
+            principal = self.authenticator.authenticate_context(headers).principal
+            if self.draft_service is None:
+                raise ConsoleDraftNotFoundError("draft requests")
+            self._validate_draft_write_request(query, headers, body)
+            document = _json_object_body(body)
+            if set(document) != {
+                "request_id",
+                "brief",
+                "context",
+                "collaborator_person_id",
+            }:
+                raise ValueError("draft request fields are invalid")
+            collaborator = document["collaborator_person_id"]
+            if collaborator is not None and not isinstance(collaborator, str):
+                raise ValueError("collaborator_person_id must be a string or null")
+            return self._json(
+                202,
+                self.draft_service.create(
+                    principal,
+                    request_id=document["request_id"],
+                    brief=document["brief"],
+                    context=document["context"],
+                    collaborator_person_id=collaborator,
+                ),
+            )
+        except InvalidConsoleCredentialError:
+            challenge = (
+                {"WWW-Authenticate": "Bearer"}
+                if self.authenticator.mode == "static"
+                else {}
+            )
+            return self._error(
+                401,
+                "invalid_credential",
+                "console credential is invalid",
+                headers=challenge,
+            )
+        except ConsoleDraftNotFoundError:
+            return self._error(404, "not_found", "resource does not exist")
+        except _WorkflowWriteRequestError:
+            return self._error(
+                403,
+                "request_rejected",
+                "workflow action request was rejected",
+            )
+        except ConsoleDraftConflictError as exc:
             return self._error(409, exc.code, str(exc))
         except (TypeError, ValueError) as exc:
             return self._error(400, "invalid_request", str(exc))
@@ -830,6 +928,14 @@ class ConsoleHttpApplication:
                     "workflow action origin is invalid"
                 )
 
+    def _validate_draft_write_request(
+        self,
+        query: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> None:
+        self._validate_task_write_request(query, headers, body)
+
     @staticmethod
     def _json(status: int, payload: Mapping[str, Any]) -> ConsoleHttpResponse:
         return ConsoleHttpResponse(
@@ -1027,7 +1133,12 @@ def _single_value_query(
     return values
 
 
-def _single_limit(raw_query: str, *, default: int) -> int:
+def _single_limit(
+    raw_query: str,
+    *,
+    default: int,
+    maximum: int = 100,
+) -> int:
     query = parse_qs(raw_query, keep_blank_values=True)
     if set(query) - {"limit"}:
         raise ValueError("only the limit query parameter is accepted")
@@ -1038,8 +1149,8 @@ def _single_limit(raw_query: str, *, default: int) -> int:
         limit = int(values[0])
     except ValueError as exc:
         raise ValueError("limit must be an integer") from exc
-    if limit < 1 or limit > 100:
-        raise ValueError("limit must be between 1 and 100")
+    if limit < 1 or limit > maximum:
+        raise ValueError(f"limit must be between 1 and {maximum}")
     return limit
 
 

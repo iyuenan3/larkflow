@@ -337,6 +337,7 @@ class TargetDraftGenerationSettings:
     claim_limit: int = 1
     retry_base: timedelta = timedelta(seconds=5)
     retry_max: timedelta = timedelta(minutes=5)
+    max_attempts: int = 5
     claim_safety: timedelta = timedelta(seconds=30)
     max_result_chars: int = 30_000
     loop: WorkerLoopSettings = WorkerLoopSettings()
@@ -354,6 +355,8 @@ class TargetDraftGenerationSettings:
             raise ValueError("draft claim_limit must be 1")
         if self.retry_base <= timedelta(0) or self.retry_max < self.retry_base:
             raise ValueError("draft retry delays are invalid")
+        if self.max_attempts < 1 or self.max_attempts > 100:
+            raise ValueError("draft max_attempts must be between 1 and 100")
         if self.claim_safety <= timedelta(0):
             raise ValueError("draft claim_safety must be positive")
         if self.max_result_chars < 1:
@@ -395,6 +398,9 @@ class TargetDraftGenerationSettings:
                 seconds=_positive_float(
                     values, "LARKFLOW_TARGET_DRAFT_RETRY_MAX_SECONDS", 300.0
                 )
+            ),
+            max_attempts=_positive_int(
+                values, "LARKFLOW_TARGET_DRAFT_MAX_ATTEMPTS", 5
             ),
             claim_safety=timedelta(
                 seconds=_positive_float(

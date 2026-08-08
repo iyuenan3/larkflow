@@ -15,6 +15,7 @@ from psycopg.errors import RaiseException
 from larkflow.workflow import (
     AutomatedExecutor,
     ConcurrentUpdateError,
+    ConsoleDraftRequest,
     ExecutionRequest,
     ExecutionResult,
     ExecutorKind,
@@ -66,6 +67,7 @@ from larkflow.workflow.console_admin_sessions import (
     ConsoleAdminSessionService,
     PostgresConsoleAdminSessionRepository,
 )
+from larkflow.workflow.console_drafts import PostgresConsoleDraftRepository
 from larkflow.workflow.directory import DirectoryPerson
 
 
@@ -171,6 +173,7 @@ def test_postgres_admin_overview_reads_all_tenant_scoped_operational_lanes():
     assert snapshot.distinct_owners == 0
     assert snapshot.active_sessions == 0
     assert {lane.key for lane in snapshot.queue_lanes} == {
+        "draft_requests",
         "outbox",
         "inbox",
         "im_commands",
@@ -180,7 +183,52 @@ def test_postgres_admin_overview_reads_all_tenant_scoped_operational_lanes():
         "role_progress",
     }
     assert all(lane.total == 0 for lane in snapshot.queue_lanes)
-    assert snapshot.applied_migrations[-1] == "0022_outbox_exhaustion"
+    assert snapshot.applied_migrations[-1] == "0023_console_draft_requests"
+
+
+def test_postgres_console_draft_request_is_idempotent_and_claimed_once():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_console_draft_{suffix}"
+    request_id = uuid4().hex
+    now = datetime(2026, 8, 9, 4, 0, tzinfo=timezone.utc)
+    repository = PostgresConsoleDraftRepository(connection_factory)
+    request = ConsoleDraftRequest(
+        id=request_id,
+        tenant_id=tenant_id,
+        requester_person_id=f"person_owner_{suffix}",
+        collaborator_person_id=f"person_collaborator_{suffix}",
+        brief="Generate and review a release summary",
+        context="Use only registered facts",
+        status="pending",
+        attempt_count=0,
+        available_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+
+    assert repository.create(request) == repository.create(request)
+
+    def claim_one(worker_id: str):
+        return PostgresConsoleDraftRepository(connection_factory).claim(
+            tenant_id,
+            worker_id=worker_id,
+            now=now,
+            limit=1,
+            claim_ttl=timedelta(minutes=10),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(claim_one, "draft-one")
+        second = pool.submit(claim_one, "draft-two")
+        claims = first.result() + second.result()
+
+    assert len(claims) == 1
+    assert claims[0].request.id == request_id
+    assert claims[0].request.status == "generating"
+    assert claims[0].request.attempt_count == 1
 
 
 def test_postgres_competing_session_revocations_are_idempotent_and_audited_once():

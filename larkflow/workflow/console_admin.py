@@ -71,6 +71,16 @@ class _QueueLane:
 
 _QUEUE_LANES = (
     _QueueLane(
+        "draft_requests",
+        "workflow_console_draft_requests",
+        "status",
+        "available_at",
+        "claim_token",
+        "claim_expires_at",
+        ("pending", "generating", "repairing", "creating", "failed"),
+        ("generating", "repairing", "creating"),
+    ),
+    _QueueLane(
         "outbox",
         "workflow_outbox_events",
         "status",

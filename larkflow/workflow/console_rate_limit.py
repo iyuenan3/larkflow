@@ -135,6 +135,7 @@ class ConsoleRequestRateLimiter:
             path.startswith("/console/api/v1/instances/")
             or path.startswith("/console/api/v1/restart-previews/")
             or path.startswith("/console/api/v1/tasks/")
+            or path == "/console/api/v1/drafts"
         ):
             return "workflow_write", self.workflow_writes_per_client
         return "read", self.requests_per_client

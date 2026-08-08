@@ -68,8 +68,16 @@
             <p>先处理需要决定的事，再查看完整流程。</p>
           </div>
           <nav class="owner-navigation" aria-label="我的工作视图">
-            <button id="attention-nav" class="owner-nav-item" type="button" data-active="true">
+            <button id="draft-nav" class="owner-nav-item" type="button" data-active="false">
               <span class="owner-nav-symbol" aria-hidden="true">01</span>
+              <span class="owner-nav-copy">
+                <strong>发起流程</strong>
+                <small>描述目标，先生成草稿预览</small>
+              </span>
+              <span class="owner-nav-count owner-nav-create">＋</span>
+            </button>
+            <button id="attention-nav" class="owner-nav-item" type="button" data-active="true">
+              <span class="owner-nav-symbol" aria-hidden="true">02</span>
               <span class="owner-nav-copy">
                 <strong>待处理</strong>
                 <small>需要你确认、恢复或完成</small>
@@ -77,7 +85,7 @@
               <span id="attention-nav-count" class="owner-nav-count">0</span>
             </button>
             <button id="workflow-nav" class="owner-nav-item" type="button" data-active="false">
-              <span class="owner-nav-symbol" aria-hidden="true">02</span>
+              <span class="owner-nav-symbol" aria-hidden="true">03</span>
               <span class="owner-nav-copy">
                 <strong>全部流程</strong>
                 <small>最近由你发起的流程</small>
@@ -95,6 +103,74 @@
         </aside>
 
         <main class="main">
+          <section id="draft-studio" class="owner-page draft-studio" aria-labelledby="draft-studio-title" hidden>
+            <header class="page-heading draft-studio-heading">
+              <div>
+                <p class="eyebrow">NEW WORKFLOW</p>
+                <h1 id="draft-studio-title">描述你想推进的工作</h1>
+                <p>中央 Agent 只生成候选流程和 DAG 草稿。草稿不会自动运行，也不会创建飞书待办。</p>
+              </div>
+              <div class="draft-safety-mark">
+                <span aria-hidden="true">✓</span>
+                <strong>预览后再启动</strong>
+              </div>
+            </header>
+
+            <div class="draft-studio-grid">
+              <form id="draft-form" class="panel draft-form">
+                <label for="draft-brief">
+                  <span>要完成什么</span>
+                  <small>必填，尽量说明最终交付物和判断标准</small>
+                </label>
+                <textarea id="draft-brief" maxlength="1000" rows="6" required placeholder="例如：根据发布说明生成一份研发简报，由我确认输入，Agent 生成摘要，再由指定协作者复核。"></textarea>
+                <div class="draft-field-count"><span id="draft-brief-count">0</span>/1000</div>
+
+                <label for="draft-context">
+                  <span>补充背景与约束</span>
+                  <small>选填，不要粘贴密码、令牌或其他敏感凭据</small>
+                </label>
+                <textarea id="draft-context" maxlength="1000" rows="4" placeholder="例如：只能依据已登记材料，不得补写来源之外的事实。"></textarea>
+                <div class="draft-field-count"><span id="draft-context-count">0</span>/1000</div>
+
+                <label for="draft-collaborator">
+                  <span>协作者</span>
+                  <small>选填。不选择时，流程里的 Human 节点默认由你负责</small>
+                </label>
+                <select id="draft-collaborator">
+                  <option value="">由我负责全部 Human 节点</option>
+                </select>
+
+                <p id="draft-form-error" class="human-task-error" role="alert"></p>
+                <button id="draft-submit" class="draft-submit" type="submit">生成流程草稿</button>
+                <p class="draft-form-boundary">提交后只进入耐久生成队列。服务端会重新校验节点、依赖、执行器和负责人。</p>
+              </form>
+
+              <aside class="draft-activity" aria-label="草稿生成状态">
+                <section id="draft-current" class="panel draft-current" hidden>
+                  <div class="draft-current-heading">
+                    <span id="draft-current-status" class="status-pill status-running">生成中</span>
+                    <code id="draft-current-id"></code>
+                  </div>
+                  <h2 id="draft-current-title">正在准备候选流程</h2>
+                  <p id="draft-current-message"></p>
+                  <div class="draft-progress" aria-hidden="true"><span></span><span></span><span></span></div>
+                  <button id="draft-open-instance" class="draft-open-instance" type="button" hidden>查看 DAG 并确认</button>
+                </section>
+
+                <section class="panel draft-recent-panel">
+                  <div class="panel-heading">
+                    <div>
+                      <p class="eyebrow">RECENT DRAFTS</p>
+                      <h2>最近生成</h2>
+                    </div>
+                    <button id="draft-refresh" class="quiet-button" type="button">刷新</button>
+                  </div>
+                  <div id="draft-recent" class="draft-recent"></div>
+                </section>
+              </aside>
+            </div>
+          </section>
+
           <section id="attention-center" class="owner-page attention-panel" aria-labelledby="attention-title">
             <header class="page-heading attention-heading">
               <div>

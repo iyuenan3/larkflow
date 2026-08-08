@@ -24,6 +24,7 @@ from .console_admin_sessions import (
     PostgresConsoleAdminSessionRepository,
 )
 from .console_actions import ConsoleActionService
+from .console_drafts import ConsoleDraftService, PostgresConsoleDraftRepository
 from .console_http import ConsoleHttpApplication, build_console_http_server
 from .console_rate_limit import ConsoleRequestRateLimiter
 from .console_tasks import ConsoleTaskService
@@ -88,6 +89,9 @@ def _run(namespace: argparse.Namespace) -> int:
     domain_service = WorkflowService(repository)
     action_service = ConsoleActionService(domain_service)
     task_service = ConsoleTaskService(domain_service)
+    draft_service = ConsoleDraftService(
+        PostgresConsoleDraftRepository(connection_factory),
+    )
     admin_people = _person_id_list(
         os.environ.get("LARKFLOW_CONSOLE_ADMIN_PERSON_IDS", ""),
         label="LARKFLOW_CONSOLE_ADMIN_PERSON_IDS",
@@ -129,6 +133,7 @@ def _run(namespace: argparse.Namespace) -> int:
             admin_session_service=admin_session_service,
             action_service=action_service,
             task_service=task_service,
+            draft_service=draft_service,
         )
         access = "enter LARKFLOW_CONSOLE_ACCESS_TOKEN in the browser"
     else:
@@ -140,15 +145,20 @@ def _run(namespace: argparse.Namespace) -> int:
             os.environ.get("LARKFLOW_CONSOLE_FEISHU_APP_SECRET"),
             "LARKFLOW_CONSOLE_FEISHU_APP_SECRET",
         )
+        directory = FeishuAppDirectory(
+            app_id=app_id,
+            app_secret=app_secret,
+        )
         domain_service = WorkflowService(
             repository,
-            directory=FeishuAppDirectory(
-                app_id=app_id,
-                app_secret=app_secret,
-            ),
+            directory=directory,
         )
         action_service = ConsoleActionService(domain_service)
         task_service = ConsoleTaskService(domain_service)
+        draft_service = ConsoleDraftService(
+            PostgresConsoleDraftRepository(connection_factory),
+            directory,
+        )
         allowed_tenant_key = _required(
             os.environ.get("LARKFLOW_CONSOLE_FEISHU_TENANT_KEY"),
             "LARKFLOW_CONSOLE_FEISHU_TENANT_KEY",
@@ -186,6 +196,7 @@ def _run(namespace: argparse.Namespace) -> int:
             admin_session_service=admin_session_service,
             action_service=action_service,
             task_service=task_service,
+            draft_service=draft_service,
         )
         rate_limiter = _build_rate_limiter()
         access = "Feishu OAuth with an opaque HttpOnly session"

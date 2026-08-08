@@ -20,6 +20,11 @@ from larkflow.config import load_dotenv, load_llm_roles
 from larkflow.llm.client import OpenAICompatLLM
 
 from .completion_poll import TaskCompletionPoller
+from .console_drafts import (
+    ConsoleDraftWorker,
+    ConsoleDraftWorkerReport,
+    PostgresConsoleDraftRepository,
+)
 from .config import (
     TargetDraftGenerationSettings,
     TargetInboundSettings,
@@ -352,7 +357,7 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             worker_id=namespace.draft_worker_id,
         )
         generator = _draft_generator(settings, environ=os.environ, log=log)
-        worker = RoleBindingActionWorker(
+        role_binding_worker = RoleBindingActionWorker(
             PostgresIMCommandStore(connection_factory),
             service,
             templates,
@@ -365,6 +370,19 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             retry_base=settings.retry_base,
             retry_max=settings.retry_max,
         )
+        console_worker = ConsoleDraftWorker(
+            PostgresConsoleDraftRepository(connection_factory),
+            service,
+            generator,
+            tenant_id=settings.tenant_id,
+            worker_id=settings.worker_id,
+            claim_limit=settings.claim_limit,
+            claim_ttl=settings.claim_ttl,
+            retry_base=settings.retry_base,
+            retry_max=settings.retry_max,
+            max_attempts=settings.max_attempts,
+        )
+        worker = _CombinedDraftWorkers(console_worker, role_binding_worker)
         if namespace.command == "generate-drafts-once":
             report = worker.run_once()
             log(
@@ -1134,6 +1152,25 @@ def _draft_generator(
         ),
         max_result_chars=settings.max_result_chars,
     )
+
+
+class _CombinedDraftWorkers:
+    """Serialize web and Feishu draft requests through one model worker."""
+
+    def __init__(self, console_worker: Any, role_binding_worker: Any) -> None:
+        self.console_worker = console_worker
+        self.role_binding_worker = role_binding_worker
+
+    def run_once(self) -> ConsoleDraftWorkerReport:
+        console = self.console_worker.run_once()
+        role_binding = self.role_binding_worker.run_once()
+        return ConsoleDraftWorkerReport(
+            claimed=console.claimed + role_binding.claimed,
+            processed=console.processed + role_binding.processed,
+            rejected=console.rejected + role_binding.rejected,
+            failed=console.failed + role_binding.failed,
+            errors=tuple(console.errors) + tuple(role_binding.errors),
+        )
 
 
 def _maximum_llm_route_seconds(roles: Mapping[str, Mapping[str, Any]]) -> float:

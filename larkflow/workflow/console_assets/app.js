@@ -45,6 +45,9 @@ const state = {
   instances: [],
   attention: [],
   humanTasks: [],
+  draftRequests: [],
+  currentDraft: null,
+  autoOpenDraftId: null,
   activeTask: null,
   detail: null,
   isAdmin: false,
@@ -76,6 +79,8 @@ const emptyState = el("empty-state");
 const detailView = el("detail");
 const attentionCenter = el("attention-center");
 const workflowLibrary = el("workflow-library");
+const draftStudio = el("draft-studio");
+const draftNav = el("draft-nav");
 const attentionNav = el("attention-nav");
 const workflowNav = el("workflow-nav");
 const workspace = document.querySelector(".workspace");
@@ -119,6 +124,7 @@ const ATTENTION_DESCRIPTION = {
   confirm_draft: "核对目标和节点后，直接在本页确认启动",
 };
 const QUEUE_LANE = {
+  draft_requests: "网页草稿生成",
   outbox: "外部投影",
   inbox: "任务事件入站",
   im_commands: "飞书命令",
@@ -231,9 +237,10 @@ async function request(path, options = {}) {
 }
 
 async function loadInstances(selectId = null) {
-  const [payload, taskPayload] = await Promise.all([
+  const [payload, taskPayload, draftPayload] = await Promise.all([
     request("/console/api/v1/instances?limit=30"),
     request("/console/api/v1/tasks?limit=30"),
+    request("/console/api/v1/drafts?limit=10"),
   ]);
   state.instances = payload.instances;
   state.humanTasks = taskPayload.tasks || [];
@@ -258,6 +265,7 @@ async function loadInstances(selectId = null) {
   };
   renderInstances();
   renderAttention(attention);
+  syncDraftRequests(draftPayload.requests || []);
   if (selectId) {
     await loadDetail(selectId);
   }
@@ -279,6 +287,229 @@ function humanTaskAttentionItem(task) {
     node: { key: task.node.key, title: task.node.title },
     action: { kind: "human_task", node_key: task.node.key },
   };
+}
+
+const DRAFT_ACTIVE_STATUSES = new Set([
+  "queued",
+  "generating",
+  "repairing",
+  "preparing",
+  "retrying",
+]);
+
+const DRAFT_STATUS = {
+  queued: "排队中",
+  generating: "生成中",
+  repairing: "重新校验",
+  preparing: "保存草稿",
+  retrying: "自动重试",
+  ready: "待确认",
+  rejected: "需要调整",
+  failed: "生成失败",
+};
+
+function newDraftRequestId() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function syncDraftRequests(requests) {
+  state.draftRequests = requests;
+  renderDraftRequests();
+  const current = state.currentDraft
+    ? requests.find((item) => item.id === state.currentDraft.id)
+    : null;
+  const active = requests.find((item) => DRAFT_ACTIVE_STATUSES.has(item.status));
+  if (current) {
+    state.currentDraft = current;
+    renderCurrentDraft(current);
+  } else if (!state.currentDraft && active) {
+    state.currentDraft = active;
+    renderCurrentDraft(active);
+    pollDraftRequest(active.id);
+  }
+}
+
+function renderDraftRequests() {
+  const list = el("draft-recent");
+  list.replaceChildren();
+  if (state.draftRequests.length === 0) {
+    list.append(node("p", "draft-recent-empty", "还没有网页草稿。输入目标后，生成进度会耐久保存在中央节点。"));
+    return;
+  }
+  state.draftRequests.slice(0, 6).forEach((requestItem) => {
+    const item = node("article", "draft-recent-item");
+    const open = node("button", "", requestItem.brief || "未命名草稿请求");
+    open.type = "button";
+    open.disabled = requestItem.status !== "ready" && !DRAFT_ACTIVE_STATUSES.has(requestItem.status);
+    open.addEventListener("click", () => {
+      state.currentDraft = requestItem;
+      renderCurrentDraft(requestItem);
+      if (requestItem.status === "ready") openDraftInstance(requestItem).catch(showWorkspaceError);
+      else pollDraftRequest(requestItem.id);
+    });
+    const meta = node("div", "draft-recent-meta");
+    meta.append(
+      node("span", "", DRAFT_STATUS[requestItem.status] || requestItem.status),
+      node("time", "", formatDate(requestItem.created_at)),
+    );
+    item.append(open, meta);
+    list.append(item);
+  });
+}
+
+function renderCurrentDraft(requestItem) {
+  const panel = el("draft-current");
+  const status = el("draft-current-status");
+  const terminal = !DRAFT_ACTIVE_STATUSES.has(requestItem.status);
+  panel.hidden = false;
+  panel.dataset.terminal = String(terminal);
+  status.className = `status-pill ${requestItem.status === "ready" ? "status-done" : ["rejected", "failed"].includes(requestItem.status) ? "status-failed" : "status-running"}`;
+  status.textContent = DRAFT_STATUS[requestItem.status] || requestItem.status;
+  el("draft-current-id").textContent = requestItem.id.slice(-8);
+  el("draft-current-title").textContent = requestItem.status === "ready"
+    ? "流程草稿已经生成"
+    : requestItem.status === "rejected"
+      ? "当前描述需要调整"
+      : requestItem.status === "failed"
+        ? "本次生成没有完成"
+        : "中央 Agent 正在准备候选流程";
+  el("draft-current-message").textContent = requestItem.message;
+  const open = el("draft-open-instance");
+  open.hidden = requestItem.status !== "ready" || !requestItem.instance_id;
+  open.disabled = false;
+  const submit = el("draft-submit");
+  submit.disabled = !terminal;
+  submit.dataset.state = requestItem.status === "ready" ? "done" : terminal ? "idle" : "working";
+  submit.textContent = !terminal
+    ? DRAFT_STATUS[requestItem.status] || "生成中"
+    : "生成另一个流程草稿";
+}
+
+async function refreshDraftRequests() {
+  const payload = await request("/console/api/v1/drafts?limit=10");
+  syncDraftRequests(payload.requests || []);
+}
+
+async function pollDraftRequest(requestId) {
+  clearTimeout(pollDraftRequest.timer);
+  if (!requestId) return;
+  try {
+    const payload = await request(`/console/api/v1/drafts/${encodeURIComponent(requestId)}`);
+    const requestItem = payload.request;
+    state.currentDraft = requestItem;
+    const existing = state.draftRequests.findIndex((item) => item.id === requestItem.id);
+    if (existing >= 0) state.draftRequests.splice(existing, 1, requestItem);
+    else state.draftRequests.unshift(requestItem);
+    renderCurrentDraft(requestItem);
+    renderDraftRequests();
+    if (DRAFT_ACTIVE_STATUSES.has(requestItem.status)) {
+      pollDraftRequest.timer = setTimeout(() => pollDraftRequest(requestId), 1000);
+      return;
+    }
+    if (requestItem.status === "ready" && state.autoOpenDraftId === requestItem.id) {
+      state.autoOpenDraftId = null;
+      await openDraftInstance(requestItem);
+    }
+  } catch (error) {
+    if (error.authentication) return;
+    pollDraftRequest.timer = setTimeout(() => pollDraftRequest(requestId), 1800);
+  }
+}
+
+async function submitDraftRequest(event) {
+  event.preventDefault();
+  const brief = el("draft-brief").value.trim();
+  const context = el("draft-context").value.trim();
+  const collaborator = el("draft-collaborator").value || null;
+  const button = el("draft-submit");
+  const errorNode = el("draft-form-error");
+  errorNode.textContent = "";
+  if (!brief) {
+    errorNode.textContent = "请先描述要完成的工作。";
+    el("draft-brief").focus();
+    return;
+  }
+  const requestId = newDraftRequestId();
+  button.disabled = true;
+  button.dataset.state = "working";
+  button.textContent = "正在进入生成队列";
+  state.autoOpenDraftId = requestId;
+  const optimistic = {
+    id: requestId,
+    status: "queued",
+    message: "正在把请求写入中央耐久队列",
+    brief,
+    instance_id: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  state.currentDraft = optimistic;
+  renderCurrentDraft(optimistic);
+  try {
+    const payload = await request("/console/api/v1/drafts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request_id: requestId,
+        brief,
+        context,
+        collaborator_person_id: collaborator,
+      }),
+    });
+    state.currentDraft = payload.request;
+    state.draftRequests.unshift(payload.request);
+    renderCurrentDraft(payload.request);
+    renderDraftRequests();
+    pollDraftRequest(requestId);
+  } catch (error) {
+    state.autoOpenDraftId = null;
+    button.disabled = false;
+    button.dataset.state = "idle";
+    button.textContent = "重新提交";
+    errorNode.textContent = error.message || "草稿请求没有创建，请重试。";
+    el("draft-current").dataset.terminal = "true";
+  }
+}
+
+async function openDraftInstance(requestItem = state.currentDraft) {
+  if (!requestItem?.instance_id) return;
+  const button = el("draft-open-instance");
+  button.disabled = true;
+  button.textContent = "正在打开 DAG";
+  state.returnSection = "drafts";
+  showDetailLoading(requestItem.brief || "正在读取流程草稿");
+  try {
+    await loadDetail(requestItem.instance_id);
+    setDetailTab("execution");
+    showToast("草稿已生成，请核对 DAG 后确认启动");
+  } catch (error) {
+    showOwnerSection("drafts");
+    button.disabled = false;
+    button.textContent = "重新打开 DAG";
+    showToast("流程草稿读取失败，请稍后重试", "error");
+    throw error;
+  }
+}
+
+async function loadDraftCollaborators() {
+  const select = el("draft-collaborator");
+  try {
+    const payload = await request("/console/api/v1/people?limit=100");
+    select.replaceChildren(node("option", "", "由我负责全部 Human 节点"));
+    select.firstChild.value = "";
+    (payload.people || []).forEach((person) => {
+      const option = node("option", "", person.name || "企业成员");
+      option.value = person.person_id;
+      select.append(option);
+    });
+    select.disabled = false;
+  } catch (_error) {
+    select.replaceChildren(node("option", "", "成员目录暂时不可用，可先由我负责"));
+    select.firstChild.value = "";
+    select.disabled = true;
+  }
 }
 
 async function loadAdminOverview() {
@@ -546,10 +777,12 @@ async function showAdminView() {
 
 function showOwnerSection(section) {
   state.ownerSection = section;
+  draftStudio.hidden = section !== "drafts";
   attentionCenter.hidden = section !== "attention";
   workflowLibrary.hidden = section !== "workflows";
   detailView.hidden = section !== "detail";
   emptyState.hidden = section !== "loading";
+  draftNav.dataset.active = String(section === "drafts");
   attentionNav.dataset.active = String(section === "attention");
   workflowNav.dataset.active = String(section === "workflows");
   if (section === "detail" && state.detailTab === "execution") {
@@ -1610,9 +1843,13 @@ function renderAudit(events) {
 }
 
 function lockConsole() {
+  clearTimeout(pollDraftRequest.timer);
   state.token = "";
   state.attention = [];
   state.detail = null;
+  state.draftRequests = [];
+  state.currentDraft = null;
+  state.autoOpenDraftId = null;
   state.isAdmin = false;
   state.adminOverview = null;
   state.adminSessions = null;
@@ -1648,12 +1885,16 @@ function showStaticLogin(message = "") {
 }
 
 function showFeishuLogin(message = "") {
+  clearTimeout(pollDraftRequest.timer);
   state.authMode = "feishu";
   state.token = "";
   state.isAdmin = false;
   state.adminOverview = null;
   state.adminSessions = null;
   state.adminSessionPreview = null;
+  state.draftRequests = [];
+  state.currentDraft = null;
+  state.autoOpenDraftId = null;
   state.view = "owner";
   state.ownerSection = "attention";
   sessionStorage.removeItem("larkflow.console.token");
@@ -1787,12 +2028,29 @@ unlockForm.addEventListener("submit", async (event) => {
 
 feishuLogin.addEventListener("click", beginFeishuLogin);
 
+draftNav.addEventListener("click", () => {
+  showOwnerSection("drafts");
+  loadDraftCollaborators().catch(showWorkspaceError);
+});
 attentionNav.addEventListener("click", () => showOwnerSection("attention"));
 workflowNav.addEventListener("click", () => {
   renderInstances();
   showOwnerSection("workflows");
 });
 el("detail-back").addEventListener("click", () => showOwnerSection(state.returnSection));
+el("draft-form").addEventListener("submit", submitDraftRequest);
+el("draft-brief").addEventListener("input", (event) => {
+  el("draft-brief-count").textContent = event.target.value.length;
+});
+el("draft-context").addEventListener("input", (event) => {
+  el("draft-context-count").textContent = event.target.value.length;
+});
+el("draft-refresh").addEventListener("click", () => {
+  refreshDraftRequests().catch(showWorkspaceError);
+});
+el("draft-open-instance").addEventListener("click", () => {
+  openDraftInstance().catch(showWorkspaceError);
+});
 el("detail-tabs").querySelectorAll("button").forEach((button) => {
   button.addEventListener("click", () => setDetailTab(button.dataset.tab));
 });

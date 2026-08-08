@@ -105,6 +105,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0020_console_sessions",
         "0021_console_session_governance",
         "0022_outbox_exhaustion",
+        "0023_console_draft_requests",
     ]
     sql = migrations[0][1]
     for table in (
@@ -122,6 +123,8 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "workflow_audit_events_append_only" in sql
     assert "ADD COLUMN claimed_by" in migrations[1][1]
     assert "CREATE TABLE workflow_inbox_events" in migrations[2][1]
+    assert "CREATE TABLE workflow_console_draft_requests" in migrations[22][1]
+    assert "workflow_console_draft_worker_wakeup" in migrations[22][1]
     assert "workflow_projection_external_identity_idx" in migrations[2][1]
     assert "ADD COLUMN verified_payload" in migrations[3][1]
     assert "ADD COLUMN version" in migrations[4][1]

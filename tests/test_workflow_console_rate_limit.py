@@ -80,6 +80,19 @@ def test_rate_limiter_separates_route_budgets_and_resets_after_window():
     assert denied_workflow.allowed is False
     assert denied_workflow.policy == "workflow_write"
 
+    clock.value = 10.0
+    drafts_limiter = _limiter(clock)
+    assert drafts_limiter.check(
+        "POST",
+        "/console/api/v1/drafts",
+        "203.0.113.1",
+    ).allowed
+    assert not drafts_limiter.check(
+        "POST",
+        "/console/api/v1/drafts",
+        "203.0.113.1",
+    ).allowed
+
     clock.value = 70.0
     assert limiter.check("GET", "/console/auth/login", "203.0.113.1").allowed
     assert limiter.check("GET", "/console/", "203.0.113.1").allowed
