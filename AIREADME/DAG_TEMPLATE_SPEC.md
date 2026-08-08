@@ -135,10 +135,11 @@ Secret、token、真实人员 ID、设备 ID、本地路径和供应商运行时
 | `work.acceptance` | 非空验收条件 |
 | `work.agent.kind` | Agent 必填，当前实现只接受 `llm.generate` |
 | `work.agent.model_role` | 非空逻辑模型角色，默认 `default` |
+| `work.agent.result_format` | 可选，当前实现接受 `plain_text / source_claims.v1 / source_decision.v1` |
 | `work.agent.instructions` | 非空节点指令，不得包含长期凭证 |
 | `retry.max_attempts` | Target 字段，当前 Template Service 尚未实现，提交时会按未知字段拒绝 |
 
-Tool 节点还应声明数据化的 `tool.kind` 和非敏感参数。Agent 节点通过 `work.agent` 声明逻辑 kind、`model_role` 和节点指令，不得把模型供应商、base URL、长期凭证或 LangGraph checkpoint 固化为业务契约。
+Tool 节点还应声明数据化的 `tool.kind` 和非敏感参数。当前确定性 Tool kind 包含 `content.check / source_claims.check / source_decision.check`；后两者分别服务于材料复核和决策生成，不能互换。Agent 节点通过 `work.agent` 声明逻辑 kind、`model_role`、结果格式和节点指令，不得把模型供应商、base URL、长期凭证或 LangGraph checkpoint 固化为业务契约。
 
 ## 7. Owner 解析
 

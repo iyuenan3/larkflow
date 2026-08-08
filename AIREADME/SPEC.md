@@ -134,7 +134,9 @@ Console 支持 `static` 与 `feishu` 两种鉴权模式。`static` 仅供 loopba
 
 该开发入口没有正式域名，进程内令牌桶也不是多副本或分布式生产限流。当前仍没有 allowlist 自助管理、批量撤销、设备命名、跨区域容灾、生产容量证明或正式员工交付方案。首版没有协作者视图、分页游标、筛选、跨轮次 diff 或流程领域写操作。
 
-Target 自动节点按工作契约 kind 路由。Agent 当前只接受 `work.agent.kind=llm.generate`。默认结果是正文；可选 `work.agent.result_format=source_claims.v1` 要求模型返回 `problem / target_users / functional_requirements / acceptance_criteria / risks / open_questions / source_url`，其中声明必须标记为 `source_fact / inference / open_question` 并引用服务端登记的稳定 `F` 或 `Q` ID。Tool 由 `ToolExecutorRouter` 按 `work.tool.kind` 选择 adapter；`content.check` 读取直接依赖正文并执行长度与必需词检查，`source_claims.check` 对结构、声明类型、事实与问题引用覆盖、来源 URL 一致性执行确定性检查。检查器不访问网页，也不声称验证事实真伪。配置或输入错误使当前 Attempt 显式失败，未知 kind 在 claim 前保持未认领。
+Target 自动节点按工作契约 kind 路由。Agent 当前只接受 `work.agent.kind=llm.generate`。默认结果是正文。`work.agent.result_format=source_claims.v1` 用于整理材料，要求模型返回 `problem / target_users / functional_requirements / acceptance_criteria / risks / open_questions / source_url`，其中声明必须标记为 `source_fact / inference / open_question` 并引用服务端登记的稳定 `F` 或 `Q` ID。`work.agent.result_format=source_decision.v1` 用于形成决定，要求返回唯一 `priority`、`rationale`、3 到 5 条 `acceptance_criteria`、带 `reconsider_when` 的 `not_now`、`risks`、逐一回答全部 Q 的 `answers` 与原样 `source_url`；除问题编号外，全部条目只引用 F，并在渲染中标记为建议推断。Tool 由 `ToolExecutorRouter` 按 `work.tool.kind` 选择 adapter；`content.check` 读取直接依赖正文并执行长度与必需词检查，`source_claims.check` 检查材料结构与来源覆盖，`source_decision.check` 检查唯一优先级、问题完整回答、完成标准数量、不做事项触发条件、F 全量覆盖和来源 URL 一致性。检查器不访问网页，也不声称验证事实真伪或建议正确性。配置或输入错误使当前 Attempt 显式失败，未知 kind 在 claim 前保持未认领。
+
+Human 责任卡中的结构化 Instance 输入和结构化依赖结果使用带围栏的 JSON 代码块展示。这样既保留可读结构，也避免 URL 后面的 JSON 引号被 Card Markdown 自动链接解析器吞入目标地址。字符串正文仍按普通 Markdown 展示，所有上下文继续受既有长度上限约束。
 
 `create-from-template` 只接受 enabled 模板，以最新不可变版本解析参数和 `owner_role -> person_id` 绑定，生成含 `template_version_id` 与 `locked` 的完整 Snapshot。`preview` 仅允许 Instance Owner 读取并重新校验 draft，不写审计、不改变状态；`confirm` 仍需显式调用。
 

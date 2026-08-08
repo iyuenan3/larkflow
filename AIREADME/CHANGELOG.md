@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.64.0-draft · 2026-08-08 · 来源约束型决策契约
+
+- Signal：真实内部样本 `im_fb85651d34e24c9789304715` 完整进入 Human 决定后被 Owner 退回。旧 `source_claims.v1` 按设计保留开放问题，因此没有回答 Q1、Q2、Q3；该结果证明材料复核契约不能代替决策契约。退回意见、旧 Agent 与 Tool 结果和审计均保留。
+- Added：内容提交 `db7651228e26055eb1229ae9f451e3e87c31df38` 新增 `source_grounded_decision` 模板、`source_decision.v1` Agent 结果与 `source_decision.check`。结果必须只给一项优先级，回答每个登记 Q，提供 3 到 5 条完成标准、不做事项、重新评估条件和风险；所有条目只引用登记 F，并以建议推断展示。确定性 Tool 检查结构、覆盖和来源 URL，不判断事实真伪或建议正确性。
+- Fixed：Human 责任卡的结构化输入与依赖结果改用 JSON 代码块，避免 Card Markdown 把 URL 后的 JSON 引号编码为链接末尾的 `%22`。普通字符串正文保持原有展示与长度限制。
+- Compatibility：旧 `source_grounded_review`、`source_claims.v1` 与 `source_claims.check` 保持原语义和兼容性，不会被自动迁移或重启。
+- Verified：Agent、Tool、模板和决定卡聚焦套件为 `44 passed`。完整离线套件在沙箱内除既有进程树权限用例外为 `987 passed, 21 skipped`，该用例在沙箱外单独通过，因此完整等价结果为 `988 passed, 21 skipped`。从内容提交构建的干净 wheel SHA-256 为 `54a4bbf4c96834d7d69a3434d01b083d2467f5df6dd129c9ac6e35876efb49ff`，位于 `/srv/larkflow/target/releases/20260808_040000_source_decision_db76512/`；新旧来源模板均在包内，`pip check` 无断裂依赖。`source_grounded_decision:1` 已启用，内容哈希为 `0bf7d5495c9a7d043c0fd0150049712f46ce9116b44cba7776ce6f3889ac2490`。真实实例 `source_decision_20260808_0405` 的四个节点均在 Attempt 1 完成；Agent 回答 Q1、Q2、Q3，Tool 覆盖 6/6 个 F 和 3/3 个 Q、零违规且 `verdict=pass`。Owner 接受后实例为 `done / version 9`，接受审计恰好一条，完成文档、最终通知和各外部投影均有绑定。飞书服务端回读终态卡为已接受、无按钮且无 `%22`。
+- Boundary：该版本已完成开发环境部署与真实飞书复验，不增加 migration，不证明 Agent 建议正确、内容质量规模化、市场价值、生产容量或生产上线。
+
 ## v0.63.0-draft · 2026-08-08 · 管理员 allowlist 运维与会话恢复门禁
 
 - Added：内容提交 `c1340ca21f13ed3f543df8f1411b94e46d9e6b7e` 增加 root 侧 `larkflow-console-admin-allowlist`。操作者只能用当前租户内仍有效的 Console 会话创建十分钟预览，不能直接提交 person ID；确认时重新校验会话、tenant、env SHA-256 和 allowlist。`abc4f5e7ad8c3617cef641efc01523055e9b695e` 修正 `psql --command` 不执行变量替换的问题，`00b3c8f920e6b856d11d9d4a91678959de3da6a5` 区分未检查健康与服务异常。
