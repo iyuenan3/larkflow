@@ -938,7 +938,7 @@ async function transferHumanTaskFromPage() {
   button.textContent = "正在转交";
   try {
     const { task, instanceId, nodeKey } = currentTaskBinding();
-    await request(
+    const result = await request(
       `/console/api/v1/tasks/${instanceId}/nodes/${nodeKey}/transfer`,
       taskWriteOptions({
         attempt_no: task.node.attempt_no,
@@ -947,9 +947,11 @@ async function transferHumanTaskFromPage() {
       }),
     );
     button.dataset.state = "done";
-    button.textContent = "已转交给新负责人";
+    button.textContent = "中央已转交，飞书同步中";
     el("human-task-result").disabled = true;
-    showToast("待办已转交，新负责人将获得飞书待办和页面处理权限");
+    showToast(
+      result.projection?.message || "中央节点已完成转交，飞书待办正在同步。",
+    );
     await loadInstances();
     setTimeout(() => humanTaskDialog.open && humanTaskDialog.close(), 900);
   } catch (error) {

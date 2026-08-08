@@ -569,6 +569,8 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"document.documentElement.dataset.theme" in script.body
     assert "正在生成预览".encode() in script.body
     assert "确认并启动".encode() in script.body
+    assert "中央已转交，飞书同步中".encode() in script.body
+    assert "飞书待办随后异步同步".encode() in page.body
     assert "复制飞书命令".encode() not in script.body
     assert b"showOwnerSection" in script.body
     assert b"setDetailTab" in script.body

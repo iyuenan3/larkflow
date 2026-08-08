@@ -236,6 +236,11 @@ class ConsoleTaskService:
             "attempt_no": attempt_no,
             "node_version": node.version,
             "assigned_to": "collaborator",
+            "projection": {
+                "kind": "feishu_task",
+                "status": "queued",
+                "message": "中央节点已完成转交，飞书待办正在同步。",
+            },
         }
 
     def _current_task(

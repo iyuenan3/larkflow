@@ -190,6 +190,11 @@ def test_transfer_preserves_authored_owner_and_moves_runtime_authority():
 
     instance = service.get(TENANT, "instance_collaboration")
     assert result["assigned_to"] == "collaborator"
+    assert result["projection"] == {
+        "kind": "feishu_task",
+        "status": "queued",
+        "message": "中央节点已完成转交，飞书待办正在同步。",
+    }
     assert instance.snapshot.node("review").owner_person_id == ASSIGNEE
     assert instance.nodes["review"].owner_person_id == NEW_ASSIGNEE
     assert tasks.list_tasks(principal(ASSIGNEE))["total"] == 0
