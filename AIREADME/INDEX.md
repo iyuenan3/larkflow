@@ -2,7 +2,9 @@
 
 > 飞书原生的企业协作 DAG：把多人流程拆成有依赖、有唯一责任人、可验收和可追溯的节点。
 >
-> 文档状态：2026-08-09 Phase 1 中央工作流基础实现。员工工作台已经覆盖 Owner 流程观察与受控操作，以及普通 Human Task 的参与者提交和运行时转交；决定节点继续使用飞书决定卡。参与任务不会扩大为完整协作者实例可见性，转交只移动运行时责任，冻结 Snapshot、旧 Attempt、结果和审计均保留。飞书 OAuth、PostgreSQL 耐久会话、管理员聚合、会话治理、公网 IP HTTPS 与安全响应头均已完成开发环境验证。十个 Python 服务、Caddy、二十一份 migration 和真实 PostgreSQL 转交竞争已回读。当前仍缺自然任务的真实浏览器提交与真实飞书 Task 转交、通用流程输入框、正式域名、生产容量、异机容灾和 Personal Agent Edge 正式分发。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+> 文档状态：2026-08-09 Phase 1 中央工作流基础实现。员工工作台已经覆盖 Owner 流程观察与受控操作，以及普通 Human Task 的参与者提交和运行时转交；决定节点继续使用飞书决定卡。参与任务不会扩大为完整协作者实例可见性，转交只移动运行时责任，冻结 Snapshot、旧 Attempt、结果和审计均保留。飞书 OAuth、PostgreSQL 耐久会话、管理员聚合、会话治理、公网 IP HTTPS 与安全响应头均已完成开发环境验证。十个 Python 服务、Caddy、二十二份 migration 和真实 PostgreSQL 转交及 outbox 终止竞争已回读。当前已有两个自然等待中的普通 Human Task，可继续进行真实浏览器提交与飞书 Task 转交验收；通用流程输入框、正式域名、生产容量、异机容灾和 Personal Agent Edge 正式分发仍缺。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+>
+> 内容提交 `ed118e7b3a9eeb5b5daed52e3d7b0296896f12f1` 为 Projection outbox 增加默认 24 次的有界重试终态。达到上限的事件进入 `exhausted` 后不再领取，同时保留 payload、累计次数、最后错误和终止时间；migration `0022_outbox_exhaustion` 不删除或覆写历史。完整离线套件为 `1005 passed, 22 skipped`，一次性真实 PostgreSQL 双连接竞争得到一路领取、一路跳过，终止后未来领取为 0。wheel SHA-256 为 `a9f68581294ac65e71b2eae5f97940618289194eedd77c5943c40f539e4f6245`，已部署到 `/srv/larkflow/target/releases/20260809_0201_outbox_exhaustion_ed118e7/`。长期库应用第二十二份 migration 后，两条历史永久无效投影从 1171 次失败进入 `exhausted / 1172`，日志为 `claimed=2 / failed=2 / exhausted=2`；全部服务和 Caddy 为 `active / NRestarts=0`。
 >
 > 内容提交 `3d438bb476ad9b9f98cd4c2873802a2894718fe4` 为工作台增加普通 Human Task 的有界详情、结果输入框和转交操作。当前负责人可提交结果，或把任务转交给同租户内、应用可见且活跃的成员；服务端同时校验 Attempt 与节点版本，旧负责人立即失权。转交只修改运行时 NodeInstance Owner，冻结 Snapshot 不变，并追加审计与 outbox、更新既有飞书 Task 负责人。决定节点不进入普通任务 API。完整离线套件为 `1003 passed, 22 skipped`；真实 PostgreSQL 双连接竞争、部署 wheel、升级前备份、二十一份 migration、十个 Python 服务、Caddy、公网静态资源、安全响应头、登录态任务与成员目录 API 和临时会话撤销均已读回。当前开发库没有自然等待中的普通 Human Task，真实浏览器提交与真实飞书 Task 转交仍待下一条自然任务验收。
 >
@@ -54,7 +56,7 @@
 >
 > 内容提交 `db7651228e26055eb1229ae9f451e3e87c31df38` 把来源约束型材料复核与决策生成拆成独立结果契约，新增 `source_decision.v1`、`source_decision.check` 与 `source_grounded_decision`，并用 JSON 代码块消除结构化卡片 URL 的 `%22` 污染。完整离线等价结果为 `988 passed, 21 skipped`，干净 wheel SHA-256 为 `54a4bbf4c96834d7d69a3434d01b083d2467f5df6dd129c9ac6e35876efb49ff`，已部署到 `/srv/larkflow/target/releases/20260808_040000_source_decision_db76512/`。真实实例 `source_decision_20260808_0405` 的四个 Attempt 1 均完成，Agent 回答 Q1、Q2、Q3，Tool 覆盖 6/6 个 F 和 3/3 个 Q、零违规且 `verdict=pass`。Owner 明确接受后实例为 `done / version 9`，终态决定卡已从飞书服务端回读为已接受、无按钮且无 `%22`。九个 Target 服务均为 `active / NRestarts=0`，legacy 消费者与 Caddy 仍 active，部署窗口 warning 为 0。该开发证据不等于业务建议正确、生产容量或生产发布。
 >
-> last-synced: 3d438bb476ad9b9f98cd4c2873802a2894718fe4 · 2026-08-09
+> last-synced: ed118e7b3a9eeb5b5daed52e3d7b0296896f12f1 · 2026-08-09
 
 ## 阅读顺序
 
@@ -74,15 +76,15 @@
 | PRODUCT_STRATEGY | ✅ | 范围收敛取舍、窄 Edge 实验，明确未做市场验证 |
 | PRD | ✅ | Target 单层 DAG MVP、工作台身份与耐久会话、Owner 受控流程操作、普通 Human Task 提交与转交、管理员聚合与会话治理、来源约束型结果、带具体意见的人类决定与 Edge Proof 功能契约 |
 | DAG_TEMPLATE_SPEC | ✅ | v0.2 模板、mention 角色绑定、草稿预览、未来区域编辑和两类重启已实现 |
-| ARCHITECTURE | ✅ | Target 模块化单体、飞书 OAuth 与 PostgreSQL 耐久会话工作台、Owner 受控流程操作、参与者任务面与运行时责任转交、管理员聚合与会话治理、独立 Worker、来源契约检查、飞书投影、失败恢复、Edge Proof 与剩余差距 |
+| ARCHITECTURE | ✅ | Target 模块化单体、飞书 OAuth 与 PostgreSQL 耐久会话工作台、Owner 受控流程操作、参与者任务面与运行时责任转交、管理员聚合与会话治理、独立 Worker、投影有界终止、来源契约检查、失败恢复、Edge Proof 与剩余差距 |
 | RELATIONS | ✅ | Target 飞书、mention 与人员选择卡身份边界、中央 lark-cli、Edge HTTPS、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | 网页普通 Human 责任入口与待办转交契约已开发部署，下一门槛为自然任务的真实页面提交与飞书 Task 转交，再建设受控流程输入框 |
+| ROADMAP | ✅ | 网页普通 Human 责任入口与待办转交契约已开发部署，已有两个自然等待任务可用于真实页面提交与飞书 Task 转交，再建设受控流程输入框 |
 | SPEC | ✅ | legacy 契约、Target CLI、Owner Console 读取与工作流 POST、OAuth v3、PostgreSQL 耐久会话、服务端管理员 allowlist、聚合与受审计会话撤销、公网请求预算和 429 契约、独立 interact 与 draft generation Worker、数据库通知唤醒、来源声明与确定性检查、必填退回意见的人类决定卡、十五个飞书窄命令、模板与无模板草稿、暂停继续取消、Task 入站、受控变化、完成投影与私有 Edge v1 HTTP、前台客户端、doctor 及 macOS manager |
-| DEPLOYMENT | ✅ | Legacy ECS 与 Target 九服务、二十一份 migration、公网 IP Console、Owner 工作台双主题与受控流程操作、真实飞书登录、受控管理员 allowlist 运维、会话暴露前恢复门禁、Caddy 边界、Edge、备份与回滚实录 |
+| DEPLOYMENT | ✅ | Legacy ECS 与 Target 九服务、二十二份 migration、投影永久失败终止、公网 IP Console、Owner 工作台、真实飞书登录、管理员运维、Caddy 边界、Edge、备份与回滚实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
-| DECISIONS | ✅ | Append-only ADR 历史，最新为普通 Human Task 使用参与者任务面并允许运行时转交 |
-| CHANGELOG | ✅ | Append-only 已实现变更，最新为 Human Task 页面提交与转交发布 |
-| MEMORY | ⚑ | Append-only 经验，仍含语义占位，已记录 psql 参数化边界、恢复会话风险、流程图手势、回调漂移、通知、计时、虚拟环境、Keychain 与离线安装风险 |
+| DECISIONS | ✅ | Append-only ADR 历史，最新为投影永久失败进入保留历史的有界终态 |
+| CHANGELOG | ✅ | Append-only 已实现变更，最新为 Projection outbox 有界终止发布 |
+| MEMORY | ⚑ | Append-only 经验，仍含语义占位，已记录永久投影重试、psql 参数化、恢复会话、流程图手势、回调漂移、通知、虚拟环境与安装风险 |
 
 ## 按任务读取
 

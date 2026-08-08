@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.68.0-draft · 2026-08-09 · Projection outbox 有界终止
+
+- Fixed：内容提交 `ed118e7b3a9eeb5b5daed52e3d7b0296896f12f1` 为 Projection outbox 增加默认 24 次尝试上限。达到上限的外部投影失败原子进入 `exhausted`，停止再次领取，同时保留事件内容、累计尝试次数、最后错误和终止时间；临时失败继续使用原有指数退避。
+- Data：migration `0022_outbox_exhaustion` 扩展 outbox 状态约束并增加 `exhausted_at` 与状态形状检查。领取 SQL 仍只接受 `pending`、`failed` 或租约过期的 `processing`，所以终止记录不会重新进入租约竞争。管理员队列聚合和 Projection 结构化日志独立暴露终止计数。
+- Verified：完整离线套件为 `1005 passed, 22 skipped`。一次性真实 PostgreSQL 应用 migration 22 后，两个连接竞争同一投影事件的领取结果为 `1 / 0`；唯一领取者写入终态后，未来一天再次领取为 0，错误与尝试次数保留。测试库和临时文件均已删除并回读不存在。
+- Deployment：wheel SHA-256 为 `a9f68581294ac65e71b2eae5f97940618289194eedd77c5943c40f539e4f6245`，位于 `/srv/larkflow/target/releases/20260809_0201_outbox_exhaustion_ed118e7/`。升级前备份 SHA-256 为 `a75bdd632f7e14b7df1e22616741dbd03e834ccb438c9ec07d75ddb5d18f5ecf`，长期库应用第二十二份 migration。两条历史永久失败投影从 1171 次失败进入 `exhausted / 1172`，日志回读 `claimed=2 / failed=2 / exhausted=2`；十个 Python 服务与 Caddy 均为 `active / NRestarts=0`，公网 200、未登录 401 与安全响应头正常。
+- Boundary：终止状态阻止无意义的永久重试，但当前没有 Console 队列重放或处置入口。需要人工修复外部身份或配置后重放的场景仍需后续设计版本绑定、权限校验和审计，不能直接把 `exhausted` 改回 `pending`。
+
 ## v0.67.0-draft · 2026-08-09 · Human Task 页面提交与转交
 
 - Added：内容提交 `3d438bb476ad9b9f98cd4c2873802a2894718fe4` 新增参与者范围的任务列表、任务详情、结果输入框、提交和转交接口。参与者只读取分配给自己的普通 Human Task 有界上下文，不能打开其他 Owner 的完整实例；明确接受或退回的决定节点继续使用飞书决定卡。
