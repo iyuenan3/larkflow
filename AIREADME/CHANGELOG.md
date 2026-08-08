@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.70.0-draft · 2026-08-09 · 员工工作台受控流程发起
+
+- Added：内容提交 `432fea77c210e7a2cfa5344054eb30d01706bf87` 在工作台增加“发起流程”。员工填写目标、可选背景与可选协作者后，请求先进入 PostgreSQL 耐久队列；不持有飞书凭据的中央草稿 Worker 生成并确定性校验最多八个 Human 或 Agent 节点的候选 DAG。成功后页面自动打开既有草稿预览，只有本人再次确认才启动。
+- Safety：服务端从当前飞书会话取得 tenant 与 requester，浏览器不能声明可信身份或 Owner。32 位 request ID 保证重复提交幂等；`FOR UPDATE SKIP LOCKED`、短租约和稳定实例 ID 保证双 Worker 只有一路领取。候选在创建实例前先冻结到请求记录，崩溃接管不会再次调用模型。确定性拒绝进入 `rejected`，基础设施失败最多尝试五次后进入 `exhausted`，原始错误不返回前端。
+- UI：页面提交前立即显示“正在进入生成队列”，随后轮询 `queued / generating / repairing / creating / retrying`，并明确收口为可打开草稿或安全失败。最近请求保留在独立列表。浅色、深色与 390 像素移动视口已完成本地真实 HTTP 验收，无横向溢出；失败后按钮可重新提交。
+- Verified：定向套件为 `69 passed`。首次完整运行因继承本机 SOCKS 代理出现两个环境性失败，清空六项代理变量并允许进程树读取后，完整离线套件为 `1015 passed, 23 skipped`。最终 wheel 包含 `console_drafts.py`、`0023_console_draft_requests.sql` 和三项静态资源，SHA-256 为 `6b320b22804c02eaa2840d9a101bcf1b4ffe75287509816486727588ccdc0198`。
+- Deployment：发布件位于 `/srv/larkflow/target/releases/20260809_0357_console_drafts_432fea7/`。升级前 custom-format 备份为 285292 bytes，SHA-256 为 `ffb091224db79ab6bab92b9f42ad0b3af8963c1380f940b5fad52329777b1b61`，并已通过 `pg_restore --list`。长期库应用 `0023_console_draft_requests`，migration 总数为 23。真实 PostgreSQL 双连接竞争只得到一个 `generating / attempt 1` claim，测试行清理一条。十个 Python 服务与 Caddy 均为 `active / NRestarts=0`；公网 200、未登录草稿 API 401、安全响应头、安装资源哈希与部署窗口零 warning 均已回读。
+- Boundary：当前证据关闭代码、持久化、竞争、部署和本地界面门槛。真实登录网页尚未生成首个真实模型草稿，因此本版本还不能宣称网页自然语言输入到中央草稿的真实业务链路已完成，也不证明模型内容质量、生产容量或组织采用。
+
 ## v0.69.0-draft · 2026-08-09 · 真实 Human Task 转交与异步状态表达
 
 - Fixed：内容提交 `3fd42df8740825482eb3bbebd5cf69715f37df5b` 把中央转交事务与飞书 Task 投影分开表达。转交响应新增 `projection.kind=feishu_task / status=queued`；页面立即显示“中央已转交，飞书同步中”，不再把 outbox 入队描述为外部负责人已经更新。异步失败继续由既有有界重试和管理员异常聚合承接。

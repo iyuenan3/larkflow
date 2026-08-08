@@ -902,3 +902,13 @@
 - Alternatives(否决)：永久无限重试；按飞书错误码或错误文字维护永久失败名单；部署时手工删除两条数据库记录；直接把旧记录标记 published；达到上限后丢弃 payload；把全部失败都在第一次终止；没有授权和审计的网页一键重放。
 - Tradeoff：永久错误不再形成日志风暴，但持续超过 24 次的真实临时故障也会停止自动恢复，需要后续受控重放能力。当前管理员面只能看到终止计数，不能查看原始 payload、人员 ID 或完整错误，也没有处置按钮；这是安全边界，不应通过放宽浏览器数据暴露来解决。
 - Evidence：内容提交 `ed118e7b3a9eeb5b5daed52e3d7b0296896f12f1`；完整离线套件为 `1005 passed, 22 skipped`。一次性真实 PostgreSQL 双连接领取结果为 `1 / 0`，终止后未来一天领取为 0。wheel SHA-256 为 `a9f68581294ac65e71b2eae5f97940618289194eedd77c5943c40f539e4f6245`，已部署到开发服务器并应用 `0022_outbox_exhaustion`。长期库两条历史失败在保留前 1171 次记录后进入 `exhausted / 1172`，日志为 `claimed=2 / failed=2 / exhausted=2`。全部服务与 Caddy 为 `active / NRestarts=0`。
+
+## ADR-103 · 2026-08-09 · 网页自然语言输入进入独立耐久草稿管道
+
+- **Status：Accepted，Development deployed，real authenticated generation pending。**
+- Problem：工作台已经可以观察和控制本人流程，也可以完成或转交 Human Task，但创建自然语言流程仍要切回机器人引导卡。让网页自动发送机器人文本只是在服务器内部模拟另一条入口，会复制消息解析、凭据依赖与视觉反馈问题，也不能解释生成中断后的恢复状态。
+- Constraint：PostgreSQL 继续是唯一权威；浏览器不能声明 tenant、requester 或可信 Owner；模型等待不能占用 Console HTTP 线程或飞书凭据 Worker；候选必须经过既有确定性 DAG 校验；生成成功不能自动运行；重复提交、Worker 竞争、崩溃接管和失败重试必须有明确语义；原始模型或基础设施错误不能暴露给员工页面。
+- Decision：网页 POST 只创建独立 `DraftRequest`，服务端从当前飞书会话绑定 requester，并可通过企业目录校验可选协作者。现有无飞书凭据 Draft Generation Worker 同时消费该耐久队列，生成与修复仍复用 `DraftDefinitionGenerator`，但候选在创建 Snapshot 前先冻结到请求记录。实例 ID 由 request ID 稳定派生，成功后只创建 `draft / 0 Attempt`，后续确认继续复用 `ConsoleActionService`。领取使用 PostgreSQL 行锁跳过与短租约；已冻结候选的接管不再调用模型；基础设施失败有界重试，确定性拒绝与耗尽分别保留终态。
+- Alternatives(否决)：网页替用户向机器人发送命令；在 Console 请求线程同步等待模型；前端直接提交完整 DAG 并写数据库；生成后自动确认；为网页复制一套模型 Worker；崩溃后重新生成候选；把 claim、原始错误或内部定义返回浏览器。
+- Tradeoff：员工减少入口切换，并能看到可恢复的生成进度，但 Draft Generation Worker 现在串行处理飞书引导和网页请求，共享模型吞吐。当前没有优先级、取消生成、人工重放、分页或多副本容量证明；五次上限也可能终止持续时间过长的临时故障。自由结构流程编辑仍保持后置。
+- Evidence：内容提交 `432fea77c210e7a2cfa5344054eb30d01706bf87`；定向套件 `69 passed`，完整离线套件 `1015 passed, 23 skipped`。wheel SHA-256 为 `6b320b22804c02eaa2840d9a101bcf1b4ffe75287509816486727588ccdc0198`，已部署到 `/srv/larkflow/target/releases/20260809_0357_console_drafts_432fea7/`。升级前备份可读，长期库应用第二十三份 migration。真实 PostgreSQL 双连接只有一路领取同一请求，测试记录已清理。十个 Python 服务与 Caddy 为 `active / NRestarts=0`，公网 200、未登录草稿 API 401、安装资源哈希与零 warning 均已回读。浅色、深色和移动端本地真实 HTTP 交互验收通过；真实登录模型生成仍待下一步关闭。

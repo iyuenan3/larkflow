@@ -1,6 +1,6 @@
 # ARCHITECTURE · larkflow
 
-> 状态：Target + Gap · 既有架构简化版 · 2026-08-07
+> 状态：Target + Gap · 既有架构简化版 · 2026-08-09
 
 ## 1. 架构原则
 
@@ -151,7 +151,8 @@ Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可
 - `draft_generation_daemon.py`：在不加载 lark-cli profile 的独立进程中只认领 `draft_wizard` canonical 动作。生成租约下限按两次完整 LLM 路由预算加安全余量计算，避免合法修复调用在租约中途被另一 Worker 接管；阶段进度使用独立短租约和 revision fencing，模型调用与飞书卡片更新不共享进程或凭据。
 - `im_commands.py` 中的 `RecoveryActionInboxBridge` 与 `HumanDecisionActionInboxBridge`：把飞书恢复卡片和人类决定卡回调转换为耐久命令。接受按钮位于表单外，退回通过表单提交必填的 `rejection_feedback`；桥接层归一化 lark-cli 字符串化 `action_value`、可缺失 `action_name` 和秒、毫秒、微秒时间戳，并严格拒绝空白或超过 1000 字的退回意见。若 `action_name` 存在则必须与服务端动作交叉一致。操作人只从飞书顶层认证字段取值，卡片 payload 中的身份不参与授权；动作耐久插入后立即尝试把原卡片替换为无按钮“处理中”，最终再更新原卡片并发送耐久文本回执。决定命令还绑定 Instance、Node、Attempt 版本并重验当前 Owner。`event_time.py` 为卡片回调提供共享时间归一化，避免边界解析分叉。
 - `card_feedback.py`：统一生成蓝色处理中与橙色拒绝卡。Target 长连接入口使用最长 3 秒的 lark-cli 直接更新；动作先延后 10 秒防止后台 Worker 抢先写入最终状态，直接更新结束后立即释放，崩溃时由延后时间兜底。单调时钟从有效回调被接受开始覆盖动作插入和直接更新，释放动作时原子保存 `updated / failed`、非负毫秒数和完成时间；结构化日志只记录动作类型、结果和耗时，不记录人员、消息或卡片标识，日志报告失败也不能破坏回调。该顺序保证最终状态不会被迟到的处理中状态覆盖，也不让视觉回写失败撤销已持久化动作。
-- `cli.py`：独立 `larkflow-target` 运维入口，提供模板全生命周期、从模板创建草稿、预览、确认、状态、Human 提交，以及 Runtime、Projection、Interactive、Draft Generation、入站校验和领域入站的单步 / 常驻服务；`generate-drafts-once / generate-drafts` 运行无凭据草稿生成车道，`reconcile-instance-completion` 可显式修复一个已完成实例缺失的完成文档或最终通知。独立 `larkflow-console` 装配 Owner 读仓储、受控操作适配与 HTTP 页面；操作适配复用 `WorkflowService`，不复用 CLI 文本解析，也不建立浏览器专属领域命令。
+- `cli.py`：独立 `larkflow-target` 运维入口，提供模板全生命周期、从模板创建草稿、预览、确认、状态、Human 提交，以及 Runtime、Projection、Interactive、Draft Generation、入站校验和领域入站的单步 / 常驻服务；`generate-drafts-once / generate-drafts` 运行无凭据草稿生成车道，并串行消费飞书引导请求与网页耐久草稿请求，避免同一模型路由并发失控。`reconcile-instance-completion` 可显式修复一个已完成实例缺失的完成文档或最终通知。独立 `larkflow-console` 装配 Owner 读仓储、受控操作适配、耐久草稿请求服务与 HTTP 页面；操作适配复用 `WorkflowService`，不复用 CLI 文本解析，也不建立浏览器专属领域命令。
+- `console_drafts.py`：工作台自然语言请求的耐久 Port、内存与 PostgreSQL 仓储、会话主体映射、目录校验、租约 Worker 和安全 DTO。模型输出先经过既有 `DraftDefinitionGenerator` 与 Snapshot 校验，再冻结到请求记录；实例创建使用稳定 ID，成功后只进入草稿，不自动运行。
 - `executors.py`：包含只接受 `work.agent.kind=llm.generate` 的 `LLMAgentExecutor`、按 `work.tool.kind` 路由内部 adapter 的 `ToolExecutorRouter`、确定性的 `content.check / source_claims.check / source_decision.check`，以及只用于开发验证的 `development.echo`。`source_claims.v1` 用于整理材料，要求区分来源事实、推断和开放问题；`source_decision.v1` 用于形成决定，要求一项优先级、逐一回答全部 Q、3 到 5 条完成标准、不做事项及重新评估条件，并把内容渲染为来源支持的建议推断。两个来源检查器都只检查结构、稳定引用覆盖与来源 URL 一致性，不访问网页或判断事实真伪；决策检查器也不判断建议在业务上是否正确。Runtime 在 claim 前按 adapter 能力筛选具体节点，未接受的 kind 保持 ready，不会先认领后失败。
 - `edge.py`、`edge_postgres.py` 与 migration `0007_edge_devices`：一次性配对、设备哈希凭据、撤销、追加型 Edge 审计和 `personal.readonly` 能力过滤。Edge 复用当前 Attempt 的 Worker、token、版本与租期校验，不创建第二套任务真相。
 - `edge_http.py` 与 `edge_gateway_cli.py`：提供私有 `/edge/v1` JSON 边界和运维入口。Gateway 默认且强制只监听 loopback；远程设备必须经独立 HTTPS 反向代理，仓库不把该接口描述为公网 API。
@@ -187,7 +188,7 @@ PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration �
 | 责任 | 每节点唯一 Owner，执行器分离 | 新内核已强制 Owner 与 `human/agent/tool` 分离；IM mention 和 Card 2.0 人员选择均在凭据侧验证活跃成员，再由领域侧冻结角色绑定，已完成开发真栈正向验收；草稿 Owner 全量目录校验已落码但默认关闭 | 需要异常成员状态回归、管理入口和生产装配 |
 | 编辑与重启 | 预览确认、revision、下游 Attempt | 未来区域编辑及节点、完整实例重启都已实现耐久预览、Owner 重授权、版本与 revision 校验、历史保护和原子审计，并完成真库竞争与 Owner 飞书闭环；编辑拒绝矩阵覆盖冻结线、非法 DAG、陈旧预览与跨人员非 Owner | 需要图形化 diff、跨轮次浏览和生产装配 |
 | 飞书集成 | PostgreSQL outbox / Inbox、幂等、服务端授权、对账 | Human Task 创建 / 完成、可靠轮询、可选事件、服务端详情回读、两阶段授权、启动对账、受控 Task 重建、十五个窄命令、模板与无模板草稿、人员选择卡、失败恢复卡、自动节点消息、暂停继续取消、两类重启、未来区域编辑、跨人员分工、完成 Docx 与最终通知已落码并完成相应开发真栈验收；凭据侧交互已拆为两个单项领取副本 | 需要更多业务命令、更高强度限流回归和生产拓扑 |
-| 工作台与管理员控制面 | Owner 浏览流程、DAG、跨轮次 Attempt、审计与派生待处理提示，并执行本人实例的受控流程操作；普通 Human Task 参与者读取有界任务上下文并提交或转交；管理员查看当前企业聚合并治理其他浏览器会话 | 飞书 OAuth、PostgreSQL 耐久会话、Owner 流程操作、参与者任务 API、运行时责任转交、服务端 allowlist 管理员聚合、会话撤销、Caddy 安全边界与有界令牌桶均已开发部署。真实 PostgreSQL 已验证转交竞争、旧负责人失权、Snapshot 保持和审计 outbox 唯一；真实登录浏览器已完成普通 Human 提交和跨成员转交，飞书 Task、NodeInstance 与 Projection 负责人一致 | 仍需暂停继续取消重启的逐项页面验收、生产容量和分布式限流；还缺通用流程输入框、批量撤销、设备命名、分页筛选、完整协作者实例视图、跨轮次对比与运行中图编辑 |
+| 工作台与管理员控制面 | Owner 浏览流程、DAG、跨轮次 Attempt、审计与派生待处理提示，发起受控自然语言流程，并执行本人实例的受控流程操作；普通 Human Task 参与者读取有界任务上下文并提交或转交；管理员查看当前企业聚合并治理其他浏览器会话 | 飞书 OAuth、PostgreSQL 耐久会话、耐久草稿请求、独立中央生成 Worker、Owner 流程操作、参与者任务 API、运行时责任转交、服务端 allowlist 管理员聚合、会话撤销、Caddy 安全边界与有界令牌桶均已开发部署。真实 PostgreSQL 已验证草稿领取竞争与转交竞争；真实登录浏览器已完成普通 Human 提交和跨成员转交。受控输入已完成本地双主题与移动端验收，真实登录模型生成仍待最终回读 | 仍需网页草稿真实登录验收、暂停继续取消重启的逐项页面验收、生产容量和分布式限流；还缺自由结构流程编辑器、批量撤销、设备命名、分页筛选、完整协作者实例视图、跨轮次对比与运行中图编辑 |
 | 运行时 | 独立 Scheduler + Node Runner | 新内核已实现 Scheduler、Node Runner、持久化 runnable scan、`llm.generate`、`content.check`、Runtime / Projection / Interactive / Inbound Worker、能力过滤、优雅停机、过期 claim 恢复，以及失败自动节点的 Owner 重试与人工接管 | 需要更多业务 Tool、自动重试策略配置、恢复运营视图和生产装配 |
 | Personal Agent Edge | 默认关闭、本人设备、窄 capability、中央真相 | Proof v0 已实现配对、撤销、私有 HTTP、手工 run-once、前台 serve、只读 Codex adapter、续租失败取消、单设备锁与迟到结果拒绝；员工 Mac 前台 serve 已通过受控真机验收。macOS Keychain、开发试用 manager、安装、升级、回滚、离线诊断、哈希锁定 wheelhouse、bootstrap pip 修复和真实断网安装均已验证 | 安全评审结论为正式分发 No-Go。仍缺最小 Edge 独立包、可复现 lock 与构建证明、Developer ID 签名、公证、可信摘要渠道、目录级读取与数据外发治理、全新员工 Mac 验收；当前持久设备需受控 SSH 隧道，公网 E2E 仍要求 ICP 接入备案或迁移合规地域；产品化仍为 Later |
 
