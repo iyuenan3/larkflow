@@ -555,8 +555,16 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"renderAdminOverview" in script.body
     assert b"credentials: \"same-origin\"" in script.body
     assert b"sessionStorage.setItem(\"larkflow.console.token\"" in script.body
-    assert "复制中".encode() in script.body
-    assert "已复制".encode() in script.body
+    assert b"larkflow.console.theme" in script.body
+    assert b"prefers-color-scheme: dark" in script.body
+    assert b"document.documentElement.dataset.theme" in script.body
+    assert "正在复制".encode() in script.body
+    assert "已复制，可去飞书发送".encode() in script.body
+    assert b"showOwnerSection" in script.body
+    assert b"setDetailTab" in script.body
+    assert b"renderOverviewNodes" in script.body
+    assert b'ownerSection: "attention"' in script.body
+    assert b'else if (!state.detail' not in script.body
     assert b'addEventListener("pointerdown"' in script.body
     assert b'event.target.closest(".graph-node")' in script.body
     assert b'addEventListener("wheel"' in script.body
@@ -567,10 +575,20 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b".insight-grid" in styles.body
     assert b"instance-insights" in page.body
     assert b"attention-center" in page.body
+    assert b"attention-nav" in page.body
+    assert b"workflow-library" in page.body
+    assert b"workflow-filters" in page.body
+    assert b"detail-tabs" in page.body
+    assert b"overview-nodes" in page.body
+    assert page.body.count(b"theme-toggle") >= 2
+    assert b'content="light dark"' in page.body
     assert b"admin-console" in page.body
     assert b"admin-view" in page.body
     assert b"graph-zoom-in" in page.body
     assert b"graph-fit" in page.body
+    assert b':root[data-theme="light"]' in styles.body
+    assert b"--font-body: 15px" in styles.body
+    assert b".theme-toggle" in styles.body
     assert _json(auth) == {
         "mode": "static",
         "authenticated": False,

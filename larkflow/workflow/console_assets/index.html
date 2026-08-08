@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="dark">
+    <meta name="color-scheme" content="light dark">
     <title>larkflow 我的工作台</title>
     <link rel="stylesheet" href="/console/styles.css">
   </head>
@@ -13,7 +13,13 @@
 
     <section id="unlock" class="unlock" aria-labelledby="unlock-title">
       <div class="unlock-card">
-        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="unlock-toolbar">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <button class="theme-toggle" type="button" aria-label="切换界面主题" aria-pressed="true">
+            <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+            <span class="theme-toggle-label">深色</span>
+          </button>
+        </div>
         <p class="eyebrow">LARKFLOW WORKSPACE</p>
         <h1 id="unlock-title">进入你的工作台</h1>
         <p id="unlock-copy" class="unlock-copy">正在确认当前登录方式。</p>
@@ -41,9 +47,13 @@
         </div>
         <div class="top-actions">
           <div id="view-switch" class="view-switch" role="group" aria-label="控制台视图">
-            <button id="owner-view" type="button" data-active="true">我的流程</button>
+            <button id="owner-view" type="button" data-active="true">工作台</button>
             <button id="admin-view" type="button" data-active="false" hidden>管理概览</button>
           </div>
+          <button class="theme-toggle compact" type="button" aria-label="切换界面主题" aria-pressed="true">
+            <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+            <span class="theme-toggle-label">深色</span>
+          </button>
           <div id="connection" class="connection"><i></i><span>已连接</span></div>
           <button id="refresh" class="icon-button" type="button" title="刷新" aria-label="刷新">↻</button>
           <button id="lock" class="quiet-button" type="button">锁定</button>
@@ -51,39 +61,99 @@
       </header>
 
       <div class="workspace">
-        <aside class="sidebar">
-          <div class="sidebar-heading">
-            <div>
-              <p class="eyebrow">MY WORKFLOWS</p>
-              <h2>我发起的流程</h2>
-            </div>
-            <span id="instance-count" class="count">0</span>
+        <aside class="sidebar" aria-label="工作台导航">
+          <div class="sidebar-intro">
+            <p class="eyebrow">OWNER WORKSPACE</p>
+            <h2>我的工作</h2>
+            <p>先处理需要决定的事，再查看完整流程。</p>
           </div>
-          <div id="instance-list" class="instance-list" aria-live="polite"></div>
+          <nav class="owner-navigation" aria-label="我的工作视图">
+            <button id="attention-nav" class="owner-nav-item" type="button" data-active="true">
+              <span class="owner-nav-symbol" aria-hidden="true">01</span>
+              <span class="owner-nav-copy">
+                <strong>待处理</strong>
+                <small>需要你确认、恢复或完成</small>
+              </span>
+              <span id="attention-nav-count" class="owner-nav-count">0</span>
+            </button>
+            <button id="workflow-nav" class="owner-nav-item" type="button" data-active="false">
+              <span class="owner-nav-symbol" aria-hidden="true">02</span>
+              <span class="owner-nav-copy">
+                <strong>全部流程</strong>
+                <small>最近由你发起的流程</small>
+              </span>
+              <span id="instance-count" class="owner-nav-count">0</span>
+            </button>
+          </nav>
+          <div class="sidebar-boundary">
+            <span class="sidebar-boundary-dot" aria-hidden="true"></span>
+            <div>
+              <strong>中央节点只读</strong>
+              <p>处理动作仍在飞书中完成，并由服务端再次校验。</p>
+            </div>
+          </div>
         </aside>
 
         <main class="main">
-          <section id="attention-center" class="panel attention-panel" aria-labelledby="attention-title">
-            <div class="attention-heading">
+          <section id="attention-center" class="owner-page attention-panel" aria-labelledby="attention-title">
+            <header class="page-heading attention-heading">
               <div>
-                <p class="eyebrow">OWNER ACTION CENTER</p>
-                <h2 id="attention-title">待处理中心</h2>
+                <p class="eyebrow">FOCUS QUEUE</p>
+                <h1 id="attention-title">今天需要处理什么</h1>
                 <p id="attention-scope">基于最近 30 个本人流程，只提供安全的下一步提示</p>
               </div>
-              <span id="attention-count" class="count">0</span>
-            </div>
+              <div class="page-heading-count">
+                <strong id="attention-count">0</strong>
+                <span>项待处理</span>
+              </div>
+            </header>
             <div id="attention-summary" class="attention-summary" aria-label="待处理分类汇总"></div>
+            <div class="section-heading">
+              <div>
+                <h2>优先队列</h2>
+                <p>按失败恢复、人工待办、暂停和草稿确认排序。</p>
+              </div>
+              <span>每组优先展示最近 5 项</span>
+            </div>
             <div id="attention-list" class="attention-list" aria-live="polite"></div>
           </section>
 
-          <section id="empty-state" class="empty-state">
-            <div class="empty-orbit"><span></span><span></span><span></span></div>
-            <p class="eyebrow">WORKFLOW OBSERVABILITY</p>
-            <h2>选择一个流程</h2>
-            <p>查看 DAG 进度、每次执行结果与完整审计时间线。</p>
+          <section id="workflow-library" class="owner-page workflow-library" aria-labelledby="workflow-library-title" hidden>
+            <header class="page-heading">
+              <div>
+                <p class="eyebrow">WORKFLOW LIBRARY</p>
+                <h1 id="workflow-library-title">全部流程</h1>
+                <p>按状态筛选最近由你发起的流程，选择后查看执行详情。</p>
+              </div>
+            </header>
+            <div class="workflow-toolbar">
+              <label class="workflow-search" for="workflow-query">
+                <span>搜索</span>
+                <input id="workflow-query" type="search" placeholder="搜索目标或实例编号" autocomplete="off">
+              </label>
+              <div id="workflow-filters" class="workflow-filters" role="group" aria-label="流程状态筛选">
+                <button type="button" data-filter="all" data-active="true">全部</button>
+                <button type="button" data-filter="active" data-active="false">进行中</button>
+                <button type="button" data-filter="draft" data-active="false">草稿</button>
+                <button type="button" data-filter="done" data-active="false">已完成</button>
+                <button type="button" data-filter="other" data-active="false">其他</button>
+              </div>
+            </div>
+            <div id="instance-list" class="instance-list" aria-live="polite"></div>
           </section>
 
-          <section id="detail" class="detail" hidden>
+          <section id="empty-state" class="empty-state" hidden>
+            <div class="empty-orbit"><span></span><span></span><span></span></div>
+            <p class="eyebrow">WORKFLOW OBSERVABILITY</p>
+            <h2>正在读取流程</h2>
+            <p>请稍候，中央节点正在返回最新状态。</p>
+          </section>
+
+          <section id="detail" class="owner-page detail" hidden>
+            <div class="detail-toolbar">
+              <button id="detail-back" class="back-button" type="button">返回</button>
+              <span id="detail-breadcrumb">流程详情</span>
+            </div>
             <div class="detail-head">
               <div class="detail-copy">
                 <div class="detail-meta">
@@ -98,74 +168,97 @@
               </div>
             </div>
 
-            <section id="instance-insights" class="panel insight-panel" aria-labelledby="insight-title">
-              <div class="insight-heading">
-                <div>
-                  <p class="eyebrow">INSTANCE SUMMARY</p>
-                  <h2 id="insight-title">实例摘要</h2>
-                </div>
-                <span class="insight-boundary">本页只读，回复与操作仍在 Agent 对话或飞书入口完成</span>
-              </div>
-              <div class="insight-grid">
-                <article class="insight-card insight-status-card">
-                  <p class="insight-label">最终状态</p>
-                  <div id="insight-status"></div>
-                  <p id="insight-status-detail" class="insight-detail"></p>
-                </article>
-                <article class="insight-card">
-                  <p class="insight-label">发生过返工的节点</p>
-                  <div id="insight-rework" class="insight-list"></div>
-                </article>
-                <article class="insight-card">
-                  <p class="insight-label">关键重启审计</p>
-                  <div id="insight-restart" class="insight-detail"></div>
-                </article>
-              </div>
-            </section>
+            <nav id="detail-tabs" class="detail-tabs" aria-label="流程详情视图">
+              <button id="detail-tab-overview" type="button" data-tab="overview" data-active="true">概览</button>
+              <button id="detail-tab-execution" type="button" data-tab="execution" data-active="false">执行图与结果</button>
+              <button id="detail-tab-audit" type="button" data-tab="audit" data-active="false">审计记录</button>
+            </nav>
 
-            <div class="detail-grid">
-              <section class="panel graph-panel">
-                <div class="panel-heading">
+            <div id="detail-overview-panel" class="detail-tab-panel">
+              <section id="instance-insights" class="panel insight-panel" aria-labelledby="insight-title">
+                <div class="insight-heading">
                   <div>
-                    <p class="eyebrow">EXECUTION GRAPH</p>
-                    <h2>流程执行图</h2>
+                    <p class="eyebrow">INSTANCE SUMMARY</p>
+                    <h2 id="insight-title">实例摘要</h2>
                   </div>
-                  <div class="graph-heading-meta">
-                    <span class="graph-legend">拖动平移 · Ctrl/⌘ + 滚轮缩放</span>
-                    <div class="graph-controls" role="group" aria-label="流程图视图控制">
-                      <button id="graph-zoom-out" class="graph-control-button" type="button" title="缩小" aria-label="缩小流程图">−</button>
-                      <button id="graph-zoom-reset" class="graph-zoom-value" type="button" title="恢复 100%" aria-label="恢复流程图为 100%">100%</button>
-                      <button id="graph-zoom-in" class="graph-control-button" type="button" title="放大" aria-label="放大流程图">+</button>
-                      <button id="graph-fit" class="graph-fit-button" type="button">适配</button>
-                    </div>
-                    <span id="graph-revision" class="revision"></span>
-                  </div>
+                  <span class="insight-boundary">本页只读，回复与操作仍在 Agent 对话或飞书入口完成</span>
                 </div>
-                <div id="graph" class="graph" tabindex="0" aria-label="流程执行图，可拖动平移并缩放"></div>
+                <div class="insight-grid">
+                  <article class="insight-card insight-status-card">
+                    <p class="insight-label">最终状态</p>
+                    <div id="insight-status"></div>
+                    <p id="insight-status-detail" class="insight-detail"></p>
+                  </article>
+                  <article class="insight-card">
+                    <p class="insight-label">发生过返工的节点</p>
+                    <div id="insight-rework" class="insight-list"></div>
+                  </article>
+                  <article class="insight-card">
+                    <p class="insight-label">关键重启审计</p>
+                    <div id="insight-restart" class="insight-detail"></div>
+                  </article>
+                </div>
               </section>
 
-              <section class="panel attempt-panel">
+              <section class="panel overview-nodes-panel" aria-labelledby="overview-nodes-title">
                 <div class="panel-heading">
                   <div>
-                    <p class="eyebrow">ATTEMPTS</p>
-                    <h2 id="attempt-heading">执行记录</h2>
+                    <p class="eyebrow">CURRENT PATH</p>
+                    <h2 id="overview-nodes-title">节点进度</h2>
                   </div>
-                  <span id="attempt-count" class="count">0</span>
+                  <span id="overview-node-count" class="count">0</span>
                 </div>
-                <div id="attempts" class="attempts"></div>
+                <div id="overview-nodes" class="overview-nodes"></div>
               </section>
             </div>
 
-            <section class="panel audit-panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">AUDIT TRAIL</p>
-                  <h2>审计时间线</h2>
-                </div>
-                <span id="audit-count" class="count">0</span>
+            <div id="detail-execution-panel" class="detail-tab-panel" hidden>
+              <div class="detail-grid">
+                <section class="panel graph-panel">
+                  <div class="panel-heading">
+                    <div>
+                      <p class="eyebrow">EXECUTION GRAPH</p>
+                      <h2>流程执行图</h2>
+                    </div>
+                    <div class="graph-heading-meta">
+                      <span class="graph-legend">拖动平移 · Ctrl/⌘ + 滚轮缩放</span>
+                      <div class="graph-controls" role="group" aria-label="流程图视图控制">
+                        <button id="graph-zoom-out" class="graph-control-button" type="button" title="缩小" aria-label="缩小流程图">−</button>
+                        <button id="graph-zoom-reset" class="graph-zoom-value" type="button" title="恢复 100%" aria-label="恢复流程图为 100%">100%</button>
+                        <button id="graph-zoom-in" class="graph-control-button" type="button" title="放大" aria-label="放大流程图">+</button>
+                        <button id="graph-fit" class="graph-fit-button" type="button">适配</button>
+                      </div>
+                      <span id="graph-revision" class="revision"></span>
+                    </div>
+                  </div>
+                  <div id="graph" class="graph" tabindex="0" aria-label="流程执行图，可拖动平移并缩放"></div>
+                </section>
+
+                <section class="panel attempt-panel">
+                  <div class="panel-heading">
+                    <div>
+                      <p class="eyebrow">ATTEMPTS</p>
+                      <h2 id="attempt-heading">执行记录</h2>
+                    </div>
+                    <span id="attempt-count" class="count">0</span>
+                  </div>
+                  <div id="attempts" class="attempts"></div>
+                </section>
               </div>
-              <div id="audit" class="audit"></div>
-            </section>
+            </div>
+
+            <div id="detail-audit-panel" class="detail-tab-panel" hidden>
+              <section class="panel audit-panel">
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">AUDIT TRAIL</p>
+                    <h2>审计时间线</h2>
+                  </div>
+                  <span id="audit-count" class="count">0</span>
+                </div>
+                <div id="audit" class="audit"></div>
+              </section>
+            </div>
           </section>
         </main>
       </div>
@@ -260,6 +353,7 @@
       </main>
     </div>
 
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <script src="/console/app.js" defer></script>
   </body>
 </html>

@@ -1,5 +1,43 @@
 "use strict";
 
+const THEME_STORAGE_KEY = "larkflow.console.theme";
+const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
+
+function storedTheme() {
+  try {
+    const value = localStorage.getItem(THEME_STORAGE_KEY);
+    return value === "light" || value === "dark" ? value : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function applyTheme(theme, persist = false) {
+  const resolved = theme === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.style.colorScheme = resolved;
+  document.querySelectorAll(".theme-toggle").forEach((button) => {
+    const isDark = resolved === "dark";
+    button.setAttribute("aria-pressed", String(isDark));
+    button.setAttribute("aria-label", isDark ? "切换到浅色模式" : "切换到深色模式");
+    button.title = isDark ? "切换到浅色模式" : "切换到深色模式";
+    button.querySelector(".theme-toggle-icon").textContent = isDark ? "☾" : "☀";
+    button.querySelector(".theme-toggle-label").textContent = isDark ? "深色" : "浅色";
+  });
+  if (persist) {
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, resolved);
+    } catch (_error) {
+      // The theme still applies when browser storage is unavailable.
+    }
+  }
+}
+
+applyTheme(storedTheme() || (systemTheme.matches ? "dark" : "light"));
+systemTheme.addEventListener("change", (event) => {
+  if (!storedTheme()) applyTheme(event.matches ? "dark" : "light");
+});
+
 const state = {
   token: sessionStorage.getItem("larkflow.console.token") || "",
   authMode: "unknown",
@@ -14,6 +52,12 @@ const state = {
   adminSessionPreview: null,
   selectedNode: null,
   graphScale: 1,
+  ownerSection: "attention",
+  returnSection: "attention",
+  detailTab: "overview",
+  workflowFilter: "all",
+  workflowQuery: "",
+  expandedAttentionKinds: new Set(),
 };
 
 const el = (id) => document.getElementById(id);
@@ -28,10 +72,21 @@ const authNote = el("auth-note");
 const instanceList = el("instance-list");
 const emptyState = el("empty-state");
 const detailView = el("detail");
+const attentionCenter = el("attention-center");
+const workflowLibrary = el("workflow-library");
+const attentionNav = el("attention-nav");
+const workflowNav = el("workflow-nav");
 const workspace = document.querySelector(".workspace");
 const adminConsole = el("admin-console");
 const ownerViewButton = el("owner-view");
 const adminViewButton = el("admin-view");
+
+document.querySelectorAll(".theme-toggle").forEach((button) => {
+  button.addEventListener("click", () => {
+    const nextTheme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    applyTheme(nextTheme, true);
+  });
+});
 
 const STATUS = {
   draft: "草稿",
@@ -53,6 +108,12 @@ const ATTENTION = {
   complete_human: "等待你处理",
   resume_flow: "已暂停",
   confirm_draft: "待确认",
+};
+const ATTENTION_DESCRIPTION = {
+  recover_failed: "先确认影响范围，再决定是否重新执行",
+  complete_human: "这些节点正在等待你的输入或判断",
+  resume_flow: "流程已暂停，需要你决定是否继续",
+  confirm_draft: "核对目标和节点后，再从飞书确认启动",
 };
 const QUEUE_LANE = {
   outbox: "外部投影",
@@ -170,9 +231,6 @@ async function loadInstances(selectId = null) {
   renderAttention(payload.attention || { items: [], counts: {}, instance_limit: 30 });
   if (selectId) {
     await loadDetail(selectId);
-  } else if (!state.detail && state.instances.length > 0) {
-    const active = state.instances.find((item) => ["running", "paused", "failed"].includes(item.status));
-    await loadDetail((active || state.instances[0]).id);
   }
 }
 
@@ -415,7 +473,7 @@ function showOwnerView() {
   adminConsole.hidden = true;
   ownerViewButton.dataset.active = "true";
   adminViewButton.dataset.active = "false";
-  requestAnimationFrame(layoutGraphCanvas);
+  showOwnerSection(state.ownerSection);
 }
 
 async function showAdminView() {
@@ -439,19 +497,66 @@ async function showAdminView() {
   }
 }
 
+function showOwnerSection(section) {
+  state.ownerSection = section;
+  attentionCenter.hidden = section !== "attention";
+  workflowLibrary.hidden = section !== "workflows";
+  detailView.hidden = section !== "detail";
+  emptyState.hidden = section !== "loading";
+  attentionNav.dataset.active = String(section === "attention");
+  workflowNav.dataset.active = String(section === "workflows");
+  if (section === "detail" && state.detailTab === "execution") {
+    requestAnimationFrame(layoutGraphCanvas);
+  }
+  window.scrollTo({ top: 0, behavior: "auto" });
+}
+
+function showDetailLoading(goal) {
+  emptyState.querySelector("h2").textContent = "正在读取流程";
+  emptyState.querySelector("p:last-child").textContent = goal || "请稍候，中央节点正在返回最新状态。";
+  showOwnerSection("loading");
+}
+
+function showToast(message, tone = "success") {
+  const toast = el("toast");
+  toast.textContent = message;
+  toast.dataset.tone = tone;
+  toast.hidden = false;
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => { toast.hidden = true; }, 2400);
+}
+
+function setDetailTab(tab) {
+  state.detailTab = tab;
+  el("detail-tabs").querySelectorAll("button").forEach((button) => {
+    const active = button.dataset.tab === tab;
+    button.dataset.active = String(active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  el("detail-overview-panel").hidden = tab !== "overview";
+  el("detail-execution-panel").hidden = tab !== "execution";
+  el("detail-audit-panel").hidden = tab !== "audit";
+  if (tab === "execution") requestAnimationFrame(layoutGraphCanvas);
+}
+
 function renderAttention(attention) {
   const list = el("attention-list");
   const summary = el("attention-summary");
   list.replaceChildren();
   summary.replaceChildren();
   el("attention-count").textContent = attention.total ?? state.attention.length;
+  el("attention-nav-count").textContent = attention.total ?? state.attention.length;
   el("attention-scope").textContent = `基于最近 ${attention.instance_limit || 30} 个本人流程，只提供安全的下一步提示`;
 
   Object.entries(ATTENTION).forEach(([kind, label]) => {
     const count = attention.counts?.[kind] || 0;
     if (count < 1) return;
     const chip = node("span", `attention-summary-chip attention-kind-${kind}`);
-    chip.append(node("strong", "", count), document.createTextNode(label));
+    chip.append(
+      node("strong", "", count),
+      node("span", "", label),
+      node("small", "", ATTENTION_DESCRIPTION[kind]),
+    );
     summary.append(chip);
   });
 
@@ -465,15 +570,50 @@ function renderAttention(attention) {
     return;
   }
 
-  state.attention.forEach((item) => list.append(attentionCard(item)));
+  Object.keys(ATTENTION).forEach((kind) => {
+    const items = state.attention.filter((item) => item.kind === kind);
+    if (items.length === 0) return;
+    const expanded = state.expandedAttentionKinds.has(kind);
+    const visibleItems = expanded ? items : items.slice(0, 5);
+    const group = node("section", `attention-group attention-kind-${kind}`);
+    group.dataset.kind = kind;
+    const heading = node("div", "attention-group-heading");
+    const headingCopy = node("div", "attention-group-copy");
+    headingCopy.append(
+      node("strong", "", ATTENTION[kind]),
+      node("span", "", ATTENTION_DESCRIPTION[kind]),
+    );
+    heading.append(headingCopy, node("span", "attention-group-count", items.length));
+    const rows = node("div", "attention-group-rows");
+    visibleItems.forEach((item) => rows.append(attentionCard(item)));
+    group.append(heading, rows);
+    if (items.length > 5) {
+      const toggle = node(
+        "button",
+        "attention-group-toggle",
+        expanded ? "收起" : `显示其余 ${items.length - 5} 项`,
+      );
+      toggle.type = "button";
+      toggle.addEventListener("click", () => {
+        if (expanded) state.expandedAttentionKinds.delete(kind);
+        else state.expandedAttentionKinds.add(kind);
+        renderAttention(attention);
+      });
+      group.append(toggle);
+    }
+    list.append(group);
+  });
 }
 
 function attentionCard(item) {
   const card = node("article", `attention-card attention-kind-${item.kind}`);
+  card.dataset.instanceId = item.instance_id;
+  const marker = node("span", "attention-marker");
+  marker.setAttribute("aria-hidden", "true");
   const copy = node("div", "attention-copy");
   const meta = node("div", "attention-meta");
   meta.append(
-    node("span", "attention-kind", ATTENTION[item.kind] || item.kind),
+    node("span", "attention-kind", item.instance_status ? statusLabel(item.instance_status) : ATTENTION[item.kind] || item.kind),
     node("span", "attention-time", formatDate(item.occurred_at)),
   );
   copy.append(
@@ -481,51 +621,41 @@ function attentionCard(item) {
     node("strong", "attention-title", item.title),
     node("span", "attention-goal", item.goal || "未命名流程"),
     node("p", "attention-detail", item.detail),
-    node("p", "attention-hint", item.action_hint),
   );
 
   const actions = node("div", "attention-actions");
   if (item.command) {
-    const command = node("div", "attention-command");
-    command.append(node("code", "", item.command));
-    const copyButton = node("button", "attention-copy-button", "复制命令");
+    const copyButton = node("button", "attention-copy-button", "复制飞书命令");
     copyButton.type = "button";
     copyButton.addEventListener("click", () => copyCommand(item.command, copyButton));
-    command.append(copyButton);
-    actions.append(command);
+    actions.append(copyButton);
   }
-  const openButton = node("button", "attention-open-button", "查看流程");
+  const openButton = node("button", "attention-open-button", "查看详情");
   openButton.type = "button";
   openButton.addEventListener("click", async () => {
     openButton.disabled = true;
     openButton.dataset.state = "working";
     openButton.textContent = "正在打开";
+    state.returnSection = "attention";
+    showDetailLoading(item.goal || item.title);
     try {
       await loadDetail(item.instance_id);
-      openButton.dataset.state = "done";
-      openButton.textContent = "已打开";
-      detailView.scrollIntoView({ behavior: "smooth", block: "start" });
+      showToast("流程详情已打开");
     } catch (error) {
-      openButton.dataset.state = "error";
-      openButton.textContent = "打开失败";
+      showOwnerSection("attention");
+      showToast("流程读取失败，请稍后重试", "error");
       showWorkspaceError(error);
-    } finally {
-      openButton.disabled = false;
-      setTimeout(() => {
-        openButton.dataset.state = "idle";
-        openButton.textContent = "查看流程";
-      }, 1600);
     }
   });
   actions.append(openButton);
-  card.append(copy, actions);
+  card.append(marker, copy, actions);
   return card;
 }
 
 async function copyCommand(command, button) {
   button.disabled = true;
   button.dataset.state = "working";
-  button.textContent = "复制中";
+  button.textContent = "正在复制";
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(command);
@@ -533,16 +663,18 @@ async function copyCommand(command, button) {
       copyCommandFallback(command);
     }
     button.dataset.state = "done";
-    button.textContent = "已复制";
+    button.textContent = "已复制，可去飞书发送";
+    showToast("命令已复制，请到 larkflow 对话发送");
   } catch (error) {
     button.dataset.state = "error";
     button.textContent = "复制失败";
+    showToast("复制失败，请重试", "error");
   } finally {
     button.disabled = false;
     setTimeout(() => {
       button.dataset.state = "idle";
-      button.textContent = "复制命令";
-    }, 1600);
+      button.textContent = "复制飞书命令";
+    }, 2200);
   }
 }
 
@@ -566,7 +698,10 @@ async function loadDetail(instanceId) {
   const instanceChanged = state.detail?.instance.id !== payload.instance.id;
   state.detail = payload;
   state.selectedNode = chooseNode(payload.nodes);
-  if (instanceChanged) state.graphScale = 1;
+  if (instanceChanged) {
+    state.graphScale = 1;
+    state.detailTab = "overview";
+  }
   renderInstances();
   renderDetail();
   if (instanceChanged) {
@@ -584,27 +719,61 @@ function chooseNode(nodes) {
 function renderInstances() {
   instanceList.replaceChildren();
   el("instance-count").textContent = state.instances.length;
+  const query = state.workflowQuery.trim().toLocaleLowerCase("zh-CN");
+  const visible = state.instances.filter((item) => {
+    const matchesQuery = !query
+      || item.id.toLocaleLowerCase("zh-CN").includes(query)
+      || (item.goal || "").toLocaleLowerCase("zh-CN").includes(query);
+    if (!matchesQuery) return false;
+    if (state.workflowFilter === "all") return true;
+    if (state.workflowFilter === "active") return ["running", "paused"].includes(item.status);
+    if (state.workflowFilter === "draft") return item.status === "draft";
+    if (state.workflowFilter === "done") return item.status === "done";
+    return !["running", "paused", "draft", "done"].includes(item.status);
+  });
   if (state.instances.length === 0) {
     const empty = node("div", "list-empty");
     empty.append(node("strong", "", "还没有流程"), node("p", "", "通过飞书发起流程后会出现在这里。"));
     instanceList.append(empty);
     return;
   }
-  state.instances.forEach((item) => {
+  if (visible.length === 0) {
+    const empty = node("div", "list-empty");
+    empty.append(node("strong", "", "没有匹配的流程"), node("p", "", "可以清除搜索词或切换状态筛选。"));
+    instanceList.append(empty);
+    return;
+  }
+  visible.forEach((item) => {
     const button = node("button", "instance-item");
     button.type = "button";
     button.dataset.active = String(state.detail?.instance.id === item.id);
-    button.addEventListener("click", () => loadDetail(item.id).catch(showWorkspaceError));
+    button.addEventListener("click", async () => {
+      state.returnSection = "workflows";
+      button.dataset.state = "working";
+      showDetailLoading(item.goal || item.id);
+      try {
+        await loadDetail(item.id);
+      } catch (error) {
+        showOwnerSection("workflows");
+        showToast("流程读取失败，请稍后重试", "error");
+        showWorkspaceError(error);
+      }
+    });
 
     const top = node("div", "instance-top");
     top.append(statusBadge(item.status), node("span", "instance-time", formatDate(item.created_at)));
     const goal = node("strong", "instance-goal", item.goal || "未命名流程");
     const footer = node("div", "instance-footer");
+    const progress = item.total_nodes ? Math.round(item.completed_nodes / item.total_nodes * 100) : 0;
+    const progressTrack = node("span", "instance-progress-track");
+    const progressValue = node("span", "instance-progress-value");
+    progressValue.style.width = `${progress}%`;
+    progressTrack.append(progressValue);
     footer.append(
       node("span", "mono", item.id),
       node("span", "instance-progress", `${item.completed_nodes}/${item.total_nodes}`),
     );
-    button.append(top, goal, footer);
+    button.append(top, goal, footer, progressTrack);
     instanceList.append(button);
   });
 }
@@ -612,8 +781,7 @@ function renderInstances() {
 function renderDetail() {
   const payload = state.detail;
   if (!payload) return;
-  emptyState.hidden = true;
-  detailView.hidden = false;
+  showOwnerSection("detail");
   const instance = payload.instance;
   const progress = instance.progress;
   el("detail-status").replaceWith(statusBadge(instance.status, "detail-status"));
@@ -625,9 +793,40 @@ function renderDetail() {
   el("progress-ring").style.setProperty("--progress", `${percent * 3.6}deg`);
   el("graph-revision").textContent = `Graph r${instance.graph_revision}`;
   renderInsights(payload);
+  renderOverviewNodes(payload.nodes);
   renderGraph(payload.nodes);
   renderAttempts(payload.nodes.find((item) => item.key === state.selectedNode));
   renderAudit(payload.audit);
+  setDetailTab(state.detailTab);
+}
+
+function renderOverviewNodes(nodes) {
+  const container = el("overview-nodes");
+  container.replaceChildren();
+  el("overview-node-count").textContent = nodes.length;
+  nodes.forEach((item, index) => {
+    const button = node("button", "overview-node");
+    button.type = "button";
+    button.dataset.status = item.status;
+    button.addEventListener("click", () => {
+      state.selectedNode = item.key;
+      updateGraphSelection(nodes);
+      renderAttempts(item);
+      setDetailTab("execution");
+      showToast(`已打开节点：${item.title}`);
+    });
+    const ordinal = node("span", "overview-node-ordinal", String(index + 1).padStart(2, "0"));
+    const copy = node("span", "overview-node-copy");
+    const title = node("span", "overview-node-title");
+    title.append(node("strong", "", item.title), statusBadge(item.status));
+    copy.append(
+      title,
+      node("small", "", `${EXECUTOR[item.executor] || item.executor} · ${RELATION[item.owner_relation] || item.owner_relation} · Attempt ${item.current_attempt_no}`),
+    );
+    const action = node("span", "overview-node-action", "查看结果");
+    button.append(ordinal, copy, action);
+    container.append(button);
+  });
 }
 
 function renderInsights(payload) {
@@ -986,6 +1185,12 @@ function lockConsole() {
   state.adminSessions = null;
   state.adminSessionPreview = null;
   state.view = "owner";
+  state.ownerSection = "attention";
+  state.returnSection = "attention";
+  state.detailTab = "overview";
+  state.workflowFilter = "all";
+  state.workflowQuery = "";
+  state.expandedAttentionKinds.clear();
   sessionStorage.removeItem("larkflow.console.token");
   adminViewButton.hidden = true;
   showOwnerView();
@@ -1017,6 +1222,7 @@ function showFeishuLogin(message = "") {
   state.adminSessions = null;
   state.adminSessionPreview = null;
   state.view = "owner";
+  state.ownerSection = "attention";
   sessionStorage.removeItem("larkflow.console.token");
   adminViewButton.hidden = true;
   unlockCopy.textContent = "使用当前飞书身份进入，只展示你有权查看的流程和待处理事项。";
@@ -1038,7 +1244,7 @@ function showConsole() {
   app.hidden = false;
   adminViewButton.hidden = !state.isAdmin;
   if (!state.isAdmin && state.view === "admin") showOwnerView();
-  requestAnimationFrame(layoutGraphCanvas);
+  if (state.view === "owner") showOwnerSection(state.ownerSection);
 }
 
 function beginFeishuLogin() {
@@ -1084,6 +1290,7 @@ async function loadAuthConfiguration() {
   }
   state.isAdmin = payload.admin === true;
   adminViewButton.hidden = !state.isAdmin;
+  el("view-switch").hidden = !state.isAdmin;
   return payload;
 }
 
@@ -1146,6 +1353,29 @@ unlockForm.addEventListener("submit", async (event) => {
 });
 
 feishuLogin.addEventListener("click", beginFeishuLogin);
+
+attentionNav.addEventListener("click", () => showOwnerSection("attention"));
+workflowNav.addEventListener("click", () => {
+  renderInstances();
+  showOwnerSection("workflows");
+});
+el("detail-back").addEventListener("click", () => showOwnerSection(state.returnSection));
+el("detail-tabs").querySelectorAll("button").forEach((button) => {
+  button.addEventListener("click", () => setDetailTab(button.dataset.tab));
+});
+el("workflow-query").addEventListener("input", (event) => {
+  state.workflowQuery = event.target.value;
+  renderInstances();
+});
+el("workflow-filters").querySelectorAll("button").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.workflowFilter = button.dataset.filter;
+    el("workflow-filters").querySelectorAll("button").forEach((candidate) => {
+      candidate.dataset.active = String(candidate === button);
+    });
+    renderInstances();
+  });
+});
 
 el("refresh").addEventListener("click", () => {
   const operation = state.view === "admin"
