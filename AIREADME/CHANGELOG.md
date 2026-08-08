@@ -7,7 +7,8 @@
 - UI：页面提交前立即显示“正在进入生成队列”，随后轮询 `queued / generating / repairing / creating / retrying`，并明确收口为可打开草稿或安全失败。最近请求保留在独立列表。浅色、深色与 390 像素移动视口已完成本地真实 HTTP 验收，无横向溢出；失败后按钮可重新提交。
 - Verified：定向套件为 `69 passed`。首次完整运行因继承本机 SOCKS 代理出现两个环境性失败，清空六项代理变量并允许进程树读取后，完整离线套件为 `1015 passed, 23 skipped`。最终 wheel 包含 `console_drafts.py`、`0023_console_draft_requests.sql` 和三项静态资源，SHA-256 为 `6b320b22804c02eaa2840d9a101bcf1b4ffe75287509816486727588ccdc0198`。
 - Deployment：发布件位于 `/srv/larkflow/target/releases/20260809_0357_console_drafts_432fea7/`。升级前 custom-format 备份为 285292 bytes，SHA-256 为 `ffb091224db79ab6bab92b9f42ad0b3af8963c1380f940b5fad52329777b1b61`，并已通过 `pg_restore --list`。长期库应用 `0023_console_draft_requests`，migration 总数为 23。真实 PostgreSQL 双连接竞争只得到一个 `generating / attempt 1` claim，测试行清理一条。十个 Python 服务与 Caddy 均为 `active / NRestarts=0`；公网 200、未登录草稿 API 401、安全响应头、安装资源哈希与部署窗口零 warning 均已回读。
-- Boundary：当前证据关闭代码、持久化、竞争、部署和本地界面门槛。真实登录网页尚未生成首个真实模型草稿，因此本版本还不能宣称网页自然语言输入到中央草稿的真实业务链路已完成，也不证明模型内容质量、生产容量或组织采用。
+- Boundary：当前证据关闭代码、持久化、竞争、部署、本地界面和真实成员主体 API 到中央模型的门槛。真实浏览器仍停在飞书授权入口，尚未完成可见点击验收；本版本也不证明模型内容质量、生产容量或组织采用。
+- Acceptance addendum：同一真实成员主体签发的五分钟临时会话，以纯合成会议摘要文本调用正式草稿 API。首次请求因未显式携带空协作者字段返回 400，临时会话已注销且没有落库；补齐 `collaborator_person_id: null` 后，请求从 `queued` 一次领取进入 `ready`，生成三节点草稿 `console_draft_0dc8215ed17b411288ca451be615a074`。独立数据库回读为 `draft / version 0 / template_version_id NULL / confirmed_at NULL / 0 NodeInstance / 0 Attempt / 0 Projection`，第二条临时会话也已注销。验收文本不含内部提交、迁移、人员信息或真实业务数据。
 
 ## v0.69.0-draft · 2026-08-09 · 真实 Human Task 转交与异步状态表达
 
