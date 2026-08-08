@@ -104,6 +104,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0019_draft_generation_progress",
         "0020_console_sessions",
         "0021_console_session_governance",
+        "0022_outbox_exhaustion",
     ]
     sql = migrations[0][1]
     for table in (
@@ -141,6 +142,9 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "CREATE TABLE workflow_console_session_revocation_previews" in migrations[20][1]
     assert "CREATE TABLE workflow_console_session_events" in migrations[20][1]
     assert "workflow_console_session_events_append_only" in migrations[20][1]
+    assert "ADD COLUMN exhausted_at" in migrations[21][1]
+    assert "'exhausted'" in migrations[21][1]
+    assert "workflow_outbox_events_exhaustion_shape" in migrations[21][1]
     assert "CREATE TABLE workflow_im_commands" in migrations[7][1]
     wakeup_sql = migrations[17][1]
     assert "pg_notify('larkflow_work_available', '')" in wakeup_sql
@@ -321,6 +325,47 @@ def test_outbox_claim_retry_expiry_and_completion():
     assert record.status == OutboxStatus.PUBLISHED
     assert repository.claim_outbox(
         "tenant_1", worker_id="worker_4", now=expired.claim_expires_at
+    ) == ()
+
+
+def test_outbox_exhaustion_preserves_failure_and_stops_future_claims():
+    repository = InMemoryWorkflowRepository()
+    aggregate = instance()
+    event = OutboxEvent(
+        id="outbox_exhausted",
+        tenant_id="tenant_1",
+        aggregate_type="instance",
+        aggregate_id="instance_1",
+        aggregate_version=0,
+        event_type="instance.created",
+        payload={"instance_id": "instance_1"},
+        created_at=NOW,
+        available_at=NOW,
+    )
+    repository.add(aggregate, outbox_events=(event,))
+    claim = repository.claim_outbox(
+        "tenant_1",
+        worker_id="worker_1",
+        now=NOW,
+    )[0]
+
+    repository.mark_outbox_exhausted(
+        "tenant_1",
+        event.id,
+        claim_token=claim.claim_token,
+        error="permanent external validation failure",
+        now=NOW,
+    )
+
+    record = repository.outbox_records("tenant_1")[0]
+    assert record.status == OutboxStatus.EXHAUSTED
+    assert record.attempt_count == 1
+    assert record.exhausted_at == NOW
+    assert record.last_error == "permanent external validation failure"
+    assert repository.claim_outbox(
+        "tenant_1",
+        worker_id="worker_2",
+        now=NOW + timedelta(days=1),
     ) == ()
 
 

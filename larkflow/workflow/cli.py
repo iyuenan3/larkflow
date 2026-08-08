@@ -842,6 +842,7 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             claim_ttl=settings.claim_ttl,
             retry_base=settings.retry_base,
             retry_max=settings.retry_max,
+            max_attempts=settings.max_attempts,
         )
         if namespace.command == "project-once":
             report = worker.run_once()
@@ -882,6 +883,7 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
                 "claim_limit": settings.claim_limit,
                 "retry_base_seconds": settings.retry_base.total_seconds(),
                 "retry_max_seconds": settings.retry_max.total_seconds(),
+                "max_attempts": settings.max_attempts,
                 "reconcile_batch_size": settings.reconcile_batch_size,
                 "completion_poll_seconds": settings.completion_poll_seconds,
                 "completion_poll_batch_size": (

@@ -15,6 +15,7 @@ class OutboxStatus(str, Enum):
     PROCESSING = "processing"
     PUBLISHED = "published"
     FAILED = "failed"
+    EXHAUSTED = "exhausted"
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,7 @@ class OutboxRecord:
     claim_token: str | None = None
     claim_expires_at: datetime | None = None
     published_at: datetime | None = None
+    exhausted_at: datetime | None = None
     last_error: str | None = None
 
 

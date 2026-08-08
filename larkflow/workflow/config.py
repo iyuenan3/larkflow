@@ -131,6 +131,7 @@ class TargetProjectionSettings:
     claim_limit: int = 20
     retry_base: timedelta = timedelta(seconds=5)
     retry_max: timedelta = timedelta(minutes=5)
+    max_attempts: int = 24
     reconcile_batch_size: int = 100
     completion_poll_seconds: float = 30.0
     completion_poll_batch_size: int = 100
@@ -149,6 +150,8 @@ class TargetProjectionSettings:
             raise ValueError("projection claim_limit must be positive")
         if self.retry_base <= timedelta(0) or self.retry_max < self.retry_base:
             raise ValueError("projection retry delays are invalid")
+        if self.max_attempts < 1:
+            raise ValueError("projection max_attempts must be positive")
         if self.reconcile_batch_size < 1:
             raise ValueError("projection reconcile_batch_size must be positive")
         if self.completion_poll_seconds <= 0:
@@ -200,6 +203,11 @@ class TargetProjectionSettings:
                     "LARKFLOW_TARGET_PROJECTION_RETRY_MAX_SECONDS",
                     300.0,
                 )
+            ),
+            max_attempts=_positive_int(
+                values,
+                "LARKFLOW_TARGET_PROJECTION_MAX_ATTEMPTS",
+                24,
             ),
             reconcile_batch_size=_positive_int(
                 values,

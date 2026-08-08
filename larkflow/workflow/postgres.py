@@ -1329,6 +1329,33 @@ class PostgresWorkflowRepository:
                 if updated is None:
                     raise InvalidOutboxClaimError(event_id)
 
+    def mark_outbox_exhausted(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        now: datetime,
+    ) -> None:
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                updated = connection.execute(
+                    """
+                    UPDATE workflow_outbox_events
+                    SET status = 'exhausted', available_at = %s,
+                        exhausted_at = %s, last_error = %s,
+                        claimed_by = NULL, claim_token = NULL,
+                        claim_expires_at = NULL
+                    WHERE tenant_id = %s AND id = %s
+                      AND status = 'processing' AND claim_token = %s
+                    RETURNING id
+                    """,
+                    (now, now, error, tenant_id, event_id, claim_token),
+                ).fetchone()
+                if updated is None:
+                    raise InvalidOutboxClaimError(event_id)
+
     @staticmethod
     def _require_created_at(instance: WorkflowInstance) -> None:
         if instance.created_at is None:

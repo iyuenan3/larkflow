@@ -180,7 +180,7 @@ def test_postgres_admin_overview_reads_all_tenant_scoped_operational_lanes():
         "role_progress",
     }
     assert all(lane.total == 0 for lane in snapshot.queue_lanes)
-    assert snapshot.applied_migrations[-1] == "0021_console_session_governance"
+    assert snapshot.applied_migrations[-1] == "0022_outbox_exhaustion"
 
 
 def test_postgres_competing_session_revocations_are_idempotent_and_audited_once():
@@ -1504,6 +1504,43 @@ def test_postgres_round_trip_audit_outbox_and_optimistic_concurrency():
             (tenant_id, claim.event.id),
         ).fetchone()["status"]
         assert status == "published"
+
+    exhausted = repository.claim_outbox(
+        tenant_id,
+        worker_id="outbox_worker_2",
+        now=datetime(2026, 8, 1, 10, 3, tzinfo=timezone.utc),
+        limit=1,
+    )[0]
+    exhausted_at = datetime(2026, 8, 1, 10, 4, tzinfo=timezone.utc)
+    repository.mark_outbox_exhausted(
+        tenant_id,
+        exhausted.event.id,
+        claim_token=exhausted.claim_token,
+        error="permanent external validation failure",
+        now=exhausted_at,
+    )
+    with connection_factory() as connection:
+        exhausted_row = connection.execute(
+            """
+            SELECT status, attempt_count, exhausted_at, last_error
+            FROM workflow_outbox_events
+            WHERE tenant_id = %s AND id = %s
+            """,
+            (tenant_id, exhausted.event.id),
+        ).fetchone()
+    assert tuple(exhausted_row) == (
+        "exhausted",
+        1,
+        exhausted_at,
+        "permanent external validation failure",
+    )
+    assert repository.claim_outbox(
+        tenant_id,
+        worker_id="outbox_worker_3",
+        now=exhausted_at + timedelta(days=1),
+    ) == ()
+
+    with connection_factory() as connection:
         with pytest.raises(RaiseException, match="append-only"):
             with connection.transaction():
                 connection.execute(

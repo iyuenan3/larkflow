@@ -229,6 +229,17 @@ class OutboxStore(Protocol):
     ) -> None:
         ...
 
+    def mark_outbox_exhausted(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        now: datetime,
+    ) -> None:
+        ...
+
 
 class ProjectionStore(Protocol):
     def get_projection(
@@ -902,6 +913,34 @@ class InMemoryWorkflowRepository:
         record.claimed_by = None
         record.claim_token = None
         record.claim_expires_at = None
+        record.last_error = error
+
+    def mark_outbox_exhausted(
+        self,
+        tenant_id: str,
+        event_id: str,
+        *,
+        claim_token: str,
+        error: str,
+        now: datetime,
+    ) -> None:
+        record = self._claimed_record(tenant_id, event_id, claim_token)
+        record.status = OutboxStatus.EXHAUSTED
+        record.event = OutboxEvent(
+            id=record.event.id,
+            tenant_id=record.event.tenant_id,
+            aggregate_type=record.event.aggregate_type,
+            aggregate_id=record.event.aggregate_id,
+            aggregate_version=record.event.aggregate_version,
+            event_type=record.event.event_type,
+            payload=record.event.payload,
+            created_at=record.event.created_at,
+            available_at=now,
+        )
+        record.claimed_by = None
+        record.claim_token = None
+        record.claim_expires_at = None
+        record.exhausted_at = now
         record.last_error = error
 
     @staticmethod

@@ -157,6 +157,7 @@ class ProjectionWorkerReport:
     documents_created: int = 0
     noops: int = 0
     failed: int = 0
+    exhausted: int = 0
     errors: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -192,6 +193,7 @@ class WorkflowProjectionWorker:
         claim_ttl: timedelta = timedelta(minutes=2),
         retry_base: timedelta = timedelta(seconds=5),
         retry_max: timedelta = timedelta(minutes=5),
+        max_attempts: int = 24,
         id_factory: Callable[[], str] | None = None,
     ) -> None:
         if not tenant_id.strip():
@@ -204,6 +206,8 @@ class WorkflowProjectionWorker:
             raise ValueError("claim_ttl must be positive")
         if retry_base <= timedelta(0) or retry_max < retry_base:
             raise ValueError("retry delays are invalid")
+        if max_attempts < 1:
+            raise ValueError("projection max_attempts must be positive")
         self.repository = repository
         self.outbox = outbox
         self.projections = projections
@@ -217,6 +221,7 @@ class WorkflowProjectionWorker:
         self.claim_ttl = claim_ttl
         self.retry_base = retry_base
         self.retry_max = retry_max
+        self.max_attempts = max_attempts
         self.id_factory = id_factory or (lambda: str(uuid4()))
 
     def run_once(self) -> ProjectionWorkerReport:
@@ -238,6 +243,7 @@ class WorkflowProjectionWorker:
         documents_created = 0
         noops = 0
         failed = 0
+        exhausted = 0
         errors = []
         for claim in claims:
             try:
@@ -245,6 +251,18 @@ class WorkflowProjectionWorker:
             except Exception as exc:
                 failed += 1
                 error = f"{claim.event.id}: {type(exc).__name__}: {exc}"
+                if claim.attempt_count >= self.max_attempts:
+                    exhausted += 1
+                    error = f"{error}; exhausted after {self.max_attempts} attempts"
+                    errors.append(error)
+                    self.outbox.mark_outbox_exhausted(
+                        self.tenant_id,
+                        claim.event.id,
+                        claim_token=claim.claim_token,
+                        error=error,
+                        now=now,
+                    )
+                    continue
                 errors.append(error)
                 self.outbox.mark_outbox_failed(
                     self.tenant_id,
@@ -279,6 +297,7 @@ class WorkflowProjectionWorker:
             documents_created=documents_created,
             noops=noops,
             failed=failed,
+            exhausted=exhausted,
             errors=tuple(errors),
         )
 

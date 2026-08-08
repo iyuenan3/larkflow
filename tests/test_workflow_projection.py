@@ -492,6 +492,56 @@ def test_ambiguous_external_create_retries_with_the_same_idempotency_key():
     assert len(tasks.tasks) == 1
 
 
+def test_projection_exhausts_a_permanent_failure_after_the_attempt_limit():
+    class RejectingTasks(RecordingTasks):
+        def create_task(self, request):
+            self.create_requests.append(request)
+            raise RuntimeError("invalid external owner")
+
+    clock = Clock()
+    service, repository, _, initial_worker = setup_human(clock)
+    assert initial_worker.run_once().noops == 1
+    service.dispatch_due(
+        TENANT,
+        "instance_projection",
+        worker_id="runtime_1",
+    )
+    tasks = RejectingTasks()
+    worker = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        tasks,
+        tenant_id=TENANT,
+        worker_id="projection_1",
+        clock=clock,
+        retry_base=timedelta(seconds=5),
+        retry_max=timedelta(seconds=20),
+        max_attempts=2,
+    )
+
+    first = worker.run_once()
+    assert first.failed == 1
+    assert first.exhausted == 0
+    clock.now += timedelta(seconds=5)
+    final = worker.run_once()
+
+    assert final.failed == 1
+    assert final.exhausted == 1
+    records = [
+        record
+        for record in repository.outbox_records(TENANT)
+        if record.status == OutboxStatus.EXHAUSTED
+    ]
+    assert len(records) == 1
+    assert records[0].attempt_count == 2
+    assert records[0].exhausted_at == clock.now
+    assert "exhausted after 2 attempts" in (records[0].last_error or "")
+    clock.now += timedelta(days=1)
+    assert worker.run_once().claimed == 0
+    assert len(tasks.create_requests) == 2
+
+
 def test_non_human_projection_events_are_published_without_external_io():
     clock = Clock()
     repository = InMemoryWorkflowRepository()

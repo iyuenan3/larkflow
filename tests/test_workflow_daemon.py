@@ -150,7 +150,7 @@ def test_projection_loop_uses_the_same_bounded_backoff_contract():
     worker = ScriptedWorker(
         [
             ProjectionWorkerReport(),
-            ProjectionWorkerReport(claimed=1, published=1, noops=1),
+            ProjectionWorkerReport(claimed=1, published=1, noops=1, exhausted=1),
             ProjectionWorkerReport(),
         ]
     )
@@ -168,6 +168,7 @@ def test_projection_loop_uses_the_same_bounded_backoff_contract():
     assert summary.ticks == 3
     assert summary.claimed == 1
     assert summary.published == 1
+    assert summary.exhausted == 1
     assert summary.reconciled_instances == 2
     assert summary.reconciled_nodes == 3
     assert summary.tasks_rebuilt == 1
@@ -504,6 +505,7 @@ def test_projection_settings_have_independent_claim_and_retry_controls(monkeypat
             "LARKFLOW_TARGET_PROJECTION_CLAIM_LIMIT": "7",
             "LARKFLOW_TARGET_PROJECTION_RETRY_BASE_SECONDS": "2",
             "LARKFLOW_TARGET_PROJECTION_RETRY_MAX_SECONDS": "30",
+            "LARKFLOW_TARGET_PROJECTION_MAX_ATTEMPTS": "9",
             "LARKFLOW_TARGET_PROJECTION_RECONCILE_BATCH_SIZE": "11",
             "LARKFLOW_TARGET_COMPLETION_POLL_SECONDS": "17.5",
             "LARKFLOW_TARGET_COMPLETION_POLL_BATCH_SIZE": "13",
@@ -517,6 +519,7 @@ def test_projection_settings_have_independent_claim_and_retry_controls(monkeypat
     assert settings.claim_limit == 7
     assert settings.retry_base == timedelta(seconds=2)
     assert settings.retry_max == timedelta(seconds=30)
+    assert settings.max_attempts == 9
     assert settings.reconcile_batch_size == 11
     assert settings.completion_poll_seconds == 17.5
     assert settings.completion_poll_batch_size == 13

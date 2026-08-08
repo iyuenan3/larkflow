@@ -50,6 +50,7 @@ class ProjectionLoopSummary:
     documents_created: int = 0
     noops: int = 0
     failed: int = 0
+    exhausted: int = 0
 
 
 class ProjectionWorkerLoop:
@@ -111,6 +112,7 @@ class ProjectionWorkerLoop:
             "documents_created": 0,
             "noops": 0,
             "failed": 0,
+            "exhausted": 0,
         }
         try:
             reconciliation = self.worker.reconcile_all(
@@ -211,6 +213,7 @@ class ProjectionWorkerLoop:
             "documents_created",
             "noops",
             "failed",
+            "exhausted",
         ):
             totals[field] += int(getattr(report, field))
 
@@ -246,6 +249,7 @@ class ProjectionWorkerLoop:
             "documents_created": report.documents_created,
             "noops": report.noops,
             "failed": report.failed,
+            "exhausted": report.exhausted,
             "errors": list(report.errors),
         }
 
