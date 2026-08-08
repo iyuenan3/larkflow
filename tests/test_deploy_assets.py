@@ -146,6 +146,7 @@ def test_console_service_is_loopback_only_and_owner_scoped():
     assert environment["LARKFLOW_CONSOLE_RATE_LIMIT_REQUESTS_PER_CLIENT"] == "300"
     assert environment["LARKFLOW_CONSOLE_RATE_LIMIT_AUTH_REQUESTS_PER_CLIENT"] == "30"
     assert environment["LARKFLOW_CONSOLE_RATE_LIMIT_ADMIN_WRITES_PER_CLIENT"] == "30"
+    assert environment["LARKFLOW_CONSOLE_RATE_LIMIT_WORKFLOW_WRITES_PER_CLIENT"] == "60"
     assert environment["LARKFLOW_CONSOLE_RATE_LIMIT_GLOBAL_REQUESTS"] == "3000"
 
 

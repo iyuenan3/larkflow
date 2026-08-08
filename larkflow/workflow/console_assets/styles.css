@@ -892,6 +892,7 @@ button { color: inherit; }
   align-items: center;
 }
 
+.attention-action-button,
 .attention-copy-button,
 .attention-open-button {
   height: 34px;
@@ -903,6 +904,12 @@ button { color: inherit; }
   font-weight: 650;
 }
 
+.attention-action-button {
+  color: #f4f7ff;
+  border-color: rgba(94, 140, 255, .3);
+  background: rgba(94, 140, 255, .18);
+}
+
 .attention-copy-button { color: #c4ccda; background: rgba(255, 255, 255, .055); }
 
 .attention-open-button {
@@ -911,10 +918,36 @@ button { color: inherit; }
   background: rgba(94, 140, 255, .12);
 }
 
-.attention-copy-button:hover, .attention-open-button:hover { border-color: var(--line-strong); background: rgba(94, 140, 255, .16); }
-.attention-copy-button[data-state="working"], .attention-open-button[data-state="working"] { color: var(--amber); }
-.attention-copy-button[data-state="done"], .attention-open-button[data-state="done"] { color: var(--mint); }
-.attention-copy-button[data-state="error"], .attention-open-button[data-state="error"] { color: var(--red); }
+.attention-action-button:hover, .attention-copy-button:hover, .attention-open-button:hover { border-color: var(--line-strong); background: rgba(94, 140, 255, .22); }
+.attention-action-button[data-state="working"], .attention-copy-button[data-state="working"], .attention-open-button[data-state="working"] { color: var(--amber); }
+.attention-action-button[data-state="done"], .attention-copy-button[data-state="done"], .attention-open-button[data-state="done"] { color: var(--mint); }
+.attention-action-button[data-state="error"], .attention-copy-button[data-state="error"], .attention-open-button[data-state="error"] { color: var(--red); }
+
+.workflow-action-preview {
+  display: flex;
+  grid-column: 2 / -1;
+  gap: 18px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 15px 16px;
+  border: 1px solid rgba(241, 180, 91, .22);
+  border-radius: 12px;
+  background: rgba(241, 180, 91, .055);
+}
+
+.workflow-action-preview[data-state="working"] { opacity: .78; }
+.workflow-action-preview[data-state="done"] { border-color: rgba(88, 214, 176, .26); background: rgba(88, 214, 176, .055); }
+.workflow-action-preview[data-state="error"] { border-color: rgba(250, 126, 136, .28); }
+.workflow-action-preview-copy { min-width: 0; }
+.workflow-action-preview-copy strong { color: var(--text-strong); font-size: var(--font-control); }
+.workflow-action-preview-copy p { margin: 6px 0 0; color: var(--muted); font-size: var(--font-meta); line-height: 1.55; }
+.workflow-action-preview-list { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
+.workflow-action-preview-list span { padding: 4px 7px; border: 1px solid var(--line); border-radius: 7px; color: var(--text-soft); background: var(--surface-subtle); font-size: var(--font-caption); }
+.workflow-action-preview-controls { display: flex; flex: 0 0 auto; gap: 8px; }
+.workflow-action-preview-controls button { min-height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; font-size: var(--font-meta); font-weight: 650; }
+.workflow-action-preview-dismiss { color: var(--text-soft); background: var(--surface-subtle); }
+.workflow-action-preview-confirm { color: #fff; border-color: rgba(250, 126, 136, .3) !important; background: rgba(250, 126, 136, .16); }
+.workflow-action-preview-controls button:disabled { cursor: wait; opacity: .68; }
 
 .attention-group-toggle {
   width: 100%;
@@ -1095,6 +1128,35 @@ button { color: inherit; }
   background: rgba(255, 255, 255, .03);
   font-size: 10px;
 }
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-glass);
+}
+
+.detail-actions > .workflow-action-preview { flex: 1 0 100%; }
+.detail-actions-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.detail-actions-copy strong { color: var(--text-strong); font-size: var(--font-control); }
+.detail-actions-copy span { color: var(--muted); font-size: var(--font-meta); }
+.detail-action-controls { display: flex; flex: 0 0 auto; gap: 8px; align-items: center; }
+.detail-action-button { min-height: 38px; padding: 0 14px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; font-size: var(--font-control); font-weight: 680; }
+.detail-action-primary { color: #fff; border-color: rgba(94, 140, 255, .34); background: rgba(94, 140, 255, .24); }
+.detail-action-secondary { color: var(--text-soft); background: var(--surface-subtle); }
+.detail-action-danger { color: var(--red); border-color: rgba(250, 126, 136, .24); background: rgba(250, 126, 136, .07); }
+.detail-action-button:hover { border-color: var(--line-strong); background: var(--surface-hover); }
+.detail-action-button:disabled { cursor: wait; opacity: .72; }
+.detail-action-button[data-state="working"] { color: var(--amber); }
+.detail-action-button[data-state="done"] { color: var(--mint); }
+.detail-action-button[data-state="error"] { color: var(--red); }
+.detail-action-empty { color: var(--muted); font-size: var(--font-meta); }
 
 .back-button::before {
   content: "‹";
@@ -1316,7 +1378,12 @@ button { color: inherit; }
   .attention-group-copy { align-items: flex-start; flex-direction: column; gap: 4px; }
   .attention-card { padding: 15px 14px; }
   .attention-actions { flex-wrap: wrap; }
-  .attention-copy-button, .attention-open-button { flex: 1 1 130px; }
+  .attention-action-button, .attention-copy-button, .attention-open-button { flex: 1 1 130px; }
+  .workflow-action-preview { grid-column: 1 / -1; align-items: stretch; flex-direction: column; }
+  .workflow-action-preview-controls button { flex: 1; }
+  .detail-actions { align-items: stretch; flex-direction: column; }
+  .detail-action-controls { flex-wrap: wrap; }
+  .detail-action-button { flex: 1 1 130px; }
   .detail-head { display: block; }
   .progress-ring { margin-top: 18px; }
   .detail-tabs button { min-width: 104px; padding: 0 10px; font-size: 10px; }
@@ -1548,6 +1615,14 @@ button { color: inherit; }
 :root[data-theme="light"] .admin-session-preview-actions button,
 :root[data-theme="light"] .admin-session-revoke,
 :root[data-theme="light"] .admin-session-current { color: var(--text-soft); }
+:root[data-theme="light"] .attention-action-button,
+:root[data-theme="light"] .attention-open-button,
+:root[data-theme="light"] .detail-action-primary { color: #21468f; }
+:root[data-theme="light"] .attention-action-button[data-state="working"],
+:root[data-theme="light"] .detail-action-button[data-state="working"] { color: #8a540d; }
+:root[data-theme="light"] .attention-action-button[data-state="done"],
+:root[data-theme="light"] .detail-action-button[data-state="done"] { color: #116f59; }
+:root[data-theme="light"] .workflow-action-preview-confirm { color: #9f2735; background: rgba(199, 61, 76, .09); }
 :root[data-theme="light"] .attention-group-toggle { color: var(--muted); }
 :root[data-theme="light"] .attention-group-toggle:hover { color: var(--text-strong); }
 :root[data-theme="light"] .instance-item:hover { background: #ffffff; }

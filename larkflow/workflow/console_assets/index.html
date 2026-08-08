@@ -88,8 +88,8 @@
           <div class="sidebar-boundary">
             <span class="sidebar-boundary-dot" aria-hidden="true"></span>
             <div>
-              <strong>中央节点只读</strong>
-              <p>处理动作仍在飞书中完成，并由服务端再次校验。</p>
+              <strong>中央节点受控操作</strong>
+              <p>流程操作在本页完成，Human 输入与决定仍在飞书处理。</p>
             </div>
           </div>
         </aside>
@@ -168,6 +168,8 @@
               </div>
             </div>
 
+            <section id="detail-actions" class="detail-actions" aria-label="流程操作"></section>
+
             <nav id="detail-tabs" class="detail-tabs" aria-label="流程详情视图">
               <button id="detail-tab-overview" type="button" data-tab="overview" data-active="true">概览</button>
               <button id="detail-tab-execution" type="button" data-tab="execution" data-active="false">执行图与结果</button>
@@ -181,7 +183,7 @@
                     <p class="eyebrow">INSTANCE SUMMARY</p>
                     <h2 id="insight-title">实例摘要</h2>
                   </div>
-                  <span class="insight-boundary">本页只读，回复与操作仍在 Agent 对话或飞书入口完成</span>
+                  <span class="insight-boundary">流程操作由中央节点校验，Human 输入与决定仍在飞书完成</span>
                 </div>
                 <div class="insight-grid">
                   <article class="insight-card insight-status-card">
@@ -272,7 +274,7 @@
           </div>
           <div class="admin-boundary">
             <strong>受控运营边界</strong>
-            <span>只有会话撤销可写，且必须预览、确认并追加审计</span>
+            <span>管理员会话撤销仍必须预览、确认并追加审计</span>
           </div>
         </section>
 

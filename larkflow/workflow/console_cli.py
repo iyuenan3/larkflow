@@ -23,10 +23,12 @@ from .console_admin_sessions import (
     ConsoleAdminSessionService,
     PostgresConsoleAdminSessionRepository,
 )
+from .console_actions import ConsoleActionService
 from .console_http import ConsoleHttpApplication, build_console_http_server
 from .console_rate_limit import ConsoleRequestRateLimiter
 from .migrate import postgres_connection_factory, verify_migrations
 from .postgres import PostgresWorkflowRepository
+from .service import WorkflowService
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -81,6 +83,7 @@ def _run(namespace: argparse.Namespace) -> int:
     verify_migrations(connection_factory)
     repository = PostgresWorkflowRepository(connection_factory)
     service = ConsoleReadService(repository)
+    action_service = ConsoleActionService(WorkflowService(repository))
     admin_people = _person_id_list(
         os.environ.get("LARKFLOW_CONSOLE_ADMIN_PERSON_IDS", ""),
         label="LARKFLOW_CONSOLE_ADMIN_PERSON_IDS",
@@ -120,6 +123,7 @@ def _run(namespace: argparse.Namespace) -> int:
             ),
             admin_service=admin_service,
             admin_session_service=admin_session_service,
+            action_service=action_service,
         )
         access = "enter LARKFLOW_CONSOLE_ACCESS_TOKEN in the browser"
     else:
@@ -166,6 +170,7 @@ def _run(namespace: argparse.Namespace) -> int:
             oauth=oauth,
             admin_service=admin_service,
             admin_session_service=admin_session_service,
+            action_service=action_service,
         )
         rate_limiter = _build_rate_limiter()
         access = "Feishu OAuth with an opaque HttpOnly session"
@@ -190,7 +195,7 @@ def _run(namespace: argparse.Namespace) -> int:
             "principal": "configured_server_side",
             "access": access,
             "auth_mode": namespace.auth_mode,
-            "mode": "owner_read_admin_session_governance",
+            "mode": "owner_actions_admin_session_governance",
             "admin_overview": "enabled" if admin_service is not None else "disabled",
             "rate_limit": "enabled" if rate_limiter is not None else "disabled",
         }
@@ -290,6 +295,15 @@ def _build_rate_limiter() -> ConsoleRequestRateLimiter:
         minimum=5,
         maximum=1_000,
     )
+    workflow_writes_per_client = _bounded_integer(
+        os.environ.get(
+            "LARKFLOW_CONSOLE_RATE_LIMIT_WORKFLOW_WRITES_PER_CLIENT",
+            "60",
+        ),
+        label="LARKFLOW_CONSOLE_RATE_LIMIT_WORKFLOW_WRITES_PER_CLIENT",
+        minimum=5,
+        maximum=2_000,
+    )
     global_requests = _bounded_integer(
         os.environ.get("LARKFLOW_CONSOLE_RATE_LIMIT_GLOBAL_REQUESTS", "3000"),
         label="LARKFLOW_CONSOLE_RATE_LIMIT_GLOBAL_REQUESTS",
@@ -301,6 +315,7 @@ def _build_rate_limiter() -> ConsoleRequestRateLimiter:
         requests_per_client=requests_per_client,
         auth_requests_per_client=auth_requests_per_client,
         admin_writes_per_client=admin_writes_per_client,
+        workflow_writes_per_client=workflow_writes_per_client,
         global_requests=global_requests,
     )
 

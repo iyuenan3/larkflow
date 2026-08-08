@@ -113,7 +113,7 @@ const ATTENTION_DESCRIPTION = {
   recover_failed: "先确认影响范围，再决定是否重新执行",
   complete_human: "这些节点正在等待你的输入或判断",
   resume_flow: "流程已暂停，需要你决定是否继续",
-  confirm_draft: "核对目标和节点后，再从飞书确认启动",
+  confirm_draft: "核对目标和节点后，直接在本页确认启动",
 };
 const QUEUE_LANE = {
   outbox: "外部投影",
@@ -188,7 +188,9 @@ async function request(path, options = {}) {
     headers.Authorization = `Bearer ${state.token}`;
   }
   if (method !== "GET" && method !== "HEAD") {
-    headers["X-Larkflow-Console-Action"] = "session-governance-v1";
+    headers["X-Larkflow-Console-Action"] = path.startsWith("/console/api/v1/admin/")
+      ? "session-governance-v1"
+      : "workflow-action-v1";
   }
   try {
     response = await fetch(path, {
@@ -624,11 +626,16 @@ function attentionCard(item) {
   );
 
   const actions = node("div", "attention-actions");
-  if (item.command) {
-    const copyButton = node("button", "attention-copy-button", "复制飞书命令");
-    copyButton.type = "button";
-    copyButton.addEventListener("click", () => copyCommand(item.command, copyButton));
-    actions.append(copyButton);
+  if (item.action) {
+    const actionButton = node(
+      "button",
+      "attention-action-button",
+      attentionActionLabel(item.action),
+    );
+    actionButton.type = "button";
+    actionButton.dataset.defaultLabel = attentionActionLabel(item.action);
+    actionButton.addEventListener("click", () => runAttentionAction(item, card, actionButton));
+    actions.append(actionButton);
   }
   const openButton = node("button", "attention-open-button", "查看详情");
   openButton.type = "button";
@@ -652,45 +659,139 @@ function attentionCard(item) {
   return card;
 }
 
-async function copyCommand(command, button) {
+function attentionActionLabel(action) {
+  if (action.kind === "confirm_draft") return "确认并启动";
+  if (action.kind === "resume") return "继续流程";
+  if (action.kind === "restart") return "查看重启影响";
+  return "执行操作";
+}
+
+function attentionActionPath(item) {
+  const instanceId = encodeURIComponent(item.instance_id);
+  if (item.action.kind === "confirm_draft") {
+    return `/console/api/v1/instances/${instanceId}/confirm`;
+  }
+  if (item.action.kind === "resume") {
+    return `/console/api/v1/instances/${instanceId}/resume`;
+  }
+  if (item.action.kind === "restart" && item.action.scope === "node") {
+    return `/console/api/v1/instances/${instanceId}/nodes/${encodeURIComponent(item.action.node_key)}/restart-preview`;
+  }
+  if (item.action.kind === "restart") {
+    return `/console/api/v1/instances/${instanceId}/restart-preview`;
+  }
+  throw new Error("当前操作尚未接入中央节点");
+}
+
+async function runAttentionAction(item, card, button) {
   button.disabled = true;
   button.dataset.state = "working";
-  button.textContent = "正在复制";
+  button.textContent = item.action.kind === "restart" ? "正在生成预览" : "正在执行";
   try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(command);
-    } else {
-      copyCommandFallback(command);
+    const payload = await request(attentionActionPath(item), { method: "POST" });
+    if (payload.stage === "preview") {
+      button.dataset.state = "done";
+      button.textContent = "等待你确认";
+      renderWorkflowActionPreview(card, payload, button);
+      return;
     }
     button.dataset.state = "done";
-    button.textContent = "已复制，可去飞书发送";
-    showToast("命令已复制，请到 larkflow 对话发送");
+    button.textContent = payload.already_applied ? "状态已经生效" : "操作已完成";
+    showToast(workflowActionSuccess(payload));
+    await loadInstances();
   } catch (error) {
     button.dataset.state = "error";
-    button.textContent = "复制失败";
-    showToast("复制失败，请重试", "error");
-  } finally {
+    button.textContent = workflowActionError(error);
+    showToast(error.message || "操作失败，请重试", "error");
     button.disabled = false;
     setTimeout(() => {
       button.dataset.state = "idle";
-      button.textContent = "复制飞书命令";
-    }, 2200);
+      button.textContent = attentionActionLabel(item.action);
+    }, 2600);
   }
 }
 
-function copyCommandFallback(command) {
-  const textarea = node("textarea", "clipboard-fallback");
-  textarea.value = command;
-  textarea.readOnly = true;
-  document.body.append(textarea);
-  let copied = false;
-  try {
-    textarea.select();
-    copied = document.execCommand("copy");
-  } finally {
-    textarea.remove();
+function workflowActionSuccess(payload) {
+  if (payload.action === "confirm_draft") return "流程已确认启动";
+  if (payload.action === "pause") return "流程已暂停";
+  if (payload.action === "resume") return "流程已继续";
+  if (payload.action === "cancel") return "流程已取消";
+  if (payload.action === "restart") return "已创建新的 Attempt";
+  return "操作已完成";
+}
+
+function workflowActionError(error) {
+  if (["preview_stale", "preview_expired", "state_conflict"].includes(error.code)) {
+    return "状态已变化";
   }
-  if (!copied) throw new Error("copy failed");
+  return "操作失败";
+}
+
+function renderWorkflowActionPreview(container, payload, sourceButton = null) {
+  container.querySelector(".workflow-action-preview")?.remove();
+  const preview = payload.preview;
+  const panel = node("section", "workflow-action-preview");
+  panel.dataset.action = payload.action;
+  const copy = node("div", "workflow-action-preview-copy");
+  const title = payload.action === "cancel"
+    ? "确认取消整个流程？"
+    : preview.scope === "instance"
+      ? "确认重新执行全部节点？"
+      : `确认从“${preview.target_node?.title || "目标节点"}”重新执行？`;
+  const affected = preview.affected_nodes || [];
+  copy.append(
+    node("strong", "", title),
+    node("p", "", `将影响 ${affected.length} 个节点。旧 Attempt、结果和审计都会保留。`),
+  );
+  const list = node("div", "workflow-action-preview-list");
+  affected.slice(0, 6).forEach((item) => {
+    list.append(node("span", "", item.title || item.key));
+  });
+  if (affected.length > 6) list.append(node("span", "", `另有 ${affected.length - 6} 个节点`));
+  copy.append(list);
+  const controls = node("div", "workflow-action-preview-controls");
+  const dismiss = node("button", "workflow-action-preview-dismiss", "暂不执行");
+  dismiss.type = "button";
+  dismiss.addEventListener("click", () => {
+    panel.remove();
+    if (sourceButton) {
+      sourceButton.disabled = false;
+      sourceButton.dataset.state = "idle";
+      sourceButton.textContent = sourceButton.dataset.defaultLabel || "查看重启影响";
+    }
+  });
+  const confirm = node(
+    "button",
+    "workflow-action-preview-confirm",
+    payload.action === "cancel" ? "确认取消" : "确认重新执行",
+  );
+  confirm.type = "button";
+  confirm.addEventListener("click", () => confirmWorkflowActionPreview(payload, panel, confirm));
+  controls.append(dismiss, confirm);
+  panel.append(copy, controls);
+  container.append(panel);
+}
+
+async function confirmWorkflowActionPreview(payload, panel, button) {
+  button.disabled = true;
+  panel.dataset.state = "working";
+  button.textContent = "正在执行";
+  const preview = payload.preview;
+  const path = payload.action === "cancel"
+    ? `/console/api/v1/instances/${encodeURIComponent(preview.instance_id)}/cancel-confirm/${preview.expected_instance_version}`
+    : `/console/api/v1/restart-previews/${encodeURIComponent(preview.id)}/confirm`;
+  try {
+    const result = await request(path, { method: "POST" });
+    panel.dataset.state = "done";
+    button.textContent = result.already_applied ? "操作已经生效" : "操作已完成";
+    showToast(workflowActionSuccess(result));
+    await loadInstances(result.instance?.id || null);
+  } catch (error) {
+    panel.dataset.state = "error";
+    button.textContent = workflowActionError(error);
+    button.disabled = false;
+    showToast(error.message || "操作失败，请重试", "error");
+  }
 }
 
 async function loadDetail(instanceId) {
@@ -792,12 +893,91 @@ function renderDetail() {
   const percent = progress.total_nodes ? Math.round(progress.completed_nodes / progress.total_nodes * 100) : 0;
   el("progress-ring").style.setProperty("--progress", `${percent * 3.6}deg`);
   el("graph-revision").textContent = `Graph r${instance.graph_revision}`;
+  renderDetailActions(instance);
   renderInsights(payload);
   renderOverviewNodes(payload.nodes);
   renderGraph(payload.nodes);
   renderAttempts(payload.nodes.find((item) => item.key === state.selectedNode));
   renderAudit(payload.audit);
   setDetailTab(state.detailTab);
+}
+
+function renderDetailActions(instance) {
+  const container = el("detail-actions");
+  container.replaceChildren();
+  const copy = node("div", "detail-actions-copy");
+  copy.append(
+    node("strong", "", "流程操作"),
+    node("span", "", "所有操作都使用当前飞书身份重新校验权限和状态"),
+  );
+  const controls = node("div", "detail-action-controls");
+
+  if (instance.status === "draft") {
+    controls.append(detailActionButton("确认并启动", "primary", (button) => runDetailDirectAction(instance, "confirm", button)));
+  } else if (instance.status === "running") {
+    controls.append(detailActionButton("暂停流程", "secondary", (button) => runDetailDirectAction(instance, "pause", button)));
+    controls.append(detailActionButton("重新执行", "secondary", (button) => previewDetailAction(instance, "restart", button)));
+    controls.append(detailActionButton("取消流程", "danger", (button) => previewDetailAction(instance, "cancel", button)));
+  } else if (instance.status === "paused") {
+    controls.append(detailActionButton("继续流程", "primary", (button) => runDetailDirectAction(instance, "resume", button)));
+    controls.append(detailActionButton("取消流程", "danger", (button) => previewDetailAction(instance, "cancel", button)));
+  } else if (["done", "failed"].includes(instance.status)) {
+    controls.append(detailActionButton("重新执行", "primary", (button) => previewDetailAction(instance, "restart", button)));
+  }
+
+  if (controls.childElementCount === 0) {
+    controls.append(node("span", "detail-action-empty", "当前状态没有可执行操作"));
+  }
+  container.append(copy, controls);
+}
+
+function detailActionButton(label, tone, action) {
+  const button = node("button", `detail-action-button detail-action-${tone}`, label);
+  button.type = "button";
+  button.dataset.defaultLabel = label;
+  button.addEventListener("click", () => action(button));
+  return button;
+}
+
+async function runDetailDirectAction(instance, action, button) {
+  button.disabled = true;
+  button.dataset.state = "working";
+  button.textContent = "正在执行";
+  try {
+    const payload = await request(
+      `/console/api/v1/instances/${encodeURIComponent(instance.id)}/${action}`,
+      { method: "POST" },
+    );
+    button.dataset.state = "done";
+    button.textContent = payload.already_applied ? "状态已经生效" : "操作已完成";
+    showToast(workflowActionSuccess(payload));
+    await loadInstances(instance.id);
+  } catch (error) {
+    button.dataset.state = "error";
+    button.textContent = workflowActionError(error);
+    button.disabled = false;
+    showToast(error.message || "操作失败，请重试", "error");
+  }
+}
+
+async function previewDetailAction(instance, action, button) {
+  button.disabled = true;
+  button.dataset.state = "working";
+  button.textContent = "正在生成预览";
+  const path = action === "cancel"
+    ? `/console/api/v1/instances/${encodeURIComponent(instance.id)}/cancel-preview`
+    : `/console/api/v1/instances/${encodeURIComponent(instance.id)}/restart-preview`;
+  try {
+    const payload = await request(path, { method: "POST" });
+    button.dataset.state = "done";
+    button.textContent = "等待你确认";
+    renderWorkflowActionPreview(el("detail-actions"), payload, button);
+  } catch (error) {
+    button.dataset.state = "error";
+    button.textContent = workflowActionError(error);
+    button.disabled = false;
+    showToast(error.message || "预览失败，请刷新后重试", "error");
+  }
 }
 
 function renderOverviewNodes(nodes) {

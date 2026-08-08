@@ -20,6 +20,7 @@ from larkflow.workflow.console_http import (
     ConsoleHttpApplication,
     build_console_http_server,
 )
+from larkflow.workflow.console_actions import ConsoleActionService
 from larkflow.workflow import console_http
 from larkflow.workflow.model import (
     AttemptStatus,
@@ -156,9 +157,11 @@ def _principal(person_id: str = OWNER, tenant_id: str = TENANT) -> ConsolePrinci
 
 
 def _application(repository=None) -> ConsoleHttpApplication:
+    repository = repository or _repository()
     return ConsoleHttpApplication(
-        ConsoleReadService(repository or _repository()),
+        ConsoleReadService(repository),
         StaticConsoleAuthenticator(TOKEN, _principal()),
+        action_service=ConsoleActionService(WorkflowService(repository)),
     )
 
 
@@ -220,7 +223,7 @@ def test_console_attention_only_includes_actionable_owner_work():
         "detail": "该 Human 节点正在等待你的输入或决定。",
         "occurred_at": NOW.isoformat(),
         "node": {"key": "confirm_input", "title": "Confirm input"},
-        "command": None,
+        "action": None,
         "action_hint": "在飞书完成该节点对应的任务或决定卡。",
     }
     assert "instance_foreign" not in encoded
@@ -273,13 +276,15 @@ def test_console_attention_uses_rework_target_and_safe_full_restart_fallback():
         OWNER,
     )
 
-    assert items[0]["command"] == "/larkflow restart-all multiple_failures"
-    commands = {item["instance_id"]: item["command"] for item in items}
-    assert commands == {
-        "multiple_failures": "/larkflow restart-all multiple_failures",
-        "rejected_instance": (
-            "/larkflow restart rejected_instance generate_summary"
-        ),
+    assert items[0]["action"] == {"kind": "restart", "scope": "instance"}
+    actions = {item["instance_id"]: item["action"] for item in items}
+    assert actions == {
+        "multiple_failures": {"kind": "restart", "scope": "instance"},
+        "rejected_instance": {
+            "kind": "restart",
+            "scope": "node",
+            "node_key": "generate_summary",
+        },
     }
 
 
@@ -335,11 +340,13 @@ def test_console_attention_prioritizes_failure_then_human_pause_and_draft():
         "resume_flow",
         "confirm_draft",
     ]
-    assert items[0]["command"] == (
-        "/larkflow restart failed_attention confirm_input"
-    )
-    assert items[2]["command"] == "/larkflow resume paused_attention"
-    assert items[3]["command"] == "/larkflow confirm draft_attention"
+    assert items[0]["action"] == {
+        "kind": "restart",
+        "scope": "node",
+        "node_key": "confirm_input",
+    }
+    assert items[2]["action"] == {"kind": "resume"}
+    assert items[3]["action"] == {"kind": "confirm_draft"}
     assert "private failure detail" not in encoded
 
 
@@ -549,7 +556,9 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"fitGraph" in script.body
     assert b"renderInsights" in script.body
     assert b"renderAttention" in script.body
-    assert b"copyCommand" in script.body
+    assert b"runAttentionAction" in script.body
+    assert b"confirmWorkflowActionPreview" in script.body
+    assert b"renderDetailActions" in script.body
     assert b"loadAuthConfiguration" in script.body
     assert b"loadAdminOverview" in script.body
     assert b"renderAdminOverview" in script.body
@@ -558,8 +567,9 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"larkflow.console.theme" in script.body
     assert b"prefers-color-scheme: dark" in script.body
     assert b"document.documentElement.dataset.theme" in script.body
-    assert "正在复制".encode() in script.body
-    assert "已复制，可去飞书发送".encode() in script.body
+    assert "正在生成预览".encode() in script.body
+    assert "确认并启动".encode() in script.body
+    assert "复制飞书命令".encode() not in script.body
     assert b"showOwnerSection" in script.body
     assert b"setDetailTab" in script.body
     assert b"renderOverviewNodes" in script.body
@@ -580,6 +590,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"workflow-filters" in page.body
     assert b"detail-tabs" in page.body
     assert b"overview-nodes" in page.body
+    assert b"detail-actions" in page.body
     assert page.body.count(b"theme-toggle") >= 2
     assert b'content="light dark"' in page.body
     assert b"admin-console" in page.body

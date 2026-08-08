@@ -37,6 +37,7 @@ class ConsoleRequestRateLimiter:
         requests_per_client: int = 300,
         auth_requests_per_client: int = 30,
         admin_writes_per_client: int = 30,
+        workflow_writes_per_client: int = 60,
         global_requests: int = 3_000,
         max_client_keys: int = 10_000,
         clock: Callable[[], float] = time.monotonic,
@@ -46,12 +47,14 @@ class ConsoleRequestRateLimiter:
         _positive("requests_per_client", requests_per_client)
         _positive("auth_requests_per_client", auth_requests_per_client)
         _positive("admin_writes_per_client", admin_writes_per_client)
+        _positive("workflow_writes_per_client", workflow_writes_per_client)
         _positive("global_requests", global_requests)
         _positive("max_client_keys", max_client_keys)
         if global_requests < max(
             requests_per_client,
             auth_requests_per_client,
             admin_writes_per_client,
+            workflow_writes_per_client,
         ):
             raise ValueError("global_requests must cover every per-client budget")
         if hash_key is not None and len(hash_key) < 16:
@@ -60,6 +63,7 @@ class ConsoleRequestRateLimiter:
         self.requests_per_client = requests_per_client
         self.auth_requests_per_client = auth_requests_per_client
         self.admin_writes_per_client = admin_writes_per_client
+        self.workflow_writes_per_client = workflow_writes_per_client
         self.global_requests = global_requests
         self.max_client_keys = max_client_keys
         self.clock = clock
@@ -127,6 +131,11 @@ class ConsoleRequestRateLimiter:
             return "auth", self.auth_requests_per_client
         if method.upper() == "POST" and path.startswith("/console/api/v1/admin/"):
             return "admin_write", self.admin_writes_per_client
+        if method.upper() == "POST" and (
+            path.startswith("/console/api/v1/instances/")
+            or path.startswith("/console/api/v1/restart-previews/")
+        ):
+            return "workflow_write", self.workflow_writes_per_client
         return "read", self.requests_per_client
 
     def _source_digest(self, source: str) -> bytes:

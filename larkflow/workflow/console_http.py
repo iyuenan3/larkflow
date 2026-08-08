@@ -33,6 +33,7 @@ from .console_admin_sessions import (
     ConsoleAdminSessionPreviewStaleError,
     ConsoleAdminSessionService,
 )
+from .console_actions import ConsoleActionConflictError, ConsoleActionService
 from .console_rate_limit import ConsoleRequestRateLimiter
 
 
@@ -42,6 +43,22 @@ LOGGER = logging.getLogger(__name__)
 _INSTANCE_ROUTE = re.compile(
     r"^/console/api/v1/instances/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})$"
 )
+_INSTANCE_ACTION_ROUTE = re.compile(
+    r"^/console/api/v1/instances/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/"
+    r"(confirm|pause|resume|cancel-preview|restart-preview)$"
+)
+_CANCEL_CONFIRM_ROUTE = re.compile(
+    r"^/console/api/v1/instances/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/"
+    r"cancel-confirm/([0-9]{1,19})$"
+)
+_NODE_RESTART_PREVIEW_ROUTE = re.compile(
+    r"^/console/api/v1/instances/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/"
+    r"nodes/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/restart-preview$"
+)
+_RESTART_CONFIRM_ROUTE = re.compile(
+    r"^/console/api/v1/restart-previews/"
+    r"([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/confirm$"
+)
 _ADMIN_SESSION_PREVIEW_ROUTE = re.compile(
     r"^/console/api/v1/admin/sessions/([0-9a-f]{32})/revoke-preview$"
 )
@@ -50,6 +67,7 @@ _ADMIN_SESSION_CONFIRM_ROUTE = re.compile(
 )
 _ADMIN_ACTION_HEADER = "x-larkflow-console-action"
 _ADMIN_ACTION_VALUE = "session-governance-v1"
+_WORKFLOW_ACTION_VALUE = "workflow-action-v1"
 _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Content-Security-Policy": (
@@ -72,6 +90,10 @@ _TRUSTED_CLIENT_SOURCE_HEADER = "x-larkflow-client-ip"
 
 
 class _AdminWriteRequestError(PermissionError):
+    pass
+
+
+class _WorkflowWriteRequestError(PermissionError):
     pass
 
 
@@ -107,12 +129,14 @@ class ConsoleHttpApplication:
         oauth: FeishuConsoleOAuthFlow | None = None,
         admin_service: ConsoleAdminReadService | None = None,
         admin_session_service: ConsoleAdminSessionService | None = None,
+        action_service: ConsoleActionService | None = None,
     ) -> None:
         self.service = service
         self.authenticator = authenticator
         self.oauth = oauth
         self.admin_service = admin_service
         self.admin_session_service = admin_session_service
+        self.action_service = action_service
         if authenticator.mode not in {"static", "feishu"}:
             raise ValueError("console authenticator mode is unsupported")
         if (authenticator.mode == "feishu") != (oauth is not None):
@@ -253,6 +277,16 @@ class ConsoleHttpApplication:
             "/console/api/v1/admin/"
         ):
             return self._handle_admin_write(
+                parsed.path,
+                parsed.query,
+                request_headers,
+            )
+
+        if method == "POST" and (
+            parsed.path.startswith("/console/api/v1/instances/")
+            or parsed.path.startswith("/console/api/v1/restart-previews/")
+        ):
+            return self._handle_workflow_write(
                 parsed.path,
                 parsed.query,
                 request_headers,
@@ -438,6 +472,116 @@ class ConsoleHttpApplication:
         except Exception:
             return self._error(500, "internal_error", "internal server error")
 
+    def _handle_workflow_write(
+        self,
+        path: str,
+        query: str,
+        headers: Mapping[str, str],
+    ) -> ConsoleHttpResponse:
+        try:
+            authentication = self.authenticator.authenticate_context(headers)
+            principal = authentication.principal
+            if self.action_service is None:
+                raise ConsoleResourceNotFoundError("workflow actions")
+            self._validate_workflow_write_request(query, headers)
+
+            node_restart = _NODE_RESTART_PREVIEW_ROUTE.fullmatch(path)
+            if node_restart is not None:
+                return self._json(
+                    201,
+                    self.action_service.preview_restart(
+                        principal,
+                        node_restart.group(1),
+                        node_key=node_restart.group(2),
+                    ),
+                )
+
+            instance_action = _INSTANCE_ACTION_ROUTE.fullmatch(path)
+            if instance_action is not None:
+                instance_id, action = instance_action.groups()
+                if action == "confirm":
+                    payload = self.action_service.confirm_draft(
+                        principal,
+                        instance_id,
+                    )
+                    return self._json(200, payload)
+                if action == "pause":
+                    return self._json(
+                        200,
+                        self.action_service.pause(principal, instance_id),
+                    )
+                if action == "resume":
+                    return self._json(
+                        200,
+                        self.action_service.resume(principal, instance_id),
+                    )
+                if action == "cancel-preview":
+                    return self._json(
+                        200,
+                        self.action_service.preview_cancellation(
+                            principal,
+                            instance_id,
+                        ),
+                    )
+                return self._json(
+                    201,
+                    self.action_service.preview_restart(
+                        principal,
+                        instance_id,
+                    ),
+                )
+
+            cancel_confirm = _CANCEL_CONFIRM_ROUTE.fullmatch(path)
+            if cancel_confirm is not None:
+                version = int(cancel_confirm.group(2))
+                if version > 9_223_372_036_854_775_807:
+                    raise ValueError("instance version is out of range")
+                return self._json(
+                    200,
+                    self.action_service.confirm_cancellation(
+                        principal,
+                        cancel_confirm.group(1),
+                        version,
+                    ),
+                )
+
+            restart_confirm = _RESTART_CONFIRM_ROUTE.fullmatch(path)
+            if restart_confirm is not None:
+                return self._json(
+                    200,
+                    self.action_service.confirm_restart(
+                        principal,
+                        restart_confirm.group(1),
+                    ),
+                )
+            raise ConsoleResourceNotFoundError("workflow action")
+        except InvalidConsoleCredentialError:
+            challenge = (
+                {"WWW-Authenticate": "Bearer"}
+                if self.authenticator.mode == "static"
+                else {}
+            )
+            return self._error(
+                401,
+                "invalid_credential",
+                "console credential is invalid",
+                headers=challenge,
+            )
+        except ConsoleResourceNotFoundError:
+            return self._error(404, "not_found", "resource does not exist")
+        except _WorkflowWriteRequestError:
+            return self._error(
+                403,
+                "request_rejected",
+                "workflow action request was rejected",
+            )
+        except ConsoleActionConflictError as exc:
+            return self._error(409, exc.code, str(exc))
+        except (TypeError, ValueError) as exc:
+            return self._error(400, "invalid_request", str(exc))
+        except Exception:
+            return self._error(500, "internal_error", "internal server error")
+
     def _validate_admin_write_request(
         self,
         query: str,
@@ -464,6 +608,34 @@ class ConsoleHttpApplication:
             ):
                 raise _AdminWriteRequestError(
                     "admin action origin is invalid"
+                )
+
+    def _validate_workflow_write_request(
+        self,
+        query: str,
+        headers: Mapping[str, str],
+    ) -> None:
+        if query:
+            raise ValueError("workflow action query is not accepted")
+        content_length = _header(headers, "content-length")
+        if content_length not in {None, "", "0"}:
+            raise ValueError("workflow action body is not accepted")
+        if _header(headers, "transfer-encoding") is not None:
+            raise ValueError("workflow action body is not accepted")
+        if not secrets.compare_digest(
+            _header(headers, _ADMIN_ACTION_HEADER) or "",
+            _WORKFLOW_ACTION_VALUE,
+        ):
+            raise _WorkflowWriteRequestError(
+                "workflow action request header is invalid"
+            )
+        if self.authenticator.mode == "feishu":
+            if self.oauth is None or not secrets.compare_digest(
+                _header(headers, "origin") or "",
+                self.oauth.public_base_url,
+            ):
+                raise _WorkflowWriteRequestError(
+                    "workflow action origin is invalid"
                 )
 
     @staticmethod

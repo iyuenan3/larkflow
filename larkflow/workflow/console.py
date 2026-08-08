@@ -246,8 +246,12 @@ class ConsoleReadService:
                             f"{candidate.node_title or candidate.node_key}"
                         ),
                         detail="先预览该节点及下游的重启影响，再确认执行。",
-                        command=f"/larkflow restart {instance_id} {target}",
-                        action_hint="把命令发送给 larkflow，按回复中的确认命令执行。",
+                        action={
+                            "kind": "restart",
+                            "scope": "node",
+                            "node_key": target,
+                        },
+                        action_hint="点击后先查看影响范围，再明确确认重新执行。",
                     )
                 )
             elif len(failed) > 1:
@@ -258,8 +262,8 @@ class ConsoleReadService:
                         priority=0,
                         title=f"恢复失败流程：{len(failed)} 个失败节点",
                         detail="存在多个失败节点，先预览完整实例重启影响。",
-                        command=f"/larkflow restart-all {instance_id}",
-                        action_hint="把命令发送给 larkflow，按回复中的确认命令执行。",
+                        action={"kind": "restart", "scope": "instance"},
+                        action_hint="点击后先查看完整影响范围，再明确确认重新执行。",
                     )
                 )
             elif first.instance_status == InstanceStatus.FAILED:
@@ -270,8 +274,8 @@ class ConsoleReadService:
                         priority=0,
                         title="恢复失败流程",
                         detail="未定位到单一失败节点，先预览完整实例重启影响。",
-                        command=f"/larkflow restart-all {instance_id}",
-                        action_hint="把命令发送给 larkflow，按回复中的确认命令执行。",
+                        action={"kind": "restart", "scope": "instance"},
+                        action_hint="点击后先查看完整影响范围，再明确确认重新执行。",
                     )
                 )
 
@@ -283,7 +287,7 @@ class ConsoleReadService:
                         priority=1,
                         title=f"完成待办：{candidate.node_title}",
                         detail="该 Human 节点正在等待你的输入或决定。",
-                        command=None,
+                        action=None,
                         action_hint="在飞书完成该节点对应的任务或决定卡。",
                     )
                 )
@@ -296,8 +300,8 @@ class ConsoleReadService:
                         priority=2,
                         title="继续已暂停流程",
                         detail="恢复后，中央调度器会从现有待调度节点继续。",
-                        command=f"/larkflow resume {instance_id}",
-                        action_hint="把命令发送给 larkflow。该操作不会创建新 Attempt。",
+                        action={"kind": "resume"},
+                        action_hint="点击即可继续。该操作不会创建新 Attempt。",
                     )
                 )
             elif first.instance_status == InstanceStatus.DRAFT:
@@ -308,8 +312,8 @@ class ConsoleReadService:
                         priority=3,
                         title="确认流程草稿",
                         detail="该草稿尚未启动，可以先在详情中核对节点。",
-                        command=f"/larkflow confirm {instance_id}",
-                        action_hint="核对后把命令发送给 larkflow。",
+                        action={"kind": "confirm_draft"},
+                        action_hint="核对后点击确认，中央节点会直接启动流程。",
                     )
                 )
 
@@ -330,7 +334,7 @@ class ConsoleReadService:
         priority: int,
         title: str,
         detail: str,
-        command: str | None,
+        action: Mapping[str, Any] | None,
         action_hint: str,
     ) -> dict[str, Any]:
         occurred_at = candidate.node_occurred_at or candidate.created_at
@@ -351,7 +355,7 @@ class ConsoleReadService:
             "detail": detail,
             "occurred_at": occurred_at.isoformat(),
             "node": node,
-            "command": command,
+            "action": dict(action) if action is not None else None,
             "action_hint": action_hint,
         }
 

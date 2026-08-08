@@ -28,6 +28,7 @@ def _limiter(clock: MutableClock, **overrides) -> ConsoleRequestRateLimiter:
         "requests_per_client": 2,
         "auth_requests_per_client": 1,
         "admin_writes_per_client": 1,
+        "workflow_writes_per_client": 1,
         "global_requests": 20,
         "max_client_keys": 20,
         "clock": clock,
@@ -65,6 +66,19 @@ def test_rate_limiter_separates_route_budgets_and_resets_after_window():
         "/console/api/v1/admin/sessions/abc/revoke-preview",
         "203.0.113.1",
     ).allowed
+
+    assert limiter.check(
+        "POST",
+        "/console/api/v1/instances/instance_a/resume",
+        "203.0.113.1",
+    ).allowed
+    denied_workflow = limiter.check(
+        "POST",
+        "/console/api/v1/instances/instance_a/resume",
+        "203.0.113.1",
+    )
+    assert denied_workflow.allowed is False
+    assert denied_workflow.policy == "workflow_write"
 
     clock.value = 70.0
     assert limiter.check("GET", "/console/auth/login", "203.0.113.1").allowed
@@ -186,6 +200,7 @@ def test_feishu_rate_limit_configuration_is_bounded(monkeypatch):
         "LARKFLOW_CONSOLE_RATE_LIMIT_REQUESTS_PER_CLIENT",
         "LARKFLOW_CONSOLE_RATE_LIMIT_AUTH_REQUESTS_PER_CLIENT",
         "LARKFLOW_CONSOLE_RATE_LIMIT_ADMIN_WRITES_PER_CLIENT",
+        "LARKFLOW_CONSOLE_RATE_LIMIT_WORKFLOW_WRITES_PER_CLIENT",
         "LARKFLOW_CONSOLE_RATE_LIMIT_GLOBAL_REQUESTS",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -195,6 +210,7 @@ def test_feishu_rate_limit_configuration_is_bounded(monkeypatch):
     assert limiter.requests_per_client == 300
     assert limiter.auth_requests_per_client == 30
     assert limiter.admin_writes_per_client == 30
+    assert limiter.workflow_writes_per_client == 60
     assert limiter.global_requests == 3_000
 
     monkeypatch.setenv("LARKFLOW_CONSOLE_RATE_LIMIT_WINDOW_SECONDS", "9")
