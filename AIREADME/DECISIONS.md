@@ -871,3 +871,13 @@
 - Tradeoff：增加一个结果格式和一个 Tool adapter，但把材料整理与决策生成的职责边界固定下来，历史模板不漂移。F 全量覆盖会要求来源登记保持精简；如果某条事实与当前决定无关，应在启动前从登记中删除，而不是让 Agent 虚构关联。Human 仍可能退回结构合法但判断不合适的结果。新模板不会自动迁移旧实例。
 - Card addendum：结构化 Instance 输入和依赖结果改为 JSON 代码块展示，避免 Card Markdown 把 URL 后的 JSON 引号吸收到自动链接并产生 `%22`。该改动只影响展示，不改变中央 Snapshot、Attempt 结果或授权。
 - Evidence：真实样本的退回卡、`failed / version 9` 聚合、Human Attempt 意见和旧自动结果已回读。内容提交 `db7651228e26055eb1229ae9f451e3e87c31df38` 通过 `44 passed` 聚焦套件与 `988 passed, 21 skipped` 完整等价套件。干净 wheel SHA-256 为 `54a4bbf4c96834d7d69a3434d01b083d2467f5df6dd129c9ac6e35876efb49ff`，已部署到 `/srv/larkflow/target/releases/20260808_040000_source_decision_db76512/`；`source_grounded_decision:1` 已启用。真实实例 `source_decision_20260808_0405` 的四个 Attempt 1 均完成，Agent 回答 Q1、Q2、Q3，Tool 覆盖 6/6 个 F 与 3/3 个 Q、零违规且 `verdict=pass`。Owner 明确接受后实例为 `done / version 9`，接受审计恰好一条，完成文档与最终通知均有绑定。飞书服务端回读终态卡为已接受、无按钮且无 `%22`。这些证据只证明开发环境中的契约、执行与交互闭环，不证明建议在业务上正确。
+
+## ADR-100 · 2026-08-09 · Owner 常用流程操作直接调用中央领域服务
+
+- **Status：Accepted · Development deployed, real authenticated action acceptance pending。**
+- Problem：Owner 工作台已经能识别草稿确认、暂停继续和失败恢复，但页面只复制飞书命令，用户还要切回机器人会话、粘贴并发送。这个绕行没有增加授权强度，因为真正可信的身份、Owner、状态、版本和预览本来就在中央节点重新校验，却增加了理解成本和操作失败点。
+- Constraint：PostgreSQL 继续是唯一业务真相；浏览器不能声明 tenant、person、Owner、节点状态或可信版本；跨 Owner 与不存在实例必须不可区分；Human 正文与最终判断继续使用飞书责任入口；取消和重启不得降级为一步不可逆操作；旧 Attempt、结果与审计必须保留；当前领域命令与幂等语义不能复制成第二套 Console 状态机；写请求必须抵抗跨站触发。
+- Decision：增加薄的 `ConsoleActionService`，只把服务端飞书会话主体映射到既有 `WorkflowService`。确认草稿、暂停和继续直接执行；取消先返回 aggregate version 与完整影响集合，再按版本确认；节点与完整实例重启复用既有耐久 RestartPreview。所有 POST 无 query、无 body，要求专用动作头；`feishu` 模式还要求精确同源 `Origin`。页面在请求前立即进入处理中，高风险操作在同页展示影响范围并要求第二次确认。Human 输入与决定仍在飞书，工作台不代填或模拟机器人消息。
+- Alternatives(否决)：让网页自动给机器人发送文本消息；继续只复制命令；在前端解释命令并直接修改 PostgreSQL；把飞书 user token 暴露给浏览器后调用业务 API；把取消和重启改为一步执行；同时建设可写 DAG 画布和 Human 表单。
+- Tradeoff：Owner 常用操作减少一次应用切换，但 Console 从观察面扩展为受控写入口，需要独立的 CSRF 边界、工作流写入限流、状态冲突反馈和真实登录验收。当前操作只覆盖 Instance Owner，不增加协作者视图、管理员领域处置、运行中图编辑或 Human 正文提交。单进程限流仍不能替代生产级分布式防护。
+- Evidence：内容提交 `da94891f5e6d01ecee6082a98bab6148abba12ee`；聚焦套件为 `53 passed`，完整离线套件为 `995 passed, 21 skipped`。干净 wheel SHA-256 为 `fca2eee16d3af57dcfb4bb78409a0b6f9e23b7d3d29aa7d7435cc1f26dd3063a`，已部署到 `/srv/larkflow/target/releases/20260808_235309_console_actions_da94891/`。升级前备份成功，长期库保持二十一份 migration，服务器 `pip check` 通过。本次只重启 Console；全部服务与 Caddy 均为 `active / NRestarts=0`，公网静态资源哈希与源码一致，未认证写请求返回 401，部署窗口 warning 为 0。浅色与深色本地浏览器视觉检查无错误或告警；真实登录 Owner 对部署版本的首轮写操作验收仍待执行。
