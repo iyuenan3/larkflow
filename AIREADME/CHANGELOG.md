@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.65.0-draft · 2026-08-08 · Owner 工作台重构与双主题
+
+- Changed：内容提交 `e3bd98d155a446a66bdb2c947e124f7ba7fc9c31` 重构 Owner 中央工作台的信息架构。默认入口改为按优先级分组的本人待处理队列，流程库独立承载全部流程，详情页拆分为概览、执行过程和审计三个页签；状态、责任人、进度和下一步行动在首屏直接可见。
+- Accessibility：全局正文、标签、按钮与表格字号上调，并增加浅色和深色主题。首次访问跟随操作系统，用户选择只保存为浏览器本地偏好，不进入服务端会话、流程数据或审计。
+- Safety：Owner 领域接口继续只读，身份、租户、Owner 可见性、管理员 allowlist、会话治理和写操作边界均未改变。前端仍不提供确认、重启、编辑或人类决定操作。
+- Verified：JavaScript 语法检查通过，Console 聚焦套件为 `16 passed`，完整离线等价结果为 `988 passed, 21 skipped`。干净 wheel SHA-256 为 `7b7b5318c4f94b096210629f5c94db1d2369ee2cb94f5e66cfc146ab8a2a5178`；wheel、临时安装和服务器安装后的三项静态资源 SHA-256 与源码逐项一致，服务器 `pip check` 无断裂依赖。
+- Deployment：发布件位于 `/srv/larkflow/target/releases/20260808_231502_console_ui_e3bd98d/`。升级前备份 `/var/backups/larkflow-postgres/larkflow_target_dev-20260808T231502+0800.dump` 为 259027 bytes，SHA-256 为 `3018163deb374eb4a7376e56c26eb381e6b78772cd267451adc9dfa742e5ff3a`；migration runner 返回空集。本次只重启 Console，九个 Target 服务、legacy 消费者与 Caddy 均回读 active，Console `NRestarts=0`。公网与 loopback `/console/` 返回 200，未认证业务与管理员 API 返回 401，公网安全响应头齐全，部署窗口 warning 为 0。
+- Boundary：该版本是开发环境界面发布，尚未完成部署后真实登录浏览器的新版视觉复验，不构成生产发布、稳定内容质量或市场价值证据。
+
 ## v0.64.0-draft · 2026-08-08 · 来源约束型决策契约
 
 - Signal：真实内部样本 `im_fb85651d34e24c9789304715` 完整进入 Human 决定后被 Owner 退回。旧 `source_claims.v1` 按设计保留开放问题，因此没有回答 Q1、Q2、Q3；该结果证明材料复核契约不能代替决策契约。退回意见、旧 Agent 与 Tool 结果和审计均保留。
