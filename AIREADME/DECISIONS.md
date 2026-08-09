@@ -996,3 +996,13 @@
 - Alternatives(否决)：继续用多个平级页签承载所有能力；点击后只修改本地文案而不回读服务端；确认草稿后自动启动；继续要求用户复制飞书命令；删除画板、Attempt 或审计以换取简洁；为页面建立第二套流程状态。
 - Tradeoff：主路径更清晰，当前任务与结果更容易发现，但高级诊断多一次展开操作，大段结果仍需折叠以控制页面长度。该结构只完成本地交互收口，不能替代部署、真实 OAuth 和一条连续首次使用验收，也不能据此开放邀请测试。
 - Evidence：内容提交 `86189216a0b67cf258daa4027d368257eee7491a`。聚焦套件为 `96 passed`，完整离线套件为 `1037 passed, 24 skipped`。本地受控页面已覆盖草稿、运行中、等待本人处理与完成结果状态；深浅色、桌面与移动布局均完成可见检查，桌面 `clientWidth` 与 `scrollWidth` 均为 `1645`，移动页面无页面级横向溢出。wheel SHA-256 为 `5851a5bc7d296d0a40e74552aeae631175c50953b59adb7f82c3431063ec802f`，已部署到 `/srv/larkflow/target/releases/20260810_0233_workflow_mainline_8618921/`。升级前 custom-format 备份可读，migration runner 返回空集，ledger 保持 `23 / 0001_workflow / 0023_console_draft_requests`；Target 与 legacy 的 `pip check` 均通过。十个 Python 服务和 Caddy 均为 `active / NRestarts=0`，公网与 loopback Console 为 200，未认证实例 API 为 401，安装态与公网三个静态资源哈希一致，部署窗口 warning 为 0。真实飞书 OAuth 连续路径仍保持 pending。
+
+## ADR-112 · 2026-08-10 · 外部事实研究使用显式搜索 Tool 并强制保留来源
+
+- **Status：Accepted，development deployed；structure accepted，source integrity follow-up required。**
+- Problem：普通 `llm.generate` 只能消费已提交上下文。自然语言旅游需求若直接生成初稿，会猜测日期、人数、预算和出发地，也无法证明景点或交通事实来自真实检索；若把研究交给 Human，又违背产品用 AI 完成公开信息研究的目标。把联网能力隐藏进普通 Agent 还会抹掉查询、来源、费用和失败边界。
+- Constraint：PostgreSQL 继续是唯一流程真相；用户输入不能注入 provider、base URL 或密钥；联网只用于公开信息研究，不登录、不提交表单、不预订、不购买；每个独立研究必须产生可被下游消费的交付物；普通 Agent 不能冒充联网；无来源结果不能解锁下游；供应商能力与费用必须由部署显式开启；关闭能力时不能生成无法调度或内容失真的旅游流程。
+- Decision：新增 `work.tool.kind=web.search` 与独立 `WebSearchToolExecutor`。Tool 通过现有服务端 LLM 路由调用供应商托管 Responses API，参数只允许 `model_role + instructions`，提示包含 Asia/Shanghai 当前日期与完整上游快照。结果固定为必填 `content(text) + sources(string_list)`，来源去重并只接受 HTTP(S) URL；空正文或无来源使 Attempt 失败。自然语言生成器只在 Runtime 与 Draft Worker 的显式开关配套启用后允许该 Tool。旅游意图必须先收集出发地、日期、人数和预算，至少拆分景点与交通两个并行搜索节点，再由 Agent 同时消费需求和研究，最后进入 Human 接受或退回。
+- Alternatives(否决)：继续让 Human 手工搜索；让普通 Agent 自行决定是否暗中联网；把搜索结果塞进同一个行程 Agent 而不形成独立节点；允许浏览器传搜索供应商配置；无引用时仍保存模型正文；搜索完成后自动接受方案；未开通搜索时退化成两节点浅流程。
+- Tradeoff：流程增加多个可见节点和供应商搜索费用，整体延迟高于一次模型生成；URL 来源只证明供应商把它作为引用返回，不证明该 URL 当前可访问、直接支持正文或来自权威机构，最终仍需 Human 判断。不同 OpenAI 兼容供应商未必支持相同 Responses Tool，因此当前真实兼容证据只覆盖开发环境已配置的火山方舟线路。安全的来源健康检查还必须处理 SSRF、重定向、DNS 与时效边界，不能用无约束服务器 GET 临时补丁代替。
+- Evidence：内容提交 `6d2d9fa22b7e6926cfe5a1bcf714ccccd073b6d3` 与装配修复 `c7e7d901237a3b72d3d265382e1e2239a0626abd` 已部署。真实样本生成结构化 Human 需求、景点/美食/交通三个并行 `web.search`、综合 Agent 与 Human 决定，并完成全部自动节点；三个搜索结果保存 6、4、7 个 URL。最终 Human 真实退回，因为抽查出现 404 和无证据重定向，而正文仍作绝对真实性声明。该证据关闭显式搜索节点、来源保存和依赖消费的开发真栈门槛，也明确证明“有 URL”不能作为来源完整性验收。

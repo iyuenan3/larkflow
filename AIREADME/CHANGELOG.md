@@ -1,5 +1,16 @@
 # CHANGELOG · larkflow
 
+## v0.80.0-draft · 2026-08-10 · 节点交付物合同与深流程生成
+
+- Fixed：普通用户新增节点不再填写内部标识。服务端生成唯一 key，并把“插入到这些节点之前”展开为同一 GraphEditPreview 内的节点新增、目标依赖重连和 `work.inputs` 同步更新。
+- Added：节点输出支持有界 `id / type / label / required` 合同。工作台按字段类型渲染 Human 交付物表单，服务端对 Human、Agent 和 Tool 结果统一校验，缺少必填字段时不提交 Attempt，也不解锁下游。内置模板同步声明用户可读的必填交付物。
+- Fixed：声明必填输出的飞书 Task 只承担责任提醒，原生勾选完成不能推进中央节点。Task 描述列出必填项并附加工作台深链；Console 对精确的任务查询参数开放主页，同时继续拒绝其他静态资源 query。
+- Changed：自然语言生成提示词与确定性校验要求每条依赖被下游明确消费、每个节点有必填交付物、Agent 从 Human 输入根节点开始并以 Human 决定结束。旅游规划额外要求出发地、日期、人数和预算，并把景点与交通等公开信息研究拆成独立 `web.search` Tool，避免退化成“直接生成初稿，再人工确认”的浅流程。
+- Added：受控 `web.search` Tool 通过现有服务端 LLM 路由调用供应商托管 Responses API。研究节点只允许公开信息搜索，禁止登录、表单提交、预订和购买，固定交付 `content + sources`；无来源、空正文、未知参数或客户端注入 provider 配置都不能完成 Attempt。运行时与草稿生成分别使用显式部署开关，未同时开启时旅游流程生成直接拒绝。
+- Verified：内容提交 `6d2d9fa22b7e6926cfe5a1bcf714ccccd073b6d3` 与装配修复 `c7e7d901237a3b72d3d265382e1e2239a0626abd` 已推送。完整离线套件为 `1058 passed, 24 skipped`，`git diff --check` 通过。当前部署 wheel 位于 `/srv/larkflow/target/releases/20260810_0440_p0_hotfix_c7e7d90/`，SHA-256 为 `3b738c85376380a1b1040bb06a9fadf748058971c1779af934c5b59ec1c9d605`；`pip check`、23 份 migration、Console 200、未认证 API 401 和核心服务 `active / NRestarts=0` 均已回读。
+- Acceptance：原始苏州旅游自然语言请求通过真实 Console API 生成 6 节点草稿，包含结构化需求、景点/美食/交通三个并行 `web.search`、综合 Agent 与最终 Human 决定。用户需求以 8 个声明字段提交；三个研究 Attempt 分别保存 6、4、7 个来源；Agent 同时消费四个上游并生成 5616 字符方案；真实飞书需求 Task 从服务端回读为 `done / mode=1 / 单一负责人`。最终 Human 经真实工作台接口退回结果，Instance 为 `failed / version 13`，追加审计保存退回意见，旧结果与投影保留。
+- Boundary：真实验收没有判为通过。至少一个引用返回 404，另有引用只重定向到首页或下载页，但 Agent 正文仍声称全部信息均为最新官方公开数据且无虚构。网页退回已进入中央真相，但既有飞书决定卡尚未原位收口，仍显示旧的等待状态。浏览器可见深链和表单未在本轮自动化中复验。发布与邀请测试门槛保持关闭，下一步必须关闭来源可访问性、证据一致性和跨入口卡片收口。
+
 ## v0.79.0-draft · 2026-08-10 · 草稿依赖连线公网可见验收
 
 - Verified：公网真实登录工作台中的纯合成草稿 `console_draft_a11c6bb9d2ae071d78b10f802f567119` 已完成端到端可见手势验收。Owner 从第 1 节点端点拖拽到第 3 节点，页面先展示 Graph r1 到 r2 的服务端修改预览；确认后再选中新增直连、点击断开并确认 Graph r2 到 r3。最终页面的新增直连数量为 0，两条原有依赖边各为 1，Graph r3 可见，断开按钮恢复禁用。

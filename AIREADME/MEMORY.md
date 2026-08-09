@@ -366,3 +366,15 @@
 - 现象（真实部署）：release 目录首次为 `root:root 0750`，服务用户在修改环境前没有读取权限；修正 group 后，服务用户 pip 已卸载旧 package，却因 root 所有的 `direct_url.json` 无法写入而退出，并留下 `~arkflow` 与 `~arkflow-0.0.2.dist-info`。旧服务进程仍在运行，磁盘 venv 则已不完整。
 - 根因（已确认）：Target venv 的 package 和 metadata 由 root 所有，但 PostgreSQL peer auth 又要求 migration 以 `lf_target_dev` 运行。把二者强行统一为同一 OS 身份，会在 pip 替换或数据库连接中的一侧失败。
 - 结论：release 目录先设为 `0750 root:lf_target_dev`，共享 venv 的 package 安装统一由 root 从已校验 wheel 执行；随后用 `pip check` 和源码哈希确认安装，再以 `lf_target_dev` 执行 migration，最后才重启服务。失败后只处理经过精确识别、属于本次 pip 替换的临时目录；本次在当前 package 完整、migration 通过且服务未重启前删除了两个无效 `~arkflow*` 目录，不应推广成通配清理命令。
+
+## 2026-08-10 · 搜索结果有 URL 不代表来源可访问或支持正文
+
+- 现象（真实苏州流程）：三个 `web.search` 节点都返回正文和来源，Agent 也成功消费全部上游并生成完整行程，但抽查出现 404、重定向到首页和重定向到下载页。Agent 正文同时声称全部信息均为最新官方公开数据且无虚构，最终 Human 因证据与声明不一致真实退回。
+- 根因（已确认边界）：当前确定性契约只校验来源为非空 HTTP(S) URL，没有校验当前可访问性、重定向终点、正文声明覆盖或权威性。供应商返回引用也不等于 larkflow 独立核验了该引用。直接让服务器访问任意模型 URL 又会引入 SSRF、DNS 重绑定、内网地址和响应体边界，不能作为无设计补丁上线。
+- 结论：来源交付物必须显式区分供应商引用、访问健康和证据支持状态；最终 Agent 禁止把未独立核验的引用写成绝对真实性保证。实现来源健康检查前先定义公共地址解析、逐跳重定向、超时、响应上限和审计策略；验收要抽查真实终点与正文声明，不能只数 URL。
+
+## 2026-08-10 · 网页决定和飞书卡片必须共享外部收口
+
+- 现象（真实苏州流程）：最终 Human 通过 Console 决定 API 成功退回，Instance、Node、Attempt 和追加审计都进入失败终态，飞书决定卡 Projection 却仍保存旧的 `waiting_human / settled=false` 状态。
+- 根因（已确认）：当前 Projection Worker 只为新的等待决定创建卡片，卡片回调入口另有原位处理中和终态更新；Console 决定直接调用同一领域服务，但没有触发等价的旧卡片终态投影。
+- 结论：领域决定提交成功后必须用同一耐久投影事件收口全部既有入口，卡片回调可以提供快速反馈，但不能成为唯一卡片终态写入者。验收要同时回读 Instance、Attempt、审计、Projection state 和飞书卡片控件，不能只凭 Console 200 或数据库终态宣称完成。
