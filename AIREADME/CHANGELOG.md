@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.77.0-draft · 2026-08-09 · 草稿态画板与依赖连线
+
+- Added：内容提交 `f320fd5b9b200fae24cefeb6a853c684a38e7565` 让草稿与运行中未来区域共用 GraphEditPreview。React Flow 画板新增节点端点连接和选中连线断开；表单依赖选择继续保留。草稿编辑确认只更新冻结 Snapshot 和 graph revision，不创建 NodeInstance、Attempt、outbox 或外部资源，后续确认启动才独立物化运行时。
+- Safety：浏览器仍不能提交身份、revision、影响集合或整张 Snapshot。每次连接与断开都先生成耐久预览，确认时重新校验 tenant、Instance Owner、状态、aggregate version、graph revision、完整 DAG 和候选 Snapshot。运行中实例继续执行冻结线校验，只能修改没有执行痕迹的未来区域。
+- Verified：前端生产构建和静态资源检查通过。完整离线套件为 `1034 passed, 24 skipped`；首次沙箱运行只有需要读取进程树的关闭测试失败，允许同一只读检查后全量通过。一次性真实 PostgreSQL 数据库完成三节点草稿的依赖连接与断开，两次编辑都保持 `draft / 0 NodeInstance / 0 Attempt`，独立启动后为 `running / 3 NodeInstance / 3 Attempt`；两条预览和两条图编辑审计均恰好出现一次，验收库随后删除。
+- Deployment：wheel SHA-256 为 `fd164c85fe0d3f0076d9ed37a4d2212e149cc4cd394fe136ec21f13ce132c1d9`，位于 `/srv/larkflow/target/releases/20260809_223113_draft_canvas_f320fd5/`。升级前备份为 348510 bytes、SHA-256 为 `6b1cdcd8510356b65fe7d09ab44f1dd690a52357ee4a6668bc2d1c23226d9` 且可读取；migration runner 返回空集，ledger 保持 23 份。十个 Python 服务与 Caddy 为 `active / NRestarts=0`，Console 内外网 200，未认证图编辑 401，安装与公网资源哈希一致，部署窗口 warning 为 0。
+- Boundary：真实登录工作台刷新后仍保持会话，但本轮浏览器控制器在切换流程时超时，没有完成可见拖拽连接手势复验。当前不支持多人实时协同、任意自由图形、跨设备布局或生产发布。
+
 ## v0.76.0-draft · 2026-08-09 · Personal Agent Edge 数据门禁与干净 Mac 可逆验收
 
 - Added：内容提交 `e6106e5f218f9c520928bef0293899ace7a2395f` 新增 `edge-data-v0.1`。`run-once` 与 `serve` 现在必须同时接收会话级模型外发确认和数据分类，当前只允许 `synthetic / public`，并把不含正文的版本化策略摘要写入结果。manager 新增精确绝对前缀确认的 `uninstall`，只删除受管 release、`current / previous` 与稳定命令，重复执行返回 `already_absent`。

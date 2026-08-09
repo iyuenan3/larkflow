@@ -103,11 +103,11 @@ Human 节点等待 Owner 提交。Agent 与 Tool 节点由中央 Node Runner 运
 
 ### 编辑
 
-运行中未来区域编辑已经按 Target 模型落地。服务端只接受当前 Owner 对 `running` 且未锁定 Instance 发起的 `add_node / update_node / remove_node`，并只允许修改没有任何执行痕迹的 `pending / ready` 当前 Attempt。服务端在内存副本上重新验证完整 DAG、Owner 与执行工作定义，随后把规范化操作、增删改集合、aggregate version、当前与目标 `graph_revision`、候选 Snapshot SHA-256 和 15 分钟有效期写入 GraphEditPreview。预览本身不修改 aggregate 或审计。
+草稿定义与运行中未来区域编辑已经共用 Target GraphEditPreview。服务端只接受当前 Owner 对未锁定的 `draft / running` Instance 发起 `add_node / update_node / remove_node`。草稿允许修改完整定义；运行中仍只允许修改没有任何执行痕迹的 `pending / ready` 当前 Attempt。服务端在内存副本上重新验证完整 DAG、Owner 与执行工作定义，随后把规范化操作、增删改集合、aggregate version、当前与目标 `graph_revision`、候选 Snapshot SHA-256 和 15 分钟有效期写入 GraphEditPreview。预览本身不修改 aggregate 或审计。
 
-确认时重新授权创建预览的当前 Instance Owner，并重新执行相同操作。aggregate version、`graph_revision`、操作语义、节点集合或候选 Snapshot 哈希任一漂移都会拒绝。确认在同一 PostgreSQL 事务内保存 aggregate、消费预览、递增一次 revision、追加一条审计及必要 outbox。新增节点创建 Attempt 1，更新节点只刷新未开始 Attempt，删除节点只移除未开始 Node 与 Attempt；模板和已执行历史不变。重复确认只回读已应用状态。
+确认时重新授权创建预览的当前 Instance Owner，并重新执行相同操作。aggregate version、`graph_revision`、操作语义、节点集合或候选 Snapshot 哈希任一漂移都会拒绝。确认在同一 PostgreSQL 事务内保存 aggregate、消费预览、递增一次 revision，并追加审计。草稿分支只替换 Snapshot，不创建 NodeInstance、Attempt、outbox 或外部资源，后续草稿确认启动才独立物化运行时。运行中分支继续更新未开始 NodeInstance、创建或关闭 Attempt，并追加必要 outbox；模板和已执行历史不变。重复确认只回读已应用状态。
 
-第一版工作台画板使用 React Flow 12.11.2 渲染节点与依赖边，ELK.js 0.12.0 负责自动布局。节点拖动位置按 Instance 保存在浏览器 `localStorage`，刷新后合并到新的自动布局之上；恢复自动布局只清除个人位置，不写 PostgreSQL。增加、修改和删除节点由浏览器构造有界操作并请求 GraphEditPreview，确认仍由服务端消费预览。选中节点的“打回到此节点”直接复用 RestartPreview。当前编辑器通过表单选择依赖，不支持拖拽连边、多人实时协同或任意自由白板。
+工作台画板使用 React Flow 12.11.2 渲染节点与依赖边，ELK.js 0.12.0 负责自动布局。节点拖动位置按 Instance 保存在浏览器 `localStorage`，刷新后合并到新的自动布局之上；恢复自动布局只清除个人位置，不写 PostgreSQL。增加、修改、删除节点，拖动节点端点增加依赖，以及选中连线断开依赖，都会被翻译成有界操作并请求 GraphEditPreview，确认仍由服务端消费预览。表单依赖选择继续保留。选中节点的“打回到此节点”直接复用 RestartPreview。当前编辑器不支持多人实时协同或任意自由白板。
 
 ### 重启
 
@@ -187,12 +187,12 @@ PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration �
 |---|---|---|---|
 | 业务真相 | PostgreSQL 领域模型 | Template 与 Instance aggregate、PostgreSQL adapter、独立 CLI、Runtime、Agent、首个 Tool、Task 入站和窄 IM 命令已落码；legacy 仍用 checkpointer | 需要更多飞书命令、更多业务 Tool 与生产装配 |
 | 持久化 | Instance、Node、Attempt、Audit、Outbox、Inbox | PostgreSQL 14 schema、事务仓储、追加型 Audit、带租约 Outbox 和事件去重 Inbox 已实现并真库验证；长期开发库与本地每日备份已建立 | 需要异机备份、PITR、升级、容量告警和生产装配 |
-| 草稿与模板可选 | 草稿预览、确认、模板或无模板实例 | 新内核支持直接 Snapshot 草稿，以及模板参数和角色绑定生成的冻结草稿；Owner 可只读预览并独立确认；飞书 IM 已提供模板 `start`、自然语言引导 `draft` 和结构化高级 `draft`，三条路径均已完成开发真栈闭环。自然语言验收还覆盖即时处理中、非法首候选的有界修复、唯一草稿、独立确认、Agent 与 Human 执行、耐久 Task 入站、最终无控件卡片、完成 Docx 和最终通知；公开软件需求材料已完成来源约束型接受和退回重启恢复路径 | 需要更完整的模板管理入口、草稿态画板编辑和受控内部试用的产品价值证据 |
+| 草稿与模板可选 | 草稿预览、确认、模板或无模板实例 | 新内核支持直接 Snapshot 草稿，以及模板参数和角色绑定生成的冻结草稿；Owner 可在受控画板预览、修改并独立确认。飞书 IM 已提供模板 `start`、自然语言引导 `draft` 和结构化高级 `draft`，三条路径均已完成开发真栈闭环。自然语言验收还覆盖即时处理中、非法首候选的有界修复、唯一草稿、独立确认、Agent 与 Human 执行、耐久 Task 入站、最终无控件卡片、完成 Docx 和最终通知；公开软件需求材料已完成来源约束型接受和退回重启恢复路径 | 需要更完整的模板管理入口、草稿拖拽连线的可见复验和受控内部试用的产品价值证据 |
 | 模板 | 简单生命周期、不可变版本、布尔锁 | Template Service、PostgreSQL 仓储、追加型审计、CLI 与 v0.2 示例已实现并真库验证 | 需要 importer 和模板管理界面 |
 | 责任 | 每节点唯一 Owner，执行器分离 | 新内核已强制 Owner 与 `human/agent/tool` 分离；IM mention 和 Card 2.0 人员选择均在凭据侧验证活跃成员，再由领域侧冻结角色绑定，已完成开发真栈正向验收；草稿 Owner 全量目录校验已落码但默认关闭 | 需要异常成员状态回归、管理入口和生产装配 |
-| 编辑与重启 | 预览确认、revision、下游 Attempt | 未来区域编辑及节点、完整实例重启都已实现耐久预览、Owner 重授权、版本与 revision 校验、历史保护和原子审计，并完成真库竞争与 Owner 飞书闭环；第一版受控 DAG 画板已接入未来区域增删改和节点返工，编辑拒绝矩阵覆盖冻结线、非法 DAG、陈旧预览与跨人员非 Owner | 需要图形化 diff、拖拽连边、跨轮次浏览和生产装配 |
+| 编辑与重启 | 预览确认、revision、下游 Attempt | 草稿定义、运行中未来区域编辑及节点、完整实例重启都已实现耐久预览、Owner 重授权、版本与 revision 校验、历史保护和原子审计；受控 DAG 画板已接入节点增删改、依赖连接与断开和节点返工，编辑拒绝矩阵覆盖冻结线、非法 DAG、陈旧预览与跨人员非 Owner | 需要图形化 diff、跨轮次浏览、多人协同和生产装配 |
 | 飞书集成 | PostgreSQL outbox / Inbox、幂等、服务端授权、对账 | Human Task 创建 / 完成、可靠轮询、可选事件、服务端详情回读、两阶段授权、启动对账、受控 Task 重建、十五个窄命令、模板与无模板草稿、人员选择卡、失败恢复卡、自动节点消息、暂停继续取消、两类重启、未来区域编辑、跨人员分工、完成 Docx 与最终通知已落码并完成相应开发真栈验收；凭据侧交互已拆为两个单项领取副本 | 需要更多业务命令、更高强度限流回归和生产拓扑 |
-| 工作台与管理员控制面 | Owner 浏览流程、DAG、跨轮次 Attempt、审计与派生待处理提示，发起受控自然语言流程，并执行本人实例的受控流程操作；普通 Human Task 参与者读取有界任务上下文并提交或转交；管理员查看当前企业聚合并治理其他浏览器会话 | 飞书 OAuth、PostgreSQL 耐久会话、耐久草稿请求、独立中央生成 Worker、Owner 流程操作、参与者任务 API、运行时责任转交、受控 DAG 画板、服务端 allowlist 管理员聚合、会话撤销、Caddy 安全边界与有界令牌桶均已开发部署。真实 PostgreSQL 已验证草稿领取竞争与转交竞争；真实登录浏览器已完成普通 Human 提交和跨成员转交。受控输入已完成真实登录模型生成；画板已完成本地真实浏览器增改、取消删除和返工闭环 | 仍需真实登录公网画板变更验收、生产容量和分布式限流；还缺拖拽连边、自由结构编辑、批量撤销、设备命名、分页筛选、完整协作者实例视图和跨轮次对比 |
+| 工作台与管理员控制面 | Owner 浏览流程、DAG、跨轮次 Attempt、审计与派生待处理提示，发起受控自然语言流程，并执行本人实例的受控流程操作；普通 Human Task 参与者读取有界任务上下文并提交或转交；管理员查看当前企业聚合并治理其他浏览器会话 | 飞书 OAuth、PostgreSQL 耐久会话、耐久草稿请求、独立中央生成 Worker、Owner 流程操作、参与者任务 API、运行时责任转交、受控 DAG 画板、服务端 allowlist 管理员聚合、会话撤销、Caddy 安全边界与有界令牌桶均已开发部署。真实 PostgreSQL 已验证草稿领取竞争、草稿连接与断开依赖、独立启动和转交竞争；真实登录浏览器已完成普通 Human 提交、跨成员转交和运行中画板增改返工。受控输入已完成真实登录模型生成 | 仍需草稿画板拖拽连线的真实登录可见复验、生产容量和分布式限流；还缺任意自由图形、多人实时协同、批量撤销、设备命名、分页筛选、完整协作者实例视图和跨轮次对比 |
 | 运行时 | 独立 Scheduler + Node Runner | 新内核已实现 Scheduler、Node Runner、持久化 runnable scan、`llm.generate`、`content.check`、Runtime / Projection / Interactive / Inbound Worker、能力过滤、优雅停机、过期 claim 恢复，以及失败自动节点的 Owner 重试与人工接管 | 需要更多业务 Tool、自动重试策略配置、恢复运营视图和生产装配 |
 | Personal Agent Edge | 默认关闭、本人设备、窄 capability、中央真相 | Proof v0 已实现配对、撤销、私有 HTTP、手工 run-once、前台 serve、只读 Codex adapter、续租失败取消、单设备锁与迟到结果拒绝；员工 Mac 前台 serve 已通过受控真机验收。macOS Keychain、开发试用 manager、安装、升级、回滚、安全卸载、独立最小 Edge wheel、精确 lock、SPDX SBOM、构建证明、bootstrap pip 修复和真实断网安装均已验证。`edge-data-v0.1` 默认拒绝且只允许显式 `synthetic / public`；一台初始无 Edge 状态的员工 Mac 已完成故障保护、真实合成执行、撤销和精确清理 | 安全评审结论仍为正式分发 No-Go。仍缺 Developer ID 签名、公证、可信摘要渠道、真实登录 Keychain 首次体验、上游 beta Profile 的版本兼容门禁、供应商与管理员对非公开数据的正式批准，以及合规公网 E2E；产品化仍为 Later |
 

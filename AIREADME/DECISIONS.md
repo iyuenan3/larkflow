@@ -955,3 +955,13 @@
 - Alternatives(否决)：把目录只读当成数据批准；默认允许内部材料；仅靠 README 提醒用户；把一次确认永久保存；由 Agent 根据正文自行分类；卸载时自动撤销远端设备；递归删除用户主目录中的模糊路径；把 Keychain 和元数据与安装目录一起静默清理。
 - Tradeoff：当前真实内部材料不能通过 Edge 执行，部分试用价值被主动推迟；`public` 仍需要使用者确认材料确实公开。安全卸载保留凭据会多一步清理，但不会制造错误的远端安全状态。Developer ID 签名、公证、可信摘要和合规公网链路仍是正式分发门槛，本阶段明确不处理签名与公证。
 - Evidence：内容提交 `e6106e5f218f9c520928bef0293899ace7a2395f`，完整离线套件 `1032 passed, 23 skipped`。主 wheel、最小员工 artifact 与 manifest SHA-256 分别为 `e163cb8a118c26f74d2543b2102564a841e356caa64692a3e4cbf1a489932b26`、`b535408b879e2767f9fbe995f3fb30def7a6b4016c23c6a6d09b078fc03372ea` 和 `86b61dfbf3dd0aa2e6bd57aa7d967164f77534dab9f1f010e8659c7ed516dd60`。初始无 Edge 状态的员工 Mac 完成安装、故障保护、升级、回滚、真实合成执行、设备撤销和安全卸载；`edge_clean_mac_e6106e5_20260809_215429` 为 `done / 3 of 3 / Attempt 1`，撤销后的旧凭据被拒绝。非交互 SSH 无法写登录 Keychain，因此自动化使用并随后删除临时测试 Keychain，原 default 与 search list 完整恢复；真实登录 Keychain 首次交互仍未关闭。中央 wheel 已部署到 `/srv/larkflow/target/releases/20260809_2203_edge_policy_e6106e5/`，备份、23 份 migration、十个 Python 服务、Caddy、Console 200、Edge 401、loopback 监听和零 warning 均已读回。
+
+## ADR-108 · 2026-08-09 · 草稿与运行中未来区域共用图编辑预览
+
+- **Status：Accepted，development deployed，visible drag acceptance pending。**
+- Problem：自然语言生成的流程在启动前只能核对和确认，不能直接在画板修正节点或依赖；运行中画板修改依赖仍依靠表单复选框。若为草稿另建一套浏览器编辑状态机，或允许浏览器直接保存整张 Snapshot，会复制领域规则并弱化已有预览确认边界。
+- Constraint：PostgreSQL 继续是唯一业务真相；浏览器不可信，不能声明身份、revision、影响集合或候选 Snapshot；草稿编辑不能提前创建运行时、外部待办或消息；运行中实例仍只允许修改没有执行痕迹的未来区域；每次连接与断开必须可预览、可过期并在确认时重新授权；当前不建设通用自由白板或多人实时协同。
+- Decision：扩展 ADR-104 的 GraphEditPreview，使同一 `add_node / update_node / remove_node` 语法同时接受 `draft` 和 `running`。草稿确认只替换冻结 Snapshot、增加 graph revision，并追加审计，后续确认启动才物化 NodeInstance 与 Attempt；运行中分支保留冻结线和运行时同步。React Flow 的节点端点连接被翻译为目标节点 `update_node.dependencies`，选中连线断开执行反向更新；两者都先显示服务端预览。表单依赖选择继续作为回退入口，个人布局仍只保存在浏览器。
+- Alternatives(否决)：浏览器直接覆盖完整 Snapshot；生成草稿后自动启动；为草稿复制第二套编辑状态机；连线后乐观持久化再异步补预览；用画板布局决定调度依赖；第一版引入任意图元、实时协同或通用撤销栈。
+- Tradeoff：草稿可以在启动前通过同一画板修正，依赖操作也更接近图形化心智模型，但每次连线仍需要显式确认，不支持多操作图形化 diff、跨设备布局、协同冲突合并或通用撤销。浏览器控制器在本轮可见复验中超时，因此服务端真库证据不能替代用户对拖拽手势的最终体验判断。
+- Evidence：内容提交 `f320fd5b9b200fae24cefeb6a853c684a38e7565`；完整离线套件为 `1034 passed, 24 skipped`。一次性真实 PostgreSQL 草稿完成连接、断开和独立启动，编辑期间保持 `0 NodeInstance / 0 Attempt`，启动后物化 3 个节点和 3 个 Attempt。wheel SHA-256 为 `fd164c85fe0d3f0076d9ed37a4d2212e149cc4cd394fe136ec21f13ce132c1d9`，已部署到 `/srv/larkflow/target/releases/20260809_223113_draft_canvas_f320fd5/`；备份、23 份 migration、十个 Python 服务、Caddy、Console 200、未认证 401、资源哈希和零 warning 均已读回。登录工作台刷新保持会话，可见拖拽手势仍待一次人工复验。
