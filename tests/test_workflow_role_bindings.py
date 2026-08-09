@@ -197,6 +197,10 @@ def generated_definition():
                     "inputs": ["dependencies.draft_summary"],
                     "outputs": [{"id": "decision", "type": "data"}],
                     "acceptance": ["已完成接受或退回判断"],
+                    "decision": {
+                        "kind": "accept_reject",
+                        "reject_target": "draft_summary",
+                    },
                 },
             },
         ],

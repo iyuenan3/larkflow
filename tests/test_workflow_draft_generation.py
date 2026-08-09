@@ -47,6 +47,10 @@ def valid_definition():
                     "inputs": ["dependencies.draft_summary"],
                     "outputs": [{"id": "decision", "type": "data"}],
                     "acceptance": ["A human decision is recorded"],
+                    "decision": {
+                        "kind": "accept_reject",
+                        "reject_target": "draft_summary",
+                    },
                 },
             },
         ],
@@ -84,6 +88,9 @@ def test_generator_accepts_only_a_valid_bounded_inline_definition():
     assert "1 到 8 个节点" in completion.calls[0][0]
     assert "personal.readonly" in completion.calls[0][0]
     assert "不得反向引用或引用后续节点" in completion.calls[0][0]
+    assert '"kind":"accept_reject"' in completion.calls[0][0]
+    assert "只有 requester 可以修改流程 DAG" in completion.calls[0][0]
+    assert "开发和验证状态不能表述为已经生产上线" in completion.calls[0][0]
 
 
 def test_generator_repairs_one_invalid_dependency_candidate():
@@ -113,6 +120,76 @@ def test_generator_rejects_after_one_failed_repair_attempt():
         DraftDefinitionGenerator(completion).generate(brief="brief", context="")
 
     assert len(completion.calls) == 2
+
+
+def test_generator_repairs_agent_flow_without_a_terminal_human_decision():
+    invalid = valid_definition()
+    invalid["nodes"][1]["work"].pop("decision")
+    completion = SequenceCompletion(
+        (json.dumps(invalid), json.dumps(valid_definition()))
+    )
+
+    result = DraftDefinitionGenerator(completion).generate(
+        brief="Summarize the plan",
+        context="No invented facts",
+    )
+
+    assert result == valid_definition()
+    assert len(completion.calls) == 2
+    assert "接受或退回" in completion.calls[1][0]
+
+
+def test_generator_rejects_decision_whose_rework_target_is_not_an_agent():
+    invalid = valid_definition()
+    invalid["nodes"].insert(
+        1,
+        {
+            "id": "human_context",
+            "title": "Add context",
+            "owner_role": "requester",
+            "executor": "human",
+            "deps": ["draft_summary"],
+            "work": {
+                "objective": "Add review context",
+                "inputs": ["dependencies.draft_summary"],
+                "outputs": [{"id": "context", "type": "text"}],
+                "acceptance": ["Context is recorded"],
+            },
+        },
+    )
+    invalid["nodes"][2]["deps"] = ["human_context"]
+    invalid["nodes"][2]["work"]["inputs"] = ["dependencies.human_context"]
+    invalid["nodes"][2]["work"]["decision"]["reject_target"] = "human_context"
+    completion = Completion(json.dumps(invalid))
+
+    with pytest.raises(DraftGenerationRejected, match="上游 Agent"):
+        DraftDefinitionGenerator(completion).generate(brief="brief", context="")
+
+
+def test_generator_keeps_a_human_only_workflow_as_an_ordinary_task():
+    value = valid_definition()
+    value["nodes"] = [
+        {
+            "id": "confirm_scope",
+            "title": "Confirm scope",
+            "owner_role": "requester",
+            "executor": "human",
+            "deps": [],
+            "work": {
+                "objective": "Confirm the requested scope",
+                "inputs": ["instance_inputs.brief"],
+                "outputs": [{"id": "confirmation", "type": "data"}],
+                "acceptance": ["Scope is explicit"],
+            },
+        }
+    ]
+
+    result = DraftDefinitionGenerator(Completion(json.dumps(value))).generate(
+        brief="Confirm scope",
+        context="",
+    )
+
+    assert "decision" not in result["nodes"][0]["work"]
 
 
 def test_generator_preserves_server_owned_user_inputs_over_model_output():

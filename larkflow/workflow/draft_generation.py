@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 import json
 from typing import Any, Protocol
 
+from .decision import human_decision_config
 from .template_service import (
     TemplateValidationError,
     inline_owner_roles,
@@ -107,16 +108,24 @@ class DraftDefinitionGenerator:
             "human 适合确认、补充、复核和最终判断，agent 适合生成、归纳和分析。"
             "不要生成 tool 节点，不要执行任何外部操作。\n\n"
             "work 字段必须且只能使用 objective、inputs、outputs、acceptance，以及 Agent 节点"
-            "所需的 agent。inputs 只能引用 instance_inputs.brief、instance_inputs.context 或"
+            "所需的 agent 或最终 Human 复核节点所需的 decision。inputs 只能引用 "
+            "instance_inputs.brief、instance_inputs.context 或"
             "直接依赖 dependencies.<node_id>。每个 deps 只能引用当前节点之前已经声明的节点；"
             "每个 dependencies.<node_id> 必须同时出现在当前节点的 deps 中，也只能引用此前节点，"
             "不得反向引用或引用后续节点。outputs 和 acceptance 必须是非空数组。"
             "Agent 节点的 agent 固定为 "
             '{"kind":"llm.generate","model_role":"default","instructions":"具体指令"}'
             "。Human 节点不能包含 agent。不得包含 provider、base_url、api_key、model、"
-            "personal.readonly 或其他能力声明。DAG 必须无环。\n\n"
+            "personal.readonly 或其他能力声明。包含 Agent 时，每个最终节点都必须是 Human "
+            "接受或退回决策，work.decision 必须且只能是 "
+            '{"kind":"accept_reject","reject_target":"直接上游 Agent 节点 id"}'
+            "，reject_target 必须同时出现在该 Human 节点的 deps 中。普通 Human 节点不能包含 "
+            "decision。DAG 必须无环。\n\n"
             "流程应尽量少节点，只保留会改变责任、输入或验收的步骤。"
-            "涉及 AI 产出时，至少安排一个后续 Human 节点复核，不让 Agent 自动做最终判断。\n\n"
+            "涉及 AI 产出时，至少安排一个后续 Human 节点复核，不让 Agent 自动做最终判断。"
+            "只有 requester 可以修改流程 DAG；collaborator 只能处理分配给自己的 Human 节点，"
+            "不能修改流程图。不要虚构上级、管理员或其他未声明角色。"
+            "开发和验证状态不能表述为已经生产上线。\n\n"
             f"用户需求数据：{request}"
         )
 
@@ -161,6 +170,8 @@ class DraftDefinitionGenerator:
         has_agent = False
         has_human_after_agent = False
         agent_ids: set[str] = set()
+        node_by_id: dict[str, Mapping[str, Any]] = {}
+        depended_on_ids: set[str] = set()
         for raw_node in nodes:
             if not isinstance(raw_node, Mapping):
                 raise DraftGenerationRejected("生成流程节点必须是对象")
@@ -168,6 +179,13 @@ class DraftDefinitionGenerator:
             if executor not in {"human", "agent"}:
                 raise DraftGenerationRejected("生成流程只能包含 Human 或 Agent 节点")
             node_id = raw_node.get("id")
+            if isinstance(node_id, str):
+                node_by_id[node_id] = raw_node
+            deps = raw_node.get("deps") or []
+            if isinstance(deps, list):
+                depended_on_ids.update(
+                    dep for dep in deps if isinstance(dep, str)
+                )
             if executor == "agent" and isinstance(node_id, str):
                 has_agent = True
                 agent_ids.add(node_id)
@@ -175,11 +193,31 @@ class DraftDefinitionGenerator:
                 if not isinstance(agent, Mapping) or agent.get("model_role") != "default":
                     raise DraftGenerationRejected("生成流程的 Agent 必须使用 default 模型角色")
             if executor == "human":
-                deps = raw_node.get("deps") or []
                 if isinstance(deps, list) and any(dep in agent_ids for dep in deps):
                     has_human_after_agent = True
+                decision = human_decision_config(raw_node.get("work") or {})
+                if decision is not None:
+                    reject_target = decision.get("reject_target")
+                    target = node_by_id.get(str(reject_target))
+                    if target is None or target.get("executor") != "agent":
+                        raise DraftGenerationRejected(
+                            "Human 决策节点的 reject_target 必须是直接上游 Agent 节点"
+                        )
         if has_agent and not has_human_after_agent:
             raise DraftGenerationRejected("Agent 产出后必须安排 Human 节点直接复核")
+        if has_agent:
+            terminal_nodes = tuple(
+                raw_node
+                for raw_node in nodes
+                if raw_node.get("id") not in depended_on_ids
+            )
+            for terminal in terminal_nodes:
+                if terminal.get("executor") != "human" or human_decision_config(
+                    terminal.get("work") or {}
+                ) is None:
+                    raise DraftGenerationRejected(
+                        "包含 Agent 的生成流程必须以可接受或退回的 Human 决策节点结束"
+                    )
         owner_bindings = {role: f"person_{role}" for role in roles}
         try:
             instantiate_inline_definition(

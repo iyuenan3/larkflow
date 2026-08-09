@@ -18,6 +18,7 @@ from larkflow.workflow import (
     InMemoryWorkflowRepository,
     InstanceStatus,
     WorkflowService,
+    human_decision_card,
 )
 from larkflow.workflow.console import (
     ConsolePrincipal,
@@ -26,6 +27,7 @@ from larkflow.workflow.console import (
 )
 from larkflow.workflow.console_actions import ConsoleActionService
 from larkflow.workflow.console_http import ConsoleHttpApplication
+from larkflow.workflow.console_tasks import ConsoleTaskService
 from larkflow.workflow.repository import InstanceNotFoundError
 
 
@@ -75,6 +77,10 @@ def definition() -> dict:
                     "inputs": ["dependencies.generate_summary"],
                     "outputs": [{"id": "decision", "type": "data"}],
                     "acceptance": ["A human decision is recorded"],
+                    "decision": {
+                        "kind": "accept_reject",
+                        "reject_target": "generate_summary",
+                    },
                 },
             },
         ],
@@ -221,6 +227,62 @@ def test_worker_freezes_candidate_creates_only_a_draft_then_existing_confirm_sta
 
     assert result["action"] == "confirm_draft"
     assert result["instance"]["status"] == "running"
+
+
+def test_generated_agent_flow_reaches_a_decision_card_not_an_ordinary_console_task():
+    draft_repository, drafts = queued_service(directory=Directory())
+    create_request(drafts)
+    workflow_repository = InMemoryWorkflowRepository()
+    workflow_service = WorkflowService(workflow_repository, clock=lambda: NOW)
+    worker = ConsoleDraftWorker(
+        draft_repository,
+        workflow_service,
+        DraftDefinitionGenerator(Completion()),
+        tenant_id=TENANT,
+        worker_id="draft-worker",
+        clock=lambda: NOW,
+    )
+    worker.run_once()
+    instance_id = drafts.get(principal(), REQUEST_ID)["request"]["instance_id"]
+    ConsoleActionService(workflow_service).confirm_draft(
+        principal(),
+        instance_id,
+    )
+    agent = workflow_service.dispatch_due(
+        TENANT,
+        instance_id,
+        worker_id="runtime-worker",
+        max_automated=1,
+    )[0]
+    workflow_service.complete_automated(
+        TENANT,
+        instance_id,
+        "generate_summary",
+        attempt_no=agent.attempt_no,
+        expected_node_version=agent.expected_node_version,
+        claim_token=agent.claim_token or "",
+        worker_id="runtime-worker",
+        result={"content": "Grounded release summary"},
+    )
+    decision = workflow_service.dispatch_due(
+        TENANT,
+        instance_id,
+        worker_id="runtime-worker",
+    )[0]
+
+    assert decision.node_key == "review_summary"
+    instance = workflow_service.get(TENANT, instance_id)
+    assert instance.snapshot.node("review_summary").work["decision"] == {
+        "kind": "accept_reject",
+        "reject_target": "generate_summary",
+    }
+    card = human_decision_card(instance, "review_summary", decision.attempt_no)
+    rendered_card = json.dumps(card, ensure_ascii=False)
+    assert "接受" in rendered_card
+    assert "填写意见并退回" in rendered_card
+    assert ConsoleTaskService(workflow_service).list_tasks(
+        principal(COLLABORATOR)
+    )["total"] == 0
 
 
 def test_persisted_candidate_is_reused_after_worker_lease_expiry_without_llm_call():
