@@ -969,10 +969,10 @@
 
 ## ADR-109 · 2026-08-10 · 工作台覆盖完整首次成功路径
 
-- **Status：Accepted，implemented and offline verified，development deployment pending。**
+- **Status：Accepted，development deployed，visible acceptance pending。**
 - Problem：开发真栈已经覆盖中央状态、飞书投影、自然语言草稿、人工任务和受控画板，但普通员工仍需要理解 `DAG / Human / Agent / Attempt / Graph revision`，并在工作台与飞书决定卡之间切换才能完成一次流程。大量历史测试流程又会遮蔽新用户的下一步。功能闭环不等于产品可用，当前状态不适合邀请他人测试或推荐使用。
 - Constraint：PostgreSQL 继续是唯一业务真相；工作台不能复制人类决定状态机；飞书卡片继续承担通知和备用入口；参与者不能因为获得任务入口而读取完整实例；接受或退回必须绑定当前 Instance、Node、Attempt 和负责人；本轮不扩张 Personal Agent Edge、自由白板或多人实时协同。
 - Decision：把首次成功路径固定为“描述目标、核对流程、确认启动、完成或判断、查看结果”。`accept_reject` Human 节点与普通 Human Task 一起进入参与者有界任务面，页面可直接接受或携带意见退回，并调用既有 `WorkflowService.submit_human_decision`；普通任务仍可提交或转交，决定任务不可转交。飞书决定卡继续调用同一领域命令。一级界面使用“流程、人工、AI、第几次执行、流程版本”等业务语言，并把结构化上下文和结果转换为可读文本。没有独立完成该路径的可见验收前，路线图保持“可用性收口”，不进入邀请测试阶段。
 - Alternatives(否决)：继续要求用户复制命令或返回飞书完成判断；在浏览器另建决定状态；把飞书 Task 完成视为接受；仅新增帮助文档而不修主路径；继续增加画板和 Edge 功能；用更多开发者引导下的合成点击代替首次使用证据。
 - Tradeoff：员工可以在一个工作台推进主要流程，入口切换和内部术语减少；飞书仍保留责任提醒和备用操作。参与者任务 API 的范围扩大到决定节点，因此服务端必须继续使用 404 隐藏越权资源，并对 Instance、Node、Attempt 和负责人做完整重验。历史测试数据清理、默认空工作区、首个示例、结果信息层级和真实首次使用验收仍需后续完成。
-- Evidence：内容提交 `64424f1de429f051af58739962f504e62337755d` 完成工作台决定入口、严格版本校验、三步首次使用引导、业务术语和结构化结果可读化。聚焦套件为 `35 passed`，完整离线套件为 `1037 passed, 24 skipped`，候选 wheel SHA-256 为 `a79d55caa8398806c826acf6ede4f0a625d48637de3a525e6bbc2d57c1f44ed0`。开发部署和真实登录浏览器验收尚未完成。本 ADR 不把本地代码、离线回归或既有技术闭环解释为可推荐使用。
+- Evidence：内容提交 `64424f1de429f051af58739962f504e62337755d` 完成工作台决定入口、严格版本校验、三步首次使用引导、业务术语和结构化结果可读化。聚焦套件为 `35 passed`，完整离线套件为 `1037 passed, 24 skipped`。wheel SHA-256 为 `a79d55caa8398806c826acf6ede4f0a625d48637de3a525e6bbc2d57c1f44ed0`，已部署到 `/srv/larkflow/target/releases/20260810_013717_first_success_64424f1/`。升级前备份可由 `pg_restore --list` 读取，migration runner 返回空集，ledger 保持 `23 / 0023_console_draft_requests`；Target 与 legacy 的 `pip check` 均通过，安装态与公网三个静态资源哈希一致。十个 Python 服务和 Caddy 均为 `active / NRestarts=0`，公网与 loopback Console 为 200，未认证实例 API 为 401，部署窗口 warning 为 0。浏览器控制连接在刷新真实登录标签页时超时，因此本轮可见验收保持 pending。本 ADR 不把开发部署、离线回归或既有技术闭环解释为可推荐使用。

@@ -23,7 +23,7 @@
 
 当前明确不进入邀请测试阶段。开发真栈已经覆盖中央状态、飞书投影、工作台和画板，但历史测试数据、内部术语、网页与飞书之间的入口切换仍使首次使用成本过高。当前发布门槛是清理默认工作区、压平动作层级、把接受或退回收回工作台、用业务语言展示上下文和结果，并由开发者独立完成一条不依赖口头指导的首次成功路径；在此之前不得描述为可推荐给其他人使用。
 
-- 内容提交 `64424f1de429f051af58739962f504e62337755d` 已把版本绑定的 Human 决定纳入参与者任务面，普通任务继续提交或转交，决定任务可直接接受或填写意见后退回；飞书决定卡继续作为通知与备用入口。工作台新增三步首次使用引导，并把主路径中的 `DAG / Human / Agent / Attempt / Graph revision` 改为业务语言。完整离线套件为 `1037 passed, 24 skipped`，候选 wheel SHA-256 为 `a79d55caa8398806c826acf6ede4f0a625d48637de3a525e6bbc2d57c1f44ed0`；开发部署和真实登录可见验收尚未完成，不能据此关闭可用性门槛。
+- 内容提交 `64424f1de429f051af58739962f504e62337755d` 已把版本绑定的 Human 决定纳入参与者任务面，普通任务继续提交或转交，决定任务可直接接受或填写意见后退回；飞书决定卡继续作为通知与备用入口。工作台新增三步首次使用引导，并把主路径中的 `DAG / Human / Agent / Attempt / Graph revision` 改为业务语言。完整离线套件为 `1037 passed, 24 skipped`，wheel SHA-256 为 `a79d55caa8398806c826acf6ede4f0a625d48637de3a525e6bbc2d57c1f44ed0`；开发部署、23 份 migration、十个 Python 服务、Caddy 和公网资源哈希已经回读。真实登录标签页刷新时浏览器控制连接超时，可见验收仍未完成，不能据此关闭可用性门槛。
 
 - 已完成领域内核：不可变 Instance Snapshot、DAG Contract 核验、草稿确认、NodeInstance、Attempt、显式状态迁移、Scheduler、中央 Node Runner、claim 和仓储 Port。
 - 已完成 PostgreSQL 14 第一版 schema：Template、TemplateVersion、Instance、NodeInstance、Attempt、Projection、Audit、Outbox。
