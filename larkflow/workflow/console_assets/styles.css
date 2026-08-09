@@ -1847,6 +1847,19 @@ button { color: inherit; }
 .human-task-input textarea:focus,
 .human-task-transfer-panel select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
 .human-task-input small { display: block; margin-top: 6px; color: var(--muted); text-align: right; font-size: var(--font-caption); }
+.human-task-deliverable-fields { display: grid; gap: 16px; margin-top: 18px; }
+.human-deliverable-field { display: grid; gap: 8px; }
+.human-deliverable-field > span { color: var(--text-strong); font-size: var(--font-control); font-weight: 700; }
+.human-deliverable-field em { margin-left: 8px; color: var(--accent); font-size: var(--font-caption); font-style: normal; }
+.human-deliverable-field input:not([type="checkbox"]),
+.human-deliverable-field select,
+.human-deliverable-field textarea {
+  width: 100%; min-height: 48px; padding: 12px 14px; border: 1px solid var(--line-strong);
+  border-radius: 12px; background: var(--surface); color: var(--text-strong); font: inherit;
+}
+.human-deliverable-field textarea { min-height: 104px; resize: vertical; }
+.human-deliverable-field input[type="checkbox"] { width: 24px; height: 24px; accent-color: var(--accent); }
+.human-deliverable-field small { color: var(--muted); font-size: var(--font-caption); }
 .human-task-error { min-height: 20px; margin: 8px 0 0; color: var(--red); font-size: var(--font-meta); }
 .human-task-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
 .human-decision-panel {

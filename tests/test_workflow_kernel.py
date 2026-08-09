@@ -271,7 +271,7 @@ def test_human_agent_and_tool_flow_unlocks_successors_and_finishes_instance():
             actor_person_id="person_editor",
             attempt_no=human.attempt_no,
             expected_node_version=human.expected_node_version,
-            result={"brief": "approved"},
+            result={"result": {"brief": "approved"}},
         )
 
     instance = service.submit_human(
@@ -281,11 +281,11 @@ def test_human_agent_and_tool_flow_unlocks_successors_and_finishes_instance():
         actor_person_id="person_owner",
         attempt_no=human.attempt_no,
         expected_node_version=human.expected_node_version,
-        result={"brief": "approved"},
+        result={"result": {"brief": "approved"}},
     )
     assert instance.nodes["collect_brief"].status == NodeStatus.DONE
     with pytest.raises(TypeError):
-        instance.current_attempt("collect_brief").result["brief"] = "changed"  # type: ignore[index]
+        instance.current_attempt("collect_brief").result["result"]["brief"] = "changed"  # type: ignore[index]
     assert instance.nodes["write_draft"].status == NodeStatus.READY
     assert instance.nodes["publish_doc"].status == NodeStatus.PENDING
 
@@ -304,7 +304,7 @@ def test_human_agent_and_tool_flow_unlocks_successors_and_finishes_instance():
             attempt_no=agent.attempt_no,
             expected_node_version=agent.expected_node_version,
             claim_token="wrong-token",
-            result={"document": "draft"},
+            result={"result": {"document": "draft"}},
             worker_id="worker_1",
         )
     assert (
@@ -324,7 +324,7 @@ def test_human_agent_and_tool_flow_unlocks_successors_and_finishes_instance():
         attempt_no=agent.attempt_no,
         expected_node_version=agent.expected_node_version,
         claim_token=agent.claim_token or "",
-        result={"document": "draft"},
+        result={"result": {"document": "draft"}},
         quality_result=quality,
         worker_id="worker_1",
     )
@@ -345,7 +345,7 @@ def test_human_agent_and_tool_flow_unlocks_successors_and_finishes_instance():
         attempt_no=tool.attempt_no,
         expected_node_version=tool.expected_node_version,
         claim_token=tool.claim_token or "",
-        result={"url": "https://example.invalid/document"},
+        result={"result": {"url": "https://example.invalid/document"}},
         worker_id="worker_1",
     )
 
@@ -389,7 +389,7 @@ def test_pause_drains_active_work_without_dispatching_new_nodes_then_resumes():
         actor_person_id="person_owner",
         attempt_no=human.attempt_no,
         expected_node_version=human.expected_node_version,
-        result={"brief": "approved while paused"},
+        result={"result": {"brief": "approved while paused"}},
     )
     assert drained.status == InstanceStatus.PAUSED
     assert drained.nodes["collect_brief"].status == NodeStatus.DONE
@@ -421,7 +421,7 @@ def test_pause_drains_active_work_without_dispatching_new_nodes_then_resumes():
         attempt_no=agent.attempt_no,
         expected_node_version=agent.expected_node_version,
         claim_token=agent.claim_token or "",
-        result={"document": "draft"},
+        result={"result": {"document": "draft"}},
         worker_id="worker_1",
     )
     assert drained.status == InstanceStatus.PAUSED
@@ -474,7 +474,7 @@ def test_paused_single_active_node_can_settle_the_instance():
         attempt_no=activation.attempt_no,
         expected_node_version=activation.expected_node_version,
         claim_token=activation.claim_token or "",
-        result={"content": "done"},
+        result={"result": {"content": "done"}},
         worker_id="worker_1",
     )
 
@@ -493,7 +493,7 @@ def test_cancel_is_owner_only_version_bound_and_rejects_late_results():
         actor_person_id="person_owner",
         attempt_no=human.attempt_no,
         expected_node_version=human.expected_node_version,
-        result={"brief": "approved"},
+        result={"result": {"brief": "approved"}},
     )
     agent = service.dispatch_ready(
         TENANT,
@@ -547,7 +547,7 @@ def test_cancel_is_owner_only_version_bound_and_rejects_late_results():
             attempt_no=agent.attempt_no,
             expected_node_version=agent.expected_node_version,
             claim_token=agent.claim_token or "",
-            result={"document": "late"},
+            result={"result": {"document": "late"}},
             worker_id="worker_1",
         )
     version_before_replay = canceled.version
@@ -653,7 +653,7 @@ def test_fan_in_unlocks_only_after_every_dependency_is_done():
         actor_person_id="legal",
         attempt_no=activations["legal_review"].attempt_no,
         expected_node_version=activations["legal_review"].expected_node_version,
-        result={"approved": True},
+        result={"result": {"approved": True}},
     )
     assert instance.nodes["release"].status == NodeStatus.PENDING
 
@@ -664,7 +664,7 @@ def test_fan_in_unlocks_only_after_every_dependency_is_done():
         actor_person_id="brand",
         attempt_no=activations["brand_review"].attempt_no,
         expected_node_version=activations["brand_review"].expected_node_version,
-        result={"approved": True},
+        result={"result": {"approved": True}},
     )
     assert instance.nodes["release"].status == NodeStatus.READY
 
@@ -683,7 +683,7 @@ def test_stale_version_and_expired_claim_are_rejected_without_mutation():
             actor_person_id="person_owner",
             attempt_no=human.attempt_no,
             expected_node_version=human.expected_node_version - 1,
-            result={"brief": "approved"},
+            result={"result": {"brief": "approved"}},
         )
 
     service.submit_human(
@@ -693,7 +693,7 @@ def test_stale_version_and_expired_claim_are_rejected_without_mutation():
         actor_person_id="person_owner",
         attempt_no=human.attempt_no,
         expected_node_version=human.expected_node_version,
-        result={"brief": "approved"},
+        result={"result": {"brief": "approved"}},
     )
     agent = service.dispatch_ready(
         TENANT, "instance_1", worker_id="worker_1"
@@ -708,7 +708,7 @@ def test_stale_version_and_expired_claim_are_rejected_without_mutation():
             attempt_no=agent.attempt_no,
             expected_node_version=agent.expected_node_version,
             claim_token=agent.claim_token or "",
-            result={"document": "late"},
+            result={"result": {"document": "late"}},
             worker_id="worker_1",
         )
     instance = service.get(TENANT, "instance_1")
@@ -806,7 +806,7 @@ def test_failed_instance_rejects_late_result_from_parallel_node():
             attempt_no=second.attempt_no,
             expected_node_version=second.expected_node_version,
             claim_token=second.claim_token or "",
-            result={"value": "late"},
+            result={"result": {"value": "late"}},
             worker_id="worker_1",
         )
     assert service.get(TENANT, "instance_1").current_attempt("second_job").result is None

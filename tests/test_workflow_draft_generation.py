@@ -19,15 +19,35 @@ def valid_definition():
         "inputs": {"brief": "Summarize the plan", "context": "No invented facts"},
         "nodes": [
             {
+                "id": "confirm_requirements",
+                "title": "Confirm requirements",
+                "owner_role": "requester",
+                "executor": "human",
+                "deps": [],
+                "work": {
+                    "objective": "Complete and confirm the requested inputs",
+                    "inputs": ["instance_inputs.brief", "instance_inputs.context"],
+                    "outputs": [
+                        {
+                            "id": "requirements",
+                            "type": "long_text",
+                            "label": "Confirmed requirements",
+                            "required": True,
+                        }
+                    ],
+                    "acceptance": ["Required inputs are explicit"],
+                },
+            },
+            {
                 "id": "draft_summary",
                 "title": "Generate summary",
                 "owner_role": "requester",
                 "executor": "agent",
-                "deps": [],
+                "deps": ["confirm_requirements"],
                 "work": {
                     "objective": "Generate a summary",
-                    "inputs": ["instance_inputs.brief"],
-                    "outputs": [{"id": "content", "type": "text"}],
+                    "inputs": ["dependencies.confirm_requirements"],
+                    "outputs": [{"id": "content", "type": "text", "label": "Summary", "required": True}],
                     "acceptance": ["No facts are invented"],
                     "agent": {
                         "kind": "llm.generate",
@@ -45,7 +65,7 @@ def valid_definition():
                 "work": {
                     "objective": "Review the generated summary",
                     "inputs": ["dependencies.draft_summary"],
-                    "outputs": [{"id": "decision", "type": "data"}],
+                    "outputs": [{"id": "decision", "type": "decision", "label": "Review decision", "required": True}],
                     "acceptance": ["A human decision is recorded"],
                     "decision": {
                         "kind": "accept_reject",
@@ -95,7 +115,7 @@ def test_generator_accepts_only_a_valid_bounded_inline_definition():
 
 def test_generator_repairs_one_invalid_dependency_candidate():
     invalid = valid_definition()
-    invalid["nodes"][0]["work"]["inputs"] = ["dependencies.review_summary"]
+    invalid["nodes"][1]["work"]["inputs"] = ["dependencies.review_summary"]
     completion = SequenceCompletion(
         (json.dumps(invalid), json.dumps(valid_definition()))
     )
@@ -113,7 +133,7 @@ def test_generator_repairs_one_invalid_dependency_candidate():
 
 def test_generator_rejects_after_one_failed_repair_attempt():
     invalid = valid_definition()
-    invalid["nodes"][0]["work"]["inputs"] = ["dependencies.review_summary"]
+    invalid["nodes"][1]["work"]["inputs"] = ["dependencies.review_summary"]
     completion = SequenceCompletion((json.dumps(invalid), json.dumps(invalid)))
 
     with pytest.raises(DraftGenerationRejected, match="undeclared dependency"):
@@ -124,7 +144,7 @@ def test_generator_rejects_after_one_failed_repair_attempt():
 
 def test_generator_repairs_agent_flow_without_a_terminal_human_decision():
     invalid = valid_definition()
-    invalid["nodes"][1]["work"].pop("decision")
+    invalid["nodes"][2]["work"].pop("decision")
     completion = SequenceCompletion(
         (json.dumps(invalid), json.dumps(valid_definition()))
     )
@@ -139,10 +159,169 @@ def test_generator_repairs_agent_flow_without_a_terminal_human_decision():
     assert "接受或退回" in completion.calls[1][0]
 
 
+def test_under_specified_trip_cannot_skip_requirements_and_research_deliverables():
+    shallow = {
+        "schema_version": "0.2",
+        "goal": "Generate a Suzhou itinerary",
+        "inputs": {},
+        "nodes": [
+            {
+                "id": "confirm_request",
+                "title": "Confirm request",
+                "owner_role": "requester",
+                "executor": "human",
+                "deps": [],
+                "work": {
+                    "objective": "Confirm the request",
+                    "inputs": ["instance_inputs.brief"],
+                    "outputs": [{"id": "confirmation", "type": "boolean", "label": "Confirmed", "required": True}],
+                    "acceptance": ["The request is confirmed"],
+                },
+            },
+            {
+                "id": "draft_itinerary",
+                "title": "Generate itinerary",
+                "owner_role": "requester",
+                "executor": "agent",
+                "deps": ["confirm_request"],
+                "work": {
+                    "objective": "Generate a Suzhou itinerary",
+                    "inputs": ["instance_inputs.brief", "dependencies.confirm_request"],
+                    "outputs": [{"id": "content", "type": "text", "label": "Itinerary", "required": True}],
+                    "acceptance": ["An itinerary exists"],
+                    "agent": {"kind": "llm.generate", "model_role": "default", "instructions": "Write the itinerary"},
+                },
+            },
+            {
+                "id": "review_itinerary",
+                "title": "Review itinerary",
+                "owner_role": "requester",
+                "executor": "human",
+                "deps": ["draft_itinerary"],
+                "work": {
+                    "objective": "Review the itinerary",
+                    "inputs": ["dependencies.draft_itinerary"],
+                    "outputs": [{"id": "decision", "type": "decision", "label": "Decision", "required": True}],
+                    "acceptance": ["A decision is recorded"],
+                    "decision": {"kind": "accept_reject", "reject_target": "draft_itinerary"},
+                },
+            },
+        ],
+    }
+    rich = valid_definition()
+    rich["goal"] = "Plan a source-grounded Suzhou trip"
+    rich["nodes"][0]["work"]["outputs"] = [
+        {"id": "origin", "type": "text", "label": "Origin", "required": True},
+        {"id": "start_date", "type": "date", "label": "Start date", "required": True},
+        {"id": "travelers", "type": "integer", "label": "Travelers", "required": True},
+        {"id": "budget", "type": "money", "label": "Budget", "required": True},
+    ]
+    research_nodes = []
+    for node_id, title, label in (
+        ("research_attractions", "Research attractions", "Attraction evidence"),
+        ("research_transport", "Research transport", "Transport evidence"),
+        ("research_lodging", "Research lodging", "Lodging evidence"),
+    ):
+        research_nodes.append(
+            {
+                "id": node_id,
+                "title": title,
+                "owner_role": "requester",
+                "executor": "tool",
+                "deps": ["confirm_requirements"],
+                "work": {
+                    "objective": title,
+                    "inputs": ["dependencies.confirm_requirements"],
+                    "outputs": [
+                        {"id": "content", "type": "text", "label": label, "required": True},
+                        {"id": "sources", "type": "string_list", "label": "Source URLs", "required": True},
+                    ],
+                    "acceptance": ["Evidence and source links are recorded"],
+                    "tool": {
+                        "kind": "web.search",
+                        "args": {
+                            "model_role": "default",
+                            "instructions": title,
+                        },
+                    },
+                },
+            }
+        )
+    rich["nodes"] = [
+        rich["nodes"][0],
+        *research_nodes,
+        {
+            **rich["nodes"][1],
+            "id": "draft_itinerary",
+            "title": "Generate itinerary",
+            "deps": [
+                "confirm_requirements",
+                "research_attractions",
+                "research_transport",
+                "research_lodging",
+            ],
+            "work": {
+                **rich["nodes"][1]["work"],
+                "objective": "Synthesize an itinerary from confirmed requirements and research",
+                "inputs": [
+                    "dependencies.confirm_requirements",
+                    "dependencies.research_attractions",
+                    "dependencies.research_transport",
+                    "dependencies.research_lodging",
+                ],
+            },
+        },
+        {
+            **rich["nodes"][2],
+            "id": "review_itinerary",
+            "title": "Review itinerary",
+            "deps": ["draft_itinerary"],
+            "work": {
+                **rich["nodes"][2]["work"],
+                "inputs": ["dependencies.draft_itinerary"],
+                "decision": {"kind": "accept_reject", "reject_target": "draft_itinerary"},
+            },
+        },
+    ]
+    completion = SequenceCompletion((json.dumps(shallow), json.dumps(rich)))
+
+    result = DraftDefinitionGenerator(completion, allow_web_search=True).generate(
+        brief="我要去苏州旅游，帮我创建一个项目来规划行程",
+        context="",
+    )
+
+    assert result["nodes"][0]["id"] == "confirm_requirements"
+    assert {item["id"] for item in result["nodes"][0]["work"]["outputs"]} == {
+        "origin",
+        "start_date",
+        "travelers",
+        "budget",
+    }
+    assert [item["id"] for item in result["nodes"][1:4]] == [
+        "research_attractions",
+        "research_transport",
+        "research_lodging",
+    ]
+    assert len(completion.calls) == 2
+    assert "旅游规划必须先收集必填需求" in completion.calls[1][0]
+    assert "日期、人数、预算" in completion.calls[0][0]
+    assert '"kind":"web.search"' in completion.calls[0][0]
+
+
+def test_trip_generation_is_rejected_when_controlled_search_is_disabled():
+    completion = Completion(json.dumps(valid_definition()))
+
+    with pytest.raises(DraftGenerationRejected, match="联网研究"):
+        DraftDefinitionGenerator(completion).generate(
+            brief="我要去苏州旅游，帮我创建一个项目来规划行程",
+            context="",
+        )
+
+
 def test_generator_rejects_decision_whose_rework_target_is_not_an_agent():
     invalid = valid_definition()
     invalid["nodes"].insert(
-        1,
+        2,
         {
             "id": "human_context",
             "title": "Add context",
@@ -152,14 +331,14 @@ def test_generator_rejects_decision_whose_rework_target_is_not_an_agent():
             "work": {
                 "objective": "Add review context",
                 "inputs": ["dependencies.draft_summary"],
-                "outputs": [{"id": "context", "type": "text"}],
+                "outputs": [{"id": "context", "type": "text", "label": "Review context", "required": True}],
                 "acceptance": ["Context is recorded"],
             },
         },
     )
-    invalid["nodes"][2]["deps"] = ["human_context"]
-    invalid["nodes"][2]["work"]["inputs"] = ["dependencies.human_context"]
-    invalid["nodes"][2]["work"]["decision"]["reject_target"] = "human_context"
+    invalid["nodes"][3]["deps"] = ["human_context"]
+    invalid["nodes"][3]["work"]["inputs"] = ["dependencies.human_context"]
+    invalid["nodes"][3]["work"]["decision"]["reject_target"] = "human_context"
     completion = Completion(json.dumps(invalid))
 
     with pytest.raises(DraftGenerationRejected, match="上游 Agent"):
@@ -178,7 +357,7 @@ def test_generator_keeps_a_human_only_workflow_as_an_ordinary_task():
             "work": {
                 "objective": "Confirm the requested scope",
                 "inputs": ["instance_inputs.brief"],
-                "outputs": [{"id": "confirmation", "type": "data"}],
+                "outputs": [{"id": "confirmation", "type": "long_text", "label": "Confirmed scope", "required": True}],
                 "acceptance": ["Scope is explicit"],
             },
         }
@@ -226,7 +405,7 @@ def test_generator_preserves_server_owned_user_inputs_over_model_output():
                     **value,
                     "nodes": [
                         {**value["nodes"][0], "owner_role": "admin"},
-                        value["nodes"][1],
+                        *value["nodes"][1:],
                     ],
                 }
             ),
@@ -237,25 +416,41 @@ def test_generator_preserves_server_owned_user_inputs_over_model_output():
                 {
                     **value,
                     "nodes": [
+                        value["nodes"][0],
                         {
-                            **value["nodes"][0],
+                            **value["nodes"][1],
                             "work": {
-                                **value["nodes"][0]["work"],
+                                **value["nodes"][1]["work"],
                                 "agent": {
-                                    **value["nodes"][0]["work"]["agent"],
+                                    **value["nodes"][1]["work"]["agent"],
                                     "model_role": "private_route",
                                 },
                             },
                         },
-                        value["nodes"][1],
+                        value["nodes"][2],
                     ],
                 }
             ),
             "default",
         ),
         (
-            lambda value: json.dumps({**value, "nodes": value["nodes"][:1]}),
-            "Human",
+            lambda value: json.dumps(
+                {
+                    **value,
+                    "nodes": [
+                        {
+                            **value["nodes"][1],
+                            "deps": [],
+                            "work": {
+                                **value["nodes"][1]["work"],
+                                "inputs": ["instance_inputs.brief"],
+                            },
+                        },
+                        value["nodes"][2],
+                    ],
+                }
+            ),
+            "Agent",
         ),
     ),
 )

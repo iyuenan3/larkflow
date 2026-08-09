@@ -8,6 +8,7 @@ import hashlib
 import html
 import json
 from typing import Any, Protocol
+from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
 from .model import ExecutorKind, FrozenDict, NodeStatus, WorkflowInstance
@@ -19,6 +20,7 @@ from .decision import (
     human_decision_action_name,
     human_decision_config,
 )
+from .deliverables import requires_structured_human_input
 from .recovery import RECOVERY_ACTION_NAME, RecoveryAction, recovery_action_name
 from .repository import OutboxStore, ProjectionStore, WorkflowRepository
 from .serde import to_json_value
@@ -200,6 +202,7 @@ class WorkflowProjectionWorker:
         retry_max: timedelta = timedelta(minutes=5),
         max_attempts: int = 24,
         id_factory: Callable[[], str] | None = None,
+        workbench_base_url: str | None = None,
     ) -> None:
         if not tenant_id.strip():
             raise ValueError("tenant_id is required")
@@ -228,6 +231,7 @@ class WorkflowProjectionWorker:
         self.retry_max = retry_max
         self.max_attempts = max_attempts
         self.id_factory = id_factory or (lambda: str(uuid4()))
+        self.workbench_base_url = _workbench_base_url(workbench_base_url)
 
     def run_once(self) -> ProjectionWorkerReport:
         now = self.clock()
@@ -980,6 +984,24 @@ class WorkflowProjectionWorker:
             f"目标：{spec.work.get('objective', '')}",
             f"验收条件：\n{acceptance}",
         ]
+        if requires_structured_human_input(spec.work):
+            labels = "、".join(
+                str(item.get("label") or item.get("id"))
+                for item in spec.work.get("outputs", ())
+                if isinstance(item, Mapping) and item.get("required") is True
+            )
+            instructions = (
+                "提交方式：该节点必须提交交付物，不能只勾选飞书待办。"
+                f"请在 Larkflow 工作台填写：{labels}。"
+            )
+            if self.workbench_base_url is not None:
+                instructions += (
+                    "\n打开对应表单："
+                    f"{self.workbench_base_url}/console/?action=task"
+                    f"&instance={quote(instance.id, safe='')}"
+                    f"&node={quote(node_key, safe='')}"
+                )
+            sections.append(instructions)
         if node.executor != ExecutorKind.HUMAN:
             sections.insert(0, "处理方式：Agent 失败后的人工接管")
         instance_input_context = _instance_input_context(instance, node_key)
@@ -1519,6 +1541,24 @@ def _bounded_task_description(body: str, footer: str) -> str:
     while prefix and len(prefix.encode("utf-8")) > available_bytes:
         prefix = prefix[:-1]
     return f"{prefix.rstrip()}{suffix}"
+
+
+def _workbench_base_url(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    normalized = value.strip().rstrip("/")
+    parsed = urlsplit(normalized)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("workbench_base_url must be a clean HTTPS origin")
+    return normalized
 
 
 def _dependency_context(instance: WorkflowInstance, node_key: str) -> str:

@@ -645,6 +645,8 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"detail-advanced" in page.body
     assert b"graph-edit-dialog" in page.body
     assert b"graph-edit-dependency-list" in page.body
+    assert b"human-task-deliverable-fields" in page.body
+    assert b"graph-edit-before-list" in page.body
     assert "生成流程草稿".encode() in page.body
     assert "提交后只生成草稿，不会自动启动".encode() in page.body
     assert "不用复制飞书命令".encode() in page.body
@@ -653,6 +655,16 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"submitHumanDecisionFromPage" in script.body
     assert b"/decision`" in script.body
     assert b"workflow-filters" in page.body
+
+    task_link = application.handle(
+        "GET",
+        "/console/?action=task&instance=instance_owner&node=confirm_input",
+    )
+    assert task_link.status == 200
+    assert application.handle(
+        "GET",
+        "/console/?action=task&instance=instance_owner&node=confirm_input&extra=1",
+    ).status == 400
     assert b"detail-tabs" in page.body
     assert b"detail-tab-overview" not in page.body
     assert b"overview-nodes" in page.body

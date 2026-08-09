@@ -425,6 +425,96 @@ def test_http_task_routes_require_version_bound_json_and_hide_full_instance():
     ).status == 403
 
 
+def test_structured_human_deliverable_is_required_and_persisted_through_http():
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, directory=Directory(), clock=lambda: NOW)
+    service.create_draft(
+        instance_id="structured_trip",
+        tenant_id=TENANT,
+        owner_person_id=OWNER,
+        actor_person_id=OWNER,
+        snapshot=InstanceSnapshot(
+            goal="Plan a trip",
+            inputs={"brief": "Plan a Suzhou trip"},
+            nodes=(
+                NodeSpec(
+                    "confirm_requirements",
+                    "确认出行需求",
+                    ASSIGNEE,
+                    "human",
+                    work={
+                        "objective": "补全并确认出行需求",
+                        "inputs": ["instance_inputs.brief"],
+                        "outputs": [
+                            {"id": "origin", "type": "text", "label": "出发地", "required": True},
+                            {"id": "start_date", "type": "date", "label": "出发日期", "required": True},
+                            {"id": "travelers", "type": "integer", "label": "出行人数", "required": True},
+                            {"id": "budget", "type": "money", "label": "总预算", "required": True},
+                        ],
+                        "acceptance": ["四项必要出行信息均已提交"],
+                    },
+                ),
+            ),
+        ),
+    )
+    service.confirm_draft(TENANT, "structured_trip", actor_person_id=OWNER)
+    service.dispatch_ready(TENANT, "structured_trip", max_automated=0)
+    tasks = ConsoleTaskService(service)
+    app = ConsoleHttpApplication(
+        ConsoleReadService(repository),
+        StaticConsoleAuthenticator(TOKEN, principal(ASSIGNEE)),
+        task_service=tasks,
+    )
+    current = tasks.get_task(
+        principal(ASSIGNEE),
+        "structured_trip",
+        "confirm_requirements",
+    )["task"]
+    assert [item["id"] for item in current["work"]["outputs"]] == [
+        "origin",
+        "start_date",
+        "travelers",
+        "budget",
+    ]
+
+    def submit(result):
+        body = json.dumps(
+            {
+                "attempt_no": current["node"]["attempt_no"],
+                "expected_node_version": current["node"]["version"],
+                "result": result,
+            },
+            separators=(",", ":"),
+        ).encode()
+        return app.handle(
+            "POST",
+            "/console/api/v1/tasks/structured_trip/nodes/confirm_requirements/submit",
+            headers={
+                "authorization": f"Bearer {TOKEN}",
+                "content-type": "application/json",
+                "content-length": str(len(body)),
+                "x-larkflow-console-action": "workflow-action-v1",
+            },
+            body=body,
+        )
+
+    missing = submit({"origin": "上海"})
+    assert missing.status == 400
+    assert "出发日期" in json.loads(missing.body)["error"]["message"]
+
+    deliverable = {
+        "origin": "上海",
+        "start_date": "2026-10-02",
+        "travelers": 2,
+        "budget": 5000,
+    }
+    accepted = submit(deliverable)
+    assert accepted.status == 200
+    assert service.get(TENANT, "structured_trip").current_attempt(
+        "confirm_requirements"
+    ).result == deliverable
+
+
 def test_http_decision_route_is_version_bound_and_owner_scoped():
     repository, service, tasks = setup_waiting_task(decision=True)
     app = ConsoleHttpApplication(

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import re
 from typing import Any
+import unicodedata
 
 from .console import ConsolePrincipal, ConsoleResourceNotFoundError
 from .editing import (
@@ -293,8 +295,13 @@ class ConsoleActionService:
     ) -> Mapping[str, Any]:
         """Create one owner-scoped future-region graph edit preview."""
 
-        translated = self._translate_graph_edit_owners(principal, operations)
         try:
+            instance = self._owned_instance(principal, instance_id)
+            translated = self._translate_graph_edit_owners(
+                principal,
+                instance,
+                operations,
+            )
             preview = self.service.preview_graph_edit(
                 principal.tenant_id,
                 instance_id,
@@ -390,30 +397,138 @@ class ConsoleActionService:
             "removed_node_keys": list(confirmation.preview.removed_node_keys),
         }
 
-    @staticmethod
+    @classmethod
     def _translate_graph_edit_owners(
+        cls,
         principal: ConsolePrincipal,
+        instance: WorkflowInstance,
         operations: list[Mapping[str, Any]],
     ) -> list[Mapping[str, Any]]:
         translated: list[Mapping[str, Any]] = []
+        known_keys = {spec.key for spec in instance.snapshot.nodes}
+        specs = {spec.key: spec for spec in instance.snapshot.nodes}
         for operation in operations:
             current = dict(operation)
             if current.get("op") == "add_node" and isinstance(
                 current.get("node"), Mapping
             ):
                 node = dict(current["node"])
+                insert_before = node.pop("insert_before", [])
+                if isinstance(insert_before, (str, bytes)) or not isinstance(
+                    insert_before,
+                    list,
+                ):
+                    raise GraphEditNotAllowedError(
+                        "insert_before must be an array"
+                    )
+                if len(insert_before) != len(set(insert_before)) or not all(
+                    isinstance(item, str) and item in known_keys
+                    for item in insert_before
+                ):
+                    raise GraphEditNotAllowedError(
+                        "insert_before contains an unknown or duplicate node"
+                    )
+                key = node.get("key")
+                if not isinstance(key, str) or not key.strip():
+                    key = cls._generated_node_key(
+                        str(node.get("title") or ""),
+                        str(node.get("executor") or "human"),
+                        known_keys,
+                    )
+                    node["key"] = key
+                known_keys.add(key)
                 if node.get("owner_person_id") == "__current_user__":
                     node["owner_person_id"] = principal.person_id
                 current["node"] = node
+                translated.append(current)
+                for target_key in insert_before:
+                    target = specs[target_key]
+                    deps = [*target.deps]
+                    if key not in deps:
+                        deps.append(key)
+                    translated.append(
+                        {
+                            "op": "update_node",
+                            "node_key": target_key,
+                            "set": {
+                                "deps": deps,
+                                "work": cls._work_with_dependencies(
+                                    target.work,
+                                    deps,
+                                ),
+                            },
+                        }
+                    )
+                continue
             elif current.get("op") == "update_node" and isinstance(
                 current.get("set"), Mapping
             ):
                 changes = dict(current["set"])
                 if changes.get("owner_person_id") == "__current_user__":
                     changes["owner_person_id"] = principal.person_id
+                node_key = current.get("node_key")
+                if "deps" in changes and isinstance(node_key, str):
+                    spec = specs.get(node_key)
+                    if spec is None:
+                        raise GraphEditNotAllowedError(
+                            f"unknown graph edit node: {node_key}"
+                        )
+                    changes["work"] = cls._work_with_dependencies(
+                        changes.get("work")
+                        if isinstance(changes.get("work"), Mapping)
+                        else spec.work,
+                        changes["deps"],
+                    )
                 current["set"] = changes
             translated.append(current)
         return translated
+
+    @staticmethod
+    def _generated_node_key(
+        title: str,
+        executor: str,
+        existing: set[str],
+    ) -> str:
+        ascii_title = unicodedata.normalize("NFKD", title).encode(
+            "ascii",
+            "ignore",
+        ).decode("ascii")
+        base = re.sub(r"[^a-z0-9]+", "_", ascii_title.lower()).strip("_")
+        if not base or not base[0].isalpha():
+            prefix = executor if executor in {"human", "agent", "tool"} else "node"
+            base = f"{prefix}_step"
+        base = base[:96].rstrip("_")
+        candidate = base
+        suffix = 2
+        while candidate in existing:
+            candidate = f"{base[:120 - len(str(suffix))]}_{suffix}"
+            suffix += 1
+        return candidate
+
+    @staticmethod
+    def _work_with_dependencies(
+        work: Mapping[str, Any],
+        dependencies: Any,
+    ) -> Mapping[str, Any]:
+        if isinstance(dependencies, (str, bytes)) or not isinstance(
+            dependencies,
+            (list, tuple),
+        ):
+            raise GraphEditNotAllowedError("deps must be an array")
+        normalized = dict(to_json_value(work))
+        inputs = normalized.get("inputs", ())
+        if isinstance(inputs, (str, bytes)) or not isinstance(inputs, list):
+            inputs = []
+        preserved = [
+            item
+            for item in inputs
+            if isinstance(item, str) and not item.startswith("dependencies.")
+        ]
+        normalized["inputs"] = [
+            *preserved,
+            *(f"dependencies.{dependency}" for dependency in dependencies),
+        ]
+        return normalized
 
     @staticmethod
     def _graph_edit_error_message(error: GraphEditNotAllowedError) -> str:

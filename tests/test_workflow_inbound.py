@@ -61,7 +61,7 @@ def task_state(**changes) -> ExternalTaskState:
     return replace(state, **changes)
 
 
-def setup_inbound(clock: Clock):
+def setup_inbound(clock: Clock, *, structured: bool = False):
     repository = InMemoryWorkflowRepository()
     service = WorkflowService(repository, clock=clock)
     service.create_draft(
@@ -79,7 +79,18 @@ def setup_inbound(clock: Clock):
                     work={
                         "objective": "Approve",
                         "inputs": [],
-                        "outputs": [{"id": "decision", "type": "data"}],
+                        "outputs": (
+                            [
+                                {
+                                    "id": "requirements",
+                                    "type": "long_text",
+                                    "label": "已确认需求",
+                                    "required": True,
+                                }
+                            ]
+                            if structured
+                            else [{"id": "decision", "type": "data"}]
+                        ),
                         "acceptance": ["A decision exists"],
                     },
                 ),
@@ -195,6 +206,22 @@ def test_verified_owner_completion_submits_the_current_human_attempt():
     assert attempt.submitted_by_person_id == "person_reviewer"
     assert attempt.result == {"confirmed": True}
     assert inbox.records(TENANT)[0].outcome == "submitted:human_node"
+
+
+def test_native_task_completion_cannot_replace_a_required_deliverable():
+    clock = Clock()
+    service, repository, inbox, bridge = setup_inbound(clock, structured=True)
+    bridge("task.task.update_user_access_v2", event())
+    assert verify(inbox, TaskReader(task_state()), clock).run_once().verified == 1
+
+    report = worker(service, repository, inbox, clock).run_once()
+
+    assert report.claimed == report.rejected == 1
+    assert report.submitted == report.failed == 0
+    current = service.get(TENANT, "instance_inbound")
+    assert current.nodes["approve"].status == NodeStatus.WAITING_HUMAN
+    assert current.current_attempt("approve").result is None
+    assert inbox.records(TENANT)[0].outcome == "rejected:task_requires_deliverable"
 
 
 def test_legacy_task_completion_cannot_bypass_an_accept_or_reject_card():

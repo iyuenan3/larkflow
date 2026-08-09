@@ -504,7 +504,8 @@
               <div id="human-task-context" class="human-task-context-body"></div>
             </section>
             <section id="human-task-submit-panel">
-              <label class="human-task-input" for="human-task-result">
+              <div id="human-task-deliverable-fields" class="human-task-deliverable-fields" hidden></div>
+              <label id="human-task-legacy-field" class="human-task-input" for="human-task-result">
                 <span>处理结果</span>
                 <textarea id="human-task-result" maxlength="12000" rows="7" placeholder="输入本节点的处理结果。提交后会继续推进流程。"></textarea>
                 <small><span id="human-task-result-count">0</span>/12000</small>
@@ -556,12 +557,8 @@
             <button id="graph-edit-close" class="human-task-close" type="button" aria-label="关闭流程编辑">×</button>
           </header>
 
+          <input id="graph-edit-key" type="hidden">
           <div class="graph-edit-grid">
-            <label id="graph-edit-key-field" for="graph-edit-key">
-              <span>内部标识</span>
-              <input id="graph-edit-key" type="text" maxlength="128" pattern="[a-z0-9][a-z0-9_]{0,127}" placeholder="例如 release_review">
-              <small>创建后不可直接改名。需要改名时应删除旧节点并新增节点。</small>
-            </label>
             <label for="graph-edit-title-input">
               <span>节点名称</span>
               <input id="graph-edit-title-input" type="text" maxlength="200" required placeholder="例如 复核发布说明">
@@ -571,7 +568,7 @@
               <select id="graph-edit-executor" required>
                 <option value="human">人工处理</option>
                 <option value="agent">AI 自动执行</option>
-                <option value="tool">确定性工具</option>
+                <option value="tool" disabled>确定性工具（需要先配置）</option>
               </select>
             </label>
             <label for="graph-edit-owner">
@@ -588,6 +585,12 @@
             <div id="graph-edit-dependency-list"></div>
           </fieldset>
 
+          <fieldset id="graph-edit-before" class="graph-edit-deps">
+            <legend>插入到这些节点之前</legend>
+            <p>所选节点会自动增加这个新节点作为前置条件，不需要再到画板上逐条连线。</p>
+            <div id="graph-edit-before-list"></div>
+          </fieldset>
+
           <div id="graph-edit-work-fields" class="graph-edit-work-fields">
             <label for="graph-edit-objective">
               <span>节点目标</span>
@@ -596,6 +599,11 @@
             <label for="graph-edit-acceptance">
               <span>验收条件</span>
               <textarea id="graph-edit-acceptance" maxlength="1000" rows="3" placeholder="每行一条验收条件"></textarea>
+            </label>
+            <label for="graph-edit-output-label">
+              <span>交付物名称</span>
+              <input id="graph-edit-output-label" type="text" maxlength="100" placeholder="例如 已确认的出行需求">
+              <small>人工节点提交交付物后才会推进，下游节点会自动收到该结果。</small>
             </label>
           </div>
 

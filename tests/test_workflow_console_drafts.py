@@ -49,15 +49,35 @@ def definition() -> dict:
         },
         "nodes": [
             {
+                "id": "confirm_requirements",
+                "title": "Confirm requirements",
+                "owner_role": "requester",
+                "executor": "human",
+                "deps": [],
+                "work": {
+                    "objective": "Complete and confirm the requested inputs",
+                    "inputs": ["instance_inputs.brief", "instance_inputs.context"],
+                    "outputs": [
+                        {
+                            "id": "requirements",
+                            "type": "long_text",
+                            "label": "Confirmed requirements",
+                            "required": True,
+                        }
+                    ],
+                    "acceptance": ["Required inputs are explicit"],
+                },
+            },
+            {
                 "id": "generate_summary",
                 "title": "Generate summary",
                 "owner_role": "requester",
                 "executor": "agent",
-                "deps": [],
+                "deps": ["confirm_requirements"],
                 "work": {
                     "objective": "Generate a grounded summary",
-                    "inputs": ["instance_inputs.brief"],
-                    "outputs": [{"id": "content", "type": "text"}],
+                    "inputs": ["dependencies.confirm_requirements"],
+                    "outputs": [{"id": "content", "type": "text", "label": "Summary", "required": True}],
                     "acceptance": ["No unsupported facts"],
                     "agent": {
                         "kind": "llm.generate",
@@ -75,7 +95,7 @@ def definition() -> dict:
                 "work": {
                     "objective": "Review the generated summary",
                     "inputs": ["dependencies.generate_summary"],
-                    "outputs": [{"id": "decision", "type": "data"}],
+                    "outputs": [{"id": "decision", "type": "decision", "label": "Review decision", "required": True}],
                     "acceptance": ["A human decision is recorded"],
                     "decision": {
                         "kind": "accept_reject",
@@ -216,6 +236,7 @@ def test_worker_freezes_candidate_creates_only_a_draft_then_existing_confirm_sta
     }
     assert [item.owner_person_id for item in instance.snapshot.nodes] == [
         OWNER,
+        OWNER,
         COLLABORATOR,
     ]
     assert all(node.current_attempt_no == 0 for node in instance.nodes.values())
@@ -247,6 +268,21 @@ def test_generated_agent_flow_reaches_one_decision_card_and_bounded_console_task
     ConsoleActionService(workflow_service).confirm_draft(
         principal(),
         instance_id,
+    )
+    confirmation = workflow_service.dispatch_due(
+        TENANT,
+        instance_id,
+        worker_id="runtime-worker",
+        max_automated=0,
+    )[0]
+    workflow_service.submit_human(
+        TENANT,
+        instance_id,
+        "confirm_requirements",
+        actor_person_id=OWNER,
+        attempt_no=confirmation.attempt_no,
+        expected_node_version=confirmation.expected_node_version,
+        result={"requirements": "Release summary requirements confirmed"},
     )
     agent = workflow_service.dispatch_due(
         TENANT,

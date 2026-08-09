@@ -21,10 +21,13 @@ class TargetRuntimeSettings:
     enable_agent_executor: bool = False
     enable_development_executor: bool = False
     enable_content_check_executor: bool = False
+    enable_web_search_executor: bool = False
     agent_claim_safety: timedelta = timedelta(seconds=30)
     agent_max_prompt_chars: int = 20_000
     agent_max_result_chars: int = 50_000
     content_check_max_chars: int = 50_000
+    web_search_max_prompt_chars: int = 20_000
+    web_search_max_result_chars: int = 50_000
 
     def __post_init__(self) -> None:
         if not self.dsn.strip():
@@ -45,6 +48,10 @@ class TargetRuntimeSettings:
             raise ValueError("agent_max_result_chars must be positive")
         if self.content_check_max_chars < 1:
             raise ValueError("content_check_max_chars must be positive")
+        if self.web_search_max_prompt_chars < 1:
+            raise ValueError("web_search_max_prompt_chars must be positive")
+        if self.web_search_max_result_chars < 1:
+            raise ValueError("web_search_max_result_chars must be positive")
 
     @classmethod
     def from_environ(
@@ -97,6 +104,9 @@ class TargetRuntimeSettings:
             enable_content_check_executor=_boolean(
                 values.get("LARKFLOW_TARGET_ENABLE_CONTENT_CHECK_EXECUTOR", "false")
             ),
+            enable_web_search_executor=_boolean(
+                values.get("LARKFLOW_TARGET_ENABLE_WEB_SEARCH_EXECUTOR", "false")
+            ),
             agent_claim_safety=timedelta(
                 seconds=_positive_float(
                     values,
@@ -117,6 +127,16 @@ class TargetRuntimeSettings:
             content_check_max_chars=_positive_int(
                 values,
                 "LARKFLOW_TARGET_CONTENT_CHECK_MAX_CHARS",
+                50_000,
+            ),
+            web_search_max_prompt_chars=_positive_int(
+                values,
+                "LARKFLOW_TARGET_WEB_SEARCH_MAX_PROMPT_CHARS",
+                20_000,
+            ),
+            web_search_max_result_chars=_positive_int(
+                values,
+                "LARKFLOW_TARGET_WEB_SEARCH_MAX_RESULT_CHARS",
                 50_000,
             ),
         )
@@ -340,6 +360,7 @@ class TargetDraftGenerationSettings:
     max_attempts: int = 5
     claim_safety: timedelta = timedelta(seconds=30)
     max_result_chars: int = 30_000
+    enable_web_search: bool = False
     loop: WorkerLoopSettings = WorkerLoopSettings()
 
     def __post_init__(self) -> None:
@@ -409,6 +430,9 @@ class TargetDraftGenerationSettings:
             ),
             max_result_chars=_positive_int(
                 values, "LARKFLOW_TARGET_DRAFT_MAX_RESULT_CHARS", 30_000
+            ),
+            enable_web_search=_boolean(
+                values.get("LARKFLOW_TARGET_DRAFT_ENABLE_WEB_SEARCH", "false")
             ),
             loop=WorkerLoopSettings(
                 idle_min_seconds=_positive_float(

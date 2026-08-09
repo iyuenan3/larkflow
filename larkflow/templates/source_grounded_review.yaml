@@ -22,7 +22,11 @@ nodes:
         - instance_inputs.source_registry
       outputs:
         - id: confirmation
-          type: data
+          type: choice
+          label: 已确认来源登记
+          required: true
+          options:
+            - 已确认
       acceptance:
         - 已核对来源 URL
         - 已确认 F 编号是来源事实，Q 编号是分析阶段的待确认问题
@@ -41,8 +45,12 @@ nodes:
       outputs:
         - id: source_claims
           type: data
+          label: 来源归因数据
+          required: true
         - id: content
           type: text
+          label: 研发需求简报
+          required: true
       acceptance:
         - 每条原文事实只引用 F 编号
         - 每条待确认问题只引用 Q 编号
@@ -67,10 +75,15 @@ nodes:
       outputs:
         - id: verdict
           type: data
+          label: 检查结论
+          required: true
         - id: evidence
           type: text
+          label: 检查证据
+          required: true
         - id: suggestion
           type: text
+          label: 修改建议
       acceptance:
         - 返回 pass 或 fail
         - 返回事实和待确认问题的编号覆盖证据
@@ -96,7 +109,9 @@ nodes:
         - dependencies.check_source_claims
       outputs:
         - id: decision
-          type: data
+          type: decision
+          label: 复核结论
+          required: true
       acceptance:
         - 已核对事实与推断的语义是否忠于来源
         - 已明确选择接受或退回

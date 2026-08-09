@@ -98,6 +98,7 @@ _ADMIN_ACTION_HEADER = "x-larkflow-console-action"
 _ADMIN_ACTION_VALUE = "session-governance-v1"
 _WORKFLOW_ACTION_VALUE = "workflow-action-v1"
 _MAX_TASK_BODY_BYTES = 65_536
+_CONSOLE_RESOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Content-Security-Policy": (
@@ -365,12 +366,24 @@ class ConsoleHttpApplication:
             if parsed.query:
                 query = parse_qs(parsed.query, keep_blank_values=True)
                 auth_error = query.get("auth_error", [])
-                if (
-                    asset[0] != "index.html"
-                    or set(query) != {"auth_error"}
-                    or len(auth_error) != 1
-                    or auth_error[0] not in {"access_denied", "login_failed"}
-                ):
+                task_link = (
+                    asset[0] == "index.html"
+                    and set(query) == {"action", "instance", "node"}
+                    and query.get("action") == ["task"]
+                    and len(query.get("instance", [])) == 1
+                    and len(query.get("node", [])) == 1
+                    and _CONSOLE_RESOURCE_ID.fullmatch(query["instance"][0])
+                    is not None
+                    and _CONSOLE_RESOURCE_ID.fullmatch(query["node"][0])
+                    is not None
+                )
+                auth_error_link = (
+                    asset[0] == "index.html"
+                    and set(query) == {"auth_error"}
+                    and len(auth_error) == 1
+                    and auth_error[0] in {"access_denied", "login_failed"}
+                )
+                if not task_link and not auth_error_link:
                     return self._error(
                         400,
                         "invalid_request",
@@ -525,7 +538,6 @@ class ConsoleHttpApplication:
             instance_id, node_key, action = match.groups()
             document = _json_object_body(body)
             allowed = {
-                "submit": {"attempt_no", "expected_node_version", "content"},
                 "transfer": {
                     "attempt_no",
                     "expected_node_version",
@@ -538,8 +550,13 @@ class ConsoleHttpApplication:
                     "decision",
                     "feedback",
                 },
-            }[action]
-            if set(document) != allowed:
+            }
+            if action == "submit":
+                common = {"attempt_no", "expected_node_version"}
+                fields = set(document)
+                if fields != common | {"content"} and fields != common | {"result"}:
+                    raise ValueError("task action fields are invalid")
+            elif set(document) != allowed[action]:
                 raise ValueError("task action fields are invalid")
             attempt_no = _positive_json_integer(document["attempt_no"], "attempt_no")
             expected_node_version = _nonnegative_json_integer(
@@ -547,9 +564,12 @@ class ConsoleHttpApplication:
                 "expected_node_version",
             )
             if action == "submit":
-                content = document["content"]
-                if not isinstance(content, str):
+                content = document.get("content")
+                result = document.get("result")
+                if content is not None and not isinstance(content, str):
                     raise ValueError("content must be a string")
+                if result is not None and not isinstance(result, Mapping):
+                    raise ValueError("result must be an object")
                 return self._json(
                     200,
                     self.task_service.submit(
@@ -559,6 +579,7 @@ class ConsoleHttpApplication:
                         attempt_no=attempt_no,
                         expected_node_version=expected_node_version,
                         content=content,
+                        result=result,
                     ),
                 )
             if action == "decision":

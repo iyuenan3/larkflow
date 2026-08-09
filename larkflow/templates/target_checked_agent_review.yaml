@@ -22,7 +22,11 @@ nodes:
         - instance_inputs.brief
       outputs:
         - id: confirmation
-          type: data
+          type: choice
+          label: 已确认生成要求
+          required: true
+          options:
+            - 已确认
       acceptance:
         - 已确认生成要求
 
@@ -40,6 +44,8 @@ nodes:
       outputs:
         - id: content
           type: text
+          label: 执行摘要
+          required: true
       acceptance:
         - 正文包含结论和下一步
         - 正文不虚构未提供的事实
@@ -61,10 +67,15 @@ nodes:
       outputs:
         - id: verdict
           type: data
+          label: 检查结论
+          required: true
         - id: evidence
           type: text
+          label: 检查证据
+          required: true
         - id: suggestion
           type: text
+          label: 修改建议
       acceptance:
         - 返回 pass 或 fail
         - 返回可供节点 Owner 判断的证据和建议
@@ -92,7 +103,9 @@ nodes:
         - dependencies.check_summary
       outputs:
         - id: review
-          type: data
+          type: decision
+          label: 复核结论
+          required: true
       acceptance:
         - 已阅读 Agent 正文和 Tool 检查证据
         - 已由节点 Owner 完成最终判断

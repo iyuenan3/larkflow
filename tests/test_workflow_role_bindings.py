@@ -160,7 +160,14 @@ def generated_definition():
                 "work": {
                     "objective": "确认输入可以交给 Agent",
                     "inputs": ["instance_inputs.brief"],
-                    "outputs": [{"id": "confirmation", "type": "data"}],
+                    "outputs": [
+                        {
+                            "id": "confirmation",
+                            "type": "boolean",
+                            "label": "Input confirmed",
+                            "required": True,
+                        }
+                    ],
                     "acceptance": ["输入已确认"],
                 },
             },
@@ -177,7 +184,14 @@ def generated_definition():
                         "instance_inputs.context",
                         "dependencies.confirm_brief",
                     ],
-                    "outputs": [{"id": "content", "type": "text"}],
+                    "outputs": [
+                        {
+                            "id": "content",
+                            "type": "text",
+                            "label": "Generated summary",
+                            "required": True,
+                        }
+                    ],
                     "acceptance": ["摘要不虚构事实"],
                     "agent": {
                         "kind": "llm.generate",
@@ -195,7 +209,14 @@ def generated_definition():
                 "work": {
                     "objective": "复核 Agent 摘要",
                     "inputs": ["dependencies.draft_summary"],
-                    "outputs": [{"id": "decision", "type": "data"}],
+                    "outputs": [
+                        {
+                            "id": "decision",
+                            "type": "decision",
+                            "label": "Review decision",
+                            "required": True,
+                        }
+                    ],
                     "acceptance": ["已完成接受或退回判断"],
                     "decision": {
                         "kind": "accept_reject",

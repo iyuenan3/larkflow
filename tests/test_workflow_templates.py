@@ -441,3 +441,25 @@ def test_packaged_personal_edge_template_is_a_human_agent_human_contract():
     assert snapshot.node("local_draft").work["agent"]["kind"] == (
         "personal.readonly"
     )
+
+
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "collaborative_agent_review.yaml",
+        "source_grounded_decision.yaml",
+        "source_grounded_review.yaml",
+        "target_agent_review.yaml",
+        "target_checked_agent_review.yaml",
+        "target_personal_edge_review.yaml",
+    ),
+)
+def test_packaged_templates_declare_user_visible_required_deliverables(filename):
+    resource = files("larkflow.templates").joinpath(filename)
+    value = yaml.safe_load(resource.read_text(encoding="utf-8"))
+
+    for node in value["nodes"]:
+        outputs = node["work"]["outputs"]
+        assert outputs, node["id"]
+        assert all(output.get("label") for output in outputs), node["id"]
+        assert any(output.get("required") is True for output in outputs), node["id"]

@@ -43,6 +43,7 @@ from .executors import (
     SourceClaimsCheckToolExecutor,
     SourceDecisionCheckToolExecutor,
     ToolExecutorRouter,
+    WebSearchToolExecutor,
 )
 from .feishu import (
     CliFeishuDocumentProjection,
@@ -140,6 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--enable-content-check-executor",
         action="store_true",
         help="enable the deterministic content.check Tool adapter",
+    )
+    parser.add_argument(
+        "--enable-web-search-executor",
+        action="store_true",
+        help="enable the source-preserving web.search Tool adapter",
     )
     parser.add_argument(
         "--validate-directory",
@@ -381,6 +387,9 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             retry_base=settings.retry_base,
             retry_max=settings.retry_max,
             max_attempts=settings.max_attempts,
+            workbench_base_url=os.environ.get(
+                "LARKFLOW_CONSOLE_PUBLIC_BASE_URL"
+            ),
         )
         worker = _CombinedDraftWorkers(console_worker, role_binding_worker)
         if namespace.command == "generate-drafts-once":
@@ -938,6 +947,8 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
         settings = replace(settings, enable_agent_executor=True)
     if namespace.enable_content_check_executor:
         settings = replace(settings, enable_content_check_executor=True)
+    if namespace.enable_web_search_executor:
+        settings = replace(settings, enable_web_search_executor=True)
     service = WorkflowService(
         repository,
         runner=NodeRunner(claim_ttl=settings.claim_ttl),
@@ -1054,13 +1065,14 @@ def _executors(
 ) -> dict[ExecutorKind, AutomatedExecutor]:
     registry: dict[ExecutorKind, AutomatedExecutor] = {}
     tool_adapters: list[object] = []
-    if settings.enable_agent_executor:
+    client = None
+    if settings.enable_agent_executor or settings.enable_web_search_executor:
         values = os.environ if environ is None else environ
         roles = load_llm_roles(dict(values))
         if not roles:
             raise ValueError(
-                "Agent executor requires a complete LLM_BASE_URL, LLM_API_KEY, "
-                "and LLM_MODEL route"
+                "Agent or web search executor requires a complete LLM_BASE_URL, "
+                "LLM_API_KEY, and LLM_MODEL route"
             )
         maximum_seconds = _maximum_llm_route_seconds(roles)
         required_seconds = (
@@ -1085,10 +1097,21 @@ def _executors(
             on_call=note_call,
             on_failover=note_failover,
         )
+    if settings.enable_agent_executor:
+        assert client is not None
         registry[ExecutorKind.AGENT] = LLMAgentExecutor(
             client,
             max_prompt_chars=settings.agent_max_prompt_chars,
             max_result_chars=settings.agent_max_result_chars,
+        )
+    if settings.enable_web_search_executor:
+        assert client is not None
+        tool_adapters.append(
+            WebSearchToolExecutor(
+                client,
+                max_prompt_chars=settings.web_search_max_prompt_chars,
+                max_result_chars=settings.web_search_max_result_chars,
+            )
         )
     if settings.enable_development_executor:
         tool_adapters.append(DevelopmentToolExecutor())
@@ -1151,6 +1174,7 @@ def _draft_generator(
             on_failover=note_failover,
         ),
         max_result_chars=settings.max_result_chars,
+        allow_web_search=settings.enable_web_search,
     )
 
 

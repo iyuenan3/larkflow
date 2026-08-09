@@ -25,6 +25,7 @@ from .decision import (
     human_decision_config,
     normalize_human_decision_feedback,
 )
+from .deliverables import validate_human_deliverable, validate_node_deliverable
 from .events import AuditEvent, OutboxEvent
 from .graph import validate_snapshot
 from .lifecycle import (
@@ -607,6 +608,19 @@ class WorkflowService:
         expected_version = instance.version
         self._require_active(instance)
         now = self.clock()
+        self.runner.check_human_submission(
+            instance,
+            node_key,
+            actor_person_id=actor_person_id,
+            attempt_no=attempt_no,
+            expected_node_version=expected_node_version,
+        )
+        try:
+            spec = instance.snapshot.node(node_key)
+        except KeyError:
+            pass
+        else:
+            result = validate_human_deliverable(spec.work, result)
         self.runner.submit_human(
             instance,
             node_key,
@@ -876,6 +890,25 @@ class WorkflowService:
         expected_version = instance.version
         self._require_active(instance)
         now = self.clock()
+        self.runner.check_automated_completion(
+            instance,
+            node_key,
+            attempt_no=attempt_no,
+            expected_node_version=expected_node_version,
+            claim_token=claim_token,
+            worker_id=worker_id,
+            now=now,
+        )
+        try:
+            spec = instance.snapshot.node(node_key)
+        except KeyError:
+            pass
+        else:
+            result = validate_node_deliverable(
+                spec.work,
+                result,
+                allow_undeclared=True,
+            )
         self.runner.complete_automated(
             instance,
             node_key,

@@ -22,7 +22,11 @@ nodes:
         - instance_inputs.brief
       outputs:
         - id: confirmation
-          type: data
+          type: choice
+          label: 已确认生成要求
+          required: true
+          options:
+            - 已确认
       acceptance:
         - 已确认生成要求
 
@@ -40,6 +44,8 @@ nodes:
       outputs:
         - id: content
           type: text
+          label: 执行摘要
+          required: true
       acceptance:
         - 正文包含明确结论和后续行动
         - 正文不虚构未提供的事实
@@ -60,7 +66,9 @@ nodes:
         - dependencies.draft_summary
       outputs:
         - id: review
-          type: data
+          type: decision
+          label: 复核结论
+          required: true
       acceptance:
         - 已阅读任务描述中的上游结果
         - 已完成接受或退回判断

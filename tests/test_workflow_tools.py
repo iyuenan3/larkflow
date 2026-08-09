@@ -24,6 +24,7 @@ from larkflow.workflow import (
     TargetRuntimeSettings,
     TemplateService,
     ToolExecutorRouter,
+    WebSearchToolExecutor,
     WorkflowService,
     WorkflowWorker,
     validate_snapshot,
@@ -37,6 +38,19 @@ NOW = datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc)
 class StaticCompletion:
     def complete(self, *, prompt: str, model_role: str) -> str:
         return "结论：输入完整，可以继续。下一步：请节点 Owner 复核摘要。"
+
+
+class StaticWebSearch:
+    def __init__(self, *, sources=None):
+        self.sources = sources or ["https://example.com/official-guide"]
+        self.calls = []
+
+    def web_search(self, *, prompt: str, model_role: str):
+        self.calls.append({"prompt": prompt, "model_role": model_role})
+        return {
+            "content": "景点开放信息与预约规则已核对。",
+            "sources": self.sources,
+        }
 
 
 def request(
@@ -74,6 +88,49 @@ def request(
         },
         expected_node_version=1,
         claim_token="claim-tools",
+        claim_expires_at=NOW + timedelta(minutes=5),
+    )
+
+
+def web_search_request(*, extra_args: dict | None = None) -> ExecutionRequest:
+    tool_args = {
+        "model_role": "default",
+        "instructions": "优先核对景点官方开放时间和预约规则",
+    }
+    tool_args.update(extra_args or {})
+    return ExecutionRequest(
+        tenant_id="tenant_tools",
+        instance_id="instance_tools",
+        node_key="research_attractions",
+        attempt_id="attempt_search",
+        attempt_no=1,
+        owner_person_id="person_owner",
+        executor="tool",
+        work={
+            "objective": "研究苏州景点开放与预约信息",
+            "inputs": ["dependencies.confirm_requirements"],
+            "outputs": [
+                {"id": "content", "type": "text", "required": True},
+                {"id": "sources", "type": "string_list", "required": True},
+            ],
+            "acceptance": ["关键结论有来源"],
+            "tool": {
+                "kind": "web.search",
+                "args": tool_args,
+            },
+        },
+        input_snapshot={
+            "dependencies": {
+                "confirm_requirements": {
+                    "origin": "上海",
+                    "start_date": "2026-08-20",
+                    "travelers": 2,
+                    "budget": 3000,
+                }
+            }
+        },
+        expected_node_version=1,
+        claim_token="claim-search",
         claim_expires_at=NOW + timedelta(minutes=5),
     )
 
@@ -439,6 +496,30 @@ def test_content_check_rejects_invalid_or_unbounded_contracts(
         ContentCheckToolExecutor().execute(execution_request)
 
 
+def test_web_search_executor_preserves_research_content_and_sources():
+    client = StaticWebSearch()
+    result = WebSearchToolExecutor(client).execute(web_search_request())
+
+    assert result.result["content"] == "景点开放信息与预约规则已核对。"
+    assert result.result["sources"] == ("https://example.com/official-guide",)
+    assert result.result["tool_kind"] == "web.search"
+    assert client.calls[0]["model_role"] == "default"
+    assert "2026-08-20" in client.calls[0]["prompt"]
+    assert "不预订、不购买" in client.calls[0]["prompt"]
+
+
+def test_web_search_executor_rejects_unsourced_or_provider_controlled_results():
+    client = StaticWebSearch()
+    client.sources = []
+    with pytest.raises(ValueError, match="cited sources"):
+        WebSearchToolExecutor(client).execute(web_search_request())
+
+    with pytest.raises(ValueError, match="unsupported fields"):
+        WebSearchToolExecutor(StaticWebSearch()).execute(
+            web_search_request(extra_args={"api_key": "must-not-be-accepted"})
+        )
+
+
 def test_tool_router_selects_one_explicit_adapter_and_rejects_unknown_kinds():
     router = ToolExecutorRouter(
         [
@@ -446,6 +527,7 @@ def test_tool_router_selects_one_explicit_adapter_and_rejects_unknown_kinds():
             SourceClaimsCheckToolExecutor(),
             SourceDecisionCheckToolExecutor(),
             DevelopmentToolExecutor(sleep=lambda _: None),
+            WebSearchToolExecutor(StaticWebSearch()),
         ]
     )
 
@@ -453,6 +535,7 @@ def test_tool_router_selects_one_explicit_adapter_and_rejects_unknown_kinds():
     assert router.execute(request()).result["verdict"] == "pass"
     assert router.execute(source_claims_request()).result["verdict"] == "pass"
     assert router.execute(source_decision_request()).result["verdict"] == "pass"
+    assert router.execute(web_search_request()).result["sources"]
     with pytest.raises(ValueError, match="unsupported Tool contract"):
         router.execute(request(kind="unknown.tool"))
 
@@ -475,6 +558,42 @@ def test_runtime_can_enable_content_check_without_enabling_development_echo():
     assert isinstance(router, ToolExecutorRouter)
     assert router.execute(request()).result["verdict"] == "pass"
     assert router.execute(source_decision_request()).result["verdict"] == "pass"
+
+
+def test_runtime_can_enable_web_search_with_the_existing_llm_route():
+    settings = TargetRuntimeSettings.from_environ(
+        {
+            "LARKFLOW_TARGET_DSN": "postgresql:///test",
+            "LARKFLOW_TARGET_TENANT": "tenant_tools",
+            "LARKFLOW_TARGET_ENABLE_WEB_SEARCH_EXECUTOR": "true",
+            "LARKFLOW_TARGET_WEB_SEARCH_MAX_PROMPT_CHARS": "1234",
+            "LARKFLOW_TARGET_WEB_SEARCH_MAX_RESULT_CHARS": "5678",
+            "LLM_BASE_URL": "https://ark.example.invalid/api/v3",
+            "LLM_API_KEY": "test-key",
+            "LLM_MODEL": "test-model",
+            "LLM_TIMEOUT": "20",
+        },
+        worker_id="worker-search",
+    )
+
+    registry = _executors(
+        settings,
+        environ={
+            "LLM_BASE_URL": "https://ark.example.invalid/api/v3",
+            "LLM_API_KEY": "test-key",
+            "LLM_MODEL": "test-model",
+            "LLM_TIMEOUT": "20",
+        },
+    )
+
+    assert tuple(registry) == (ExecutorKind.TOOL,)
+    router = registry[ExecutorKind.TOOL]
+    assert router.accepts(
+        executor=ExecutorKind.TOOL,
+        work=web_search_request().work,
+    )
+    assert settings.web_search_max_prompt_chars == 1234
+    assert settings.web_search_max_result_chars == 5678
 
 
 def test_packaged_human_agent_tool_human_template_matches_the_target_contract():
@@ -687,7 +806,7 @@ def test_mixed_template_runs_human_agent_tool_human_to_completion():
         actor_person_id="person_owner",
         attempt_no=confirmation.attempt_no,
         expected_node_version=current.nodes["confirm_brief"].version,
-        result={"confirmation": True},
+            result={"confirmation": "已确认"},
     )
 
     assert worker.run_once().completed == 1

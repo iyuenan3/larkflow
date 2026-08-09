@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
+import re
 import time
 
 
@@ -157,7 +159,8 @@ class OpenAICompatLLM(LLMClient):
             started = time.monotonic()
             self._note_call({"event": "start", "model_role": model_role, "link": i,
                              "model": cfg["model"], "base_url": cfg["base_url"],
-                             "timeout": cfg.get("timeout") or self.timeout})
+                             "timeout": cfg.get("timeout") or self.timeout,
+                             "operation": "completion"})
             try:
                 resp = self._client(cfg).chat.completions.create(
                     model=cfg["model"],
@@ -182,6 +185,51 @@ class OpenAICompatLLM(LLMClient):
                 self._note_failover(model_role, i, len(chain), tried)
             return resp.choices[0].message.content or ""
         raise LLMUnavailable(f"角色 {model_role} 没有任何可用线路")   # 链为空（装配期已挡）
+
+    def web_search(self, *, prompt: str, model_role: str) -> dict:
+        """Use a provider-hosted web search and preserve its cited URLs.
+
+        This deliberately lives behind a separate executor contract. Ordinary
+        ``llm.generate`` calls remain offline with respect to external tools,
+        while a ``web.search`` node is visible in the DAG and audit trail.
+        """
+
+        chain = self._chain(model_role)
+        tried: list[str] = []
+        for i, cfg in enumerate(chain):
+            started = time.monotonic()
+            self._note_call({"event": "start", "model_role": model_role, "link": i,
+                             "model": cfg["model"], "base_url": cfg["base_url"],
+                             "timeout": cfg.get("timeout") or self.timeout,
+                             "operation": "web_search"})
+            try:
+                response = self._client(cfg).responses.create(
+                    model=cfg["model"],
+                    input=prompt,
+                    tools=[{"type": "web_search"}],
+                )
+                result = _web_search_result(response)
+            except Exception as exc:
+                self._note_call({"event": "end", "model_role": model_role, "link": i,
+                                 "ok": False, "seconds": round(time.monotonic() - started, 1),
+                                 "error": f"{type(exc).__name__}: {exc}",
+                                 "operation": "web_search"})
+                tried.append(f"{cfg['base_url']}/{cfg['model']}: {type(exc).__name__}: {exc}")
+                if not _can_fail_over(exc):
+                    raise
+                if i == len(chain) - 1:
+                    raise LLMUnavailable(
+                        f"角色 {model_role} 的 {len(chain)} 条联网搜索线路全部打不通："
+                        + "｜".join(tried)) from exc
+                continue
+            self._note_call({"event": "end", "model_role": model_role, "link": i,
+                             "ok": True, "seconds": round(time.monotonic() - started, 1),
+                             "operation": "web_search",
+                             "source_count": len(result["sources"])})
+            if i:
+                self._note_failover(model_role, i, len(chain), tried)
+            return result
+        raise LLMUnavailable(f"角色 {model_role} 没有任何可用联网搜索线路")
 
     def _note_call(self, record: dict) -> None:
         if self.on_call is None:
@@ -209,3 +257,112 @@ class OpenAICompatLLM(LLMClient):
             model_role="triage",
         )
         return json.loads(text)
+
+
+_HTTP_URL_RE = re.compile(
+    r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+"
+)
+
+
+def _web_search_result(response: object) -> dict:
+    """Extract one bounded research report and provider-backed citations."""
+
+    data = _response_mapping(response)
+    content = data.get("output_text")
+    if not isinstance(content, str) or not content.strip():
+        content = _response_output_text(data)
+    if not content:
+        raise ValueError("web search returned an empty result")
+
+    sources: list[str] = []
+    _collect_citation_urls(data, sources)
+    for match in _HTTP_URL_RE.findall(content):
+        _append_url(sources, match.rstrip(".,;:!?，。；：！？"))
+    if not sources:
+        raise ValueError("web search returned no cited sources")
+    return {"content": content.strip(), "sources": sources}
+
+
+def _response_mapping(response: object) -> Mapping[str, object]:
+    if isinstance(response, Mapping):
+        return response
+    dump = getattr(response, "model_dump", None)
+    if callable(dump):
+        value = dump()
+        if isinstance(value, Mapping):
+            return value
+    output = getattr(response, "output", None)
+    output_text = getattr(response, "output_text", None)
+    value = {
+        "output": [_object_mapping(item) for item in output or ()],
+        "output_text": output_text,
+    }
+    return value
+
+
+def _object_mapping(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _object_mapping(item) for key, item in value.items()}
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        return _object_mapping(dump())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [_object_mapping(item) for item in value]
+    fields = getattr(value, "__dict__", None)
+    if isinstance(fields, Mapping):
+        return {
+            str(key): _object_mapping(item)
+            for key, item in fields.items()
+            if not str(key).startswith("_")
+        }
+    return value
+
+
+def _response_output_text(data: Mapping[str, object]) -> str:
+    parts: list[str] = []
+    output = data.get("output")
+    if not isinstance(output, Sequence) or isinstance(output, (str, bytes)):
+        return ""
+    for item in output:
+        if not isinstance(item, Mapping) or item.get("type") != "message":
+            continue
+        blocks = item.get("content")
+        if not isinstance(blocks, Sequence) or isinstance(blocks, (str, bytes)):
+            continue
+        for block in blocks:
+            if not isinstance(block, Mapping):
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+    return "\n\n".join(parts)
+
+
+def _collect_citation_urls(value: object, sources: list[str]) -> None:
+    if isinstance(value, Mapping):
+        kind = value.get("type")
+        if kind in {"url_citation", "citation", "reference"}:
+            url = value.get("url")
+            if isinstance(url, str):
+                _append_url(sources, url)
+            nested = value.get("url_citation")
+            if isinstance(nested, Mapping):
+                nested_url = nested.get("url")
+                if isinstance(nested_url, str):
+                    _append_url(sources, nested_url)
+        for key, item in value.items():
+            if key == "url" and isinstance(item, str) and (
+                "reference" in value or "title" in value
+            ):
+                _append_url(sources, item)
+            _collect_citation_urls(item, sources)
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        for item in value:
+            _collect_citation_urls(item, sources)
+
+
+def _append_url(sources: list[str], value: str) -> None:
+    normalized = value.strip()
+    if normalized.startswith(("https://", "http://")) and normalized not in sources:
+        sources.append(normalized)

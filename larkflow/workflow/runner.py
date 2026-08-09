@@ -166,19 +166,40 @@ class NodeRunner:
         quality_result: QualityResult | None,
         now: datetime,
     ) -> None:
+        self.check_human_submission(
+            instance,
+            node_key,
+            actor_person_id=actor_person_id,
+            attempt_no=attempt_no,
+            expected_node_version=expected_node_version,
+        )
         node = instance.nodes[node_key]
-        if actor_person_id != node.owner_person_id:
-            raise AuthorizationError(f"only the node owner may submit: {node_key}")
-        attempt = self._current_attempt(instance, node_key, attempt_no)
-        self._expect_node(node_key, node.version, expected_node_version)
-        if node.status != NodeStatus.WAITING_HUMAN:
-            raise TransitionError(f"node is not waiting for a human: {node_key}")
+        attempt = instance.current_attempt(node_key)
 
         transition_node(node, NodeStatus.DONE, now=now)
         transition_attempt(attempt, AttemptStatus.DONE, now=now)
         attempt.result = FrozenDict(result)
         attempt.quality_result = quality_result
         attempt.submitted_by_person_id = actor_person_id
+
+    def check_human_submission(
+        self,
+        instance: WorkflowInstance,
+        node_key: str,
+        *,
+        actor_person_id: str,
+        attempt_no: int,
+        expected_node_version: int,
+    ) -> None:
+        """Validate Human authority and attempt state without mutating it."""
+
+        node = instance.nodes[node_key]
+        if actor_person_id != node.owner_person_id:
+            raise AuthorizationError(f"only the node owner may submit: {node_key}")
+        self._current_attempt(instance, node_key, attempt_no)
+        self._expect_node(node_key, node.version, expected_node_version)
+        if node.status != NodeStatus.WAITING_HUMAN:
+            raise TransitionError(f"node is not waiting for a human: {node_key}")
 
     def reject_human(
         self,
@@ -225,6 +246,39 @@ class NodeRunner:
         quality_result: QualityResult | None,
         now: datetime,
     ) -> None:
+        self.check_automated_completion(
+            instance,
+            node_key,
+            attempt_no=attempt_no,
+            expected_node_version=expected_node_version,
+            claim_token=claim_token,
+            worker_id=worker_id,
+            now=now,
+        )
+        node = instance.nodes[node_key]
+        attempt = instance.current_attempt(node_key)
+
+        transition_node(node, NodeStatus.DONE, now=now)
+        transition_attempt(attempt, AttemptStatus.DONE, now=now)
+        attempt.result = FrozenDict(result)
+        attempt.quality_result = quality_result
+        attempt.claimed_by = None
+        attempt.claim_token = None
+        attempt.claim_expires_at = None
+
+    def check_automated_completion(
+        self,
+        instance: WorkflowInstance,
+        node_key: str,
+        *,
+        attempt_no: int,
+        expected_node_version: int,
+        claim_token: str,
+        worker_id: str,
+        now: datetime,
+    ) -> None:
+        """Validate an automated claim without committing its result."""
+
         node = instance.nodes[node_key]
         if node.executor == ExecutorKind.HUMAN:
             raise TransitionError(f"human node cannot submit an automated claim: {node_key}")
@@ -236,14 +290,6 @@ class NodeRunner:
             raise ClaimExpiredError(f"claim expired: {node_key}")
         if node.status != NodeStatus.RUNNING:
             raise TransitionError(f"node is not running: {node_key}")
-
-        transition_node(node, NodeStatus.DONE, now=now)
-        transition_attempt(attempt, AttemptStatus.DONE, now=now)
-        attempt.result = FrozenDict(result)
-        attempt.quality_result = quality_result
-        attempt.claimed_by = None
-        attempt.claim_token = None
-        attempt.claim_expires_at = None
 
     def renew_automated_claim(
         self,

@@ -69,6 +69,7 @@ from .executors import (
     SourceClaimsCheckToolExecutor,
     SourceDecisionCheckToolExecutor,
     ToolExecutorRouter,
+    WebSearchToolExecutor,
     render_source_claims,
     render_source_decision,
 )
@@ -538,6 +539,7 @@ __all__ = [
     "TemplateStore",
     "TemplateValidationError",
     "ToolExecutorRouter",
+    "WebSearchToolExecutor",
     "TransitionError",
     "UnsupportedEdgeCapabilityError",
     "WorkflowInstance",

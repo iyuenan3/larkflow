@@ -14,6 +14,7 @@ from .decision import (
     human_decision_config,
 )
 from .directory import DirectoryValidationError
+from .deliverables import validate_human_deliverable
 from .model import AttemptStatus, ExecutorKind, NodeStatus
 from .repository import ConcurrentUpdateError, InstanceNotFoundError
 from .runner import AuthorizationError, StaleAttemptError
@@ -116,6 +117,7 @@ class ConsoleTaskService:
                 },
                 "work": {
                     "objective": str(spec.work.get("objective") or ""),
+                    "outputs": to_json_value(spec.work.get("outputs", ())),
                     "acceptance": [
                         str(item) for item in spec.work.get("acceptance", ())
                     ],
@@ -177,16 +179,29 @@ class ConsoleTaskService:
         *,
         attempt_no: int,
         expected_node_version: int,
-        content: str,
+        content: str | None = None,
+        result: Mapping[str, Any] | None = None,
     ) -> Mapping[str, Any]:
-        content = content.strip()
-        if not content:
-            raise ValueError("content is required")
-        if len(content) > MAX_HUMAN_TASK_CONTENT_CHARS:
-            raise ValueError(
-                f"content exceeds {MAX_HUMAN_TASK_CONTENT_CHARS} characters"
-            )
-        self._current_task(principal, instance_id, node_key, decision=False)
+        _instance, _node, spec, _attempt = self._current_task(
+            principal,
+            instance_id,
+            node_key,
+            decision=False,
+        )
+        if (content is None) == (result is None):
+            raise ValueError("submit requires exactly one of content or result")
+        if content is not None:
+            content = content.strip()
+            if not content:
+                raise ValueError("content is required")
+            if len(content) > MAX_HUMAN_TASK_CONTENT_CHARS:
+                raise ValueError(
+                    f"content exceeds {MAX_HUMAN_TASK_CONTENT_CHARS} characters"
+                )
+            submitted = {"content": content}
+        else:
+            assert result is not None
+            submitted = validate_human_deliverable(spec.work, result)
         try:
             instance = self.service.submit_human(
                 principal.tenant_id,
@@ -195,7 +210,7 @@ class ConsoleTaskService:
                 actor_person_id=principal.person_id,
                 attempt_no=attempt_no,
                 expected_node_version=expected_node_version,
-                result={"content": content},
+                result=submitted,
             )
         except (AuthorizationError, InstanceNotFoundError):
             raise ConsoleTaskNotFoundError((instance_id, node_key)) from None

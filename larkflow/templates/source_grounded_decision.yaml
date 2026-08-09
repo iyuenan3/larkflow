@@ -22,7 +22,11 @@ nodes:
         - instance_inputs.source_registry
       outputs:
         - id: confirmation
-          type: data
+          type: choice
+          label: 已确认决策来源登记
+          required: true
+          options:
+            - 已确认
       acceptance:
         - 已核对来源 URL
         - 已确认 F 编号是来源事实，Q 编号是本次必须回答的决策问题
@@ -41,8 +45,12 @@ nodes:
       outputs:
         - id: source_decision
           type: data
+          label: 来源约束型决策数据
+          required: true
         - id: content
           type: text
+          label: 优先级建议
+          required: true
       acceptance:
         - 只给出一项最高优先级并引用 F 编号
         - 逐一回答全部 Q 编号
@@ -68,10 +76,15 @@ nodes:
       outputs:
         - id: verdict
           type: data
+          label: 检查结论
+          required: true
         - id: evidence
           type: text
+          label: 检查证据
+          required: true
         - id: suggestion
           type: text
+          label: 修改建议
       acceptance:
         - 返回 pass 或 fail
         - 返回来源事实与决策问题覆盖证据
@@ -97,7 +110,9 @@ nodes:
         - dependencies.check_source_decision
       outputs:
         - id: decision
-          type: data
+          type: decision
+          label: 复核结论
+          required: true
       acceptance:
         - 已核对唯一优先级与全部问题回答是否符合当前工作
         - 已核对完成标准、不做事项和重新评估条件是否可执行

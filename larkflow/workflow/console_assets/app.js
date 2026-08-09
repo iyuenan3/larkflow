@@ -38,6 +38,25 @@ systemTheme.addEventListener("change", (event) => {
   if (!storedTheme()) applyTheme(event.matches ? "dark" : "light");
 });
 
+function linkedTaskFromLocation() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("action") !== "task") {
+    try {
+      return JSON.parse(sessionStorage.getItem("larkflow.console.linkedTask") || "null");
+    } catch (_error) {
+      return null;
+    }
+  }
+  const value = { instanceId: params.get("instance"), nodeKey: params.get("node") };
+  if (!value.instanceId || !value.nodeKey) return null;
+  try {
+    sessionStorage.setItem("larkflow.console.linkedTask", JSON.stringify(value));
+  } catch (_error) {
+    // The current page can still open the task after authentication.
+  }
+  return value;
+}
+
 const state = {
   token: sessionStorage.getItem("larkflow.console.token") || "",
   authMode: "unknown",
@@ -63,6 +82,7 @@ const state = {
   workflowQuery: "",
   expandedAttentionKinds: new Set(),
   graphEditor: null,
+  autoOpenTask: linkedTaskFromLocation(),
 };
 
 const el = (id) => document.getElementById(id);
@@ -311,6 +331,25 @@ async function loadInstances(selectId = null) {
   syncDraftRequests(draftPayload.requests || []);
   if (selectId) {
     await loadDetail(selectId);
+  } else if (state.autoOpenTask) {
+    const linked = state.autoOpenTask;
+    const item = state.attention.find((candidate) => (
+      candidate.action?.kind === "human_task"
+      && candidate.instance_id === linked.instanceId
+      && candidate.action.node_key === linked.nodeKey
+    ));
+    state.autoOpenTask = null;
+    try {
+      sessionStorage.removeItem("larkflow.console.linkedTask");
+    } catch (_error) {
+      // Nothing else depends on persistent cleanup.
+    }
+    window.history.replaceState({}, "", "/console/");
+    if (item) {
+      await openHumanTask(item, document.createElement("button"));
+    } else {
+      showToast("该待办已处理、已转交或你无权访问", "error");
+    }
   } else if (
     state.ownerSection === "attention"
     && state.attention.length === 0
@@ -1114,6 +1153,9 @@ function resetHumanTaskControls() {
   el("human-task-result").value = "";
   el("human-task-result").disabled = false;
   el("human-task-result-count").textContent = "0";
+  el("human-task-deliverable-fields").replaceChildren();
+  el("human-task-deliverable-fields").hidden = true;
+  el("human-task-legacy-field").hidden = false;
   el("human-task-error").textContent = "";
   el("human-task-submit-panel").hidden = false;
   el("human-task-actions").hidden = false;
@@ -1158,6 +1200,7 @@ function renderHumanTask(task) {
     acceptanceItems.forEach((item) => acceptance.append(node("li", "", item)));
   }
   renderHumanTaskContext(task.work.context || {});
+  renderHumanDeliverableFields(task.work.outputs || []);
   el("human-task-submit-panel").hidden = isDecision;
   el("human-task-actions").hidden = isDecision;
   el("human-decision-panel").hidden = !isDecision;
@@ -1166,8 +1209,94 @@ function renderHumanTask(task) {
   el("human-task-content").hidden = false;
   requestAnimationFrame(() => {
     if (isDecision) el("human-decision-accept").focus();
-    else el("human-task-result").focus();
+    else (el("human-task-deliverable-fields").querySelector("input, textarea, select")
+      || el("human-task-result")).focus();
   });
+}
+
+function renderHumanDeliverableFields(outputs) {
+  const container = el("human-task-deliverable-fields");
+  container.replaceChildren();
+  const structured = Array.isArray(outputs)
+    && outputs.some((output) => output && output.required === true);
+  container.hidden = !structured;
+  el("human-task-legacy-field").hidden = structured;
+  if (!structured) return;
+
+  outputs.forEach((output) => {
+    if (!output || !output.id) return;
+    const field = node("label", "human-deliverable-field");
+    const title = node("span", "", output.label || output.id);
+    if (output.required) title.append(node("em", "", "必填"));
+    field.append(title);
+    let input;
+    if (output.type === "choice") {
+      input = document.createElement("select");
+      input.append(node("option", "", "请选择"));
+      input.firstElementChild.value = "";
+      (output.options || []).forEach((choice) => {
+        const option = node("option", "", choice);
+        option.value = choice;
+        input.append(option);
+      });
+    } else if (["long_text", "data", "object", "document", "file", "string_list"].includes(output.type)) {
+      input = document.createElement("textarea");
+      input.rows = output.type === "long_text" ? 5 : 3;
+      input.maxLength = 12000;
+    } else {
+      input = document.createElement("input");
+      input.type = ({
+        boolean: "checkbox",
+        date: "date",
+        integer: "number",
+        money: "number",
+        number: "number",
+        url: "url",
+      })[output.type] || "text";
+      if (output.type === "integer") input.step = "1";
+      if (output.type === "number" || output.type === "money") input.step = "any";
+      if (input.type !== "checkbox") input.maxLength = 12000;
+    }
+    input.dataset.outputId = output.id;
+    input.dataset.outputType = output.type || "text";
+    input.required = Boolean(output.required) && input.type !== "checkbox";
+    if (output.placeholder) input.placeholder = output.placeholder;
+    field.append(input);
+    if (output.help) field.append(node("small", "", output.help));
+    container.append(field);
+  });
+}
+
+function humanDeliverableResult() {
+  const container = el("human-task-deliverable-fields");
+  if (container.hidden) {
+    const content = el("human-task-result").value.trim();
+    if (!content) throw new Error("请先输入处理结果。");
+    return { content };
+  }
+  const result = {};
+  container.querySelectorAll("[data-output-id]").forEach((input) => {
+    const outputId = input.dataset.outputId;
+    const type = input.dataset.outputType;
+    let value;
+    if (type === "boolean") value = input.checked;
+    else if (type === "integer") value = input.value === "" ? null : Number.parseInt(input.value, 10);
+    else if (["number", "money"].includes(type)) value = input.value === "" ? null : Number(input.value);
+    else if (type === "string_list") {
+      value = input.value.split("\n").map((item) => item.trim()).filter(Boolean);
+    } else if (["data", "object"].includes(type)) {
+      const raw = input.value.trim();
+      if (!raw) value = null;
+      else {
+        try { value = JSON.parse(raw); }
+        catch (_error) { throw new Error(`${input.closest("label")?.querySelector("span")?.textContent || outputId}需要填写有效 JSON`); }
+      }
+    } else value = input.value.trim();
+    if (value !== null && value !== "" && !(Array.isArray(value) && value.length === 0)) {
+      result[outputId] = value;
+    }
+  });
+  return result;
 }
 
 function renderHumanTaskContext(context) {
@@ -1219,11 +1348,12 @@ async function reloadAfterTaskMutation(instanceId) {
 async function submitHumanTaskFromPage() {
   const button = el("human-task-submit");
   const transfer = el("human-task-transfer-open");
-  const content = el("human-task-result").value.trim();
   el("human-task-error").textContent = "";
-  if (!content) {
-    el("human-task-error").textContent = "请先输入处理结果。";
-    el("human-task-result").focus();
+  let result;
+  try {
+    result = humanDeliverableResult();
+  } catch (error) {
+    el("human-task-error").textContent = error.message || "请填写节点交付物。";
     return;
   }
   button.disabled = true;
@@ -1237,7 +1367,7 @@ async function submitHumanTaskFromPage() {
       taskWriteOptions({
         attempt_no: task.node.attempt_no,
         expected_node_version: task.node.version,
-        content,
+        result,
       }),
     );
     button.dataset.state = "done";
@@ -2031,10 +2161,7 @@ async function openGraphEditor(mode, nodeKey = null) {
     : (isDraft
       ? "草稿中的节点可以修改，确认修改后仍需单独确认启动。"
       : "只能修改尚未开始执行且没有执行历史的未来节点。");
-  const keyInput = el("graph-edit-key");
-  keyInput.value = selected?.key || "";
-  keyInput.disabled = mode === "edit";
-  keyInput.required = mode === "add";
+  el("graph-edit-key").value = selected?.key || "";
   el("graph-edit-title-input").value = selected?.title || "";
   el("graph-edit-executor").value = selected?.executor || "human";
   const toolOption = el("graph-edit-executor").querySelector('option[value="tool"]');
@@ -2042,14 +2169,34 @@ async function openGraphEditor(mode, nodeKey = null) {
   el("graph-edit-work-fields").hidden = mode === "edit";
   el("graph-edit-objective").value = "";
   el("graph-edit-acceptance").value = "";
+  el("graph-edit-output-label").value = "";
   el("graph-edit-remove").hidden = mode !== "edit";
   el("graph-edit-error").textContent = "";
   renderGraphDependencyOptions(nodes, selected);
+  renderGraphBeforeOptions(nodes, mode);
   resetGraphOwnerOptions(mode);
   graphEditDialog.showModal();
-  if (mode === "add") keyInput.focus();
-  else el("graph-edit-title-input").focus();
+  el("graph-edit-title-input").focus();
   loadGraphEditorPeople(state.graphEditor).catch(() => {});
+}
+
+function renderGraphBeforeOptions(nodes, mode) {
+  const fieldset = el("graph-edit-before");
+  const container = el("graph-edit-before-list");
+  fieldset.hidden = mode !== "add";
+  container.replaceChildren();
+  if (mode !== "add") return;
+  nodes.forEach((item) => {
+    const option = node("label", "graph-edit-dependency-option");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = item.key;
+    option.append(checkbox, node("span", "", item.title), node("code", "", item.key));
+    container.append(option);
+  });
+  if (container.childElementCount === 0) {
+    container.append(node("p", "muted", "当前没有需要增加前置条件的节点。"));
+  }
 }
 
 function renderGraphDependencyOptions(nodes, selected) {
@@ -2100,6 +2247,11 @@ function graphEditDependencies() {
     .map((item) => item.value);
 }
 
+function graphEditBeforeNodes() {
+  return Array.from(el("graph-edit-before-list").querySelectorAll("input:checked"))
+    .map((item) => item.value);
+}
+
 function graphEditOperation() {
   const mode = state.graphEditor?.mode;
   const title = el("graph-edit-title-input").value.trim();
@@ -2108,30 +2260,39 @@ function graphEditOperation() {
   const deps = graphEditDependencies();
   if (!title) throw new Error("请填写节点名称");
   if (mode === "add") {
-    const key = el("graph-edit-key").value.trim();
-    if (!/^[a-z0-9][a-z0-9_]{0,127}$/.test(key)) {
-      throw new Error("节点 ID 只能使用小写字母、数字和下划线");
-    }
     const acceptance = el("graph-edit-acceptance").value
       .split("\n")
       .map((item) => item.trim())
       .filter(Boolean);
     const objective = el("graph-edit-objective").value.trim() || title;
+    const outputLabel = el("graph-edit-output-label").value.trim()
+      || (executor === "human" ? "处理结果" : "生成结果");
     const work = {
       objective,
       inputs: deps.map((item) => `dependencies.${item}`),
-      outputs: [{ id: "result", type: "data" }],
+      outputs: [{
+        id: "content",
+        label: outputLabel,
+        type: executor === "human" ? "long_text" : "text",
+        required: true,
+      }],
       acceptance: acceptance.length ? acceptance : [`${title} 已完成`],
     };
-    if (executor === "tool") work.tool = { kind: "noop", args: {} };
+    if (executor === "agent") {
+      work.agent = {
+        kind: "llm.generate",
+        model_role: "default",
+        instructions: objective,
+      };
+    }
     return {
       op: "add_node",
       node: {
-        key,
         title,
         owner_person_id: owner || "__current_user__",
         executor,
         deps,
+        insert_before: graphEditBeforeNodes(),
         work,
       },
     };

@@ -267,6 +267,77 @@ def test_human_task_is_created_after_activation_and_completed_after_submission()
     assert worker.run_once().claimed == 0
 
 
+def test_required_deliverable_task_links_to_its_workbench_form():
+    clock = Clock()
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=clock)
+    service.create_draft(
+        instance_id="trip:input",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=InstanceSnapshot(
+            goal="Plan a trip",
+            nodes=(
+                NodeSpec(
+                    "confirm_requirements",
+                    "确认出行需求",
+                    "person_reviewer",
+                    "human",
+                    work={
+                        "objective": "补全并确认出行需求",
+                        "inputs": [],
+                        "outputs": [
+                            {"id": "origin", "type": "text", "label": "出发地", "required": True},
+                            {"id": "travelers", "type": "integer", "label": "出行人数", "required": True},
+                        ],
+                        "acceptance": ["必要信息均已提交"],
+                    },
+                ),
+            ),
+        ),
+    )
+    service.confirm_draft(TENANT, "trip:input", actor_person_id="person_owner")
+    tasks = RecordingTasks()
+    worker = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        tasks,
+        tenant_id=TENANT,
+        worker_id="projection_1",
+        clock=clock,
+        workbench_base_url="https://workspace.example.test",
+    )
+    assert worker.run_once().noops == 1
+    service.dispatch_due(TENANT, "trip:input", worker_id="runtime_1")
+
+    assert worker.run_once().tasks_created == 1
+    description = tasks.create_requests[0].description
+    assert "不能只勾选飞书待办" in description
+    assert "出发地、出行人数" in description
+    assert (
+        "https://workspace.example.test/console/?action=task"
+        "&instance=trip%3Ainput&node=confirm_requirements"
+    ) in description
+
+
+def test_workbench_task_link_requires_a_clean_https_origin():
+    clock = Clock()
+    repository = InMemoryWorkflowRepository()
+    with pytest.raises(ValueError, match="clean HTTPS origin"):
+        WorkflowProjectionWorker(
+            repository,
+            repository,
+            repository,
+            RecordingTasks(),
+            tenant_id=TENANT,
+            worker_id="projection_1",
+            clock=clock,
+            workbench_base_url="http://workspace.example.test/path",
+        )
+
+
 def test_runtime_transfer_reassigns_the_existing_feishu_task():
     clock = Clock()
     service, repository, tasks, worker = setup_human(clock)

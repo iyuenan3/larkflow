@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 
 from .model import InstanceSnapshot, NodeStatus
 from .decision import HUMAN_DECISION_KIND
+from .deliverables import DeliverableContractError, validate_output_contract
 
 
 NODE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -63,8 +64,10 @@ def _validate_work(
         raise GraphValidationError(f"work objective is required: {node_key}")
 
     outputs = work.get("outputs")
-    if not _non_empty_sequence(outputs):
-        raise GraphValidationError(f"work outputs are required: {node_key}")
+    try:
+        validate_output_contract(outputs, node_key=node_key)
+    except DeliverableContractError as exc:
+        raise GraphValidationError(str(exc)) from exc
 
     acceptance = work.get("acceptance")
     if not _non_empty_sequence(acceptance) or not all(

@@ -23,6 +23,7 @@ from larkflow.workflow import (
     WorkflowService,
     WorkflowWorker,
 )
+from larkflow.workflow.deliverables import DeliverableValidationError
 
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
@@ -177,6 +178,73 @@ def test_worker_commits_claim_before_calling_external_executor():
     assert report.recovered == 0
     assert executor.requests[0].idempotency_key.endswith(":attempt:1")
     assert service.get(TENANT, "instance_runtime").status == InstanceStatus.DONE
+
+
+def test_required_automated_deliverable_is_validated_before_commit():
+    clock = Clock()
+    snapshot = InstanceSnapshot(
+        goal="produce a declared deliverable",
+        nodes=(
+            NodeSpec(
+                "generate",
+                "Generate",
+                "person_owner",
+                "agent",
+                work={
+                    "objective": "Produce the result",
+                    "inputs": [],
+                    "outputs": [
+                        {
+                            "id": "content",
+                            "type": "text",
+                            "label": "Generated content",
+                            "required": True,
+                        }
+                    ],
+                    "acceptance": ["The content exists"],
+                    "prompt": "Generate the result",
+                },
+            ),
+        ),
+    )
+    service, _ = build_runtime(clock=clock, snapshot=snapshot)
+    activation = service.dispatch_due(
+        TENANT,
+        "instance_runtime",
+        worker_id="worker_1",
+        max_automated=1,
+    )[0]
+
+    with pytest.raises(DeliverableValidationError, match="Generated content"):
+        service.complete_automated(
+            TENANT,
+            "instance_runtime",
+            "generate",
+            attempt_no=activation.attempt_no,
+            expected_node_version=activation.expected_node_version,
+            claim_token=activation.claim_token or "",
+            result={"summary": "undeclared output"},
+            worker_id="worker_1",
+        )
+
+    still_running = service.get(TENANT, "instance_runtime")
+    assert still_running.nodes["generate"].status == NodeStatus.RUNNING
+    assert still_running.current_attempt("generate").result is None
+
+    finished = service.complete_automated(
+        TENANT,
+        "instance_runtime",
+        "generate",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        claim_token=activation.claim_token or "",
+        result={"content": "validated output"},
+        worker_id="worker_1",
+    )
+    assert finished.status == InstanceStatus.DONE
+    assert finished.current_attempt("generate").result == {
+        "content": "validated output"
+    }
 
 
 def test_cancellation_during_execution_discards_the_late_worker_result():

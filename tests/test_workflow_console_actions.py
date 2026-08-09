@@ -382,6 +382,7 @@ def test_http_graph_edit_requires_bounded_json_preview_before_confirmation():
         f"/console/api/v1/graph-edit-previews/{preview_id}/confirm",
         headers=ACTION_HEADERS,
     )
+
     replay = application.handle(
         "POST",
         f"/console/api/v1/graph-edit-previews/{preview_id}/confirm",
@@ -436,6 +437,57 @@ def test_http_graph_edit_updates_a_draft_without_starting_it():
     assert stored.nodes == {}
     assert stored.snapshot.node("draft_summary").deps == ()
 
+
+def test_console_add_generates_internal_key_and_inserts_before_selected_nodes():
+    _repository, domain, actions = _services()
+
+    preview = actions.preview_graph_edit(
+        _principal(),
+        "draft_owner",
+        [
+            {
+                "op": "add_node",
+                "node": {
+                    "title": "确认出行需求",
+                    "owner_person_id": "__current_user__",
+                    "executor": "human",
+                    "deps": [],
+                    "insert_before": ["draft_summary"],
+                    "work": {
+                        "objective": "补全并确认出行需求",
+                        "inputs": ["instance_inputs.brief"],
+                        "outputs": [
+                            {
+                                "id": "requirements",
+                                "type": "long_text",
+                                "label": "已确认的出行需求",
+                                "required": True,
+                            }
+                        ],
+                        "acceptance": ["出行需求完整且明确"],
+                    },
+                },
+            }
+        ],
+    )
+
+    assert preview["preview"]["added_nodes"] == [
+        {"key": "human_step", "title": "确认出行需求"}
+    ]
+    assert preview["preview"]["updated_nodes"] == [
+        {"key": "draft_summary", "title": "Draft summary"}
+    ]
+    actions.confirm_graph_edit(_principal(), preview["preview"]["id"])
+    snapshot = domain.get(TENANT, "draft_owner").snapshot
+    assert snapshot.node("human_step").title == "确认出行需求"
+    assert snapshot.node("draft_summary").deps == (
+        "confirm_input",
+        "human_step",
+    )
+    assert snapshot.node("draft_summary").work["inputs"] == (
+        "dependencies.confirm_input",
+        "dependencies.human_step",
+    )
 
 def test_feishu_workflow_actions_require_the_exact_public_origin():
     repository, _domain, actions = _services()
