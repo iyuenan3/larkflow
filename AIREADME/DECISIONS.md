@@ -966,3 +966,13 @@
 - Tradeoff：草稿可以在启动前通过同一画板修正，依赖操作也更接近图形化心智模型，但每次连线仍需要显式确认，不支持多操作图形化 diff、跨设备布局、协同冲突合并或通用撤销。浏览器控制器在本轮可见复验中超时，因此服务端真库证据不能替代用户对拖拽手势的最终体验判断。
 - Evidence：内容提交 `f320fd5b9b200fae24cefeb6a853c684a38e7565`；完整离线套件为 `1034 passed, 24 skipped`。一次性真实 PostgreSQL 草稿完成连接、断开和独立启动，编辑期间保持 `0 NodeInstance / 0 Attempt`，启动后物化 3 个节点和 3 个 Attempt。wheel SHA-256 为 `fd164c85fe0d3f0076d9ed37a4d2212e149cc4cd394fe136ec21f13ce132c1d9`，已部署到 `/srv/larkflow/target/releases/20260809_223113_draft_canvas_f320fd5/`；备份、23 份 migration、十个 Python 服务、Caddy、Console 200、未认证 401、资源哈希和零 warning 均已读回。登录工作台刷新保持会话，可见拖拽手势仍待一次人工复验。
 - Status addendum：真实登录验收确认显式刷新后草稿画板进入可编辑状态，同时发现 9 像素端点在自动适配后只有约 3 到 4 像素。内容提交 `4eb417cc9d020b2165b0fa8f857e3cdc8806d126` 把端点扩大到 24 像素并增加高亮、光标和悬停反馈；完整离线套件保持 `1034 passed, 24 skipped`。新 wheel 已部署，安装态、loopback 和公网 CSS 哈希一致，Console 与 Caddy 健康。浏览器控制通道在部署后刷新时持续超时，因此 ADR-108 的 visible drag acceptance 仍保持 pending。
+
+## ADR-109 · 2026-08-10 · 工作台覆盖完整首次成功路径
+
+- **Status：Accepted，implemented and offline verified，development deployment pending。**
+- Problem：开发真栈已经覆盖中央状态、飞书投影、自然语言草稿、人工任务和受控画板，但普通员工仍需要理解 `DAG / Human / Agent / Attempt / Graph revision`，并在工作台与飞书决定卡之间切换才能完成一次流程。大量历史测试流程又会遮蔽新用户的下一步。功能闭环不等于产品可用，当前状态不适合邀请他人测试或推荐使用。
+- Constraint：PostgreSQL 继续是唯一业务真相；工作台不能复制人类决定状态机；飞书卡片继续承担通知和备用入口；参与者不能因为获得任务入口而读取完整实例；接受或退回必须绑定当前 Instance、Node、Attempt 和负责人；本轮不扩张 Personal Agent Edge、自由白板或多人实时协同。
+- Decision：把首次成功路径固定为“描述目标、核对流程、确认启动、完成或判断、查看结果”。`accept_reject` Human 节点与普通 Human Task 一起进入参与者有界任务面，页面可直接接受或携带意见退回，并调用既有 `WorkflowService.submit_human_decision`；普通任务仍可提交或转交，决定任务不可转交。飞书决定卡继续调用同一领域命令。一级界面使用“流程、人工、AI、第几次执行、流程版本”等业务语言，并把结构化上下文和结果转换为可读文本。没有独立完成该路径的可见验收前，路线图保持“可用性收口”，不进入邀请测试阶段。
+- Alternatives(否决)：继续要求用户复制命令或返回飞书完成判断；在浏览器另建决定状态；把飞书 Task 完成视为接受；仅新增帮助文档而不修主路径；继续增加画板和 Edge 功能；用更多开发者引导下的合成点击代替首次使用证据。
+- Tradeoff：员工可以在一个工作台推进主要流程，入口切换和内部术语减少；飞书仍保留责任提醒和备用操作。参与者任务 API 的范围扩大到决定节点，因此服务端必须继续使用 404 隐藏越权资源，并对 Instance、Node、Attempt 和负责人做完整重验。历史测试数据清理、默认空工作区、首个示例、结果信息层级和真实首次使用验收仍需后续完成。
+- Evidence：内容提交 `64424f1de429f051af58739962f504e62337755d` 完成工作台决定入口、严格版本校验、三步首次使用引导、业务术语和结构化结果可读化。聚焦套件为 `35 passed`，完整离线套件为 `1037 passed, 24 skipped`，候选 wheel SHA-256 为 `a79d55caa8398806c826acf6ede4f0a625d48637de3a525e6bbc2d57c1f44ed0`。开发部署和真实登录浏览器验收尚未完成。本 ADR 不把本地代码、离线回归或既有技术闭环解释为可推荐使用。

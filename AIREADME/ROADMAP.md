@@ -1,6 +1,6 @@
 # ROADMAP · larkflow
 
-> 状态：Target Delivery Plan · 2026-08-09
+> 状态：Target Delivery Plan · 2026-08-10
 >
 > 原来的三级协作、个人 Agent Edge 产品化和完整能力治理路线已移出近期范围。现有代码作为 legacy 机制原型保留；一个不改变中央主线的只读 Edge Proof 单独验证架构边界。
 
@@ -17,9 +17,13 @@
 
 **Exit gate：** 每项 MVP 都有明确的产品理由和可判定验收；核心文档无范围冲突；市场结论仍标记为未知。
 
-## Now · Phase 1 中央工作流基础
+## Now · Phase 1 首次成功路径与可用性收口
 
-目标：一个企业可以从模板或无模板定义启动单层 DAG，并在飞书中可靠推进。
+目标：一名普通员工不阅读说明、不复制飞书命令，也能在五分钟内完成“描述目标、核对草稿、确认启动、处理人工任务或判断、查看结果”的首次闭环。
+
+当前明确不进入邀请测试阶段。开发真栈已经覆盖中央状态、飞书投影、工作台和画板，但历史测试数据、内部术语、网页与飞书之间的入口切换仍使首次使用成本过高。当前发布门槛是清理默认工作区、压平动作层级、把接受或退回收回工作台、用业务语言展示上下文和结果，并由开发者独立完成一条不依赖口头指导的首次成功路径；在此之前不得描述为可推荐给其他人使用。
+
+- 内容提交 `64424f1de429f051af58739962f504e62337755d` 已把版本绑定的 Human 决定纳入参与者任务面，普通任务继续提交或转交，决定任务可直接接受或填写意见后退回；飞书决定卡继续作为通知与备用入口。工作台新增三步首次使用引导，并把主路径中的 `DAG / Human / Agent / Attempt / Graph revision` 改为业务语言。完整离线套件为 `1037 passed, 24 skipped`，候选 wheel SHA-256 为 `a79d55caa8398806c826acf6ede4f0a625d48637de3a525e6bbc2d57c1f44ed0`；开发部署和真实登录可见验收尚未完成，不能据此关闭可用性门槛。
 
 - 已完成领域内核：不可变 Instance Snapshot、DAG Contract 核验、草稿确认、NodeInstance、Attempt、显式状态迁移、Scheduler、中央 Node Runner、claim 和仓储 Port。
 - 已完成 PostgreSQL 14 第一版 schema：Template、TemplateVersion、Instance、NodeInstance、Attempt、Projection、Audit、Outbox。
