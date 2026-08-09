@@ -914,3 +914,13 @@
 - Evidence：内容提交 `432fea77c210e7a2cfa5344054eb30d01706bf87`；定向套件 `69 passed`，完整离线套件 `1015 passed, 23 skipped`。wheel SHA-256 为 `6b320b22804c02eaa2840d9a101bcf1b4ffe75287509816486727588ccdc0198`，已部署到 `/srv/larkflow/target/releases/20260809_0357_console_drafts_432fea7/`。升级前备份可读，长期库应用第二十三份 migration。真实 PostgreSQL 双连接只有一路领取同一请求，测试记录已清理。十个 Python 服务与 Caddy 为 `active / NRestarts=0`，公网 200、未登录草稿 API 401、安装资源哈希与零 warning 均已回读。浅色、深色和移动端本地真实 HTTP 交互验收通过；真实登录模型生成仍待下一步关闭。
 - Status addendum：真实成员主体的短期临时会话已用纯合成文本通过正式草稿 API 和真实中央模型，一次领取生成三节点草稿。数据库独立回读 `draft / version 0 / template_version_id NULL / confirmed_at NULL / 0 NodeInstance / 0 Attempt / 0 Projection`，临时会话已注销。该证据关闭身份主体、耐久请求、模型与草稿边界，不关闭飞书授权后的真实浏览器点击验收。
 - Visible acceptance addendum：真实 Chrome 登录会话已从公网工作台完成纯合成输入、点击生成、即时进度反馈和自动打开草稿。实例 `console_draft_a11c6bb9d2ae071d78b10f802f567119` 经 PostgreSQL 独立回读为 `draft / version 0 / template_version_id NULL / confirmed_at NULL / 3 nodes / 0 NodeInstance / 0 Attempt / 0 Projection`，请求为 `ready / attempt 1`。没有启动流程或创建外部副作用。该证据关闭 ADR-103 的真实浏览器点击门槛，下一阶段转向真实业务材料的受控试用，不改变生成后必须由本人独立确认启动的决策。
+
+## ADR-104 · 2026-08-09 · 画板只提交受控领域命令并把布局留在浏览器
+
+- **Status：Accepted，Development deployed，real authenticated graph mutation pending。**
+- Problem：现有工作台能展示 DAG 和执行历史，也能通过表单按钮执行流程操作，但用户不能在图上直接增加或修改未来节点，也不能从选中节点发起返工。若浏览器直接保存整张图或自行计算合法性，就会形成第二套工作流引擎，并允许客户端身份、依赖和影响范围进入授权边界。
+- Constraint：PostgreSQL 继续是唯一业务真相；只允许当前 Instance Owner 修改没有执行痕迹的未来区域；结构变更必须保留既有 GraphEditPreview 的版本、revision、候选 Snapshot 和原子确认；返工必须保留 RestartPreview、旧 Attempt、结果与审计；节点拖动不能改变调度；可操作状态应立即可见；当前阶段不建设通用自由白板。
+- Decision：画板使用 React Flow 渲染和交互，ELK.js 只计算展示布局。个人节点位置按 Instance 保存到浏览器 `localStorage`，不写数据库。增加、更新和删除节点被翻译为有界 GraphEdit operation，服务端生成预览并在确认时重新授权和重放；当前用户 Owner 占位符由服务端替换为认证主体。节点返工直接调用既有 RestartPreview。第一版通过表单选择依赖，不提供拖拽连边、任意图元或多人实时协同。
+- Alternatives(否决)：浏览器提交完整 Snapshot 覆盖数据库；前端自行判断冻结线或 DAG 合法性；拖动节点同时改变依赖；把画板布局写入 Instance aggregate；为画板复制一套编辑状态机；直接从画板创建新 Attempt；第一版引入通用白板或多人协同协议。
+- Tradeoff：用户可以在同一工作台理解并操作流程，且领域安全边界不变，但个人布局目前只存在当前浏览器，不会跨设备同步。表单依赖选择比拖拽连边更保守；大型图、图形化 diff、草稿态自由编辑、协同布局和可访问性仍需后续验证。
+- Evidence：内容提交 `b60cbbd8beb98742cc80082df78ac185274e3a8a`；完整离线套件 `1019 passed, 23 skipped`。本地真实浏览器完成拖动持久化、节点增加、节点修改、删除预览取消与四节点返工确认。wheel SHA-256 为 `e558f75a2e495d7d1e79e52a1b36458fb55c76ed6eca608e365dc94d43f97221`，已部署到 `/srv/larkflow/target/releases/20260809_175848_console_canvas_b60cbbd/`。migration runner 返回空集，公网静态资源与安装资源哈希一致，未登录图编辑接口返回 401，十个 Python 服务和 Caddy 均为 `active / NRestarts=0`。服务器真实登录图编辑尚待下一步关闭。

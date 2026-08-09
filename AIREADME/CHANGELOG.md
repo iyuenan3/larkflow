@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.72.0-draft · 2026-08-09 · 受控 DAG 画板第一版
+
+- Added：内容提交 `b60cbbd8beb98742cc80082df78ac185274e3a8a` 增加基于 React Flow 12.11.2 与 ELK.js 0.12.0 的运行画板。节点可拖动、缩放、适配和恢复自动布局；位置按 Instance 保存到当前浏览器，不改变依赖或领域状态。
+- Actions：Owner 可在画板增加、修改或删除未来区域节点，并从选中节点发起返工。图结构变更先调用 `graph-edit-preview`，再用耐久 preview ID 确认；节点返工继续使用 RestartPreview。服务端重新校验飞书会话、tenant、当前 Instance Owner、aggregate version、graph revision、冻结执行前沿、完整 DAG、Owner 和候选 Snapshot，不信任客户端身份或影响集合。
+- UI：增加节点与编辑节点使用同页表单选择 executor、Owner 和依赖；删除、编辑和返工都先显示服务端影响预览。已开始节点返回明确提示并引导使用返工。当前版本不支持拖拽连边、多人实时协同或通用自由白板。
+- Verified：本地真实浏览器完成节点拖动与刷新持久化、未来 Agent 节点增加、标题和依赖修改、删除预览取消，以及从运行节点发起四节点返工并创建新 Attempt。完整离线套件为 `1019 passed, 23 skipped`；wheel 安装资源与源码的五项静态资源 SHA-256 一致。
+- Deployment：wheel SHA-256 为 `e558f75a2e495d7d1e79e52a1b36458fb55c76ed6eca608e365dc94d43f97221`，位于 `/srv/larkflow/target/releases/20260809_175848_console_canvas_b60cbbd/`。升级前备份成功，migration runner 返回 `versions=[]`，ledger 保持 23 份。公网工作台 200、未登录图编辑 API 401、静态资源哈希和安全响应头均已回读；十个 Python 服务与 Caddy 为 `active / NRestarts=0`，部署窗口 warning 为 0。
+- Boundary：本轮浏览器图变更使用本地模拟服务，没有修改服务器真实业务实例。开发服务器只完成制品、迁移、服务、公网静态资源和授权边界验收；真实登录 Owner 的公网图编辑与返工闭环是下一门槛。
+
 ## v0.71.0-draft · 2026-08-09 · 飞书 Task 长描述边界与公开材料试用
 
 - Fixed：内容提交 `482c280cf9007951fb117b835086a4b19eb1f932` 为飞书 Task 描述增加 3000 字符与 10000 字节双重上限。超限时只截断展示正文，保留明确提示、流程 ID、节点和 Attempt；完整输入与上游结果仍保存在 PostgreSQL，不把飞书 Task 当权威副本。

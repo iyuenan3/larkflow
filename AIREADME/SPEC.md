@@ -118,9 +118,13 @@ Interactive Worker 依次访问 IM 命令验证、IM 回复、人员分工卡创
 
 Owner 流程写接口均为无请求体 POST：`/console/api/v1/instances/<instance_id>/confirm`、`pause` 与 `resume` 直接执行；`cancel-preview` 返回当前 aggregate version 与完整影响集合，`cancel-confirm/<expected_instance_version>` 才确认取消；`restart-preview` 和 `nodes/<node_key>/restart-preview` 创建既有耐久 RestartPreview，`/console/api/v1/restart-previews/<preview_id>/confirm` 才创建新 Attempt。取消和重启预览不修改领域聚合。确认时重新校验 tenant、Instance Owner、当前状态、aggregate version 和既有预览约束；跨 Owner 与不存在实例统一返回 404，状态冲突、陈旧或过期预览返回安全的 409。重复确认、暂停、继续、取消与重启使用领域层既有幂等语义，不重复增加审计或 Attempt。
 
+受控 DAG 画板使用 `POST /console/api/v1/instances/<instance_id>/graph-edit-preview` 创建未来区域编辑预览。请求体必须且只能是 `{"operations":[...]}`，操作沿用 `add_node / update_node / remove_node` 领域契约；服务端把 `owner_person_id=__current_user__` 翻译为当前认证主体，不接受浏览器声明任意当前用户身份。成功响应只返回预览 ID、当前与目标 graph revision、增删改节点摘要和过期时间。`POST /console/api/v1/graph-edit-previews/<preview_id>/confirm` 无请求体，只消费既有预览并返回最终 revision 与受影响节点。两条接口都重新校验 tenant、当前 Instance Owner、状态、冻结执行前沿、完整 DAG、工作定义、aggregate version 和候选 Snapshot；不能修改已开始节点，不能依据客户端影响集合执行。
+
+页面画板由 React Flow 12.11.2 与 ELK.js 0.12.0 构建。节点拖动位置按 Instance 保存在当前浏览器，刷新后继续使用；恢复自动布局只清除本地位置，不访问领域写接口。画板上的增加、编辑和删除先打开表单，再展示服务端 GraphEditPreview；“打回到此节点”复用 RestartPreview。当前不支持拖拽连边、任意自由图形或多人实时协同。
+
 参与者任务接口为 `GET /console/api/v1/tasks`、`GET /console/api/v1/tasks/<instance_id>/nodes/<node_key>`、对应的 `POST .../submit` 与 `POST .../transfer`，以及 `GET /console/api/v1/people`。任务列表和详情只返回当前 person 负责的普通 `waiting_human` 节点、目标、验收条件、当前 Attempt、节点版本和有界依赖上下文；参与者访问同一实例的完整 Owner 详情仍返回 404。提交和转交只接受严格 JSON，并同时校验 tenant、当前节点 Owner、executor、状态、Attempt 编号与节点版本。转交目标由服务端应用凭据目录解析，必须是同一租户内、应用可见且活跃的成员；领域事务只改变运行时 `NodeInstance.owner_person_id`，冻结 `InstanceSnapshot` 不变，并追加转交审计与 outbox。旧负责人随事务提交立即失去提交权，Projection 使用稳定幂等键更新既有飞书 Task 负责人。转交响应固定把外部投影标记为 `projection.kind=feishu_task / status=queued`，页面显示中央责任已改变且飞书仍在同步；异步失败由既有 outbox 有界重试和管理员异常聚合承接。`accept_reject` 决定节点不进入普通任务接口，继续使用版本绑定的飞书决定卡。
 
-所有工作流 POST 拒绝 query、请求体、`Content-Length` 非零值和 `Transfer-Encoding`，并要求 `X-Larkflow-Console-Action: workflow-action-v1`。`feishu` 模式还要求 `Origin` 精确等于配置的 Console 公网 origin；客户端身份字段、版本正文或节点状态都不被接收。页面按钮在请求发出前立即进入“正在执行”或“正在生成预览”，完成后显示明确终态；取消和重启在同页展示影响节点，并要求第二次点击确认。
+所有工作流 POST 都拒绝 query 和 `Transfer-Encoding`，并要求 `X-Larkflow-Console-Action: workflow-action-v1`。除 graph edit preview 外的流程写接口拒绝请求体和非零 `Content-Length`；graph edit preview 要求 `Content-Type: application/json`、精确 `Content-Length`、最多 65536 字节和严格字段集合。`feishu` 模式还要求 `Origin` 精确等于配置的 Console 公网 origin；客户端身份字段、版本正文或节点状态都不被接收。页面按钮在请求发出前立即进入“正在执行”或“正在生成预览”，完成后显示明确终态；取消、重启和图编辑在同页展示服务端预览，并要求第二次点击确认。
 
 Console 支持 `static` 与 `feishu` 两种鉴权模式。`static` 仅供 loopback 开发，要求 `LARKFLOW_CONSOLE_ACCESS_TOKEN` 至少 32 字符，并在服务端把该 Bearer token 映射到 `LARKFLOW_TARGET_TENANT + LARKFLOW_CONSOLE_PERSON_ID`。`feishu` 使用 OAuth v3 authorization code 与 PKCE S256；服务端保存单次、五分钟有效的 state，并用 Secure、HttpOnly、SameSite=Lax 的 `__Host-` cookie 绑定发起浏览器。回调在服务端以 app secret 换取用户 access token，只调用一次用户信息接口，然后立即丢弃该 token。返回的飞书 `tenant_key` 必须等于 `LARKFLOW_CONSOLE_FEISHU_TENANT_KEY`，并显式映射到 `LARKFLOW_TARGET_TENANT`；`open_id` 成为当前 person。用户 OAuth 不申请业务 scope，不持久化 refresh token，也不依赖服务器或员工电脑的 `lark-cli` 登录。
 
@@ -144,7 +148,7 @@ Console 支持 `static` 与 `feishu` 两种鉴权模式。`static` 仅供 loopba
 
 migration `0023_console_draft_requests` 保存请求、输入、生成状态、尝试次数、可用时间、短租约、冻结候选定义、实例绑定、安全错误码与完成时间。独立 Draft Generation Worker 在同一 PostgreSQL 事务中通过 `FOR UPDATE SKIP LOCKED` 领取；候选一旦通过确定性校验，就必须先在当前 claim 下保存，再用 `console_draft_<request_id>` 作为稳定实例 ID 创建未启动 Snapshot。Worker 在保存候选后崩溃时，接管者复用同一冻结候选，不能再次调用模型。基础设施失败采用有界退避，默认最多五次后进入 `exhausted`；确定性拒绝直接进入 `rejected`。成功请求只创建 `draft / 0 Attempt`，仍由既有确认接口启动。
 
-该开发入口没有正式域名，进程内令牌桶也不是多副本或分布式生产限流。当前仍没有自由结构流程编辑器、allowlist 自助管理、批量撤销、设备命名、跨区域容灾、生产容量证明或正式员工交付方案。工作台只提供参与者任务面，不提供完整协作者实例视图、分页游标、筛选、跨轮次 diff 或运行中图编辑。
+该开发入口没有正式域名，进程内令牌桶也不是多副本或分布式生产限流。当前仍没有拖拽连边、自由结构流程编辑器、多人实时协同、allowlist 自助管理、批量撤销、设备命名、跨区域容灾、生产容量证明或正式员工交付方案。工作台只提供参与者任务面，不提供完整协作者实例视图、分页游标、筛选或跨轮次 diff；受控 DAG 画板只允许 Owner 修改未来区域并发起节点返工。
 
 Target 自动节点按工作契约 kind 路由。Agent 当前只接受 `work.agent.kind=llm.generate`。默认结果是正文。`work.agent.result_format=source_claims.v1` 用于整理材料，要求模型返回 `problem / target_users / functional_requirements / acceptance_criteria / risks / open_questions / source_url`，其中声明必须标记为 `source_fact / inference / open_question` 并引用服务端登记的稳定 `F` 或 `Q` ID。`work.agent.result_format=source_decision.v1` 用于形成决定，要求返回唯一 `priority`、`rationale`、3 到 5 条 `acceptance_criteria`、带 `reconsider_when` 的 `not_now`、`risks`、逐一回答全部 Q 的 `answers` 与原样 `source_url`；除问题编号外，全部条目只引用 F，并在渲染中标记为建议推断。Tool 由 `ToolExecutorRouter` 按 `work.tool.kind` 选择 adapter；`content.check` 读取直接依赖正文并执行长度与必需词检查，`source_claims.check` 检查材料结构与来源覆盖，`source_decision.check` 检查唯一优先级、问题完整回答、完成标准数量、不做事项触发条件、F 全量覆盖和来源 URL 一致性。检查器不访问网页，也不声称验证事实真伪或建议正确性。配置或输入错误使当前 Attempt 显式失败，未知 kind 在 claim 前保持未认领。
 
