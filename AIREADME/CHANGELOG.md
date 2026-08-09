@@ -1,5 +1,15 @@
 # CHANGELOG · larkflow
 
+## v0.76.0-draft · 2026-08-09 · Personal Agent Edge 数据门禁与干净 Mac 可逆验收
+
+- Added：内容提交 `e6106e5f218f9c520928bef0293899ace7a2395f` 新增 `edge-data-v0.1`。`run-once` 与 `serve` 现在必须同时接收会话级模型外发确认和数据分类，当前只允许 `synthetic / public`，并把不含正文的版本化策略摘要写入结果。manager 新增精确绝对前缀确认的 `uninstall`，只删除受管 release、`current / previous` 与稳定命令，重复执行返回 `already_absent`。
+- Security：`internal / confidential / restricted` 默认拒绝且没有客户端绕过参数。安全卸载故意保留 Keychain、设备元数据和中央设备状态；管理员必须独立撤销设备，防止本机文件删除被误认为凭据已经失效。
+- Verified：完整离线套件为 `1032 passed, 23 skipped`。macOS arm64、CPython 3.12 bundle 为 9 个 wheel；主 wheel SHA-256 为 `e163cb8a118c26f74d2543b2102564a841e356caa64692a3e4cbf1a489932b26`，最小员工 artifact SHA-256 为 `b535408b879e2767f9fbe995f3fb30def7a6b4016c23c6a6d09b078fc03372ea`，manifest SHA-256 为 `86b61dfbf3dd0aa2e6bd57aa7d967164f77534dab9f1f010e8659c7ed516dd60`。一台初始无 Edge 状态的员工 Mac 完成旧版安装、无效 manifest 故障保护、升级、回滚、再升级、配对、`doctor`、真实 Codex 合成执行、撤销和安全卸载。实例 `edge_clean_mac_e6106e5_20260809_215429` 为 `done / 3 of 3 / Attempt 1`，结果策略为 `edge-data-v0.1 / synthetic`；撤销后的旧凭据被中央拒绝。
+- Keychain boundary：非交互 SSH 写登录 Keychain 返回 `User interaction is not allowed`。自动验收先保存原 default 与 search list，再使用临时解锁的测试 Keychain 完成真实 Edge 凭据读写，结束后删除精确测试项、元数据、安装前缀、工作区、临时文件和隧道，并恢复原 Keychain 配置。该证据验证代码与清理边界，不关闭真实员工登录 Keychain 首次交互体验。
+- Deployment：主 wheel 位于 `/srv/larkflow/target/releases/20260809_2203_edge_policy_e6106e5/`。升级前备份 `/var/backups/larkflow-postgres/larkflow_target_dev-20260809T220248+0800.dump` 为 348510 bytes、权限 `0600 lf_target_dev:lf_target_dev`、SHA-256 `dc556788996afe7f3f9faf650ccea15a9ae2dce9375c5b6cbd767370b6f898a5`，且可由 `pg_restore --list` 读取。migration runner 返回 `versions=[]`，ledger 保持 `23 / 0023_console_draft_requests`；十个 Python 服务与 Caddy 为 `active / NRestarts=0`，Console loopback 与公网 200，未认证 Edge claim 401，5432、8765、8780 只监听 loopback，部署窗口 warning 为 0。
+- Recovery note：Target 共享 venv 现有 package metadata 为 root 所有。服务用户替换安装在卸载旧包后因 `direct_url.json` 权限失败，服务尚未重启；随后从已校验 release wheel 以 root 恢复安装，`pip check`、源码哈希和 migration 通过后才统一重启。只删除这次失败留下且精确识别的 `~arkflow` 与 `~arkflow-0.0.2.dist-info`，没有泛化清理其他路径。
+- Boundary：正式员工分发仍为 No-Go。Developer ID 签名与公证按本阶段决策后置；可信摘要发布、真实登录 Keychain 首次体验、上游 beta 兼容门禁、供应商与管理员对非公开数据的正式批准，以及合规公网 Edge 入口仍未关闭。
+
 ## v0.75.0-draft · 2026-08-09 · Personal Agent Edge 目录隔离与模型外发确认
 
 - Added：内容提交 `ab3ad5e8f00dded71763c70e6437ff0782050e8b` 新增 `larkflow_edge_readonly` Codex permission Profile。文件系统根默认拒绝、最小系统路径只读、临时目录拒绝，仅所选工作区只读，并在工作区内排除 `.agents`、`.codex`、`.env*`、证书和常见私钥名。网页搜索、浏览器、Computer Use、应用、图片生成和命令网络均关闭。

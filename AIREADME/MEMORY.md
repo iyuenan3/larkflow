@@ -354,3 +354,15 @@
 - 现象（真实部署）：新 wheel 已完成替换且 `pip check` 通过，随后以 `sudo` root 直接运行 `larkflow-target --env-file /etc/larkflow-target.env migrate`。客户端通过本机 Unix socket 连接，PostgreSQL 返回 `FATAL: role "root" does not exist`；部署脚本因 fail-fast 在任何服务重启前停止。
 - 根因（已确认）：Target 开发库使用 Unix socket peer authentication，数据库角色与系统用户都固定为 `lf_target_dev`。读取同一个 env 文件不会改变 peer auth 映射；root 运行 CLI 会被数据库识别为 root，而不是服务角色。
 - 结论：服务器 migration 必须用 `sudo -u lf_target_dev /srv/larkflow/target/venv/bin/larkflow-target --env-file /etc/larkflow-target.env migrate`，或由同用户的 systemd `ExecStartPre` 执行。部署顺序继续保持备份、wheel 校验、安装、`pip check`、正确用户 migration、服务重启和读回。migration 失败时不得继续重启；若失败发生在重启前，应明确说明旧进程仍在运行，修正身份后再继续，而不是重复安装或修改数据库认证。
+
+## 2026-08-09 · 非交互 SSH 不能代表员工登录 Keychain 首次体验
+
+- 现象（干净员工 Mac）：设备配对已由中央成功签发，但 `security add-generic-password` 在 SSH 会话中返回 `User interaction is not allowed`，Edge 正确地没有留下元数据或 Keychain 凭据。独立虚拟凭据探针得到相同结果。
+- 根因（已确认）：macOS 登录 Keychain 的首次写入依赖当前图形登录会话和用户交互，非交互 SSH 即使使用同一用户也不能获得等价授权。把失败归因于 Edge 配对协议或靠重试绕过都会混淆操作系统安全边界。
+- 结论：自动化可以先完整保存 default Keychain 与 search list，再用明确命名、临时解锁的测试 Keychain 验证 Edge 凭据读写和清理代码，结束后恢复原配置并删除精确测试项。但该证据只能证明代码和边界，不能宣称登录 Keychain 首次体验已通过。正式员工验收仍需在可见登录会话中由用户完成一次配对、回读和清理。
+
+## 2026-08-09 · root 所有的共享 venv 必须把安装身份与 migration 身份分开
+
+- 现象（真实部署）：release 目录首次为 `root:root 0750`，服务用户在修改环境前没有读取权限；修正 group 后，服务用户 pip 已卸载旧 package，却因 root 所有的 `direct_url.json` 无法写入而退出，并留下 `~arkflow` 与 `~arkflow-0.0.2.dist-info`。旧服务进程仍在运行，磁盘 venv 则已不完整。
+- 根因（已确认）：Target venv 的 package 和 metadata 由 root 所有，但 PostgreSQL peer auth 又要求 migration 以 `lf_target_dev` 运行。把二者强行统一为同一 OS 身份，会在 pip 替换或数据库连接中的一侧失败。
+- 结论：release 目录先设为 `0750 root:lf_target_dev`，共享 venv 的 package 安装统一由 root 从已校验 wheel 执行；随后用 `pip check` 和源码哈希确认安装，再以 `lf_target_dev` 执行 migration，最后才重启服务。失败后只处理经过精确识别、属于本次 pip 替换的临时目录；本次在当前 package 完整、migration 通过且服务未重启前删除了两个无效 `~arkflow*` 目录，不应推广成通配清理命令。
