@@ -1,4 +1,4 @@
-"""Safe preview and confirmation rules for future-region graph edits."""
+"""Safe preview and confirmation rules for controlled graph edits."""
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -172,12 +172,15 @@ def apply_future_graph_edit(
     *,
     now: datetime,
 ) -> GraphEditPlan:
-    """Apply one validated edit to pristine future nodes only."""
+    """Apply one validated edit to a draft or pristine future nodes."""
 
-    if instance.status != InstanceStatus.RUNNING:
-        raise GraphEditNotAllowedError("only running instances can be edited")
+    if instance.status not in {InstanceStatus.DRAFT, InstanceStatus.RUNNING}:
+        raise GraphEditNotAllowedError("only draft or running instances can be edited")
     if instance.snapshot.locked:
         raise GraphEditNotAllowedError("locked instance snapshots cannot be edited")
+    editing_draft = instance.status == InstanceStatus.DRAFT
+    if editing_draft and (instance.nodes or instance.attempts):
+        raise GraphEditNotAllowedError("draft instance has unexpected runtime state")
 
     normalized = normalize_graph_edit_operations(operations)
     specs = list(instance.snapshot.nodes)
@@ -201,7 +204,8 @@ def apply_future_graph_edit(
         current = by_key.get(node_key)
         if current is None:
             raise GraphEditNotAllowedError(f"unknown graph edit node: {node_key}")
-        _require_pristine_future_node(instance, node_key)
+        if not editing_draft:
+            _require_pristine_future_node(instance, node_key)
         if op == "remove_node":
             specs = [spec for spec in specs if spec.key != node_key]
             del by_key[node_key]
@@ -238,48 +242,49 @@ def apply_future_graph_edit(
     except GraphValidationError as exc:
         raise GraphEditNotAllowedError(str(exc)) from exc
 
-    for node_key in removed:
-        instance.nodes.pop(node_key)
-        for attempt_key in tuple(instance.attempts):
-            if attempt_key[0] == node_key:
-                del instance.attempts[attempt_key]
+    if not editing_draft:
+        for node_key in removed:
+            instance.nodes.pop(node_key)
+            for attempt_key in tuple(instance.attempts):
+                if attempt_key[0] == node_key:
+                    del instance.attempts[attempt_key]
 
-    for node_key in updated:
-        spec = candidate.node(node_key)
-        node = instance.nodes[node_key]
-        node.owner_person_id = spec.owner_person_id
-        node.executor = spec.executor
-        node.version += 1
-        node.status = _future_status(instance, spec)
-        node.ready_at = now if node.status == NodeStatus.READY else None
-        attempt = instance.current_attempt(node_key)
-        attempt.status = AttemptStatus.PENDING
-        attempt.input_snapshot = FrozenDict({"deps": spec.deps, "work": spec.work})
+        for node_key in updated:
+            spec = candidate.node(node_key)
+            node = instance.nodes[node_key]
+            node.owner_person_id = spec.owner_person_id
+            node.executor = spec.executor
+            node.version += 1
+            node.status = _future_status(instance, spec)
+            node.ready_at = now if node.status == NodeStatus.READY else None
+            attempt = instance.current_attempt(node_key)
+            attempt.status = AttemptStatus.PENDING
+            attempt.input_snapshot = FrozenDict({"deps": spec.deps, "work": spec.work})
 
-    for node_key in added:
-        spec = candidate.node(node_key)
-        node_id = f"{instance.id}:{node_key}"
-        status = _future_status(instance, spec)
-        instance.nodes[node_key] = NodeInstance(
-            id=node_id,
-            instance_id=instance.id,
-            node_key=node_key,
-            owner_person_id=spec.owner_person_id,
-            executor=spec.executor,
-            status=status,
-            ready_at=now if status == NodeStatus.READY else None,
-        )
-        instance.attempts[(node_key, 1)] = NodeAttempt(
-            id=f"{node_id}:attempt:1",
-            node_instance_id=node_id,
-            attempt_no=1,
-            status=AttemptStatus.PENDING,
-            input_snapshot=FrozenDict({"deps": spec.deps, "work": spec.work}),
-        )
+        for node_key in added:
+            spec = candidate.node(node_key)
+            node_id = f"{instance.id}:{node_key}"
+            status = _future_status(instance, spec)
+            instance.nodes[node_key] = NodeInstance(
+                id=node_id,
+                instance_id=instance.id,
+                node_key=node_key,
+                owner_person_id=spec.owner_person_id,
+                executor=spec.executor,
+                status=status,
+                ready_at=now if status == NodeStatus.READY else None,
+            )
+            instance.attempts[(node_key, 1)] = NodeAttempt(
+                id=f"{node_id}:attempt:1",
+                node_instance_id=node_id,
+                attempt_no=1,
+                status=AttemptStatus.PENDING,
+                input_snapshot=FrozenDict({"deps": spec.deps, "work": spec.work}),
+            )
 
     instance.snapshot = candidate
     instance.graph_revision += 1
-    if instance.nodes and all(
+    if not editing_draft and instance.nodes and all(
         node.status == NodeStatus.DONE for node in instance.nodes.values()
     ):
         instance.status = InstanceStatus.DONE

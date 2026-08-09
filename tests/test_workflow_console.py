@@ -591,9 +591,11 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b'else if (!state.detail' not in script.body
     assert b'canvasLoadPromise' in script.body
     assert canvas_script.status == 200
-    assert "受控流程运行画板".encode() in canvas_script.body
+    assert "受控流程画板".encode() in canvas_script.body
     assert "增加节点".encode() in canvas_script.body
     assert "编辑节点".encode() in canvas_script.body
+    assert "断开选中连线".encode() in canvas_script.body
+    assert "拖动节点端点可增加依赖".encode() in canvas_script.body
     assert "打回到此节点".encode() in canvas_script.body
     assert "恢复自动布局".encode() in canvas_script.body
     assert b"larkflow.canvas.layout.v1" in canvas_script.body

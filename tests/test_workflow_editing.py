@@ -122,6 +122,83 @@ def edit_operations() -> list[dict]:
     ]
 
 
+def test_draft_graph_edit_changes_only_snapshot_until_separate_confirmation():
+    repository = InMemoryWorkflowRepository()
+    clock = Clock()
+    identifiers = count(1)
+    service = WorkflowService(
+        repository,
+        clock=clock,
+        id_factory=lambda: f"draft-edit-id-{next(identifiers)}",
+    )
+    service.create_draft(
+        instance_id="instance_draft_edit",
+        tenant_id=TENANT,
+        owner_person_id="owner",
+        actor_person_id="owner",
+        snapshot=snapshot(),
+    )
+
+    preview = service.preview_graph_edit(
+        TENANT,
+        "instance_draft_edit",
+        [
+            {
+                "op": "update_node",
+                "node_key": "draft",
+                "set": {"title": "Draft from editable canvas", "deps": []},
+            },
+            {"op": "remove_node", "node_key": "review"},
+            {
+                "op": "add_node",
+                "node": {
+                    "key": "approve",
+                    "title": "Approve draft",
+                    "owner_person_id": "owner",
+                    "executor": "human",
+                    "deps": ["draft"],
+                    "work": work("approval"),
+                },
+            },
+        ],
+        actor_person_id="owner",
+    )
+
+    unchanged = service.get(TENANT, "instance_draft_edit")
+    assert unchanged.status == InstanceStatus.DRAFT
+    assert unchanged.graph_revision == 1
+    assert unchanged.nodes == {}
+    assert unchanged.attempts == {}
+
+    edited = service.confirm_graph_edit(
+        TENANT,
+        preview.id,
+        actor_person_id="owner",
+    ).instance
+    assert edited.status == InstanceStatus.DRAFT
+    assert edited.graph_revision == 2
+    assert edited.nodes == {}
+    assert edited.attempts == {}
+    assert tuple(item.key for item in edited.snapshot.nodes) == (
+        "brief",
+        "draft",
+        "approve",
+    )
+    assert edited.snapshot.node("draft").deps == ()
+
+    running = service.confirm_draft(
+        TENANT,
+        "instance_draft_edit",
+        actor_person_id="owner",
+    )
+    assert running.status == InstanceStatus.RUNNING
+    assert tuple(running.nodes) == ("brief", "draft", "approve")
+    assert running.nodes["brief"].status == NodeStatus.READY
+    assert running.nodes["draft"].status == NodeStatus.READY
+    assert running.nodes["approve"].status == NodeStatus.PENDING
+    assert running.current_attempt("approve").input_snapshot["deps"] == ("draft",)
+
+
 def test_graph_edit_preview_and_confirmation_preserve_frozen_history():
     service, repository, _ = build_service()
     before = service.get(TENANT, "instance_edit")

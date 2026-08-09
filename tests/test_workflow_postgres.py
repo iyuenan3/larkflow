@@ -31,6 +31,7 @@ from larkflow.workflow import (
     InvalidInboxClaimError,
     NodeRunner,
     NodeSpec,
+    NodeStatus,
     PostgresWorkflowInbox,
     PostgresIMCommandStore,
     PostgresWorkerWakeup,
@@ -1357,6 +1358,84 @@ def test_postgres_graph_edit_is_durable_and_consumed_exactly_once():
     ]
     assert removed_rows == 0
     assert index_row is not None
+
+
+def test_postgres_draft_graph_edit_stays_unmaterialized_until_start():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_draft_graph_edit_{suffix}"
+    instance_id = f"instance_draft_graph_edit_{suffix}"
+    owner = f"person_owner_{suffix}"
+    repository = PostgresWorkflowRepository(connection_factory)
+    service = WorkflowService(repository)
+    work = {
+        "objective": "Complete the step",
+        "inputs": [],
+        "outputs": [{"id": "result", "type": "data"}],
+        "acceptance": ["A result exists"],
+    }
+    service.create_draft(
+        instance_id=instance_id,
+        tenant_id=tenant_id,
+        owner_person_id=owner,
+        actor_person_id=owner,
+        snapshot=InstanceSnapshot(
+            goal="Edit before starting",
+            nodes=(
+                NodeSpec("brief", "Confirm brief", owner, "human", work=work),
+                NodeSpec(
+                    "review",
+                    "Review brief",
+                    owner,
+                    "human",
+                    deps=("brief",),
+                    work=work,
+                ),
+            ),
+        ),
+    )
+    preview = service.preview_graph_edit(
+        tenant_id,
+        instance_id,
+        [
+            {
+                "op": "update_node",
+                "node_key": "review",
+                "set": {"title": "Review edited brief", "deps": []},
+            }
+        ],
+        actor_person_id=owner,
+    )
+    edited = service.confirm_graph_edit(
+        tenant_id,
+        preview.id,
+        actor_person_id=owner,
+    ).instance
+
+    assert edited.status == InstanceStatus.DRAFT
+    assert edited.graph_revision == 2
+    assert edited.nodes == {}
+    assert edited.snapshot.node("review").deps == ()
+    with connection_factory() as connection:
+        materialized = connection.execute(
+            """
+            SELECT count(*) AS count FROM workflow_node_instances
+            WHERE tenant_id = %s AND instance_id = %s
+            """,
+            (tenant_id, instance_id),
+        ).fetchone()["count"]
+    assert materialized == 0
+
+    running = service.confirm_draft(
+        tenant_id,
+        instance_id,
+        actor_person_id=owner,
+    )
+    assert running.status == InstanceStatus.RUNNING
+    assert running.nodes["brief"].status == NodeStatus.READY
+    assert running.nodes["review"].status == NodeStatus.READY
 
 
 def test_postgres_persists_a_dependent_draft_before_nodes_are_materialized():

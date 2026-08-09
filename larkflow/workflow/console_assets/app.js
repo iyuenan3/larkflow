@@ -1589,7 +1589,7 @@ function mountGraphCanvas(nodes) {
     items: nodes,
     selectedNode: state.selectedNode,
     instanceId: instance?.id || "",
-    editable: instance?.status === "running",
+    editable: ["draft", "running"].includes(instance?.status),
     restartable: ["running", "done", "failed"].includes(instance?.status),
     onNodeSelect: (nodeKey) => {
       state.selectedNode = nodeKey;
@@ -1598,6 +1598,8 @@ function mountGraphCanvas(nodes) {
     },
     onRequestAdd: () => openGraphEditor("add"),
     onRequestEdit: (nodeKey) => openGraphEditor("edit", nodeKey),
+    onRequestConnect: (sourceKey, targetKey) => previewGraphDependency(sourceKey, targetKey, true),
+    onRequestDisconnect: (sourceKey, targetKey) => previewGraphDependency(sourceKey, targetKey, false),
     onRequestRestart: (nodeKey) => previewNodeRestart(nodeKey),
   });
 }
@@ -1636,8 +1638,8 @@ function layoutGraphCanvas() {
 async function openGraphEditor(mode, nodeKey = null) {
   const instance = state.detail?.instance;
   const nodes = state.detail?.nodes || [];
-  if (!instance || instance.status !== "running") {
-    showToast("只有运行中的流程可以修改未来节点", "error");
+  if (!instance || !["draft", "running"].includes(instance.status)) {
+    showToast("只有草稿或运行中的流程可以修改", "error");
     return;
   }
   const selected = mode === "edit"
@@ -1650,9 +1652,14 @@ async function openGraphEditor(mode, nodeKey = null) {
   state.graphEditor = { mode, nodeKey: selected?.key || null };
   el("graph-edit-form").dataset.mode = mode;
   el("graph-edit-title").textContent = mode === "add" ? "增加流程节点" : "编辑流程节点";
+  const isDraft = instance.status === "draft";
   el("graph-edit-boundary").textContent = mode === "add"
-    ? "新节点先进入未来区域，提交后生成可核对的修改预览。"
-    : "只能修改尚未开始执行且没有执行历史的未来节点。";
+    ? (isDraft
+      ? "新节点会先加入草稿，确认修改后仍不会自动启动流程。"
+      : "新节点先进入未来区域，提交后生成可核对的修改预览。")
+    : (isDraft
+      ? "草稿中的节点可以修改，确认修改后仍需单独确认启动。"
+      : "只能修改尚未开始执行且没有执行历史的未来节点。");
   const keyInput = el("graph-edit-key");
   keyInput.value = selected?.key || "";
   keyInput.disabled = mode === "edit";
@@ -1822,6 +1829,33 @@ function createGraphEditPreview(operations) {
   );
 }
 
+async function previewGraphDependency(sourceKey, targetKey, connect) {
+  const target = state.detail?.nodes.find((item) => item.key === targetKey);
+  if (!target || sourceKey === targetKey) {
+    showToast("请选择两个不同的有效节点", "error");
+    return;
+  }
+  const dependencies = new Set(target.deps || []);
+  if (connect) dependencies.add(sourceKey);
+  else dependencies.delete(sourceKey);
+  if (JSON.stringify(Array.from(dependencies)) === JSON.stringify(target.deps || [])) {
+    showToast(connect ? "该依赖已经存在" : "该依赖已经移除");
+    return;
+  }
+  showToast(connect ? "正在校验新增依赖" : "正在校验断开依赖");
+  try {
+    const payload = await createGraphEditPreview([{
+      op: "update_node",
+      node_key: targetKey,
+      set: { deps: Array.from(dependencies) },
+    }]);
+    renderGraphEditPreview(payload);
+  } catch (error) {
+    showToast(error.message || "依赖修改预览生成失败，请重试", "error");
+    throw error;
+  }
+}
+
 function renderGraphEditPreview(payload) {
   const container = el("graph-action-preview");
   container.replaceChildren();
@@ -1831,7 +1865,9 @@ function renderGraphEditPreview(payload) {
   const copy = node("div", "workflow-action-preview-copy");
   copy.append(
     node("strong", "", `确认应用 Graph r${preview.graph_revision} 到 r${preview.proposed_graph_revision} 的修改？`),
-    node("p", "", "中央节点已验证权限、执行冻结线和 DAG 合法性。确认后才会修改流程。"),
+    node("p", "", state.detail?.instance.status === "draft"
+      ? "中央节点已验证权限和 DAG 合法性。确认后只修改草稿，不会启动流程。"
+      : "中央节点已验证权限、执行冻结线和 DAG 合法性。确认后才会修改流程。"),
   );
   const list = node("div", "workflow-action-preview-list");
   [

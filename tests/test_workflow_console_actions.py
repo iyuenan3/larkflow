@@ -393,6 +393,50 @@ def test_http_graph_edit_requires_bounded_json_preview_before_confirmation():
     assert json.loads(replay.body)["already_applied"] is True
 
 
+def test_http_graph_edit_updates_a_draft_without_starting_it():
+    repository, _domain, actions = _services()
+    application = ConsoleHttpApplication(
+        ConsoleReadService(repository),
+        StaticConsoleAuthenticator(TOKEN, _principal()),
+        action_service=actions,
+    )
+    path = "/console/api/v1/instances/draft_owner/graph-edit-preview"
+    body = json.dumps(
+        {
+            "operations": [
+                {
+                    "op": "update_node",
+                    "node_key": "draft_summary",
+                    "set": {"deps": []},
+                }
+            ]
+        },
+        separators=(",", ":"),
+    ).encode()
+    headers = {
+        **ACTION_HEADERS,
+        "Content-Type": "application/json",
+        "Content-Length": str(len(body)),
+    }
+
+    preview = application.handle("POST", path, headers=headers, body=body)
+    assert preview.status == 201
+    preview_id = json.loads(preview.body)["preview"]["id"]
+    confirmed = application.handle(
+        "POST",
+        f"/console/api/v1/graph-edit-previews/{preview_id}/confirm",
+        headers=ACTION_HEADERS,
+    )
+
+    payload = json.loads(confirmed.body)
+    assert confirmed.status == 200
+    assert payload["instance"]["status"] == "draft"
+    assert payload["graph_revision"] == 2
+    stored = repository.get(TENANT, "draft_owner")
+    assert stored.nodes == {}
+    assert stored.snapshot.node("draft_summary").deps == ()
+
+
 def test_feishu_workflow_actions_require_the_exact_public_origin():
     repository, _domain, actions = _services()
 

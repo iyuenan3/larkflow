@@ -1127,7 +1127,7 @@ class WorkflowService:
         *,
         actor_person_id: str,
     ) -> GraphEditPreview:
-        """Persist a future-region edit preview without changing the aggregate."""
+        """Persist a draft or future-region edit preview without changing the aggregate."""
 
         instance = self.repository.get(tenant_id, instance_id)
         self._require_instance_owner(instance, actor_person_id)
@@ -1162,7 +1162,7 @@ class WorkflowService:
         *,
         actor_person_id: str,
     ) -> GraphEditConfirmation:
-        """Consume one future-region edit preview atomically."""
+        """Consume one controlled graph edit preview atomically."""
 
         preview = self.repository.get_graph_edit_preview(tenant_id, preview_id)
         if preview.actor_person_id != actor_person_id:

@@ -420,8 +420,10 @@ class ConsoleActionService:
         message = str(error)
         if "crossed the edit frontier" in message or "execution history" in message:
             return "该节点已经开始执行，不能直接修改。需要返工时请使用打回到此节点。"
-        if "only running instances" in message:
-            return "只有运行中的流程可以修改未来节点。"
+        if "only draft or running instances" in message:
+            return "只有草稿或运行中的流程可以修改。"
+        if "unexpected runtime state" in message:
+            return "该草稿存在异常运行状态，暂时不能修改。"
         if "locked instance" in message:
             return "该流程图已经锁定，不能修改。"
         if "cycle" in message:

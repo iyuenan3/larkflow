@@ -180,7 +180,12 @@ const WorkflowNode = memo(function WorkflowNode({ data, selected }) {
       data-selected={String(Boolean(selected))}
       aria-label={`${data.title}，${statusLabel(data.status)}，Attempt ${data.current_attempt_no}`}
     >
-      <Handle className="lfc-handle" type="target" position={Position.Left} isConnectable={false} />
+      <Handle
+        className="lfc-handle"
+        type="target"
+        position={Position.Left}
+        isConnectable={Boolean(data.targetConnectable)}
+      />
       <div className="lfc-node-heading">
         <span className="lfc-node-ordinal">{String(data.ordinal).padStart(2, "0")}</span>
         <span className="lfc-node-status" data-status={data.status}>
@@ -198,7 +203,12 @@ const WorkflowNode = memo(function WorkflowNode({ data, selected }) {
       <p className="lfc-node-deps">
         {dependencies.length ? `依赖 ${dependencies.length} 个上游节点` : "入口节点，无依赖"}
       </p>
-      <Handle className="lfc-handle" type="source" position={Position.Right} isConnectable={false} />
+      <Handle
+        className="lfc-handle"
+        type="source"
+        position={Position.Right}
+        isConnectable={Boolean(data.sourceConnectable)}
+      />
     </div>
   );
 });
@@ -226,6 +236,8 @@ function CanvasBody({
   onNodeSelect,
   onRequestAdd,
   onRequestEdit,
+  onRequestConnect,
+  onRequestDisconnect,
   onRequestRestart,
 }) {
   const reactFlow = useReactFlow();
@@ -234,6 +246,7 @@ function CanvasBody({
   const [layoutNodes, setLayoutNodes] = useState([]);
   const [layoutState, setLayoutState] = useState("loading");
   const [busyAction, setBusyAction] = useState(null);
+  const [selectedEdge, setSelectedEdge] = useState(null);
   const theme = useConsoleTheme();
   const graphSignature = useMemo(
     () => JSON.stringify([instanceId, items.map((item) => [item.key, item.deps || []])]),
@@ -274,12 +287,18 @@ function CanvasBody({
       data: {
         ...current,
         ordinal: items.findIndex((candidate) => candidate.key === item.id) + 1,
+        sourceConnectable: editable,
+        targetConnectable: editable && (
+          current.current_attempt_no === 0
+          || ["pending", "ready"].includes(current.status)
+        ),
       },
     };
-  }), [items, layoutNodes, selectedNode]);
+  }), [editable, items, layoutNodes, selectedNode]);
 
   const edges = useMemo(() => items.flatMap((item) => (item.deps || []).map((source) => {
     const related = selectedNode === source || selectedNode === item.key;
+    const selected = selectedEdge?.source === source && selectedEdge?.target === item.key;
     return {
       id: `${source}:${item.key}`,
       source,
@@ -287,12 +306,21 @@ function CanvasBody({
       type: "smoothstep",
       animated: related && ["running", "ready"].includes(item.status),
       markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
-      className: related ? "lfc-edge-related" : "lfc-edge",
-      style: related
+      selected,
+      className: selected ? "lfc-edge-selected" : (related ? "lfc-edge-related" : "lfc-edge"),
+      style: selected
+        ? { stroke: "var(--blue)", strokeWidth: 2.8 }
+        : related
         ? { stroke: "var(--blue)", strokeWidth: 2.2 }
         : { stroke: "var(--lfc-edge)", strokeWidth: 1.35 },
     };
-  })), [items, selectedNode]);
+  })), [items, selectedEdge, selectedNode]);
+
+  useEffect(() => {
+    if (!selectedEdge) return;
+    const target = items.find((item) => item.key === selectedEdge.target);
+    if (!target || !(target.deps || []).includes(selectedEdge.source)) setSelectedEdge(null);
+  }, [items, selectedEdge]);
 
   const matches = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("zh-CN");
@@ -354,6 +382,23 @@ function CanvasBody({
     }
   }, [busyAction]);
 
+  const connectNodes = useCallback((connection) => {
+    if (!editable || !connection.source || !connection.target) return;
+    setSelectedEdge(null);
+    invokeAction(
+      "connect",
+      () => onRequestConnect?.(connection.source, connection.target),
+    );
+  }, [editable, invokeAction, onRequestConnect]);
+
+  const disconnectSelected = useCallback(() => {
+    if (!selectedEdge) return;
+    invokeAction(
+      "disconnect",
+      () => onRequestDisconnect?.(selectedEdge.source, selectedEdge.target),
+    );
+  }, [invokeAction, onRequestDisconnect, selectedEdge]);
+
   const onKeyDown = useCallback((event) => {
     const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName);
     if (typing) {
@@ -379,6 +424,11 @@ function CanvasBody({
   }, [hostElement, reactFlow]);
 
   const completed = items.filter((item) => item.status === "done").length;
+  const selectedItem = items.find((item) => item.key === selectedNode);
+  const selectedMutable = editable && selectedItem && (
+    selectedItem.current_attempt_no === 0
+    || ["pending", "ready"].includes(selectedItem.status)
+  );
   return (
     <div className="lfc-shell" data-theme={theme} tabIndex={0} onKeyDown={onKeyDown}>
       <ReactFlow
@@ -389,9 +439,9 @@ function CanvasBody({
         minZoom={0.32}
         maxZoom={1.8}
         nodesDraggable
-        nodesConnectable={false}
+        nodesConnectable={editable}
         elementsSelectable
-        edgesFocusable={false}
+        edgesFocusable={editable}
         deleteKeyCode={null}
         panOnDrag
         zoomOnScroll
@@ -400,11 +450,14 @@ function CanvasBody({
         onlyRenderVisibleElements
         onNodesChange={onNodesChange}
         onNodeDragStop={onNodeDragStop}
+        onConnect={connectNodes}
         onInit={(instance) => registerController(hostElement, instance, graphSignature)}
         onNodeClick={(_event, item) => focusNode(item.id)}
+        onEdgeClick={(_event, edge) => setSelectedEdge({ source: edge.source, target: edge.target })}
+        onPaneClick={() => setSelectedEdge(null)}
         fitView
         fitViewOptions={FIT_OPTIONS}
-        aria-label="受控流程运行画板"
+        aria-label="受控流程画板"
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1.25} color="var(--lfc-grid)" />
         <MiniMap
@@ -457,10 +510,17 @@ function CanvasBody({
           </button>
           <button
             type="button"
-            disabled={!editable || !selectedNode || Boolean(busyAction)}
+            disabled={!selectedMutable || Boolean(busyAction)}
             onClick={() => invokeAction("edit", () => onRequestEdit?.(selectedNode))}
           >
             编辑节点
+          </button>
+          <button
+            type="button"
+            disabled={!editable || !selectedEdge || Boolean(busyAction)}
+            onClick={disconnectSelected}
+          >
+            {busyAction === "disconnect" ? "生成预览中" : "断开选中连线"}
           </button>
           <button
             type="button"
@@ -479,7 +539,8 @@ function CanvasBody({
           </button>
         </Panel>
         <Panel className="lfc-summary-panel" position="bottom-left">
-          <span className="lfc-readonly"><i aria-hidden="true">⌁</i>受控运行画板</span>
+          <span className="lfc-readonly"><i aria-hidden="true">⌁</i>{editable ? "可编辑流程画板" : "只读流程画板"}</span>
+          {editable && <span>拖动节点端点可增加依赖</span>}
           <span>{completed}/{items.length} 已完成</span>
           {layoutState === "loading" && <span>正在布局</span>}
           {layoutState === "saved" && <span>布局已保存</span>}
