@@ -989,10 +989,10 @@
 
 ## ADR-111 · 2026-08-10 · 流程详情采用单一首次成功主线
 
-- **Status：Accepted，locally verified；development deployment and real visible acceptance pending。**
+- **Status：Accepted，development deployed；real visible acceptance pending。**
 - Problem：详情页虽然已经具备流程概览、动作、画板、每次执行和审计，但这些区域仍平级出现。当前 Human Task 被藏在“我的待处理”列表，用户操作后详情不刷新，完成流程的实质结果也需要在执行历史中寻找。已有能力没有形成一条连续、可感知的首次成功路径。
 - Constraint：PostgreSQL 继续是唯一业务真相；所有动作必须复用既有 `WorkflowService` 与参与者任务 API；浏览器不能另建状态机或乐观伪造最终结果；画板、Attempt、结果和审计不能删除；飞书继续承担通知、待办和备用决定卡；历史运行与 Target、As-built 边界必须保留。
 - Decision：Owner 详情固定为“描述目标、核对流程、确认启动、完成或判断、查看结果”五步主线。顶部只展示当前最重要动作；当前认证主体若正好负责该流程的 Human Task 或决定，则在顶部直接展开同一有界任务表单。提交、判断和转交成功后重新读取当前详情。主页面展示流程结果，并优先选择 Agent 或 Tool 的实质产出；接受类决定结果作为补充。暂停、取消和重启收进次要操作，画板、每次执行与审计收进高级视图。
 - Alternatives(否决)：继续用多个平级页签承载所有能力；点击后只修改本地文案而不回读服务端；确认草稿后自动启动；继续要求用户复制飞书命令；删除画板、Attempt 或审计以换取简洁；为页面建立第二套流程状态。
 - Tradeoff：主路径更清晰，当前任务与结果更容易发现，但高级诊断多一次展开操作，大段结果仍需折叠以控制页面长度。该结构只完成本地交互收口，不能替代部署、真实 OAuth 和一条连续首次使用验收，也不能据此开放邀请测试。
-- Evidence：内容提交 `86189216a0b67cf258daa4027d368257eee7491a`。聚焦套件为 `96 passed`，完整离线套件为 `1037 passed, 24 skipped`。本地受控页面已覆盖草稿、运行中、等待本人处理与完成结果状态；深浅色、桌面与移动布局均完成可见检查，桌面 `clientWidth` 与 `scrollWidth` 均为 `1645`，移动页面无页面级横向溢出。该提交此时尚未部署，真实飞书 OAuth 连续路径仍保持 pending。
+- Evidence：内容提交 `86189216a0b67cf258daa4027d368257eee7491a`。聚焦套件为 `96 passed`，完整离线套件为 `1037 passed, 24 skipped`。本地受控页面已覆盖草稿、运行中、等待本人处理与完成结果状态；深浅色、桌面与移动布局均完成可见检查，桌面 `clientWidth` 与 `scrollWidth` 均为 `1645`，移动页面无页面级横向溢出。wheel SHA-256 为 `5851a5bc7d296d0a40e74552aeae631175c50953b59adb7f82c3431063ec802f`，已部署到 `/srv/larkflow/target/releases/20260810_0233_workflow_mainline_8618921/`。升级前 custom-format 备份可读，migration runner 返回空集，ledger 保持 `23 / 0001_workflow / 0023_console_draft_requests`；Target 与 legacy 的 `pip check` 均通过。十个 Python 服务和 Caddy 均为 `active / NRestarts=0`，公网与 loopback Console 为 200，未认证实例 API 为 401，安装态与公网三个静态资源哈希一致，部署窗口 warning 为 0。真实飞书 OAuth 连续路径仍保持 pending。
