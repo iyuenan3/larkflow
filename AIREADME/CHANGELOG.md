@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.79.0-draft · 2026-08-10 · 草稿依赖连线公网可见验收
+
+- Verified：公网真实登录工作台中的纯合成草稿 `console_draft_a11c6bb9d2ae071d78b10f802f567119` 已完成端到端可见手势验收。Owner 从第 1 节点端点拖拽到第 3 节点，页面先展示 Graph r1 到 r2 的服务端修改预览；确认后再选中新增直连、点击断开并确认 Graph r2 到 r3。最终页面的新增直连数量为 0，两条原有依赖边各为 1，Graph r3 可见，断开按钮恢复禁用。
+- Persistence：PostgreSQL 回读实例为 `draft / version 2 / graph_revision 3`，`confirmed_at` 与 `completed_at` 仍为空。r1 到 r2 和 r2 到 r3 两条 GraphEditPreview 均已消费并分别绑定 instance version 1 和 2，`instance.graph_edited` 审计恰为 2；最终 Snapshot 已恢复 `confirm_synthetic_topics -> generate_meeting_summary_draft -> final_review_and_save_draft`。
+- Safety：NodeInstance、Attempt 与 Projection 均为 0，没有确认启动、创建飞书待办或产生其他外部资源。该证据关闭开发环境中草稿连接端点、预览确认、选边和断开依赖的可见交互门槛，不外推多人实时协同、自由白板、生产容量或生产发布。
+- Operations：验收期间浏览器控制扩展访问自身遥测端点时多次超时，但工作台交互和中央节点响应正常。最终判断以页面状态、React Flow 边数量和独立 PostgreSQL 回读为准，不把控制器遥测失败归因于 larkflow。
+
 ## v0.78.0-draft · 2026-08-09 · 草稿画板端点可用性修复
 
 - Fixed：内容提交 `4eb417cc9d020b2165b0fa8f857e3cdc8806d126` 把画板连接端点从 9 像素扩大到 24 像素，并增加蓝色高亮、十字光标、外圈与 30 像素悬停反馈。真实登录验收先发现旧标签页仍加载部署前脚本；显式刷新后草稿编辑按钮正确启用，但自动适配后的端点只有约 3 到 4 像素，难以命中，因此本次按实际可用性缺陷处理。
