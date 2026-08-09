@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.78.0-draft · 2026-08-09 · 草稿画板端点可用性修复
+
+- Fixed：内容提交 `4eb417cc9d020b2165b0fa8f857e3cdc8806d126` 把画板连接端点从 9 像素扩大到 24 像素，并增加蓝色高亮、十字光标、外圈与 30 像素悬停反馈。真实登录验收先发现旧标签页仍加载部署前脚本；显式刷新后草稿编辑按钮正确启用，但自动适配后的端点只有约 3 到 4 像素，难以命中，因此本次按实际可用性缺陷处理。
+- Verified：前端生产构建通过，新增已构建 CSS 尺寸断言。完整离线套件为 `1034 passed, 24 skipped`。wheel SHA-256 为 `339c7ec280b4d3151dd49c33e9f5473433e26e9fe33009e0954e32ca1ed95686`。
+- Deployment：发布件位于 `/srv/larkflow/target/releases/20260809_232154_canvas_handles_4eb417c/`。升级前备份为 348510 bytes、权限 `0600 lf_target_dev:lf_target_dev`；migration runner 返回空集。只重启 Console，Console 与 Caddy 为 active，Console `NRestarts=0`，部署窗口 warning 为 0。安装态、loopback 与公网 CSS SHA-256 均为 `229d2723513e6e828415b18f85030abb7d1f2ce2645fc99342b397f05f0f6726`。
+- Boundary：浏览器控制通道在部署后刷新时持续超时，最终可见拖拽、预览确认和断开连线尚未重验。静态资源哈希、服务健康和此前真实 PostgreSQL 路径不能替代该手势体验结论。
+
 ## v0.77.0-draft · 2026-08-09 · 草稿态画板与依赖连线
 
 - Added：内容提交 `f320fd5b9b200fae24cefeb6a853c684a38e7565` 让草稿与运行中未来区域共用 GraphEditPreview。React Flow 画板新增节点端点连接和选中连线断开；表单依赖选择继续保留。草稿编辑确认只更新冻结 Snapshot 和 graph revision，不创建 NodeInstance、Attempt、outbox 或外部资源，后续确认启动才独立物化运行时。

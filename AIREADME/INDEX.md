@@ -4,6 +4,8 @@
 >
 > 文档状态：2026-08-09 Phase 1 中央工作流基础实现。员工工作台已经覆盖 Owner 流程观察与受控操作、普通 Human Task 的参与者提交和运行时转交、受控自然语言流程发起，以及受控 DAG 画板。画板支持草稿态与运行中未来区域的节点增删改、节点端点连边、选中连线断开、节点返工、节点拖动与浏览器本地布局；每次领域结构变化仍先创建服务端预览，再由本人确认。草稿图编辑只更新冻结 Snapshot，不提前创建运行时或外部副作用。决定节点继续使用飞书决定卡。飞书 OAuth、PostgreSQL 耐久会话、管理员聚合、会话治理、公网 IP HTTPS 与安全响应头均已完成开发环境验证。十个 Python 服务、Caddy 和二十三份 migration 均已回读。下一产品门槛回到小范围真实业务试用和逐条来源约束增强；多人实时协同和通用自由白板不属于当前版本。正式域名、生产容量和异机容灾仍缺。Personal Agent Edge 已完成 `edge-data-v0.1` 默认拒绝策略、目录级只读、会话级模型外发确认、安全卸载，以及干净员工 Mac 上旧版安装、故障保护、升级、回滚、合成数据真实执行、撤销和清理的开发验证。非交互自动化使用临时测试 Keychain，不能替代真实登录 Keychain 首次交互；签名、公证、可信摘要渠道和合规公网入口也未完成，正式分发仍为 No-Go。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
+> 内容提交 `4eb417cc9d020b2165b0fa8f857e3cdc8806d126` 来自草稿画板真实登录验收中的可用性发现。部署前旧标签页仍加载旧 JavaScript，显式刷新后草稿编辑按钮正确启用；随后发现 9 像素连接端点在自动适配缩放后只剩约 3 到 4 像素。修复把端点扩大到 24 像素，并增加高亮、十字光标和悬停反馈。完整离线套件为 `1034 passed, 24 skipped`。wheel SHA-256 为 `339c7ec280b4d3151dd49c33e9f5473433e26e9fe33009e0954e32ca1ed95686`，已部署到 `/srv/larkflow/target/releases/20260809_232154_canvas_handles_4eb417c/`；安装态、loopback 和公网 CSS 哈希一致，Console 与 Caddy 为 active，`NRestarts=0`，部署窗口无 warning。浏览器控制通道在部署后刷新时持续超时，最终可见拖拽确认仍待验收。
+>
 > 内容提交 `f320fd5b9b200fae24cefeb6a853c684a38e7565` 让草稿与运行中未来区域共用 GraphEditPreview，并为 React Flow 画板增加依赖连接与断开操作。草稿确认只更新 Snapshot 和 graph revision，启动仍是独立动作。完整离线套件为 `1034 passed, 24 skipped`。wheel SHA-256 为 `fd164c85fe0d3f0076d9ed37a4d2212e149cc4cd394fe136ec21f13ce132c1d9`，已部署到 `/srv/larkflow/target/releases/20260809_223113_draft_canvas_f320fd5/`。升级前 custom-format 备份可读，migration runner 返回空集，ledger 保持 23 份；十个 Python 服务与 Caddy 为 `active / NRestarts=0`，Console 公网与 loopback 200，未认证图编辑 401，安装与公网静态资源哈希一致，部署窗口 warning 为 0。一次性真实 PostgreSQL 数据库完成草稿连接、断开和独立启动，编辑期间保持 `0 NodeInstance / 0 Attempt`，启动后为 3 个节点和 3 个 Attempt，测试库随后删除。真实登录页面刷新保持登录，但本轮浏览器控制器超时，未完成可见拖拽手势复验。
 >
 > 内容提交 `e6106e5f218f9c520928bef0293899ace7a2395f` 增加 `edge-data-v0.1`、显式 `synthetic / public` 分类、结果策略摘要和精确前缀安全卸载。完整离线套件为 `1032 passed, 23 skipped`。clean commit 的主 wheel、最小员工 artifact 与 manifest SHA-256 分别为 `e163cb8a118c26f74d2543b2102564a841e356caa64692a3e4cbf1a489932b26`、`b535408b879e2767f9fbe995f3fb30def7a6b4016c23c6a6d09b078fc03372ea` 和 `86b61dfbf3dd0aa2e6bd57aa7d967164f77534dab9f1f010e8659c7ed516dd60`。干净员工 Mac 上的纯合成实例 `edge_clean_mac_e6106e5_20260809_215429` 完成 3/3 Attempt 1，撤销后的旧凭据被中央拒绝，安装、临时 Keychain、元数据、工作区和隧道均按精确范围清理。主 wheel 已部署到 `/srv/larkflow/target/releases/20260809_2203_edge_policy_e6106e5/`；备份、23 份 migration、十个 Python 服务、Caddy、Console 200、未认证 Edge 401、loopback 监听与零 warning 均已读回。
@@ -76,7 +78,7 @@
 >
 > 内容提交 `d879a280d49e584d2d7e5927a498e7947544bb63` 已把自然语言 Agent 候选的明确决定出口升级为服务端结构不变量，并完成真实开发部署与飞书返工验收。真实合成实例先退回 Agent Attempt 1，再通过节点重启只创建 Agent 与最终 Human Attempt 2；具体意见进入 Agent 新输入，第二版补充回滚条件和监控窗口后明确接受。旧结果、两张决定卡、完成文档、最终通知和审计均保留。该证据只适用于开发环境，不证明内容质量、业务价值、生产容量或生产发布。
 >
-> last-synced: f320fd5b9b200fae24cefeb6a853c684a38e7565 · 2026-08-09
+> last-synced: 4eb417cc9d020b2165b0fa8f857e3cdc8806d126 · 2026-08-09
 
 ## 阅读顺序
 
@@ -103,7 +105,7 @@
 | DEPLOYMENT | ✅ | Legacy ECS 与 Target 十服务、二十三份 migration、耐久网页草稿、投影永久失败终止、公网 IP Console、Owner 工作台、真实飞书登录、管理员运维、Caddy 边界、Edge、备份与回滚实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
 | DECISIONS | ✅ | Append-only ADR 历史，最新为画板只提交受控领域命令并把布局留在浏览器 |
-| CHANGELOG | ✅ | Append-only 已实现变更，最新为草稿态画板、依赖连线及真实 PostgreSQL 验收 |
+| CHANGELOG | ✅ | Append-only 已实现变更，最新为草稿画板端点可用性修复及开发部署 |
 | MEMORY | ⚑ | Append-only 经验，仍含语义占位，已记录永久投影重试、psql 参数化、恢复会话、流程图手势、回调漂移、通知、虚拟环境与安装风险 |
 
 ## 按任务读取
