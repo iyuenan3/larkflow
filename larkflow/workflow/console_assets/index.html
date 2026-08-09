@@ -6,6 +6,7 @@
     <meta name="color-scheme" content="light dark">
     <title>larkflow 我的工作台</title>
     <link rel="stylesheet" href="/console/styles.css">
+    <link rel="stylesheet" href="/console/canvas.css">
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -291,7 +292,7 @@
             </div>
 
             <div id="detail-execution-panel" class="detail-tab-panel" hidden>
-              <div class="detail-grid">
+              <div id="detail-grid" class="detail-grid" data-canvas-expanded="false">
                 <section class="panel graph-panel">
                   <div class="panel-heading">
                     <div>
@@ -299,17 +300,13 @@
                       <h2>流程执行图</h2>
                     </div>
                     <div class="graph-heading-meta">
-                      <span class="graph-legend">拖动平移 · Ctrl/⌘ + 滚轮缩放</span>
-                      <div class="graph-controls" role="group" aria-label="流程图视图控制">
-                        <button id="graph-zoom-out" class="graph-control-button" type="button" title="缩小" aria-label="缩小流程图">−</button>
-                        <button id="graph-zoom-reset" class="graph-zoom-value" type="button" title="恢复 100%" aria-label="恢复流程图为 100%">100%</button>
-                        <button id="graph-zoom-in" class="graph-control-button" type="button" title="放大" aria-label="放大流程图">+</button>
-                        <button id="graph-fit" class="graph-fit-button" type="button">适配</button>
-                      </div>
+                      <span class="graph-legend">拖动节点保存布局 · 拖动空白平移 · 滚轮缩放</span>
+                      <button id="graph-expand" class="graph-expand-button" type="button" aria-pressed="false">展开画板</button>
                       <span id="graph-revision" class="revision"></span>
                     </div>
                   </div>
-                  <div id="graph" class="graph" tabindex="0" aria-label="流程执行图，可拖动平移并缩放"></div>
+                  <div id="graph-action-preview" class="graph-action-preview"></div>
+                  <div id="graph" class="graph" aria-label="受控流程运行画板"></div>
                 </section>
 
                 <section class="panel attempt-panel">
@@ -481,6 +478,70 @@
               <button id="human-task-transfer-confirm" class="human-task-transfer-confirm" type="button">确认转交</button>
             </section>
           </div>
+        </form>
+      </dialog>
+
+      <dialog id="graph-edit-dialog" class="graph-edit-dialog" aria-labelledby="graph-edit-title">
+        <form id="graph-edit-form" class="graph-edit-shell">
+          <header class="graph-edit-header">
+            <div>
+              <p class="eyebrow">CONTROLLED DAG EDIT</p>
+              <h2 id="graph-edit-title">编辑流程节点</h2>
+              <p id="graph-edit-boundary">修改只作用于尚未开始执行的未来节点，提交后先生成预览。</p>
+            </div>
+            <button id="graph-edit-close" class="human-task-close" type="button" aria-label="关闭流程编辑">×</button>
+          </header>
+
+          <div class="graph-edit-grid">
+            <label id="graph-edit-key-field" for="graph-edit-key">
+              <span>节点 ID</span>
+              <input id="graph-edit-key" type="text" maxlength="128" pattern="[a-z0-9][a-z0-9_]{0,127}" placeholder="例如 release_review">
+              <small>创建后不可直接改名。需要改名时应删除旧节点并新增节点。</small>
+            </label>
+            <label for="graph-edit-title-input">
+              <span>节点名称</span>
+              <input id="graph-edit-title-input" type="text" maxlength="200" required placeholder="例如 复核发布说明">
+            </label>
+            <label for="graph-edit-executor">
+              <span>执行方式</span>
+              <select id="graph-edit-executor" required>
+                <option value="human">Human 人工处理</option>
+                <option value="agent">Agent 自动执行</option>
+                <option value="tool">Tool 确定性工具</option>
+              </select>
+            </label>
+            <label for="graph-edit-owner">
+              <span>负责人</span>
+              <select id="graph-edit-owner">
+                <option value="">保持当前负责人</option>
+              </select>
+            </label>
+          </div>
+
+          <fieldset class="graph-edit-deps">
+            <legend>上游依赖</legend>
+            <p>只有勾选的节点完成后，本节点才会进入可执行状态。</p>
+            <div id="graph-edit-dependency-list"></div>
+          </fieldset>
+
+          <div id="graph-edit-work-fields" class="graph-edit-work-fields">
+            <label for="graph-edit-objective">
+              <span>节点目标</span>
+              <textarea id="graph-edit-objective" maxlength="1000" rows="3" placeholder="说明该节点要完成什么"></textarea>
+            </label>
+            <label for="graph-edit-acceptance">
+              <span>验收条件</span>
+              <textarea id="graph-edit-acceptance" maxlength="1000" rows="3" placeholder="每行一条验收条件"></textarea>
+            </label>
+          </div>
+
+          <p id="graph-edit-error" class="human-task-error" role="alert"></p>
+          <footer class="graph-edit-actions">
+            <button id="graph-edit-remove" class="graph-edit-remove" type="button">删除此节点</button>
+            <span></span>
+            <button id="graph-edit-cancel" class="human-task-secondary" type="button">取消</button>
+            <button id="graph-edit-submit" class="human-task-primary" type="submit">生成修改预览</button>
+          </footer>
         </form>
       </dialog>
     </div>

@@ -56,13 +56,13 @@ const state = {
   adminSessions: null,
   adminSessionPreview: null,
   selectedNode: null,
-  graphScale: 1,
   ownerSection: "attention",
   returnSection: "attention",
   detailTab: "overview",
   workflowFilter: "all",
   workflowQuery: "",
   expandedAttentionKinds: new Set(),
+  graphEditor: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -88,6 +88,7 @@ const adminConsole = el("admin-console");
 const ownerViewButton = el("owner-view");
 const adminViewButton = el("admin-view");
 const humanTaskDialog = el("human-task-dialog");
+const graphEditDialog = el("graph-edit-dialog");
 
 document.querySelectorAll(".theme-toggle").forEach((button) => {
   button.addEventListener("click", () => {
@@ -158,11 +159,7 @@ const EVENT = {
   "node.human_takeover_started": "人工接管已开始",
 };
 
-const GRAPH_MIN_SCALE = 0.5;
-const GRAPH_MAX_SCALE = 1.6;
-const GRAPH_SCALE_STEP = 0.1;
-let graphDrag = null;
-let suppressGraphClick = false;
+let canvasLoadPromise = null;
 
 function node(tag, className, text) {
   const item = document.createElement(tag);
@@ -1203,6 +1200,7 @@ function workflowActionSuccess(payload) {
   if (payload.action === "resume") return "流程已继续";
   if (payload.action === "cancel") return "流程已取消";
   if (payload.action === "restart") return "已创建新的 Attempt";
+  if (payload.action === "graph_edit") return "流程图修改已应用";
   return "操作已完成";
 }
 
@@ -1210,6 +1208,7 @@ function workflowActionError(error) {
   if (["preview_stale", "preview_expired", "state_conflict"].includes(error.code)) {
     return "状态已变化";
   }
+  if (error.code === "edit_not_allowed") return "当前节点不可修改";
   return "操作失败";
 }
 
@@ -1286,15 +1285,10 @@ async function loadDetail(instanceId) {
   state.detail = payload;
   state.selectedNode = chooseNode(payload.nodes);
   if (instanceChanged) {
-    state.graphScale = 1;
     state.detailTab = "overview";
   }
   renderInstances();
   renderDetail();
-  if (instanceChanged) {
-    el("graph").scrollLeft = 0;
-    el("graph").scrollTop = 0;
-  }
 }
 
 function chooseNode(nodes) {
@@ -1379,6 +1373,7 @@ function renderDetail() {
   const percent = progress.total_nodes ? Math.round(progress.completed_nodes / progress.total_nodes * 100) : 0;
   el("progress-ring").style.setProperty("--progress", `${percent * 3.6}deg`);
   el("graph-revision").textContent = `Graph r${instance.graph_revision}`;
+  el("graph-action-preview").replaceChildren();
   renderDetailActions(instance);
   renderInsights(payload);
   renderOverviewNodes(payload.nodes);
@@ -1543,228 +1538,360 @@ function statusBadge(status, id = "") {
   return badge;
 }
 
-function renderGraph(nodes) {
+function ensureCanvasBundle() {
+  if (window.LarkflowCanvas) return Promise.resolve(window.LarkflowCanvas);
+  if (canvasLoadPromise) return canvasLoadPromise;
+  canvasLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "/console/canvas.js";
+    script.async = true;
+    script.addEventListener("load", () => {
+      if (window.LarkflowCanvas) resolve(window.LarkflowCanvas);
+      else reject(new Error("流程画板初始化失败"));
+    }, { once: true });
+    script.addEventListener("error", () => reject(new Error("流程画板资源加载失败")), { once: true });
+    document.head.append(script);
+  });
+  return canvasLoadPromise;
+}
+
+function renderGraphFallback(nodes, message) {
   const graph = el("graph");
   graph.replaceChildren();
-  if (nodes.length === 0) {
-    graph.append(node("p", "muted", "草稿中没有节点。"));
-    return;
-  }
-
-  const layers = topologicalLayers(nodes);
-  const ordinalByKey = new Map(nodes.map((item, index) => [item.key, index + 1]));
-  const minimumWidth = Math.max(1, layers.length) * 250 + Math.max(0, layers.length - 1) * 52;
-  const stage = node("div", "dag-stage");
-  const canvas = node("div", "dag-canvas");
-  canvas.dataset.minimumWidth = String(minimumWidth);
-  const edges = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  edges.classList.add("dag-edges");
-  edges.setAttribute("aria-hidden", "true");
-  const grid = node("div", "dag-grid");
-  grid.style.gridTemplateColumns = `repeat(${layers.length}, minmax(250px, 1fr))`;
-
-  layers.forEach((items, layerIndex) => {
-    const layer = node("section", "dag-layer");
-    layer.append(node("p", "dag-layer-label", `阶段 ${String(layerIndex + 1).padStart(2, "0")}`));
-    const stack = node("div", "dag-layer-nodes");
-    items.forEach((item) => {
-      stack.append(graphNodeCard(item, ordinalByKey.get(item.key), nodes));
-    });
-    layer.append(stack);
-    grid.append(layer);
-  });
-
-  canvas.append(edges, grid);
-  stage.append(canvas);
-  graph.append(stage);
-  requestAnimationFrame(layoutGraphCanvas);
-}
-
-function graphNodeCard(item, ordinal, nodes) {
-  const card = node("button", "graph-node");
-  card.type = "button";
-  card.dataset.nodeKey = item.key;
-  card.dataset.status = item.status;
-  card.dataset.selected = String(state.selectedNode === item.key);
-  card.addEventListener("click", () => {
-    state.selectedNode = item.key;
-    updateGraphSelection(nodes);
-    renderAttempts(item);
-  });
-
-  const badge = node("span", "node-ordinal", String(ordinal).padStart(2, "0"));
-  const content = node("div", "node-content");
-  const top = node("div", "node-title-row");
-  top.append(node("strong", "", item.title), statusBadge(item.status));
-  const metadata = node("div", "node-metadata");
-  metadata.append(
-    node("span", `executor executor-${item.executor}`, EXECUTOR[item.executor] || item.executor),
-    node("span", "", `Owner: ${RELATION[item.owner_relation] || item.owner_relation}`),
-    node("span", "", `Attempt ${item.current_attempt_no}`),
+  const fallback = node("div", "graph-fallback");
+  fallback.append(
+    node("strong", "", message),
+    node("p", "", "仍可从下方节点列表选择并查看执行记录。"),
   );
-  const dependency = item.deps.length > 0
-    ? `依赖 ${item.deps.join("、")}`
-    : "入口节点，无依赖";
-  content.append(
-    top,
-    node("span", "node-key mono", item.key),
-    metadata,
-    node("span", "node-dependencies", dependency),
-  );
-  card.append(badge, content);
-  return card;
-}
-
-function topologicalLayers(nodes) {
-  const byKey = new Map(nodes.map((item) => [item.key, item]));
-  const depthByKey = new Map();
-  const visiting = new Set();
-
-  function depth(item) {
-    if (depthByKey.has(item.key)) return depthByKey.get(item.key);
-    if (visiting.has(item.key)) return 0;
-    visiting.add(item.key);
-    const dependencies = item.deps
-      .map((key) => byKey.get(key))
-      .filter(Boolean);
-    const value = dependencies.length > 0
-      ? Math.max(...dependencies.map((dependency) => depth(dependency))) + 1
-      : 0;
-    visiting.delete(item.key);
-    depthByKey.set(item.key, value);
-    return value;
-  }
-
-  const layers = [];
   nodes.forEach((item) => {
-    const layerIndex = depth(item);
-    if (!layers[layerIndex]) layers[layerIndex] = [];
-    layers[layerIndex].push(item);
+    const button = node("button", "graph-fallback-node");
+    button.type = "button";
+    button.dataset.selected = String(state.selectedNode === item.key);
+    button.append(
+      node("span", "", item.title),
+      node("code", "", item.key),
+      statusBadge(item.status),
+    );
+    button.addEventListener("click", () => {
+      state.selectedNode = item.key;
+      renderGraphFallback(nodes, message);
+      renderAttempts(item);
+    });
+    fallback.append(button);
   });
-  return layers.filter(Boolean);
+  graph.append(fallback);
 }
 
-function clampGraphScale(value) {
-  return Math.min(GRAPH_MAX_SCALE, Math.max(GRAPH_MIN_SCALE, value));
-}
-
-function updateGraphControls() {
-  const percent = Math.round(state.graphScale * 100);
-  el("graph-zoom-reset").textContent = `${percent}%`;
-  el("graph-zoom-out").disabled = state.graphScale <= GRAPH_MIN_SCALE;
-  el("graph-zoom-in").disabled = state.graphScale >= GRAPH_MAX_SCALE;
-}
-
-function layoutGraphCanvas() {
+function mountGraphCanvas(nodes) {
   const graph = el("graph");
-  const stage = graph.querySelector(".dag-stage");
-  const canvas = graph.querySelector(".dag-canvas");
-  if (!stage || !canvas || !state.detail) {
-    updateGraphControls();
+  const instance = state.detail?.instance;
+  window.LarkflowCanvas.render(graph, {
+    items: nodes,
+    selectedNode: state.selectedNode,
+    instanceId: instance?.id || "",
+    editable: instance?.status === "running",
+    restartable: ["running", "done", "failed"].includes(instance?.status),
+    onNodeSelect: (nodeKey) => {
+      state.selectedNode = nodeKey;
+      updateGraphSelection(nodes);
+      renderAttempts(nodes.find((item) => item.key === nodeKey));
+    },
+    onRequestAdd: () => openGraphEditor("add"),
+    onRequestEdit: (nodeKey) => openGraphEditor("edit", nodeKey),
+    onRequestRestart: (nodeKey) => previewNodeRestart(nodeKey),
+  });
+}
+
+function renderGraph(nodes) {
+  if (nodes.length === 0) {
+    renderGraphFallback(nodes, "草稿中没有节点。");
     return;
   }
-  const minimumWidth = Number(canvas.dataset.minimumWidth) || 250;
-  const naturalWidth = Math.max(minimumWidth, graph.clientWidth - 36);
-  canvas.style.width = `${naturalWidth}px`;
-  canvas.style.transform = `scale(${state.graphScale})`;
-  const naturalHeight = Math.max(344, canvas.scrollHeight);
-  stage.style.width = `${naturalWidth * state.graphScale}px`;
-  stage.style.height = `${naturalHeight * state.graphScale}px`;
-  drawDagEdges(canvas, state.detail.nodes);
-  updateGraphControls();
-}
-
-function setGraphScale(value, anchorX = null, anchorY = null) {
-  const graph = el("graph");
-  const previousScale = state.graphScale;
-  const nextScale = clampGraphScale(Math.round(value * 100) / 100);
-  if (nextScale === previousScale) return;
-  const viewportX = anchorX ?? graph.clientWidth / 2;
-  const viewportY = anchorY ?? graph.clientHeight / 2;
-  const contentX = (graph.scrollLeft + viewportX) / previousScale;
-  const contentY = (graph.scrollTop + viewportY) / previousScale;
-  state.graphScale = nextScale;
-  layoutGraphCanvas();
-  graph.scrollLeft = contentX * nextScale - viewportX;
-  graph.scrollTop = contentY * nextScale - viewportY;
-}
-
-function fitGraph() {
-  const graph = el("graph");
-  const canvas = graph.querySelector(".dag-canvas");
-  if (!canvas) return;
-  const minimumWidth = Number(canvas.dataset.minimumWidth) || 250;
-  const availableWidth = Math.max(1, graph.clientWidth - 36);
-  setGraphScale(Math.min(1, availableWidth / minimumWidth), 0, 0);
-  graph.scrollLeft = 0;
-  graph.scrollTop = 0;
+  if (window.LarkflowCanvas) {
+    mountGraphCanvas(nodes);
+    return;
+  }
+  renderGraphFallback(nodes, "正在启动流程画板");
+  ensureCanvasBundle()
+    .then(() => {
+      const currentNodes = state.detail?.nodes || nodes;
+      mountGraphCanvas(currentNodes);
+      if (state.detailTab === "execution") layoutGraphCanvas();
+    })
+    .catch((error) => {
+      renderGraphFallback(nodes, error.message);
+      showToast(error.message, "error");
+    });
 }
 
 function updateGraphSelection(nodes) {
-  const graph = el("graph");
-  graph.querySelectorAll(".graph-node").forEach((card) => {
-    card.dataset.selected = String(card.dataset.nodeKey === state.selectedNode);
-  });
-  const canvas = graph.querySelector(".dag-canvas");
-  if (canvas) drawDagEdges(canvas, nodes);
+  if (window.LarkflowCanvas) mountGraphCanvas(nodes);
+  else renderGraph(nodes);
 }
 
-function drawDagEdges(canvas, nodes) {
-  const svg = canvas.querySelector(".dag-edges");
-  if (!svg) return;
-  svg.replaceChildren();
-  const width = canvas.offsetWidth;
-  const height = canvas.offsetHeight;
-  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  svg.setAttribute("width", String(width));
-  svg.setAttribute("height", String(height));
+function layoutGraphCanvas() {
+  if (window.LarkflowCanvas) window.LarkflowCanvas.refresh(el("graph"));
+}
 
-  const namespace = "http://www.w3.org/2000/svg";
-  const definitions = document.createElementNS(namespace, "defs");
-  const marker = document.createElementNS(namespace, "marker");
-  marker.setAttribute("id", "dag-arrow");
-  marker.setAttribute("viewBox", "0 0 10 10");
-  marker.setAttribute("refX", "8");
-  marker.setAttribute("refY", "5");
-  marker.setAttribute("markerWidth", "6");
-  marker.setAttribute("markerHeight", "6");
-  marker.setAttribute("orient", "auto-start-reverse");
-  const arrow = document.createElementNS(namespace, "path");
-  arrow.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
-  marker.append(arrow);
-  definitions.append(marker);
-  svg.append(definitions);
+async function openGraphEditor(mode, nodeKey = null) {
+  const instance = state.detail?.instance;
+  const nodes = state.detail?.nodes || [];
+  if (!instance || instance.status !== "running") {
+    showToast("只有运行中的流程可以修改未来节点", "error");
+    return;
+  }
+  const selected = mode === "edit"
+    ? nodes.find((item) => item.key === nodeKey)
+    : null;
+  if (mode === "edit" && !selected) {
+    showToast("请先选择要修改的节点", "error");
+    return;
+  }
+  state.graphEditor = { mode, nodeKey: selected?.key || null };
+  el("graph-edit-form").dataset.mode = mode;
+  el("graph-edit-title").textContent = mode === "add" ? "增加流程节点" : "编辑流程节点";
+  el("graph-edit-boundary").textContent = mode === "add"
+    ? "新节点先进入未来区域，提交后生成可核对的修改预览。"
+    : "只能修改尚未开始执行且没有执行历史的未来节点。";
+  const keyInput = el("graph-edit-key");
+  keyInput.value = selected?.key || "";
+  keyInput.disabled = mode === "edit";
+  keyInput.required = mode === "add";
+  el("graph-edit-title-input").value = selected?.title || "";
+  el("graph-edit-executor").value = selected?.executor || "human";
+  const toolOption = el("graph-edit-executor").querySelector('option[value="tool"]');
+  toolOption.disabled = mode === "edit" && selected?.executor !== "tool";
+  el("graph-edit-work-fields").hidden = mode === "edit";
+  el("graph-edit-objective").value = "";
+  el("graph-edit-acceptance").value = "";
+  el("graph-edit-remove").hidden = mode !== "edit";
+  el("graph-edit-error").textContent = "";
+  renderGraphDependencyOptions(nodes, selected);
+  resetGraphOwnerOptions(mode);
+  graphEditDialog.showModal();
+  if (mode === "add") keyInput.focus();
+  else el("graph-edit-title-input").focus();
+  loadGraphEditorPeople(state.graphEditor).catch(() => {});
+}
 
-  const cardByKey = new Map(
-    [...canvas.querySelectorAll(".graph-node")].map((card) => [card.dataset.nodeKey, card]),
-  );
-  const canvasRect = canvas.getBoundingClientRect();
-  nodes.forEach((targetNode) => {
-    const target = cardByKey.get(targetNode.key);
-    if (!target) return;
-    targetNode.deps.forEach((dependencyKey) => {
-      const source = cardByKey.get(dependencyKey);
-      if (!source) return;
-      const sourceRect = source.getBoundingClientRect();
-      const targetRect = target.getBoundingClientRect();
-      const startX = (sourceRect.right - canvasRect.left) / state.graphScale;
-      const startY = (sourceRect.top + sourceRect.height / 2 - canvasRect.top) / state.graphScale;
-      const endX = (targetRect.left - canvasRect.left) / state.graphScale;
-      const endY = (targetRect.top + targetRect.height / 2 - canvasRect.top) / state.graphScale;
-      const bend = Math.max(30, (endX - startX) * 0.45);
-      const path = document.createElementNS(namespace, "path");
-      path.classList.add("dag-edge");
-      path.dataset.selected = String(
-        state.selectedNode === dependencyKey || state.selectedNode === targetNode.key,
-      );
-      path.setAttribute(
-        "d",
-        `M ${startX} ${startY} C ${startX + bend} ${startY}, ${endX - bend} ${endY}, ${endX} ${endY}`,
-      );
-      path.setAttribute("marker-end", "url(#dag-arrow)");
-      svg.append(path);
-    });
+function renderGraphDependencyOptions(nodes, selected) {
+  const container = el("graph-edit-dependency-list");
+  container.replaceChildren();
+  const dependencies = new Set(selected?.deps || []);
+  nodes.filter((item) => item.key !== selected?.key).forEach((item) => {
+    const option = node("label", "graph-edit-dependency-option");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = item.key;
+    checkbox.checked = dependencies.has(item.key);
+    option.append(checkbox, node("span", "", item.title), node("code", "", item.key));
+    container.append(option);
   });
+  if (container.childElementCount === 0) {
+    container.append(node("p", "muted", "当前没有可选上游节点。"));
+  }
+}
+
+function resetGraphOwnerOptions(mode) {
+  const select = el("graph-edit-owner");
+  select.replaceChildren();
+  if (mode === "edit") {
+    const keep = node("option", "", "保持当前负责人");
+    keep.value = "";
+    select.append(keep);
+  }
+  const current = node("option", "", "我（当前登录成员）");
+  current.value = "__current_user__";
+  select.append(current);
+  select.value = mode === "add" ? "__current_user__" : "";
+}
+
+async function loadGraphEditorPeople(editor) {
+  const payload = await request("/console/api/v1/people?limit=100");
+  if (state.graphEditor !== editor || !graphEditDialog.open) return;
+  const select = el("graph-edit-owner");
+  (payload.people || []).forEach((person) => {
+    const option = node("option", "", person.name || "企业成员");
+    option.value = person.person_id;
+    select.append(option);
+  });
+}
+
+function graphEditDependencies() {
+  return Array.from(el("graph-edit-dependency-list").querySelectorAll("input:checked"))
+    .map((item) => item.value);
+}
+
+function graphEditOperation() {
+  const mode = state.graphEditor?.mode;
+  const title = el("graph-edit-title-input").value.trim();
+  const executor = el("graph-edit-executor").value;
+  const owner = el("graph-edit-owner").value;
+  const deps = graphEditDependencies();
+  if (!title) throw new Error("请填写节点名称");
+  if (mode === "add") {
+    const key = el("graph-edit-key").value.trim();
+    if (!/^[a-z0-9][a-z0-9_]{0,127}$/.test(key)) {
+      throw new Error("节点 ID 只能使用小写字母、数字和下划线");
+    }
+    const acceptance = el("graph-edit-acceptance").value
+      .split("\n")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const objective = el("graph-edit-objective").value.trim() || title;
+    const work = {
+      objective,
+      inputs: deps.map((item) => `dependencies.${item}`),
+      outputs: [{ id: "result", type: "data" }],
+      acceptance: acceptance.length ? acceptance : [`${title} 已完成`],
+    };
+    if (executor === "tool") work.tool = { kind: "noop", args: {} };
+    return {
+      op: "add_node",
+      node: {
+        key,
+        title,
+        owner_person_id: owner || "__current_user__",
+        executor,
+        deps,
+        work,
+      },
+    };
+  }
+  const current = state.detail.nodes.find((item) => item.key === state.graphEditor?.nodeKey);
+  if (!current) throw new Error("节点已经不存在，请刷新后重试");
+  const changes = {};
+  if (title !== current.title) changes.title = title;
+  if (executor !== current.executor) changes.executor = executor;
+  if (JSON.stringify(deps) !== JSON.stringify(current.deps || [])) changes.deps = deps;
+  if (owner) changes.owner_person_id = owner;
+  if (Object.keys(changes).length === 0) throw new Error("请先修改至少一项内容");
+  return { op: "update_node", node_key: current.key, set: changes };
+}
+
+async function submitGraphEditForm(event) {
+  event.preventDefault();
+  const button = el("graph-edit-submit");
+  const errorNode = el("graph-edit-error");
+  errorNode.textContent = "";
+  button.disabled = true;
+  button.textContent = "正在生成预览";
+  try {
+    const payload = await createGraphEditPreview([graphEditOperation()]);
+    graphEditDialog.close();
+    renderGraphEditPreview(payload);
+  } catch (error) {
+    errorNode.textContent = error.message || "修改预览生成失败，请重试。";
+  } finally {
+    button.disabled = false;
+    button.textContent = "生成修改预览";
+  }
+}
+
+async function removeGraphNode() {
+  const current = state.detail?.nodes.find((item) => item.key === state.graphEditor?.nodeKey);
+  if (!current) return;
+  const button = el("graph-edit-remove");
+  button.disabled = true;
+  button.textContent = "正在生成删除预览";
+  el("graph-edit-error").textContent = "";
+  try {
+    const payload = await createGraphEditPreview([
+      { op: "remove_node", node_key: current.key },
+    ]);
+    graphEditDialog.close();
+    renderGraphEditPreview(payload);
+  } catch (error) {
+    el("graph-edit-error").textContent = error.message || "删除预览生成失败，请重试。";
+  } finally {
+    button.disabled = false;
+    button.textContent = "删除此节点";
+  }
+}
+
+function createGraphEditPreview(operations) {
+  const instanceId = state.detail?.instance.id;
+  showToast("正在校验流程修改并生成预览");
+  return request(
+    `/console/api/v1/instances/${encodeURIComponent(instanceId)}/graph-edit-preview`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operations }),
+    },
+  );
+}
+
+function renderGraphEditPreview(payload) {
+  const container = el("graph-action-preview");
+  container.replaceChildren();
+  const preview = payload.preview;
+  const panel = node("section", "workflow-action-preview");
+  panel.dataset.action = "graph_edit";
+  const copy = node("div", "workflow-action-preview-copy");
+  copy.append(
+    node("strong", "", `确认应用 Graph r${preview.graph_revision} 到 r${preview.proposed_graph_revision} 的修改？`),
+    node("p", "", "中央节点已验证权限、执行冻结线和 DAG 合法性。确认后才会修改流程。"),
+  );
+  const list = node("div", "workflow-action-preview-list");
+  [
+    ["新增", preview.added_nodes || []],
+    ["修改", preview.updated_nodes || []],
+    ["删除", preview.removed_nodes || []],
+  ].forEach(([label, items]) => items.forEach((item) => {
+    list.append(node("span", "", `${label}：${item.title || item.key}`));
+  }));
+  copy.append(list);
+  const controls = node("div", "workflow-action-preview-controls");
+  const dismiss = node("button", "workflow-action-preview-dismiss", "暂不应用");
+  dismiss.type = "button";
+  dismiss.addEventListener("click", () => panel.remove());
+  const confirm = node("button", "workflow-action-preview-confirm", "确认应用修改");
+  confirm.type = "button";
+  confirm.addEventListener("click", () => confirmGraphEditPreview(payload, panel, confirm));
+  controls.append(dismiss, confirm);
+  panel.append(copy, controls);
+  container.append(panel);
+  showToast("修改预览已生成，请核对后确认");
+}
+
+async function confirmGraphEditPreview(payload, panel, button) {
+  button.disabled = true;
+  panel.dataset.state = "working";
+  button.textContent = "正在应用";
+  try {
+    const result = await request(
+      `/console/api/v1/graph-edit-previews/${encodeURIComponent(payload.preview.id)}/confirm`,
+      { method: "POST" },
+    );
+    panel.dataset.state = "done";
+    button.textContent = result.already_applied ? "修改已经生效" : "修改已应用";
+    showToast("流程图修改已应用");
+    await loadInstances(result.instance?.id || null);
+  } catch (error) {
+    panel.dataset.state = "error";
+    button.textContent = workflowActionError(error);
+    button.disabled = false;
+    showToast(error.message || "修改应用失败，请重试", "error");
+  }
+}
+
+async function previewNodeRestart(nodeKey) {
+  const instanceId = state.detail?.instance.id;
+  showToast("正在生成节点打回影响预览");
+  try {
+    const payload = await request(
+      `/console/api/v1/instances/${encodeURIComponent(instanceId)}/nodes/${encodeURIComponent(nodeKey)}/restart-preview`,
+      { method: "POST" },
+    );
+    const container = el("graph-action-preview");
+    container.replaceChildren();
+    renderWorkflowActionPreview(container, payload);
+    showToast("打回预览已生成，请核对影响节点");
+  } catch (error) {
+    showToast(error.message || "打回预览生成失败，请重试", "error");
+    throw error;
+  }
 }
 
 function renderAttempts(selected) {
@@ -2096,87 +2223,24 @@ humanTaskDialog.addEventListener("close", () => {
   state.activeTask = null;
   resetHumanTaskControls();
 });
-el("graph-zoom-out").addEventListener("click", () => setGraphScale(state.graphScale - GRAPH_SCALE_STEP));
-el("graph-zoom-reset").addEventListener("click", () => setGraphScale(1));
-el("graph-zoom-in").addEventListener("click", () => setGraphScale(state.graphScale + GRAPH_SCALE_STEP));
-el("graph-fit").addEventListener("click", fitGraph);
-
-el("graph").addEventListener("wheel", (event) => {
-  if (!event.ctrlKey && !event.metaKey) return;
-  event.preventDefault();
-  const rect = el("graph").getBoundingClientRect();
-  const direction = event.deltaY < 0 ? GRAPH_SCALE_STEP : -GRAPH_SCALE_STEP;
-  setGraphScale(
-    state.graphScale + direction,
-    event.clientX - rect.left,
-    event.clientY - rect.top,
-  );
-}, { passive: false });
-
-el("graph").addEventListener("pointerdown", (event) => {
-  if (event.pointerType === "mouse" && event.button !== 0) return;
-  if (event.target.closest(".graph-node")) return;
-  const graph = el("graph");
-  graphDrag = {
-    pointerId: event.pointerId,
-    startX: event.clientX,
-    startY: event.clientY,
-    scrollLeft: graph.scrollLeft,
-    scrollTop: graph.scrollTop,
-    moved: false,
-  };
-  graph.setPointerCapture(event.pointerId);
+el("graph-edit-form").addEventListener("submit", submitGraphEditForm);
+el("graph-edit-close").addEventListener("click", () => graphEditDialog.close());
+el("graph-edit-cancel").addEventListener("click", () => graphEditDialog.close());
+el("graph-edit-remove").addEventListener("click", removeGraphNode);
+graphEditDialog.addEventListener("close", () => {
+  state.graphEditor = null;
+  el("graph-edit-error").textContent = "";
 });
-
-el("graph").addEventListener("pointermove", (event) => {
-  if (!graphDrag || graphDrag.pointerId !== event.pointerId) return;
-  const deltaX = event.clientX - graphDrag.startX;
-  const deltaY = event.clientY - graphDrag.startY;
-  if (!graphDrag.moved && Math.hypot(deltaX, deltaY) < 4) return;
-  graphDrag.moved = true;
-  const graph = el("graph");
-  graph.dataset.panning = "true";
-  graph.scrollLeft = graphDrag.scrollLeft - deltaX;
-  graph.scrollTop = graphDrag.scrollTop - deltaY;
-  event.preventDefault();
+el("graph-expand").addEventListener("click", (event) => {
+  const grid = el("detail-grid");
+  const expanded = grid.dataset.canvasExpanded !== "true";
+  grid.dataset.canvasExpanded = String(expanded);
+  event.currentTarget.setAttribute("aria-pressed", String(expanded));
+  event.currentTarget.textContent = expanded ? "收起画板" : "展开画板";
+  requestAnimationFrame(() => {
+    if (window.LarkflowCanvas) window.LarkflowCanvas.fit(el("graph"));
+  });
 });
-
-function finishGraphPan(event) {
-  if (!graphDrag || graphDrag.pointerId !== event.pointerId) return;
-  const graph = el("graph");
-  if (graph.hasPointerCapture(event.pointerId)) graph.releasePointerCapture(event.pointerId);
-  suppressGraphClick = graphDrag.moved;
-  if (suppressGraphClick) {
-    setTimeout(() => { suppressGraphClick = false; }, 0);
-  }
-  graphDrag = null;
-  delete graph.dataset.panning;
-}
-
-el("graph").addEventListener("pointerup", finishGraphPan);
-el("graph").addEventListener("pointercancel", finishGraphPan);
-el("graph").addEventListener("click", (event) => {
-  if (!suppressGraphClick) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  suppressGraphClick = false;
-}, true);
-
-el("graph").addEventListener("keydown", (event) => {
-  const graph = el("graph");
-  if (["Enter", " "].includes(event.key) && event.target.closest(".graph-node")) return;
-  if (event.key === "ArrowLeft") graph.scrollLeft -= 80;
-  else if (event.key === "ArrowRight") graph.scrollLeft += 80;
-  else if (event.key === "ArrowUp") graph.scrollTop -= 80;
-  else if (event.key === "ArrowDown") graph.scrollTop += 80;
-  else if (["+", "="].includes(event.key)) setGraphScale(state.graphScale + GRAPH_SCALE_STEP);
-  else if (event.key === "-") setGraphScale(state.graphScale - GRAPH_SCALE_STEP);
-  else if (event.key === "0") setGraphScale(1);
-  else if (event.key.toLowerCase() === "f") fitGraph();
-  else return;
-  event.preventDefault();
-});
-
 window.addEventListener("resize", () => {
   if (state.detail) layoutGraphCanvas();
 });

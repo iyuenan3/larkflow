@@ -183,6 +183,88 @@ def test_restart_uses_durable_preview_and_preserves_idempotent_replay():
     assert replay["already_applied"] is True
 
 
+def test_graph_edit_previews_adds_updates_and_replays_with_server_identity():
+    _repository, domain, actions = _services()
+    operations = [
+        {
+            "op": "update_node",
+            "node_key": "draft_summary",
+            "set": {"title": "Draft verified summary"},
+        },
+        {
+            "op": "add_node",
+            "node": {
+                "key": "release_review",
+                "title": "Review release",
+                "owner_person_id": "__current_user__",
+                "executor": "human",
+                "deps": ["draft_summary"],
+                "work": {
+                    "objective": "Review release",
+                    "inputs": ["dependencies.draft_summary"],
+                    "outputs": [{"id": "result", "type": "data"}],
+                    "acceptance": ["Release is reviewed"],
+                },
+            },
+        },
+    ]
+
+    preview = actions.preview_graph_edit(
+        _principal(),
+        "restart_owner",
+        operations,
+    )
+    unchanged = domain.get(TENANT, "restart_owner")
+
+    assert unchanged.graph_revision == 1
+    assert unchanged.snapshot.node("draft_summary").title == "Draft summary"
+    assert preview["preview"]["proposed_graph_revision"] == 2
+    assert preview["preview"]["added_nodes"] == [
+        {"key": "release_review", "title": "Review release"}
+    ]
+    assert preview["preview"]["updated_nodes"] == [
+        {"key": "draft_summary", "title": "Draft verified summary"}
+    ]
+
+    confirmed = actions.confirm_graph_edit(
+        _principal(),
+        preview["preview"]["id"],
+    )
+    replay = actions.confirm_graph_edit(
+        _principal(),
+        preview["preview"]["id"],
+    )
+    edited = domain.get(TENANT, "restart_owner")
+
+    assert confirmed["graph_revision"] == 2
+    assert confirmed["already_applied"] is False
+    assert replay["already_applied"] is True
+    assert edited.snapshot.node("draft_summary").title == "Draft verified summary"
+    assert edited.snapshot.node("release_review").owner_person_id == OWNER
+
+
+def test_graph_edit_reports_a_localized_frozen_frontier_error():
+    _repository, _domain, actions = _services()
+
+    with pytest.raises(ConsoleActionConflictError) as caught:
+        actions.preview_graph_edit(
+            _principal(),
+            "restart_owner",
+            [
+                {
+                    "op": "update_node",
+                    "node_key": "confirm_input",
+                    "set": {"title": "Too late"},
+                }
+            ],
+        )
+
+    assert caught.value.code == "edit_not_allowed"
+    assert str(caught.value) == (
+        "该节点已经开始执行，不能直接修改。需要返工时请使用打回到此节点。"
+    )
+
+
 def test_action_service_hides_foreign_and_missing_resources_identically():
     _repository, _domain, actions = _services()
 
@@ -250,6 +332,65 @@ def test_http_workflow_actions_require_auth_header_and_reject_request_bodies():
     )
     assert foreign.status == missing.status == 404
     assert foreign.body == missing.body
+
+
+def test_http_graph_edit_requires_bounded_json_preview_before_confirmation():
+    repository, _domain, actions = _services()
+    application = ConsoleHttpApplication(
+        ConsoleReadService(repository),
+        StaticConsoleAuthenticator(TOKEN, _principal()),
+        action_service=actions,
+    )
+    path = "/console/api/v1/instances/restart_owner/graph-edit-preview"
+    body = json.dumps(
+        {
+            "operations": [
+                {
+                    "op": "update_node",
+                    "node_key": "draft_summary",
+                    "set": {"title": "Draft from canvas"},
+                }
+            ]
+        },
+        separators=(",", ":"),
+    ).encode()
+    headers = {
+        **ACTION_HEADERS,
+        "Content-Type": "application/json",
+        "Content-Length": str(len(body)),
+    }
+
+    assert application.handle("POST", path, headers=ACTION_HEADERS).status == 400
+    assert application.handle(
+        "POST",
+        path,
+        headers={**headers, "Content-Type": "text/plain"},
+        body=body,
+    ).status == 400
+    assert application.handle(
+        "POST",
+        path,
+        headers={**headers, "Content-Length": str(len(body) + 1)},
+        body=body,
+    ).status == 400
+
+    preview = application.handle("POST", path, headers=headers, body=body)
+    assert preview.status == 201
+    preview_id = json.loads(preview.body)["preview"]["id"]
+    confirmed = application.handle(
+        "POST",
+        f"/console/api/v1/graph-edit-previews/{preview_id}/confirm",
+        headers=ACTION_HEADERS,
+    )
+    replay = application.handle(
+        "POST",
+        f"/console/api/v1/graph-edit-previews/{preview_id}/confirm",
+        headers=ACTION_HEADERS,
+    )
+
+    assert confirmed.status == replay.status == 200
+    assert json.loads(confirmed.body)["graph_revision"] == 2
+    assert json.loads(replay.body)["already_applied"] is True
 
 
 def test_feishu_workflow_actions_require_the_exact_public_origin():

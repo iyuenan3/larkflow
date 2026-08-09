@@ -69,6 +69,14 @@ _RESTART_CONFIRM_ROUTE = re.compile(
     r"^/console/api/v1/restart-previews/"
     r"([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/confirm$"
 )
+_GRAPH_EDIT_PREVIEW_ROUTE = re.compile(
+    r"^/console/api/v1/instances/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/"
+    r"graph-edit-preview$"
+)
+_GRAPH_EDIT_CONFIRM_ROUTE = re.compile(
+    r"^/console/api/v1/graph-edit-previews/"
+    r"([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/confirm$"
+)
 _TASK_ROUTE = re.compile(
     r"^/console/api/v1/tasks/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/"
     r"nodes/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})$"
@@ -329,11 +337,13 @@ class ConsoleHttpApplication:
         if method == "POST" and (
             parsed.path.startswith("/console/api/v1/instances/")
             or parsed.path.startswith("/console/api/v1/restart-previews/")
+            or parsed.path.startswith("/console/api/v1/graph-edit-previews/")
         ):
             return self._handle_workflow_write(
                 parsed.path,
                 parsed.query,
                 request_headers,
+                body,
             )
 
         if method not in {"GET", "HEAD"}:
@@ -347,6 +357,8 @@ class ConsoleHttpApplication:
         asset = {
             "/console/": ("index.html", "text/html; charset=utf-8"),
             "/console/app.js": ("app.js", "text/javascript; charset=utf-8"),
+            "/console/canvas.js": ("canvas.js", "text/javascript; charset=utf-8"),
+            "/console/canvas.css": ("canvas.css", "text/css; charset=utf-8"),
             "/console/styles.css": ("styles.css", "text/css; charset=utf-8"),
         }.get(parsed.path)
         if asset is not None:
@@ -722,13 +734,36 @@ class ConsoleHttpApplication:
         path: str,
         query: str,
         headers: Mapping[str, str],
+        body: bytes,
     ) -> ConsoleHttpResponse:
         try:
             authentication = self.authenticator.authenticate_context(headers)
             principal = authentication.principal
             if self.action_service is None:
                 raise ConsoleResourceNotFoundError("workflow actions")
-            self._validate_workflow_write_request(query, headers)
+            graph_edit_preview = _GRAPH_EDIT_PREVIEW_ROUTE.fullmatch(path)
+            self._validate_workflow_write_request(
+                query,
+                headers,
+                body,
+                allow_body=graph_edit_preview is not None,
+            )
+
+            if graph_edit_preview is not None:
+                document = _json_object_body(body)
+                if set(document) != {"operations"}:
+                    raise ValueError("graph edit preview fields are invalid")
+                operations = document["operations"]
+                if not isinstance(operations, list):
+                    raise ValueError("graph edit operations must be an array")
+                return self._json(
+                    201,
+                    self.action_service.preview_graph_edit(
+                        principal,
+                        graph_edit_preview.group(1),
+                        operations,
+                    ),
+                )
 
             node_restart = _NODE_RESTART_PREVIEW_ROUTE.fullmatch(path)
             if node_restart is not None:
@@ -799,6 +834,16 @@ class ConsoleHttpApplication:
                         restart_confirm.group(1),
                     ),
                 )
+
+            graph_edit_confirm = _GRAPH_EDIT_CONFIRM_ROUTE.fullmatch(path)
+            if graph_edit_confirm is not None:
+                return self._json(
+                    200,
+                    self.action_service.confirm_graph_edit(
+                        principal,
+                        graph_edit_confirm.group(1),
+                    ),
+                )
             raise ConsoleResourceNotFoundError("workflow action")
         except InvalidConsoleCredentialError:
             challenge = (
@@ -859,13 +904,37 @@ class ConsoleHttpApplication:
         self,
         query: str,
         headers: Mapping[str, str],
+        body: bytes,
+        *,
+        allow_body: bool = False,
     ) -> None:
         if query:
             raise ValueError("workflow action query is not accepted")
-        content_length = _header(headers, "content-length")
-        if content_length not in {None, "", "0"}:
-            raise ValueError("workflow action body is not accepted")
         if _header(headers, "transfer-encoding") is not None:
+            raise ValueError("workflow action transfer encoding is not accepted")
+        content_length = _header(headers, "content-length")
+        if allow_body:
+            if content_length is None:
+                raise ValueError("workflow action content length is required")
+            try:
+                parsed_length = int(content_length)
+            except ValueError as exc:
+                raise ValueError("workflow action content length is invalid") from exc
+            if (
+                parsed_length < 1
+                or parsed_length > _MAX_TASK_BODY_BYTES
+                or parsed_length != len(body)
+            ):
+                raise ValueError("workflow action body size is invalid")
+            content_type = (_header(headers, "content-type") or "").lower()
+            if content_type not in {
+                "application/json",
+                "application/json; charset=utf-8",
+            }:
+                raise ValueError(
+                    "workflow action content type must be application/json"
+                )
+        elif content_length not in {None, "", "0"} or body:
             raise ValueError("workflow action body is not accepted")
         if not secrets.compare_digest(
             _header(headers, _ADMIN_ACTION_HEADER) or "",

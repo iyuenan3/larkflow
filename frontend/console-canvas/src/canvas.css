@@ -1,0 +1,154 @@
+.lfc-shell {
+  --lfc-edge: #465165;
+  --lfc-grid: rgba(132, 149, 177, .26);
+  --lfc-minimap-mask: rgba(9, 12, 18, .74);
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--text);
+  border-radius: 0 0 var(--radius) var(--radius);
+  outline: none;
+  background: radial-gradient(circle at 35% 20%, rgba(67, 105, 195, .055), transparent 36%), var(--surface-subtle);
+}
+
+.lfc-shell[data-theme="light"] {
+  --lfc-edge: #8d98aa;
+  --lfc-grid: rgba(83, 105, 143, .2);
+  --lfc-minimap-mask: rgba(235, 240, 248, .78);
+}
+
+.lfc-shell:focus-visible { box-shadow: inset 0 0 0 2px rgba(94, 140, 255, .52); }
+.lfc-shell .react-flow__pane { cursor: grab; }
+.lfc-shell .react-flow__pane.dragging { cursor: grabbing; }
+.lfc-shell .react-flow__node { cursor: grab; }
+.lfc-shell .react-flow__node.dragging { cursor: grabbing; }
+.lfc-shell .react-flow__edge-path { transition: stroke .18s ease, stroke-width .18s ease, opacity .18s ease; }
+.lfc-shell .react-flow__edge.lfc-edge { opacity: .7; }
+.lfc-shell .react-flow__edge.lfc-edge-related { opacity: 1; }
+.lfc-shell .react-flow__attribution { color: var(--muted-2); background: transparent; }
+
+.lfc-node {
+  position: relative;
+  width: 292px;
+  height: 156px;
+  padding: 15px 16px 13px;
+  overflow: hidden;
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, .18);
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+.lfc-node::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  content: "";
+  background: #8f9aab;
+}
+.lfc-node[data-status="done"]::before { background: #58d6b0; }
+.lfc-node[data-status="failed"]::before { background: #fa7e88; }
+.lfc-node[data-status="running"]::before,
+.lfc-node[data-status="ready"]::before { background: #5e8cff; }
+.lfc-node[data-status="waiting_human"]::before { background: #f1b45b; }
+.lfc-node[data-status="paused"]::before { background: #b895ff; }
+.lfc-node:hover { border-color: rgba(94, 140, 255, .48); transform: translateY(-1px); }
+.lfc-node[data-selected="true"] {
+  border-color: rgba(94, 140, 255, .8);
+  box-shadow: 0 0 0 3px rgba(94, 140, 255, .16), 0 18px 38px rgba(0, 0, 0, .24);
+}
+.lfc-node-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.lfc-node-ordinal { color: #91aaf0; font: 650 var(--font-caption)/1 "SFMono-Regular", monospace; letter-spacing: .05em; }
+.lfc-node-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--font-caption); }
+.lfc-node-status i { width: 6px; height: 6px; border-radius: 50%; background: #8f9aab; }
+.lfc-node-status[data-status="done"] { color: #6edbb9; }
+.lfc-node-status[data-status="done"] i { background: #58d6b0; }
+.lfc-node-status[data-status="failed"] { color: #fc8f99; }
+.lfc-node-status[data-status="failed"] i { background: #fa7e88; }
+.lfc-node-status[data-status="running"],
+.lfc-node-status[data-status="ready"] { color: #80a3ff; }
+.lfc-node-status[data-status="running"] i,
+.lfc-node-status[data-status="ready"] i { background: #5e8cff; }
+.lfc-node-status[data-status="waiting_human"] { color: #f0bb6d; }
+.lfc-node-status[data-status="waiting_human"] i { background: #f1b45b; }
+.lfc-node-title { display: block; margin: 13px 0 4px; overflow: hidden; font-size: var(--font-body); text-overflow: ellipsis; white-space: nowrap; }
+.lfc-node-key { display: block; overflow: hidden; color: var(--muted-2); font-size: var(--font-caption); text-overflow: ellipsis; white-space: nowrap; }
+.lfc-node-meta { display: flex; gap: 5px; margin-top: 12px; overflow: hidden; }
+.lfc-node-meta span { flex: 0 1 auto; min-width: 0; padding: 4px 6px; overflow: hidden; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; font-size: var(--font-caption); text-overflow: ellipsis; white-space: nowrap; }
+.lfc-node-meta span[data-executor="agent"] { color: #a9bffa; background: rgba(94, 140, 255, .07); }
+.lfc-node-meta span[data-executor="tool"] { color: #79dec1; background: rgba(88, 214, 176, .06); }
+.lfc-node-deps { margin: 9px 0 0; color: var(--muted-2); font-size: var(--font-caption); }
+.lfc-handle { width: 8px !important; height: 8px !important; border: 2px solid var(--surface) !important; background: #70809a !important; }
+
+.lfc-search-panel { width: min(330px, calc(100% - 118px)); margin: 14px !important; }
+.lfc-search { display: grid; height: 42px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 11px; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: 0 12px 28px rgba(0, 0, 0, .15); }
+.lfc-search > span { color: var(--muted); font-size: 19px; }
+.lfc-search input { width: 100%; color: var(--text); border: 0; outline: 0; background: transparent; font-size: var(--font-meta); }
+.lfc-search input::placeholder { color: var(--muted-2); }
+.lfc-search kbd { padding: 3px 6px; color: var(--muted-2); border: 1px solid var(--line); border-radius: 5px; background: var(--surface-subtle); font: var(--font-caption)/1 "SFMono-Regular", monospace; }
+.lfc-search-results { margin-top: 7px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--surface); box-shadow: 0 18px 36px rgba(0, 0, 0, .24); }
+.lfc-search-results button { display: grid; width: 100%; gap: 3px; padding: 10px 12px; text-align: left; color: var(--text); border: 0; border-bottom: 1px solid var(--line); cursor: pointer; background: transparent; }
+.lfc-search-results button:last-child { border-bottom: 0; }
+.lfc-search-results button:hover { background: var(--surface-hover); }
+.lfc-search-results button span { overflow: hidden; font-size: var(--font-meta); text-overflow: ellipsis; white-space: nowrap; }
+.lfc-search-results button code { overflow: hidden; color: var(--muted-2); font-size: var(--font-caption); text-overflow: ellipsis; white-space: nowrap; }
+.lfc-search-results p { margin: 0; padding: 13px; color: var(--muted); font-size: var(--font-meta); }
+
+.lfc-edit-panel {
+  display: flex;
+  max-width: calc(100% - 380px);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+  margin: 14px !important;
+}
+.lfc-edit-panel button {
+  min-height: 38px;
+  padding: 0 11px;
+  color: var(--text-soft);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .14);
+  font-size: var(--font-caption);
+  font-weight: 650;
+}
+.lfc-edit-panel button:hover:not(:disabled) { color: var(--text); border-color: rgba(94, 140, 255, .48); background: var(--surface-hover); }
+.lfc-edit-panel button[data-tone="danger"] { color: #fc9da5; border-color: rgba(250, 126, 136, .28); }
+.lfc-edit-panel button:disabled { cursor: not-allowed; opacity: .42; }
+
+.lfc-summary-panel { display: flex; align-items: center; gap: 7px; margin: 14px !important; }
+.lfc-summary-panel > span { padding: 6px 9px; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--surface) 92%, transparent); font-size: var(--font-caption); box-shadow: 0 8px 20px rgba(0, 0, 0, .12); }
+.lfc-summary-panel .lfc-readonly { color: #9fb6f6; }
+.lfc-readonly i { margin-right: 5px; font-style: normal; }
+.lfc-controls { overflow: hidden; margin: 14px 14px 116px 0 !important; border: 1px solid var(--line-strong) !important; border-radius: 10px !important; box-shadow: 0 12px 26px rgba(0, 0, 0, .18) !important; }
+.lfc-controls button { width: 34px !important; height: 34px !important; color: var(--text) !important; border-bottom-color: var(--line) !important; background: var(--surface) !important; fill: currentColor !important; }
+.lfc-controls button:hover { background: var(--surface-hover) !important; }
+.lfc-minimap { right: 14px !important; bottom: 14px !important; width: 146px !important; height: 92px !important; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface) !important; box-shadow: 0 12px 28px rgba(0, 0, 0, .2); }
+
+.lfc-shell[data-theme="light"] .lfc-node { box-shadow: 0 12px 28px rgba(40, 60, 90, .1); }
+.lfc-shell[data-theme="light"] .lfc-node-status[data-status="done"] { color: #13785f; }
+.lfc-shell[data-theme="light"] .lfc-node-status[data-status="failed"] { color: #b82f40; }
+.lfc-shell[data-theme="light"] .lfc-node-status[data-status="running"],
+.lfc-shell[data-theme="light"] .lfc-node-status[data-status="ready"] { color: #2456c4; }
+.lfc-shell[data-theme="light"] .lfc-node-status[data-status="waiting_human"] { color: #915a0c; }
+
+@media (max-width: 620px) {
+  .lfc-search-panel { width: calc(100% - 28px); }
+  .lfc-edit-panel { top: 58px !important; max-width: calc(100% - 28px); justify-content: flex-start; }
+  .lfc-edit-panel button { flex: 1 1 auto; }
+  .lfc-minimap { width: 120px !important; height: 76px !important; }
+  .lfc-controls { margin-bottom: 99px !important; }
+  .lfc-summary-panel > span:not(.lfc-readonly) { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lfc-node,
+  .lfc-shell .react-flow__edge-path { transition: none; }
+}

@@ -106,7 +106,13 @@ def test_every_console_asset_is_covered_by_package_data():
         for path in CONSOLE_ASSETS.iterdir()
         if path.is_file() and path.suffix != ".py"
     ]
-    assert {path.name for path in assets} == {"index.html", "app.js", "styles.css"}
+    assert {path.name for path in assets} == {
+        "index.html",
+        "app.js",
+        "canvas.css",
+        "canvas.js",
+        "styles.css",
+    }
     for asset in assets:
         assert any(fnmatch.fnmatch(asset.name, pat) for pat in pats), (
             f"{asset.name} 不被 package-data 的 {pats} 覆盖，"

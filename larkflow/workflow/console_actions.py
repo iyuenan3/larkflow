@@ -5,6 +5,12 @@ from collections.abc import Mapping
 from typing import Any
 
 from .console import ConsolePrincipal, ConsoleResourceNotFoundError
+from .editing import (
+    GraphEditNotAllowedError,
+    GraphEditPreviewExpiredError,
+    GraphEditPreviewNotFoundError,
+    StaleGraphEditPreviewError,
+)
 from .lifecycle import CancellationNotAllowedError, StaleCancellationError
 from .model import InstanceStatus, WorkflowInstance
 from .repository import ConcurrentUpdateError, InstanceNotFoundError
@@ -278,6 +284,151 @@ class ConsoleActionService:
                 for key in confirmation.preview.affected_node_keys
             ],
         }
+
+    def preview_graph_edit(
+        self,
+        principal: ConsolePrincipal,
+        instance_id: str,
+        operations: list[Mapping[str, Any]],
+    ) -> Mapping[str, Any]:
+        """Create one owner-scoped future-region graph edit preview."""
+
+        translated = self._translate_graph_edit_owners(principal, operations)
+        try:
+            preview = self.service.preview_graph_edit(
+                principal.tenant_id,
+                instance_id,
+                translated,
+                actor_person_id=principal.person_id,
+            )
+            instance = self._owned_instance(principal, instance_id)
+        except GraphEditNotAllowedError as exc:
+            raise ConsoleActionConflictError(
+                "edit_not_allowed",
+                self._graph_edit_error_message(exc),
+            ) from None
+        except (AuthorizationError, InstanceNotFoundError):
+            raise ConsoleResourceNotFoundError(instance_id) from None
+
+        titles = {spec.key: spec.title for spec in instance.snapshot.nodes}
+        for operation in preview.operations:
+            if operation["op"] == "add_node":
+                node = operation["node"]
+                titles[str(node["key"])] = str(node["title"])
+            elif operation["op"] == "update_node":
+                changes = operation["set"]
+                if "title" in changes:
+                    titles[str(operation["node_key"])] = str(changes["title"])
+        return {
+            "action": "graph_edit",
+            "stage": "preview",
+            "preview": {
+                "id": preview.id,
+                "instance_id": preview.instance_id,
+                "graph_revision": preview.graph_revision,
+                "proposed_graph_revision": preview.proposed_graph_revision,
+                "expected_instance_version": preview.expected_instance_version,
+                "added_nodes": [
+                    {"key": key, "title": titles.get(key, key)}
+                    for key in preview.added_node_keys
+                ],
+                "updated_nodes": [
+                    {"key": key, "title": titles.get(key, key)}
+                    for key in preview.updated_node_keys
+                ],
+                "removed_nodes": [
+                    {"key": key, "title": titles.get(key, key)}
+                    for key in preview.removed_node_keys
+                ],
+                "expires_at": to_json_value(preview.expires_at),
+            },
+        }
+
+    def confirm_graph_edit(
+        self,
+        principal: ConsolePrincipal,
+        preview_id: str,
+    ) -> Mapping[str, Any]:
+        """Apply or safely replay one graph edit preview."""
+
+        try:
+            confirmation = self.service.confirm_graph_edit(
+                principal.tenant_id,
+                preview_id,
+                actor_person_id=principal.person_id,
+            )
+        except GraphEditPreviewExpiredError:
+            raise ConsoleActionConflictError(
+                "preview_expired",
+                "流程编辑预览已过期，请重新预览。",
+            ) from None
+        except StaleGraphEditPreviewError:
+            raise ConsoleActionConflictError(
+                "preview_stale",
+                "流程状态已变化，请重新预览后再确认。",
+            ) from None
+        except GraphEditNotAllowedError as exc:
+            raise ConsoleActionConflictError(
+                "edit_not_allowed",
+                self._graph_edit_error_message(exc),
+            ) from None
+        except (
+            AuthorizationError,
+            InstanceNotFoundError,
+            GraphEditPreviewNotFoundError,
+        ):
+            raise ConsoleResourceNotFoundError(preview_id) from None
+        return {
+            **self._completed(
+                "graph_edit",
+                confirmation.instance,
+                confirmation.already_applied,
+            ),
+            "graph_revision": confirmation.instance.graph_revision,
+            "added_node_keys": list(confirmation.preview.added_node_keys),
+            "updated_node_keys": list(confirmation.preview.updated_node_keys),
+            "removed_node_keys": list(confirmation.preview.removed_node_keys),
+        }
+
+    @staticmethod
+    def _translate_graph_edit_owners(
+        principal: ConsolePrincipal,
+        operations: list[Mapping[str, Any]],
+    ) -> list[Mapping[str, Any]]:
+        translated: list[Mapping[str, Any]] = []
+        for operation in operations:
+            current = dict(operation)
+            if current.get("op") == "add_node" and isinstance(
+                current.get("node"), Mapping
+            ):
+                node = dict(current["node"])
+                if node.get("owner_person_id") == "__current_user__":
+                    node["owner_person_id"] = principal.person_id
+                current["node"] = node
+            elif current.get("op") == "update_node" and isinstance(
+                current.get("set"), Mapping
+            ):
+                changes = dict(current["set"])
+                if changes.get("owner_person_id") == "__current_user__":
+                    changes["owner_person_id"] = principal.person_id
+                current["set"] = changes
+            translated.append(current)
+        return translated
+
+    @staticmethod
+    def _graph_edit_error_message(error: GraphEditNotAllowedError) -> str:
+        message = str(error)
+        if "crossed the edit frontier" in message or "execution history" in message:
+            return "该节点已经开始执行，不能直接修改。需要返工时请使用打回到此节点。"
+        if "only running instances" in message:
+            return "只有运行中的流程可以修改未来节点。"
+        if "locked instance" in message:
+            return "该流程图已经锁定，不能修改。"
+        if "cycle" in message:
+            return "该修改会形成循环依赖，请重新选择上游节点。"
+        if "graph exceeds" in message or "exceeds" in message:
+            return "本次修改超过流程规模限制，请拆分后重试。"
+        return "流程修改不合法，请检查节点、依赖和执行方式。"
 
     def _owned_instance(
         self,

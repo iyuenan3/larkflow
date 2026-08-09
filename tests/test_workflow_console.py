@@ -532,6 +532,8 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
         "/console/?auth_error=access_denied",
     )
     script = application.handle("GET", "/console/app.js")
+    canvas_script = application.handle("GET", "/console/canvas.js")
+    canvas_styles = application.handle("GET", "/console/canvas.css")
     styles = application.handle("GET", "/console/styles.css")
     auth = application.handle("GET", "/console/api/v1/auth")
     missing_auth = application.handle("GET", "/console/api/v1/instances")
@@ -550,15 +552,22 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert "使用飞书身份进入".encode() in page.body
     assert script.status == 200
     assert b"innerHTML" not in script.body
-    assert b"topologicalLayers" in script.body
-    assert b"targetNode.deps" in script.body
-    assert b"setGraphScale" in script.body
-    assert b"fitGraph" in script.body
+    assert b"ensureCanvasBundle" in script.body
+    assert b"LarkflowCanvas.render" in script.body
+    assert b"mountGraphCanvas" in script.body
+    assert b"canvasExpanded" in script.body
+    assert b"LarkflowCanvas.fit" in script.body
+    assert b"topologicalLayers" not in script.body
+    assert b"drawDagEdges" not in script.body
     assert b"renderInsights" in script.body
     assert b"renderAttention" in script.body
     assert b"runAttentionAction" in script.body
     assert b"confirmWorkflowActionPreview" in script.body
     assert b"renderDetailActions" in script.body
+    assert b"openGraphEditor" in script.body
+    assert b"createGraphEditPreview" in script.body
+    assert b"confirmGraphEditPreview" in script.body
+    assert b"previewNodeRestart" in script.body
     assert b"submitDraftRequest" in script.body
     assert b"pollDraftRequest" in script.body
     assert b"openDraftInstance" in script.body
@@ -580,19 +589,34 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"renderOverviewNodes" in script.body
     assert b'ownerSection: "attention"' in script.body
     assert b'else if (!state.detail' not in script.body
-    assert b'addEventListener("pointerdown"' in script.body
-    assert b'event.target.closest(".graph-node")' in script.body
-    assert b'addEventListener("wheel"' in script.body
-    assert b"graph-connector" not in script.body
+    assert b'canvasLoadPromise' in script.body
+    assert canvas_script.status == 200
+    assert "受控流程运行画板".encode() in canvas_script.body
+    assert "增加节点".encode() in canvas_script.body
+    assert "编辑节点".encode() in canvas_script.body
+    assert "打回到此节点".encode() in canvas_script.body
+    assert "恢复自动布局".encode() in canvas_script.body
+    assert b"larkflow.canvas.layout.v1" in canvas_script.body
+    assert b"elk.algorithm" in canvas_script.body
+    assert b"NETWORK_SIMPLEX" in canvas_script.body
+    assert b"LarkflowCanvas" in canvas_script.body
+    assert b"process.env.NODE_ENV" not in canvas_script.body
+    assert canvas_styles.status == 200
+    assert b".lfc-node" in canvas_styles.body
+    assert b".lfc-minimap" in canvas_styles.body
+    assert b".react-flow" in canvas_styles.body
     assert styles.status == 200
-    assert b".dag-edge" in styles.body
-    assert b".graph-controls" in styles.body
+    assert b".graph-fallback" in styles.body
+    assert b'.detail-grid[data-canvas-expanded="true"]' in styles.body
+    assert b"height: clamp(520px, 62vh, 720px)" in styles.body
     assert b".insight-grid" in styles.body
     assert b"instance-insights" in page.body
     assert b"attention-center" in page.body
     assert b"attention-nav" in page.body
     assert b"workflow-library" in page.body
     assert b"draft-studio" in page.body
+    assert b"graph-edit-dialog" in page.body
+    assert b"graph-edit-dependency-list" in page.body
     assert "生成流程草稿".encode() in page.body
     assert "草稿不会自动运行".encode() in page.body
     assert b"workflow-filters" in page.body
@@ -603,8 +627,9 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b'content="light dark"' in page.body
     assert b"admin-console" in page.body
     assert b"admin-view" in page.body
-    assert b"graph-zoom-in" in page.body
-    assert b"graph-fit" in page.body
+    assert b'/console/canvas.css' in page.body
+    assert "受控流程运行画板".encode() in page.body
+    assert "展开画板".encode() in page.body
     assert b':root[data-theme="light"]' in styles.body
     assert b"--font-body: 15px" in styles.body
     assert b".theme-toggle" in styles.body
@@ -639,6 +664,7 @@ def test_console_http_rejects_writes_bad_queries_and_resource_enumeration():
         "/console/?auth_error=login_failed&auth_error=access_denied",
     ).status == 400
     assert application.handle("GET", "/console/app.js?v=1").status == 400
+    assert application.handle("GET", "/console/canvas.js?v=1").status == 400
     assert application.handle(
         "GET",
         "/console/api/v1/instances?limit=0",
