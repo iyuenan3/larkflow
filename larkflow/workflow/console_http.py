@@ -83,7 +83,7 @@ _TASK_ROUTE = re.compile(
 )
 _TASK_ACTION_ROUTE = re.compile(
     r"^/console/api/v1/tasks/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/"
-    r"nodes/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/(submit|transfer)$"
+    r"nodes/([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/(submit|transfer|decision)$"
 )
 _DRAFT_ROUTE = re.compile(
     r"^/console/api/v1/drafts/([0-9a-f]{32})$"
@@ -531,6 +531,13 @@ class ConsoleHttpApplication:
                     "expected_node_version",
                     "new_owner_person_id",
                 },
+                "decision": {
+                    "attempt_no",
+                    "expected_instance_version",
+                    "expected_node_version",
+                    "decision",
+                    "feedback",
+                },
             }[action]
             if set(document) != allowed:
                 raise ValueError("task action fields are invalid")
@@ -552,6 +559,30 @@ class ConsoleHttpApplication:
                         attempt_no=attempt_no,
                         expected_node_version=expected_node_version,
                         content=content,
+                    ),
+                )
+            if action == "decision":
+                expected_instance_version = _nonnegative_json_integer(
+                    document["expected_instance_version"],
+                    "expected_instance_version",
+                )
+                decision = document["decision"]
+                feedback = document["feedback"]
+                if not isinstance(decision, str):
+                    raise ValueError("decision must be a string")
+                if feedback is not None and not isinstance(feedback, str):
+                    raise ValueError("feedback must be a string or null")
+                return self._json(
+                    200,
+                    self.task_service.submit_decision(
+                        principal,
+                        instance_id,
+                        node_key,
+                        attempt_no=attempt_no,
+                        expected_instance_version=expected_instance_version,
+                        expected_node_version=expected_node_version,
+                        decision=decision,
+                        feedback=feedback,
                     ),
                 )
             new_owner_person_id = document["new_owner_person_id"]

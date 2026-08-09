@@ -7,7 +7,12 @@ import secrets
 from typing import Any
 
 from .console import ConsolePrincipal
-from .decision import human_decision_config
+from .decision import (
+    HumanDecision,
+    HumanDecisionFeedbackError,
+    HumanDecisionNotAllowedError,
+    human_decision_config,
+)
 from .directory import DirectoryValidationError
 from .model import AttemptStatus, ExecutorKind, NodeStatus
 from .repository import ConcurrentUpdateError, InstanceNotFoundError
@@ -32,7 +37,7 @@ class ConsoleTaskConflictError(RuntimeError):
 
 
 class ConsoleTaskService:
-    """Expose only the current principal's ordinary Human task bindings."""
+    """Expose the current principal's bounded Human work bindings."""
 
     def __init__(self, service: WorkflowService) -> None:
         self.service = service
@@ -55,8 +60,7 @@ class ConsoleTaskService:
                 summary.instance_id,
             )
             spec = instance.snapshot.node(summary.node_key)
-            if human_decision_config(spec.work) is not None:
-                continue
+            decision = human_decision_config(spec.work)
             tasks.append(
                 {
                     "id": f"{summary.instance_id}:{summary.node_key}",
@@ -73,6 +77,7 @@ class ConsoleTaskService:
                         "attempt_no": summary.attempt_no,
                         "version": summary.node_version,
                     },
+                    "kind": "decision" if decision is not None else "task",
                     "started_at": summary.started_at.isoformat(),
                 }
             )
@@ -88,10 +93,14 @@ class ConsoleTaskService:
             principal,
             instance_id,
             node_key,
+            decision=None,
         )
+        decision = human_decision_config(spec.work)
         return {
             "task": {
+                "kind": "decision" if decision is not None else "task",
                 "instance_id": instance.id,
+                "instance_version": instance.version,
                 "goal": instance.snapshot.goal,
                 "instance_status": instance.status.value,
                 "instance_owner_relation": self._relation(
@@ -111,12 +120,22 @@ class ConsoleTaskService:
                         str(item) for item in spec.work.get("acceptance", ())
                     ],
                     "context": self._bounded_context(attempt.input_snapshot),
+                    "decision": (
+                        {
+                            "kind": "accept_reject",
+                            "reject_target": decision.get("reject_target"),
+                        }
+                        if decision is not None
+                        else None
+                    ),
                 },
                 "actions": {
-                    "submit": True,
-                    "transfer": callable(
+                    "submit": decision is None,
+                    "transfer": decision is None and callable(
                         getattr(self.service.directory, "list_candidate_people", None)
                     ),
+                    "accept": decision is not None,
+                    "reject": decision is not None,
                 },
             }
         }
@@ -167,7 +186,7 @@ class ConsoleTaskService:
             raise ValueError(
                 f"content exceeds {MAX_HUMAN_TASK_CONTENT_CHARS} characters"
             )
-        self._current_task(principal, instance_id, node_key)
+        self._current_task(principal, instance_id, node_key, decision=False)
         try:
             instance = self.service.submit_human(
                 principal.tenant_id,
@@ -205,7 +224,7 @@ class ConsoleTaskService:
         expected_node_version: int,
         new_owner_person_id: str,
     ) -> Mapping[str, Any]:
-        self._current_task(principal, instance_id, node_key)
+        self._current_task(principal, instance_id, node_key, decision=False)
         try:
             instance = self.service.transfer_human_task(
                 principal.tenant_id,
@@ -239,8 +258,64 @@ class ConsoleTaskService:
             "projection": {
                 "kind": "feishu_task",
                 "status": "queued",
-                "message": "中央节点已完成转交，飞书待办正在同步。",
+                "message": "负责人已更换，飞书待办正在同步。",
             },
+        }
+
+    def submit_decision(
+        self,
+        principal: ConsolePrincipal,
+        instance_id: str,
+        node_key: str,
+        *,
+        attempt_no: int,
+        expected_instance_version: int,
+        expected_node_version: int,
+        decision: str,
+        feedback: str | None,
+    ) -> Mapping[str, Any]:
+        """Submit one version-bound accept or reject decision from the workbench."""
+
+        try:
+            normalized_decision = HumanDecision(decision)
+        except ValueError as exc:
+            raise ValueError("decision must be accept or reject") from exc
+        self._current_task(principal, instance_id, node_key, decision=True)
+        try:
+            instance = self.service.submit_human_decision(
+                principal.tenant_id,
+                instance_id,
+                node_key,
+                normalized_decision,
+                actor_person_id=principal.person_id,
+                attempt_no=attempt_no,
+                expected_instance_version=expected_instance_version,
+                expected_node_version=expected_node_version,
+                feedback=feedback,
+            )
+        except (AuthorizationError, InstanceNotFoundError):
+            raise ConsoleTaskNotFoundError((instance_id, node_key)) from None
+        except HumanDecisionFeedbackError as exc:
+            raise ValueError(str(exc)) from None
+        except (
+            ConcurrentUpdateError,
+            HumanDecisionNotAllowedError,
+            StaleAttemptError,
+            TransitionError,
+        ):
+            raise ConsoleTaskConflictError(
+                "task_stale",
+                "待办状态已经变化，请刷新后再判断。",
+            ) from None
+        node = instance.nodes[node_key]
+        return {
+            "action": "submit_human_decision",
+            "decision": normalized_decision.value,
+            "instance_id": instance.id,
+            "node_key": node_key,
+            "attempt_no": attempt_no,
+            "node_status": node.status.value,
+            "instance_status": instance.status.value,
         }
 
     def _current_task(
@@ -248,6 +323,8 @@ class ConsoleTaskService:
         principal: ConsolePrincipal,
         instance_id: str,
         node_key: str,
+        *,
+        decision: bool | None = False,
     ) -> tuple[Any, Any, Any, Any]:
         try:
             instance = self.service.repository.get(
@@ -259,11 +336,12 @@ class ConsoleTaskService:
             attempt = instance.current_attempt(node_key)
         except (InstanceNotFoundError, KeyError):
             raise ConsoleTaskNotFoundError((instance_id, node_key)) from None
+        is_decision = human_decision_config(spec.work) is not None
         if (
             node.executor != ExecutorKind.HUMAN
             or node.status != NodeStatus.WAITING_HUMAN
             or attempt.status != AttemptStatus.WAITING_HUMAN
-            or human_decision_config(spec.work) is not None
+            or (decision is not None and is_decision != decision)
             or not secrets.compare_digest(node.owner_person_id, principal.person_id)
         ):
             raise ConsoleTaskNotFoundError((instance_id, node_key))

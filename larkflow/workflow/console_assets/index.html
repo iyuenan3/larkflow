@@ -21,7 +21,7 @@
             <span class="theme-toggle-label">深色</span>
           </button>
         </div>
-        <p class="eyebrow">LARKFLOW WORKSPACE</p>
+        <p class="eyebrow">LARKFLOW 工作台</p>
         <h1 id="unlock-title">进入你的工作台</h1>
         <p id="unlock-copy" class="unlock-copy">正在确认当前登录方式。</p>
         <form id="unlock-form">
@@ -33,7 +33,7 @@
         </form>
         <button id="feishu-login" class="feishu-login-button" type="button" hidden>使用飞书身份进入</button>
         <p id="unlock-error" class="form-error" role="alert"></p>
-        <p id="auth-note" class="local-note"><span></span>身份和流程权限均由中央节点校验。</p>
+        <p id="auth-note" class="local-note"><span></span>系统会校验你的身份和每次操作权限。</p>
       </div>
     </section>
 
@@ -64,9 +64,9 @@
       <div class="workspace">
         <aside class="sidebar" aria-label="工作台导航">
           <div class="sidebar-intro">
-            <p class="eyebrow">OWNER WORKSPACE</p>
+            <p class="eyebrow">我的工作</p>
             <h2>我的工作</h2>
-            <p>先处理需要决定的事，再查看完整流程。</p>
+            <p>从发起一项工作开始，后续处理都可以在这里完成。</p>
           </div>
           <nav class="owner-navigation" aria-label="我的工作视图">
             <button id="draft-nav" class="owner-nav-item" type="button" data-active="false">
@@ -97,8 +97,8 @@
           <div class="sidebar-boundary">
             <span class="sidebar-boundary-dot" aria-hidden="true"></span>
             <div>
-              <strong>中央节点受控操作</strong>
-              <p>普通 Human 待办可在本页完成或转交，接受与退回决定仍在飞书处理。</p>
+              <strong>不用复制飞书命令</strong>
+              <p>你可以在这里发起、确认、完成、判断或转交工作，飞书继续负责通知和待办提醒。</p>
             </div>
           </div>
         </aside>
@@ -107,9 +107,9 @@
           <section id="draft-studio" class="owner-page draft-studio" aria-labelledby="draft-studio-title" hidden>
             <header class="page-heading draft-studio-heading">
               <div>
-                <p class="eyebrow">NEW WORKFLOW</p>
-                <h1 id="draft-studio-title">描述你想推进的工作</h1>
-                <p>中央 Agent 只生成候选流程和 DAG 草稿。草稿不会自动运行，也不会创建飞书待办。</p>
+                <p class="eyebrow">发起一项工作</p>
+                <h1 id="draft-studio-title">告诉我你想完成什么</h1>
+                <p>系统会先生成一份可修改的流程草稿。只有你确认后，流程才会启动并通知参与人。</p>
               </div>
               <div class="draft-safety-mark">
                 <span aria-hidden="true">✓</span>
@@ -117,13 +117,19 @@
               </div>
             </header>
 
+            <ol class="first-run-journey" aria-label="首次使用步骤">
+              <li><span>1</span><div><strong>描述目标</strong><p>写清交付物和判断标准</p></div></li>
+              <li><span>2</span><div><strong>检查流程</strong><p>确认步骤、依赖和负责人</p></div></li>
+              <li><span>3</span><div><strong>推进工作</strong><p>在本页完成、退回或转交</p></div></li>
+            </ol>
+
             <div class="draft-studio-grid">
               <form id="draft-form" class="panel draft-form">
                 <label for="draft-brief">
                   <span>要完成什么</span>
                   <small>必填，尽量说明最终交付物和判断标准</small>
                 </label>
-                <textarea id="draft-brief" maxlength="1000" rows="6" required placeholder="例如：根据发布说明生成一份研发简报，由我确认输入，Agent 生成摘要，再由指定协作者复核。"></textarea>
+                <textarea id="draft-brief" maxlength="1000" rows="6" required placeholder="例如：根据发布说明生成一份研发简报，由我确认输入，AI 生成摘要，再由指定协作者复核。"></textarea>
                 <div class="draft-field-count"><span id="draft-brief-count">0</span>/1000</div>
 
                 <label for="draft-context">
@@ -135,15 +141,15 @@
 
                 <label for="draft-collaborator">
                   <span>协作者</span>
-                  <small>选填。不选择时，流程里的 Human 节点默认由你负责</small>
+                  <small>选填。不选择时，流程里的人工步骤默认由你负责</small>
                 </label>
                 <select id="draft-collaborator">
-                  <option value="">由我负责全部 Human 节点</option>
+                  <option value="">由我负责全部人工步骤</option>
                 </select>
 
                 <p id="draft-form-error" class="human-task-error" role="alert"></p>
                 <button id="draft-submit" class="draft-submit" type="submit">生成流程草稿</button>
-                <p class="draft-form-boundary">提交后只进入耐久生成队列。服务端会重新校验节点、依赖、执行器和负责人。</p>
+                <p class="draft-form-boundary">提交后只生成草稿，不会自动启动或通知其他人。</p>
               </form>
 
               <aside class="draft-activity" aria-label="草稿生成状态">
@@ -155,13 +161,13 @@
                   <h2 id="draft-current-title">正在准备候选流程</h2>
                   <p id="draft-current-message"></p>
                   <div class="draft-progress" aria-hidden="true"><span></span><span></span><span></span></div>
-                  <button id="draft-open-instance" class="draft-open-instance" type="button" hidden>查看 DAG 并确认</button>
+                  <button id="draft-open-instance" class="draft-open-instance" type="button" hidden>查看流程并确认</button>
                 </section>
 
                 <section class="panel draft-recent-panel">
                   <div class="panel-heading">
                     <div>
-                      <p class="eyebrow">RECENT DRAFTS</p>
+                      <p class="eyebrow">最近草稿</p>
                       <h2>最近生成</h2>
                     </div>
                     <button id="draft-refresh" class="quiet-button" type="button">刷新</button>
@@ -175,7 +181,7 @@
           <section id="attention-center" class="owner-page attention-panel" aria-labelledby="attention-title">
             <header class="page-heading attention-heading">
               <div>
-                <p class="eyebrow">FOCUS QUEUE</p>
+                <p class="eyebrow">待你处理</p>
                 <h1 id="attention-title">今天需要处理什么</h1>
                 <p id="attention-scope">基于最近 30 个本人流程，只提供安全的下一步提示</p>
               </div>
@@ -198,7 +204,7 @@
           <section id="workflow-library" class="owner-page workflow-library" aria-labelledby="workflow-library-title" hidden>
             <header class="page-heading">
               <div>
-                <p class="eyebrow">WORKFLOW LIBRARY</p>
+                <p class="eyebrow">流程记录</p>
                 <h1 id="workflow-library-title">全部流程</h1>
                 <p>按状态筛选最近由你发起的流程，选择后查看执行详情。</p>
               </div>
@@ -206,7 +212,7 @@
             <div class="workflow-toolbar">
               <label class="workflow-search" for="workflow-query">
                 <span>搜索</span>
-                <input id="workflow-query" type="search" placeholder="搜索目标或实例编号" autocomplete="off">
+                <input id="workflow-query" type="search" placeholder="搜索目标或流程编号" autocomplete="off">
               </label>
               <div id="workflow-filters" class="workflow-filters" role="group" aria-label="流程状态筛选">
                 <button type="button" data-filter="all" data-active="true">全部</button>
@@ -223,7 +229,7 @@
             <div class="empty-orbit"><span></span><span></span><span></span></div>
             <p class="eyebrow">WORKFLOW OBSERVABILITY</p>
             <h2>正在读取流程</h2>
-            <p>请稍候，中央节点正在返回最新状态。</p>
+            <p>请稍候，正在读取最新状态。</p>
           </section>
 
           <section id="detail" class="owner-page detail" hidden>
@@ -257,10 +263,10 @@
               <section id="instance-insights" class="panel insight-panel" aria-labelledby="insight-title">
                 <div class="insight-heading">
                   <div>
-                    <p class="eyebrow">INSTANCE SUMMARY</p>
-                    <h2 id="insight-title">实例摘要</h2>
+                    <p class="eyebrow">流程概览</p>
+                    <h2 id="insight-title">流程摘要</h2>
                   </div>
-                  <span class="insight-boundary">流程操作与普通 Human 输入由中央节点校验，接受与退回决定仍在飞书完成</span>
+                  <span class="insight-boundary">所有操作都在服务端校验，飞书会同步通知和待办状态</span>
                 </div>
                 <div class="insight-grid">
                   <article class="insight-card insight-status-card">
@@ -282,7 +288,7 @@
               <section class="panel overview-nodes-panel" aria-labelledby="overview-nodes-title">
                 <div class="panel-heading">
                   <div>
-                    <p class="eyebrow">CURRENT PATH</p>
+                    <p class="eyebrow">当前进度</p>
                     <h2 id="overview-nodes-title">节点进度</h2>
                   </div>
                   <span id="overview-node-count" class="count">0</span>
@@ -296,7 +302,7 @@
                 <section class="panel graph-panel">
                   <div class="panel-heading">
                     <div>
-                      <p class="eyebrow">EXECUTION GRAPH</p>
+                      <p class="eyebrow">流程与结果</p>
                       <h2>流程执行图</h2>
                     </div>
                     <div class="graph-heading-meta">
@@ -431,7 +437,7 @@
         <form method="dialog" class="human-task-shell">
           <header class="human-task-header">
             <div>
-              <p class="eyebrow">HUMAN TASK</p>
+              <p id="human-task-kind-label" class="eyebrow">处理任务</p>
               <h2 id="human-task-title">处理待办</h2>
               <p id="human-task-goal" class="human-task-goal"></p>
             </div>
@@ -454,22 +460,39 @@
                 <strong id="human-task-context-title">可用上下文</strong>
                 <span>只展示完成当前节点所需的输入快照</span>
               </div>
-              <pre id="human-task-context"></pre>
+              <div id="human-task-context" class="human-task-context-body"></div>
             </section>
-            <label class="human-task-input" for="human-task-result">
-              <span>处理结果</span>
-              <textarea id="human-task-result" maxlength="12000" rows="7" placeholder="输入本节点的处理结果。提交后会直接推进中央工作流。"></textarea>
-              <small><span id="human-task-result-count">0</span>/12000</small>
-            </label>
+            <section id="human-task-submit-panel">
+              <label class="human-task-input" for="human-task-result">
+                <span>处理结果</span>
+                <textarea id="human-task-result" maxlength="12000" rows="7" placeholder="输入本节点的处理结果。提交后会继续推进流程。"></textarea>
+                <small><span id="human-task-result-count">0</span>/12000</small>
+              </label>
+            </section>
             <p id="human-task-error" class="human-task-error" role="alert"></p>
-            <div class="human-task-actions">
+            <div id="human-task-actions" class="human-task-actions">
               <button id="human-task-transfer-open" class="human-task-secondary" type="button">转交给其他人</button>
               <button id="human-task-submit" class="human-task-primary" type="button">提交并推进流程</button>
             </div>
+            <section id="human-decision-panel" class="human-decision-panel" hidden>
+              <div class="human-decision-copy">
+                <strong>这份结果是否可以继续使用？</strong>
+                <p>接受后流程会继续或完成。退回时请说明需要修改什么，意见会带入下一次执行。</p>
+              </div>
+              <label class="human-task-input" for="human-decision-feedback">
+                <span>退回意见</span>
+                <textarea id="human-decision-feedback" maxlength="1000" rows="4" placeholder="仅退回时必填，例如：请补充回滚条件，并明确监控窗口。"></textarea>
+                <small><span id="human-decision-feedback-count">0</span>/1000</small>
+              </label>
+              <div class="human-decision-actions">
+                <button id="human-decision-reject" class="human-decision-reject" type="button">退回修改</button>
+                <button id="human-decision-accept" class="human-task-primary" type="button">接受并继续</button>
+              </div>
+            </section>
             <section id="human-task-transfer-panel" class="human-task-transfer-panel" hidden>
               <div>
                 <strong>转交待办</strong>
-                <p>中央节点会立即更换负责人，你将不再能提交这个节点。飞书待办随后异步同步，失败时管理员概览会显示异常。</p>
+                <p>系统会立即更换负责人，你将不再能提交这个节点。飞书待办随后同步，失败时管理员概览会显示异常。</p>
               </div>
               <label for="human-task-person">选择企业成员</label>
               <select id="human-task-person">
@@ -485,7 +508,7 @@
         <form id="graph-edit-form" class="graph-edit-shell">
           <header class="graph-edit-header">
             <div>
-              <p class="eyebrow">CONTROLLED DAG EDIT</p>
+              <p class="eyebrow">安全修改流程</p>
               <h2 id="graph-edit-title">编辑流程节点</h2>
               <p id="graph-edit-boundary">草稿节点和运行中的未来节点都先生成修改预览，确认后才会生效。</p>
             </div>
@@ -494,7 +517,7 @@
 
           <div class="graph-edit-grid">
             <label id="graph-edit-key-field" for="graph-edit-key">
-              <span>节点 ID</span>
+              <span>内部标识</span>
               <input id="graph-edit-key" type="text" maxlength="128" pattern="[a-z0-9][a-z0-9_]{0,127}" placeholder="例如 release_review">
               <small>创建后不可直接改名。需要改名时应删除旧节点并新增节点。</small>
             </label>
@@ -505,9 +528,9 @@
             <label for="graph-edit-executor">
               <span>执行方式</span>
               <select id="graph-edit-executor" required>
-                <option value="human">Human 人工处理</option>
-                <option value="agent">Agent 自动执行</option>
-                <option value="tool">Tool 确定性工具</option>
+                <option value="human">人工处理</option>
+                <option value="agent">AI 自动执行</option>
+                <option value="tool">确定性工具</option>
               </select>
             </label>
             <label for="graph-edit-owner">

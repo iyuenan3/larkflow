@@ -547,7 +547,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert failed_login_page.status == 200
     assert denied_login_page.status == 200
     assert page.content_type == "text/html; charset=utf-8"
-    assert b"LARKFLOW WORKSPACE" in page.body
+    assert "LARKFLOW 工作台".encode() in page.body
     assert "我的工作台".encode() in page.body
     assert "使用飞书身份进入".encode() in page.body
     assert script.status == 200
@@ -581,13 +581,14 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"document.documentElement.dataset.theme" in script.body
     assert "正在生成预览".encode() in script.body
     assert "确认并启动".encode() in script.body
-    assert "中央已转交，飞书同步中".encode() in script.body
-    assert "飞书待办随后异步同步".encode() in page.body
+    assert "负责人已更换，飞书同步中".encode() in script.body
+    assert "飞书待办随后同步".encode() in page.body
     assert "复制飞书命令".encode() not in script.body
     assert b"showOwnerSection" in script.body
     assert b"setDetailTab" in script.body
     assert b"renderOverviewNodes" in script.body
     assert b'ownerSection: "attention"' in script.body
+    assert b'&& state.instances.length === 0' not in script.body
     assert b'else if (!state.detail' not in script.body
     assert b'canvasLoadPromise' in script.body
     assert canvas_script.status == 200
@@ -596,6 +597,8 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert "编辑节点".encode() in canvas_script.body
     assert "断开选中连线".encode() in canvas_script.body
     assert "拖动节点端点可增加依赖".encode() in canvas_script.body
+    assert "第 ".encode() in canvas_script.body
+    assert "可修改流程".encode() in canvas_script.body
     assert "打回到此节点".encode() in canvas_script.body
     assert "恢复自动布局".encode() in canvas_script.body
     assert b"larkflow.canvas.layout.v1" in canvas_script.body
@@ -621,7 +624,12 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"graph-edit-dialog" in page.body
     assert b"graph-edit-dependency-list" in page.body
     assert "生成流程草稿".encode() in page.body
-    assert "草稿不会自动运行".encode() in page.body
+    assert "提交后只生成草稿，不会自动启动".encode() in page.body
+    assert "不用复制飞书命令".encode() in page.body
+    assert "接受并继续".encode() in page.body
+    assert "退回修改".encode() in page.body
+    assert b"submitHumanDecisionFromPage" in script.body
+    assert b"/decision`" in script.body
     assert b"workflow-filters" in page.body
     assert b"detail-tabs" in page.body
     assert b"overview-nodes" in page.body

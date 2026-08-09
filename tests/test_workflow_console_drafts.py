@@ -229,7 +229,7 @@ def test_worker_freezes_candidate_creates_only_a_draft_then_existing_confirm_sta
     assert result["instance"]["status"] == "running"
 
 
-def test_generated_agent_flow_reaches_a_decision_card_not_an_ordinary_console_task():
+def test_generated_agent_flow_reaches_one_decision_card_and_bounded_console_task():
     draft_repository, drafts = queued_service(directory=Directory())
     create_request(drafts)
     workflow_repository = InMemoryWorkflowRepository()
@@ -280,9 +280,11 @@ def test_generated_agent_flow_reaches_a_decision_card_not_an_ordinary_console_ta
     rendered_card = json.dumps(card, ensure_ascii=False)
     assert "接受" in rendered_card
     assert "填写意见并退回" in rendered_card
-    assert ConsoleTaskService(workflow_service).list_tasks(
+    listing = ConsoleTaskService(workflow_service).list_tasks(
         principal(COLLABORATOR)
-    )["total"] == 0
+    )
+    assert listing["total"] == 1
+    assert listing["tasks"][0]["kind"] == "decision"
 
 
 def test_persisted_candidate_is_reused_after_worker_lease_expiry_without_llm_call():

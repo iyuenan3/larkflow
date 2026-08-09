@@ -110,7 +110,7 @@ const STATUS = {
   waiting_human: "等待人工",
 };
 
-const EXECUTOR = { human: "Human", agent: "Agent", tool: "Tool" };
+const EXECUTOR = { human: "人工", agent: "AI", tool: "工具" };
 const RELATION = { you: "你", collaborator: "协作者", system: "系统" };
 const ATTENTION = {
   recover_failed: "失败恢复",
@@ -180,6 +180,52 @@ function statusLabel(value) {
   return STATUS[value] || value || "未知";
 }
 
+const FIELD_LABELS = {
+  content: "内容",
+  summary: "摘要",
+  decision: "判断",
+  feedback: "意见",
+  facts: "来源事实",
+  inferences: "建议与推断",
+  open_questions: "待确认问题",
+  acceptance: "验收条件",
+  objective: "目标",
+  url: "来源链接",
+  title: "标题",
+};
+
+function readableFieldLabel(key) {
+  return FIELD_LABELS[key] || String(key).replaceAll("_", " ");
+}
+
+function readableValue(value) {
+  if (value === null || value === undefined || value === "") return "无";
+  if (["string", "number", "boolean"].includes(typeof value)) {
+    if (value === true) return "是";
+    if (value === false) return "否";
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "无";
+    return value.map((item) => {
+      const body = readableValue(item).replaceAll("\n", "\n  ");
+      return `• ${body}`;
+    }).join("\n");
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value);
+    if (entries.length === 0) return "无";
+    return entries.map(([key, item]) => {
+      const body = readableValue(item);
+      if (item !== null && typeof item === "object") {
+        return `${readableFieldLabel(key)}：\n${body.split("\n").map((line) => `  ${line}`).join("\n")}`;
+      }
+      return `${readableFieldLabel(key)}：${body}`;
+    }).join("\n");
+  }
+  return String(value);
+}
+
 function setConnection(mode, text) {
   const connection = el("connection");
   connection.dataset.mode = mode;
@@ -209,7 +255,7 @@ async function request(path, options = {}) {
     });
   } catch (error) {
     setConnection("error", "连接失败");
-    throw new Error("无法连接本机控制台服务");
+    throw new Error("无法连接工作台服务");
   }
   const payload = await response.json();
   if (response.status === 401) {
@@ -265,10 +311,17 @@ async function loadInstances(selectId = null) {
   syncDraftRequests(draftPayload.requests || []);
   if (selectId) {
     await loadDetail(selectId);
+  } else if (
+    state.ownerSection === "attention"
+    && state.attention.length === 0
+  ) {
+    showOwnerSection("drafts");
+    loadDraftCollaborators().catch(showWorkspaceError);
   }
 }
 
 function humanTaskAttentionItem(task) {
+  const isDecision = task.kind === "decision";
   return {
     id: `complete_human:${task.instance_id}:${task.node.key}`,
     kind: "complete_human",
@@ -276,13 +329,15 @@ function humanTaskAttentionItem(task) {
     instance_id: task.instance_id,
     goal: task.goal,
     instance_status: task.instance_status,
-    title: `完成待办：${task.node.title}`,
-    detail: task.instance_owner_relation === "you"
-      ? "该普通 Human 节点正在等待你的输入，可在本页提交或转交。"
-      : "你是该协作流程当前节点的负责人，可在本页提交或转交。",
+    title: `${isDecision ? "作出判断" : "完成任务"}：${task.node.title}`,
+    detail: isDecision
+      ? "查看上游结果后，在本页接受或退回。"
+      : task.instance_owner_relation === "you"
+        ? "这一步正在等待你的输入，可在本页提交或转交。"
+        : "你是当前负责人，可在本页提交或转交。",
     occurred_at: task.started_at,
     node: { key: task.node.key, title: task.node.title },
-    action: { kind: "human_task", node_key: task.node.key },
+    action: { kind: isDecision ? "human_decision" : "human_task", node_key: task.node.key },
   };
 }
 
@@ -332,7 +387,7 @@ function renderDraftRequests() {
   const list = el("draft-recent");
   list.replaceChildren();
   if (state.draftRequests.length === 0) {
-    list.append(node("p", "draft-recent-empty", "还没有网页草稿。输入目标后，生成进度会耐久保存在中央节点。"));
+    list.append(node("p", "draft-recent-empty", "还没有流程草稿。输入目标后，生成进度会自动保存。"));
     return;
   }
   state.draftRequests.slice(0, 6).forEach((requestItem) => {
@@ -371,7 +426,7 @@ function renderCurrentDraft(requestItem) {
       ? "当前描述需要调整"
       : requestItem.status === "failed"
         ? "本次生成没有完成"
-        : "中央 Agent 正在准备候选流程";
+        : "AI 正在准备候选流程";
   el("draft-current-message").textContent = requestItem.message;
   const open = el("draft-open-instance");
   open.hidden = requestItem.status !== "ready" || !requestItem.instance_id;
@@ -474,17 +529,17 @@ async function openDraftInstance(requestItem = state.currentDraft) {
   if (!requestItem?.instance_id) return;
   const button = el("draft-open-instance");
   button.disabled = true;
-  button.textContent = "正在打开 DAG";
+  button.textContent = "正在打开流程";
   state.returnSection = "drafts";
   showDetailLoading(requestItem.brief || "正在读取流程草稿");
   try {
     await loadDetail(requestItem.instance_id);
     setDetailTab("execution");
-    showToast("草稿已生成，请核对 DAG 后确认启动");
+    showToast("草稿已生成，请核对流程后确认启动");
   } catch (error) {
     showOwnerSection("drafts");
     button.disabled = false;
-    button.textContent = "重新打开 DAG";
+    button.textContent = "重新打开流程";
     showToast("流程草稿读取失败，请稍后重试", "error");
     throw error;
   }
@@ -494,7 +549,7 @@ async function loadDraftCollaborators() {
   const select = el("draft-collaborator");
   try {
     const payload = await request("/console/api/v1/people?limit=100");
-    select.replaceChildren(node("option", "", "由我负责全部 Human 节点"));
+    select.replaceChildren(node("option", "", "由我负责全部人工步骤"));
     select.firstChild.value = "";
     (payload.people || []).forEach((person) => {
       const option = node("option", "", person.name || "企业成员");
@@ -790,7 +845,7 @@ function showOwnerSection(section) {
 
 function showDetailLoading(goal) {
   emptyState.querySelector("h2").textContent = "正在读取流程";
-  emptyState.querySelector("p:last-child").textContent = goal || "请稍候，中央节点正在返回最新状态。";
+  emptyState.querySelector("p:last-child").textContent = goal || "请稍候，正在读取最新状态。";
   showOwnerSection("loading");
 }
 
@@ -823,7 +878,7 @@ function renderAttention(attention) {
   summary.replaceChildren();
   el("attention-count").textContent = attention.total ?? state.attention.length;
   el("attention-nav-count").textContent = attention.total ?? state.attention.length;
-  el("attention-scope").textContent = `汇总最近 ${attention.instance_limit || 30} 个本人流程，以及当前分配给你的普通 Human 待办`;
+  el("attention-scope").textContent = `汇总最近 ${attention.instance_limit || 30} 个本人流程，以及当前分配给你的人工任务和判断`;
 
   Object.entries(ATTENTION).forEach(([kind, label]) => {
     const count = attention.counts?.[kind] || 0;
@@ -841,7 +896,7 @@ function renderAttention(attention) {
     const empty = node("div", "attention-empty");
     empty.append(
       node("strong", "", "当前没有需要你处理的流程"),
-      node("p", "", "草稿确认、本人 Human 待办、暂停流程和失败恢复会出现在这里。"),
+      node("p", "", "草稿确认、人工任务、结果判断、暂停流程和失败恢复会出现在这里。"),
     );
     list.append(empty);
     return;
@@ -912,7 +967,7 @@ function attentionCard(item) {
     actionButton.addEventListener("click", () => runAttentionAction(item, card, actionButton));
     actions.append(actionButton);
   }
-  if (item.action?.kind !== "human_task") {
+  if (!["human_task", "human_decision"].includes(item.action?.kind)) {
     const openButton = node("button", "attention-open-button", "查看详情");
     openButton.type = "button";
     openButton.addEventListener("click", async () => {
@@ -938,6 +993,7 @@ function attentionCard(item) {
 
 function attentionActionLabel(action) {
   if (action.kind === "human_task") return "处理待办";
+  if (action.kind === "human_decision") return "查看并判断";
   if (action.kind === "confirm_draft") return "确认并启动";
   if (action.kind === "resume") return "继续流程";
   if (action.kind === "restart") return "查看重启影响";
@@ -958,13 +1014,13 @@ function attentionActionPath(item) {
   if (item.action.kind === "restart") {
     return `/console/api/v1/instances/${instanceId}/restart-preview`;
   }
-  throw new Error("当前操作尚未接入中央节点");
+  throw new Error("当前操作暂时不可用");
 }
 
 async function runAttentionAction(item, card, button) {
   button.disabled = true;
   button.dataset.state = "working";
-  if (item.action.kind === "human_task") {
+  if (["human_task", "human_decision"].includes(item.action.kind)) {
     button.textContent = "正在打开";
     await openHumanTask(item, button);
     return;
@@ -1032,6 +1088,12 @@ function resetHumanTaskControls() {
   el("human-task-result").disabled = false;
   el("human-task-result-count").textContent = "0";
   el("human-task-error").textContent = "";
+  el("human-task-submit-panel").hidden = false;
+  el("human-task-actions").hidden = false;
+  el("human-decision-panel").hidden = true;
+  el("human-decision-feedback").value = "";
+  el("human-decision-feedback").disabled = false;
+  el("human-decision-feedback-count").textContent = "0";
   el("human-task-transfer-panel").hidden = true;
   el("human-task-person").replaceChildren(node("option", "", "正在读取可选成员"));
   el("human-task-person").value = "";
@@ -1046,10 +1108,18 @@ function resetHumanTaskControls() {
   transfer.disabled = false;
   transfer.dataset.state = "idle";
   transfer.textContent = "确认转交";
+  ["human-decision-accept", "human-decision-reject"].forEach((id) => {
+    const decisionButton = el(id);
+    decisionButton.disabled = false;
+    decisionButton.dataset.state = "idle";
+    decisionButton.textContent = id.endsWith("accept") ? "接受并继续" : "退回修改";
+  });
 }
 
 function renderHumanTask(task) {
+  const isDecision = task.kind === "decision";
   el("human-task-title").textContent = task.node.title;
+  el("human-task-kind-label").textContent = isDecision ? "需要你判断" : "需要你完成";
   el("human-task-goal").textContent = task.goal;
   el("human-task-objective").textContent = task.work.objective || "完成当前节点";
   const acceptance = el("human-task-acceptance");
@@ -1060,11 +1130,40 @@ function renderHumanTask(task) {
   } else {
     acceptanceItems.forEach((item) => acceptance.append(node("li", "", item)));
   }
-  el("human-task-context").textContent = JSON.stringify(task.work.context || {}, null, 2);
-  el("human-task-transfer-open").hidden = !task.actions.transfer;
+  renderHumanTaskContext(task.work.context || {});
+  el("human-task-submit-panel").hidden = isDecision;
+  el("human-task-actions").hidden = isDecision;
+  el("human-decision-panel").hidden = !isDecision;
+  el("human-task-transfer-open").hidden = isDecision || !task.actions.transfer;
   el("human-task-loading").hidden = true;
   el("human-task-content").hidden = false;
-  requestAnimationFrame(() => el("human-task-result").focus());
+  requestAnimationFrame(() => {
+    if (isDecision) el("human-decision-accept").focus();
+    else el("human-task-result").focus();
+  });
+}
+
+function renderHumanTaskContext(context) {
+  const container = el("human-task-context");
+  container.replaceChildren();
+  const sections = [
+    ["原始输入", context.instance_inputs],
+    ["上游结果", context.dependencies],
+    ["返工意见", context.rework_feedback],
+  ].filter(([, value]) => value !== undefined && value !== null && (
+    typeof value !== "object" || Object.keys(value).length > 0
+  ));
+  if (sections.length === 0) {
+    container.append(node("p", "human-task-context-empty", "当前任务没有额外输入。"));
+    return;
+  }
+  sections.forEach(([label, value]) => {
+    const article = node("article", "human-task-context-section");
+    article.append(node("strong", "", label));
+    const body = node("pre", "", readableValue(value));
+    article.append(body);
+    container.append(article);
+  });
 }
 
 function currentTaskBinding() {
@@ -1125,6 +1224,51 @@ async function submitHumanTaskFromPage() {
   }
 }
 
+async function submitHumanDecisionFromPage(decision) {
+  const accept = el("human-decision-accept");
+  const reject = el("human-decision-reject");
+  const feedbackInput = el("human-decision-feedback");
+  const feedback = feedbackInput.value.trim();
+  el("human-task-error").textContent = "";
+  if (decision === "reject" && !feedback) {
+    el("human-task-error").textContent = "退回时请说明需要修改什么。";
+    feedbackInput.focus();
+    return;
+  }
+  accept.disabled = true;
+  reject.disabled = true;
+  feedbackInput.disabled = true;
+  const activeButton = decision === "accept" ? accept : reject;
+  activeButton.dataset.state = "working";
+  activeButton.textContent = decision === "accept" ? "正在接受" : "正在退回";
+  try {
+    const { task, instanceId, nodeKey } = currentTaskBinding();
+    await request(
+      `/console/api/v1/tasks/${instanceId}/nodes/${nodeKey}/decision`,
+      taskWriteOptions({
+        attempt_no: task.node.attempt_no,
+        expected_instance_version: task.instance_version,
+        expected_node_version: task.node.version,
+        decision,
+        feedback: decision === "reject" ? feedback : null,
+      }),
+    );
+    activeButton.dataset.state = "done";
+    activeButton.textContent = decision === "accept" ? "已接受" : "已退回";
+    showToast(decision === "accept" ? "结果已接受，流程正在继续" : "结果已退回，意见已经保存");
+    await loadInstances();
+    setTimeout(() => humanTaskDialog.open && humanTaskDialog.close(), 800);
+  } catch (error) {
+    accept.disabled = false;
+    reject.disabled = false;
+    feedbackInput.disabled = false;
+    activeButton.dataset.state = "error";
+    activeButton.textContent = decision === "accept" ? "接受失败，请重试" : "退回失败，请重试";
+    el("human-task-error").textContent = error.message || "提交失败，请刷新后重试。";
+    showToast(error.message || "提交失败，请重试", "error");
+  }
+}
+
 async function openHumanTaskTransfer() {
   const button = el("human-task-transfer-open");
   const panel = el("human-task-transfer-panel");
@@ -1177,10 +1321,10 @@ async function transferHumanTaskFromPage() {
       }),
     );
     button.dataset.state = "done";
-    button.textContent = "中央已转交，飞书同步中";
+    button.textContent = "负责人已更换，飞书同步中";
     el("human-task-result").disabled = true;
     showToast(
-      result.projection?.message || "中央节点已完成转交，飞书待办正在同步。",
+      result.projection?.message || "负责人已更换，飞书待办正在同步。",
     );
     await loadInstances();
     setTimeout(() => humanTaskDialog.open && humanTaskDialog.close(), 900);
@@ -1199,7 +1343,7 @@ function workflowActionSuccess(payload) {
   if (payload.action === "pause") return "流程已暂停";
   if (payload.action === "resume") return "流程已继续";
   if (payload.action === "cancel") return "流程已取消";
-  if (payload.action === "restart") return "已创建新的 Attempt";
+  if (payload.action === "restart") return "已创建新一轮执行";
   if (payload.action === "graph_edit") return "流程图修改已应用";
   return "操作已完成";
 }
@@ -1226,7 +1370,7 @@ function renderWorkflowActionPreview(container, payload, sourceButton = null) {
   const affected = preview.affected_nodes || [];
   copy.append(
     node("strong", "", title),
-    node("p", "", `将影响 ${affected.length} 个节点。旧 Attempt、结果和审计都会保留。`),
+    node("p", "", `将影响 ${affected.length} 个节点。旧执行记录、结果和审计都会保留。`),
   );
   const list = node("div", "workflow-action-preview-list");
   affected.slice(0, 6).forEach((item) => {
@@ -1314,7 +1458,7 @@ function renderInstances() {
   });
   if (state.instances.length === 0) {
     const empty = node("div", "list-empty");
-    empty.append(node("strong", "", "还没有流程"), node("p", "", "通过飞书发起流程后会出现在这里。"));
+    empty.append(node("strong", "", "还没有流程"), node("p", "", "点击左侧“发起流程”，描述目标后先生成一份草稿。"));
     instanceList.append(empty);
     return;
   }
@@ -1368,11 +1512,11 @@ function renderDetail() {
   el("detail-status").replaceWith(statusBadge(instance.status, "detail-status"));
   el("detail-id").textContent = instance.id;
   el("detail-goal").textContent = instance.goal || "未命名流程";
-  el("detail-created").textContent = `创建于 ${formatDate(instance.created_at)} · 实例版本 ${instance.version}`;
+  el("detail-created").textContent = `创建于 ${formatDate(instance.created_at)} · 流程版本 ${instance.version}`;
   el("progress-value").textContent = `${progress.completed_nodes}/${progress.total_nodes}`;
   const percent = progress.total_nodes ? Math.round(progress.completed_nodes / progress.total_nodes * 100) : 0;
   el("progress-ring").style.setProperty("--progress", `${percent * 3.6}deg`);
-  el("graph-revision").textContent = `Graph r${instance.graph_revision}`;
+  el("graph-revision").textContent = `流程图版本 ${instance.graph_revision}`;
   el("graph-action-preview").replaceChildren();
   renderDetailActions(instance);
   renderInsights(payload);
@@ -1482,7 +1626,7 @@ function renderOverviewNodes(nodes) {
     title.append(node("strong", "", item.title), statusBadge(item.status));
     copy.append(
       title,
-      node("small", "", `${EXECUTOR[item.executor] || item.executor} · ${RELATION[item.owner_relation] || item.owner_relation} · Attempt ${item.current_attempt_no}`),
+      node("small", "", `${EXECUTOR[item.executor] || item.executor} · ${RELATION[item.owner_relation] || item.owner_relation} · 第 ${item.current_attempt_no} 次执行`),
     );
     const action = node("span", "overview-node-action", "查看结果");
     button.append(ordinal, copy, action);
@@ -1497,7 +1641,7 @@ function renderInsights(payload) {
 
   const status = el("insight-status");
   status.replaceChildren(statusBadge(instance.status));
-  el("insight-status-detail").textContent = `${progress.completed_nodes}/${progress.total_nodes} 个节点完成 · 实例版本 ${instance.version}`;
+  el("insight-status-detail").textContent = `${progress.completed_nodes}/${progress.total_nodes} 个节点完成 · 流程版本 ${instance.version}`;
 
   const rework = el("insight-rework");
   rework.replaceChildren();
@@ -1508,7 +1652,7 @@ function renderInsights(payload) {
       const row = node("div", "insight-node");
       const copy = node("div", "insight-node-copy");
       copy.append(node("strong", "", item.title), node("span", "mono", item.key));
-      row.append(copy, node("span", "attempt-chip", `Attempt ${item.current_attempt_no}`));
+      row.append(copy, node("span", "attempt-chip", `第 ${item.current_attempt_no} 次`));
       rework.append(row);
     });
   }
@@ -1525,7 +1669,7 @@ function renderInsights(payload) {
   restart.append(
     node("strong", "insight-restart-title", title),
     node("p", "", `${formatDate(event.occurred_at)} · 操作者：${RELATION[event.actor_relation] || event.actor_relation}${target}`),
-    node("p", "", `影响 ${event.affected_nodes.length} 个节点${event.attempt_no ? ` · 新 Attempt ${event.attempt_no}` : ""}`),
+    node("p", "", `影响 ${event.affected_nodes.length} 个节点${event.attempt_no ? ` · 新一轮为第 ${event.attempt_no} 次` : ""}`),
   );
   if (event.affected_nodes.length > 0) {
     restart.append(node("p", "insight-affected", event.affected_nodes.map((item) => item.title).join("、")));
@@ -1864,10 +2008,10 @@ function renderGraphEditPreview(payload) {
   panel.dataset.action = "graph_edit";
   const copy = node("div", "workflow-action-preview-copy");
   copy.append(
-    node("strong", "", `确认应用 Graph r${preview.graph_revision} 到 r${preview.proposed_graph_revision} 的修改？`),
+    node("strong", "", `确认把流程版本 ${preview.graph_revision} 更新为 ${preview.proposed_graph_revision}？`),
     node("p", "", state.detail?.instance.status === "draft"
-      ? "中央节点已验证权限和 DAG 合法性。确认后只修改草稿，不会启动流程。"
-      : "中央节点已验证权限、执行冻结线和 DAG 合法性。确认后才会修改流程。"),
+      ? "系统已检查权限和流程结构。确认后只修改草稿，不会启动流程。"
+      : "系统已检查权限、已执行步骤和流程结构。确认后才会修改流程。"),
   );
   const list = node("div", "workflow-action-preview-list");
   [
@@ -1946,7 +2090,7 @@ function renderAttempts(selected) {
     card.dataset.current = String(item.attempt_no === selected.current_attempt_no);
     const head = node("div", "attempt-head");
     const title = node("div", "attempt-title");
-    title.append(node("strong", "", `Attempt ${item.attempt_no}`), statusBadge(item.status));
+    title.append(node("strong", "", `第 ${item.attempt_no} 次执行`), statusBadge(item.status));
     head.append(title, node("span", "muted", formatDate(item.completed_at || item.started_at)));
     const facts = node("div", "attempt-facts");
     facts.append(
@@ -1959,7 +2103,7 @@ function renderAttempts(selected) {
       const result = node("div", "result-block");
       result.append(node("span", "result-label", "结果快照"));
       const pre = node("pre", "");
-      pre.textContent = JSON.stringify(item.result, null, 2);
+      pre.textContent = readableValue(item.result);
       result.append(pre);
       card.append(result);
     }
@@ -1995,7 +2139,7 @@ function renderAudit(events) {
     );
     const description = [
       item.node_key ? `节点 ${item.node_key}` : "流程级事件",
-      item.attempt_no ? `Attempt ${item.attempt_no}` : null,
+      item.attempt_no ? `第 ${item.attempt_no} 次执行` : null,
       RELATION[item.actor_relation] || item.actor_relation,
       item.source,
     ].filter(Boolean).join(" · ");
@@ -2063,7 +2207,7 @@ function showFeishuLogin(message = "") {
   sessionStorage.removeItem("larkflow.console.token");
   adminViewButton.hidden = true;
   unlockCopy.textContent = "使用当前飞书身份进入，只展示你有权查看的流程和待处理事项。";
-  authNote.lastChild.textContent = "身份和流程权限均由中央节点校验。";
+  authNote.lastChild.textContent = "系统会校验你的身份和每次操作权限。";
   unlockForm.hidden = true;
   feishuLogin.hidden = false;
   feishuLogin.disabled = false;
@@ -2252,9 +2396,14 @@ el("human-task-close").addEventListener("click", () => humanTaskDialog.close());
 el("human-task-result").addEventListener("input", (event) => {
   el("human-task-result-count").textContent = event.target.value.length;
 });
+el("human-decision-feedback").addEventListener("input", (event) => {
+  el("human-decision-feedback-count").textContent = event.target.value.length;
+});
 el("human-task-submit").addEventListener("click", submitHumanTaskFromPage);
 el("human-task-transfer-open").addEventListener("click", openHumanTaskTransfer);
 el("human-task-transfer-confirm").addEventListener("click", transferHumanTaskFromPage);
+el("human-decision-accept").addEventListener("click", () => submitHumanDecisionFromPage("accept"));
+el("human-decision-reject").addEventListener("click", () => submitHumanDecisionFromPage("reject"));
 humanTaskDialog.addEventListener("close", () => {
   state.activeTask = null;
   resetHumanTaskControls();

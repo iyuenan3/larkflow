@@ -193,7 +193,7 @@ def test_transfer_preserves_authored_owner_and_moves_runtime_authority():
     assert result["projection"] == {
         "kind": "feishu_task",
         "status": "queued",
-        "message": "中央节点已完成转交，飞书待办正在同步。",
+        "message": "负责人已更换，飞书待办正在同步。",
     }
     assert instance.snapshot.node("review").owner_person_id == ASSIGNEE
     assert instance.nodes["review"].owner_person_id == NEW_ASSIGNEE
@@ -261,12 +261,107 @@ def test_new_assignee_can_submit_and_old_assignee_cannot():
     ).result == {"content": "Release assessment accepted with evidence."}
 
 
-def test_decision_cards_remain_outside_the_ordinary_task_surface():
-    _, _, tasks = setup_waiting_task(decision=True)
+def test_decision_is_visible_as_bounded_work_without_transfer_authority():
+    repository, _, tasks = setup_waiting_task(decision=True)
 
-    assert tasks.list_tasks(principal(ASSIGNEE))["total"] == 0
+    listing = tasks.list_tasks(principal(ASSIGNEE))
+    detail = tasks.get_task(
+        principal(ASSIGNEE),
+        "instance_collaboration",
+        "review",
+    )["task"]
+
+    assert listing["total"] == 1
+    assert listing["tasks"][0]["kind"] == "decision"
+    assert detail["kind"] == "decision"
+    assert detail["actions"] == {
+        "submit": False,
+        "transfer": False,
+        "accept": True,
+        "reject": True,
+    }
+    assert detail["work"]["decision"] == {
+        "kind": "accept_reject",
+        "reject_target": "draft",
+    }
+    assert detail["work"]["context"]["dependencies"]["draft"] == {
+        "content": "Assessment ready for review."
+    }
     with pytest.raises(ConsoleTaskNotFoundError):
-        tasks.get_task(principal(ASSIGNEE), "instance_collaboration", "review")
+        tasks.get_task(principal(NEW_ASSIGNEE), "instance_collaboration", "review")
+    assert not [
+        event
+        for event in repository.recent_audit_log(TENANT, "instance_collaboration")
+        if event.event_type.startswith("node.human_decision_")
+    ]
+
+
+def test_assignee_can_accept_decision_from_workbench():
+    _, service, tasks = setup_waiting_task(decision=True)
+    current = tasks.get_task(
+        principal(ASSIGNEE),
+        "instance_collaboration",
+        "review",
+    )["task"]
+
+    result = tasks.submit_decision(
+        principal(ASSIGNEE),
+        "instance_collaboration",
+        "review",
+        attempt_no=current["node"]["attempt_no"],
+        expected_instance_version=current["instance_version"],
+        expected_node_version=current["node"]["version"],
+        decision="accept",
+        feedback=None,
+    )
+
+    assert result["action"] == "submit_human_decision"
+    assert result["decision"] == "accept"
+    assert result["instance_status"] == "done"
+    assert service.get(TENANT, "instance_collaboration").current_attempt(
+        "review"
+    ).result == {"decision": "accepted"}
+    assert tasks.list_tasks(principal(ASSIGNEE))["total"] == 0
+
+
+def test_reject_decision_requires_feedback_and_preserves_it():
+    _, service, tasks = setup_waiting_task(decision=True)
+    current = tasks.get_task(
+        principal(ASSIGNEE),
+        "instance_collaboration",
+        "review",
+    )["task"]
+    binding = {
+        "attempt_no": current["node"]["attempt_no"],
+        "expected_instance_version": current["instance_version"],
+        "expected_node_version": current["node"]["version"],
+        "decision": "reject",
+    }
+
+    with pytest.raises(ValueError, match="必须填写具体意见"):
+        tasks.submit_decision(
+            principal(ASSIGNEE),
+            "instance_collaboration",
+            "review",
+            feedback="",
+            **binding,
+        )
+    result = tasks.submit_decision(
+        principal(ASSIGNEE),
+        "instance_collaboration",
+        "review",
+        feedback="请补充回滚条件。",
+        **binding,
+    )
+
+    assert result["decision"] == "reject"
+    assert result["instance_status"] == "failed"
+    assert service.get(TENANT, "instance_collaboration").current_attempt(
+        "review"
+    ).result == {
+        "decision": "rejected",
+        "feedback": "请补充回滚条件。",
+    }
 
 
 def test_http_task_routes_require_version_bound_json_and_hide_full_instance():
@@ -328,3 +423,50 @@ def test_http_task_routes_require_version_bound_json_and_hide_full_instance():
         headers=missing_header,
         body=body,
     ).status == 403
+
+
+def test_http_decision_route_is_version_bound_and_owner_scoped():
+    repository, service, tasks = setup_waiting_task(decision=True)
+    app = ConsoleHttpApplication(
+        ConsoleReadService(repository),
+        StaticConsoleAuthenticator(TOKEN, principal(ASSIGNEE)),
+        task_service=tasks,
+    )
+    current = tasks.get_task(
+        principal(ASSIGNEE),
+        "instance_collaboration",
+        "review",
+    )["task"]
+    body = json.dumps(
+        {
+            "attempt_no": current["node"]["attempt_no"],
+            "expected_instance_version": current["instance_version"],
+            "expected_node_version": current["node"]["version"],
+            "decision": "accept",
+            "feedback": None,
+        },
+        separators=(",", ":"),
+    ).encode()
+    headers = {
+        "authorization": f"Bearer {TOKEN}",
+        "content-type": "application/json",
+        "content-length": str(len(body)),
+        "x-larkflow-console-action": "workflow-action-v1",
+    }
+
+    response = app.handle(
+        "POST",
+        "/console/api/v1/tasks/instance_collaboration/nodes/review/decision",
+        headers=headers,
+        body=body,
+    )
+
+    assert response.status == 200
+    assert json.loads(response.body)["decision"] == "accept"
+    assert service.get(TENANT, "instance_collaboration").status.value == "done"
+    assert app.handle(
+        "POST",
+        "/console/api/v1/tasks/instance_collaboration/nodes/review/decision",
+        headers=headers,
+        body=body,
+    ).status == 404

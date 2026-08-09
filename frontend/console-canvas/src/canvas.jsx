@@ -45,7 +45,7 @@ const STATUS_LABELS = {
   ready: "待调度",
   waiting_human: "等待人工",
 };
-const EXECUTOR_LABELS = { human: "Human", agent: "Agent", tool: "Tool" };
+const EXECUTOR_LABELS = { human: "人工", agent: "AI", tool: "工具" };
 const OWNER_LABELS = { you: "你", collaborator: "协作者", system: "系统" };
 const STATUS_COLORS = {
   done: "#58d6b0",
@@ -178,7 +178,7 @@ const WorkflowNode = memo(function WorkflowNode({ data, selected }) {
       className="lfc-node"
       data-status={data.status}
       data-selected={String(Boolean(selected))}
-      aria-label={`${data.title}，${statusLabel(data.status)}，Attempt ${data.current_attempt_no}`}
+      aria-label={`${data.title}，${statusLabel(data.status)}，第 ${data.current_attempt_no} 次执行`}
     >
       <Handle
         className="lfc-handle"
@@ -198,7 +198,7 @@ const WorkflowNode = memo(function WorkflowNode({ data, selected }) {
       <div className="lfc-node-meta">
         <span data-executor={data.executor}>{EXECUTOR_LABELS[data.executor] || data.executor}</span>
         <span>负责人：{OWNER_LABELS[data.owner_relation] || data.owner_relation}</span>
-        <span>Attempt {data.current_attempt_no}</span>
+        <span>第 {data.current_attempt_no} 次执行</span>
       </div>
       <p className="lfc-node-deps">
         {dependencies.length ? `依赖 ${dependencies.length} 个上游节点` : "入口节点，无依赖"}
@@ -483,7 +483,7 @@ function CanvasBody({
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索节点名称或 ID"
+              placeholder="搜索步骤名称或内部标识"
               aria-label="搜索流程节点"
               autoComplete="off"
             />
@@ -539,7 +539,7 @@ function CanvasBody({
           </button>
         </Panel>
         <Panel className="lfc-summary-panel" position="bottom-left">
-          <span className="lfc-readonly"><i aria-hidden="true">⌁</i>{editable ? "可编辑流程画板" : "只读流程画板"}</span>
+          <span className="lfc-readonly"><i aria-hidden="true">⌁</i>{editable ? "可修改流程" : "查看流程"}</span>
           {editable && <span>拖动节点端点可增加依赖</span>}
           <span>{completed}/{items.length} 已完成</span>
           {layoutState === "loading" && <span>正在布局</span>}
