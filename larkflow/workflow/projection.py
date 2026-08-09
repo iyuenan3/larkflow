@@ -37,6 +37,11 @@ PROJECTION_EVENTS = {
 MAX_DEPENDENCY_CONTEXT_CHARS = 6_000
 MAX_MESSAGE_RESULT_CHARS = 2_000
 MAX_DOCUMENT_RESULT_CHARS = 12_000
+MAX_FEISHU_TASK_DESCRIPTION_CHARS = 3_000
+MAX_FEISHU_TASK_DESCRIPTION_BYTES = 10_000
+TASK_DESCRIPTION_TRUNCATION_NOTICE = (
+    "[任务描述已截断，完整上下文保存在 larkflow 流程记录中]"
+)
 
 
 @dataclass(frozen=True)
@@ -983,10 +988,10 @@ class WorkflowProjectionWorker:
         dependency_context = _dependency_context(instance, node_key)
         if dependency_context:
             sections.append(f"上游结果：\n{dependency_context}")
-        sections.append(
+        footer = (
             f"流程：{instance.id}\n节点：{node_key}\nAttempt：{attempt_no}"
         )
-        description = "\n\n".join(sections)
+        description = _bounded_task_description("\n\n".join(sections), footer)
         return TaskProjectionRequest(
             tenant_id=self.tenant_id,
             instance_id=instance.id,
@@ -1491,6 +1496,29 @@ def _repair_generation(state: Mapping[str, Any]) -> int:
     if generation < 0:
         raise ValueError("projection repair_generation is invalid")
     return generation
+
+
+def _bounded_task_description(body: str, footer: str) -> str:
+    """Fit a task description within Feishu's character and byte limits."""
+
+    full = f"{body}\n\n{footer}"
+    if (
+        len(full) <= MAX_FEISHU_TASK_DESCRIPTION_CHARS
+        and len(full.encode("utf-8")) <= MAX_FEISHU_TASK_DESCRIPTION_BYTES
+    ):
+        return full
+
+    suffix = f"\n\n{TASK_DESCRIPTION_TRUNCATION_NOTICE}\n\n{footer}"
+    available_chars = MAX_FEISHU_TASK_DESCRIPTION_CHARS - len(suffix)
+    available_bytes = MAX_FEISHU_TASK_DESCRIPTION_BYTES - len(
+        suffix.encode("utf-8")
+    )
+    if available_chars < 0 or available_bytes < 0:
+        raise ValueError("workflow task identity exceeds Feishu description limits")
+    prefix = body[:available_chars]
+    while prefix and len(prefix.encode("utf-8")) > available_bytes:
+        prefix = prefix[:-1]
+    return f"{prefix.rstrip()}{suffix}"
 
 
 def _dependency_context(instance: WorkflowInstance, node_key: str) -> str:

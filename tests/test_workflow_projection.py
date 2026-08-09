@@ -443,6 +443,84 @@ def test_final_human_task_contains_the_committed_agent_result():
     assert "agent_kind" not in final_request.description
 
 
+def test_final_human_task_bounds_long_agent_result_for_feishu():
+    clock = Clock()
+    repository = InMemoryWorkflowRepository()
+    service = WorkflowService(repository, clock=clock)
+    service.create_draft(
+        instance_id="instance_long_result",
+        tenant_id=TENANT,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=mixed_snapshot(),
+    )
+    service.confirm_draft(
+        TENANT,
+        "instance_long_result",
+        actor_person_id="person_owner",
+    )
+    tasks = RecordingTasks()
+    projection = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        tasks,
+        tenant_id=TENANT,
+        worker_id="projection_1",
+        clock=clock,
+    )
+    assert projection.run_once().noops == 3
+
+    confirmation = service.dispatch_due(
+        TENANT,
+        "instance_long_result",
+        worker_id="runtime_1",
+    )[0]
+    assert projection.run_once().tasks_created == 1
+    service.submit_human(
+        TENANT,
+        "instance_long_result",
+        "confirm",
+        actor_person_id="person_reviewer",
+        attempt_no=confirmation.attempt_no,
+        expected_node_version=confirmation.expected_node_version,
+        result={"approved": True},
+    )
+    agent = service.dispatch_due(
+        TENANT,
+        "instance_long_result",
+        worker_id="runtime_1",
+        max_automated=1,
+    )[0]
+    service.complete_automated(
+        TENANT,
+        "instance_long_result",
+        "draft",
+        attempt_no=agent.attempt_no,
+        expected_node_version=agent.expected_node_version,
+        claim_token=agent.claim_token or "",
+        worker_id="runtime_1",
+        result={"content": "结论：需要补齐运行约束。" + "兼容性风险。" * 2_000},
+    )
+    service.dispatch_due(
+        TENANT,
+        "instance_long_result",
+        worker_id="runtime_1",
+    )
+
+    report = projection.run_once()
+
+    assert report.tasks_created == 1
+    final_request = tasks.create_requests[-1]
+    assert len(final_request.description) <= 3_000
+    assert len(final_request.description.encode("utf-8")) <= 10_000
+    assert "结论：需要补齐运行约束。" in final_request.description
+    assert "任务描述已截断" in final_request.description
+    assert "流程：instance_long_result" in final_request.description
+    assert "节点：review" in final_request.description
+    assert final_request.description.endswith("Attempt：1")
+
+
 def test_ambiguous_external_create_retries_with_the_same_idempotency_key():
     clock = Clock()
     service, repository, _, initial_worker = setup_human(clock)
