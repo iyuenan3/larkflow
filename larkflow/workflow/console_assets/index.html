@@ -88,8 +88,8 @@
             <button id="workflow-nav" class="owner-nav-item" type="button" data-active="false">
               <span class="owner-nav-symbol" aria-hidden="true">03</span>
               <span class="owner-nav-copy">
-                <strong>全部流程</strong>
-                <small>最近由你发起的流程</small>
+                <strong>流程记录</strong>
+                <small>默认只看仍需跟进的流程</small>
               </span>
               <span id="instance-count" class="owner-nav-count">0</span>
             </button>
@@ -108,8 +108,8 @@
             <header class="page-heading draft-studio-heading">
               <div>
                 <p class="eyebrow">发起一项工作</p>
-                <h1 id="draft-studio-title">告诉我你想完成什么</h1>
-                <p>系统会先生成一份可修改的流程草稿。只有你确认后，流程才会启动并通知参与人。</p>
+                <h1 id="draft-studio-title">先从一项具体工作开始</h1>
+                <p>用一句话说清要交付什么。系统只生成草稿，等你检查步骤和负责人后才会启动。</p>
               </div>
               <div class="draft-safety-mark">
                 <span aria-hidden="true">✓</span>
@@ -125,27 +125,42 @@
 
             <div class="draft-studio-grid">
               <form id="draft-form" class="panel draft-form">
+                <fieldset class="draft-starters">
+                  <legend>不知道怎么写，可以从常见场景开始</legend>
+                  <div class="draft-starter-options">
+                    <button type="button" data-draft-starter="material">整理材料并复核</button>
+                    <button type="button" data-draft-starter="release">准备发布检查</button>
+                    <button type="button" data-draft-starter="meeting">整理会议行动项</button>
+                  </div>
+                  <p>示例只会填入表单，你可以继续修改，不会直接创建或启动流程。</p>
+                </fieldset>
+
                 <label for="draft-brief">
                   <span>要完成什么</span>
-                  <small>必填，尽量说明最终交付物和判断标准</small>
+                  <small>必填，写清交付物和完成标准即可</small>
                 </label>
-                <textarea id="draft-brief" maxlength="1000" rows="6" required placeholder="例如：根据发布说明生成一份研发简报，由我确认输入，AI 生成摘要，再由指定协作者复核。"></textarea>
+                <textarea id="draft-brief" maxlength="1000" rows="6" required placeholder="例如：把现有发布说明整理成一份研发简报，最后由人工检查是否准确。"></textarea>
                 <div class="draft-field-count"><span id="draft-brief-count">0</span>/1000</div>
 
-                <label for="draft-context">
-                  <span>补充背景与约束</span>
-                  <small>选填，不要粘贴密码、令牌或其他敏感凭据</small>
-                </label>
-                <textarea id="draft-context" maxlength="1000" rows="4" placeholder="例如：只能依据已登记材料，不得补写来源之外的事实。"></textarea>
-                <div class="draft-field-count"><span id="draft-context-count">0</span>/1000</div>
+                <details id="draft-advanced" class="draft-advanced">
+                  <summary>补充约束或指定协作者 <span>选填</span></summary>
+                  <div class="draft-advanced-fields">
+                    <label for="draft-context">
+                      <span>背景与约束</span>
+                      <small>不要粘贴密码、令牌或其他敏感凭据</small>
+                    </label>
+                    <textarea id="draft-context" maxlength="1000" rows="4" placeholder="例如：只能依据已登记材料，不得补写来源之外的事实。"></textarea>
+                    <div class="draft-field-count"><span id="draft-context-count">0</span>/1000</div>
 
-                <label for="draft-collaborator">
-                  <span>协作者</span>
-                  <small>选填。不选择时，流程里的人工步骤默认由你负责</small>
-                </label>
-                <select id="draft-collaborator">
-                  <option value="">由我负责全部人工步骤</option>
-                </select>
+                    <label for="draft-collaborator">
+                      <span>协作者</span>
+                      <small>不选择时，流程里的人工步骤默认由你负责</small>
+                    </label>
+                    <select id="draft-collaborator">
+                      <option value="">由我负责全部人工步骤</option>
+                    </select>
+                  </div>
+                </details>
 
                 <p id="draft-form-error" class="human-task-error" role="alert"></p>
                 <button id="draft-submit" class="draft-submit" type="submit">生成流程草稿</button>
@@ -164,11 +179,11 @@
                   <button id="draft-open-instance" class="draft-open-instance" type="button" hidden>查看流程并确认</button>
                 </section>
 
-                <section class="panel draft-recent-panel">
+                <section id="draft-recent-panel" class="panel draft-recent-panel">
                   <div class="panel-heading">
                     <div>
-                      <p class="eyebrow">最近草稿</p>
-                      <h2>最近生成</h2>
+                      <p class="eyebrow">继续上一次</p>
+                      <h2>最近的草稿</h2>
                     </div>
                     <button id="draft-refresh" class="quiet-button" type="button">刷新</button>
                   </div>
@@ -205,8 +220,8 @@
             <header class="page-heading">
               <div>
                 <p class="eyebrow">流程记录</p>
-                <h1 id="workflow-library-title">全部流程</h1>
-                <p>按状态筛选最近由你发起的流程，选择后查看执行详情。</p>
+                <h1 id="workflow-library-title">流程记录</h1>
+                <p>默认隐藏已经结束的历史记录，需要时可以按状态查看。</p>
               </div>
             </header>
             <div class="workflow-toolbar">
@@ -215,10 +230,11 @@
                 <input id="workflow-query" type="search" placeholder="搜索目标或流程编号" autocomplete="off">
               </label>
               <div id="workflow-filters" class="workflow-filters" role="group" aria-label="流程状态筛选">
-                <button type="button" data-filter="all" data-active="true">全部</button>
+                <button type="button" data-filter="open" data-active="true">需要跟进</button>
                 <button type="button" data-filter="active" data-active="false">进行中</button>
                 <button type="button" data-filter="draft" data-active="false">草稿</button>
                 <button type="button" data-filter="done" data-active="false">已完成</button>
+                <button type="button" data-filter="all" data-active="false">全部</button>
                 <button type="button" data-filter="other" data-active="false">其他</button>
               </div>
             </div>
@@ -251,11 +267,13 @@
               </div>
             </div>
 
+            <section id="workflow-next-step" class="workflow-next-step" aria-live="polite"></section>
+
             <section id="detail-actions" class="detail-actions" aria-label="流程操作"></section>
 
             <nav id="detail-tabs" class="detail-tabs" aria-label="流程详情视图">
               <button id="detail-tab-overview" type="button" data-tab="overview" data-active="true">概览</button>
-              <button id="detail-tab-execution" type="button" data-tab="execution" data-active="false">执行图与结果</button>
+              <button id="detail-tab-execution" type="button" data-tab="execution" data-active="false">流程图与执行记录</button>
               <button id="detail-tab-audit" type="button" data-tab="audit" data-active="false">审计记录</button>
             </nav>
 

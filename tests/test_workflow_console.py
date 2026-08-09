@@ -587,7 +587,10 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"showOwnerSection" in script.body
     assert b"setDetailTab" in script.body
     assert b"renderOverviewNodes" in script.body
+    assert b"renderWorkflowNextStep" in script.body
     assert b'ownerSection: "attention"' in script.body
+    assert b'workflowFilter: "open"' in script.body
+    assert b'setDetailTab("overview")' in script.body
     assert b'&& state.instances.length === 0' not in script.body
     assert b'else if (!state.detail' not in script.body
     assert b'canvasLoadPromise' in script.body
@@ -616,11 +619,20 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b'.detail-grid[data-canvas-expanded="true"]' in styles.body
     assert b"height: clamp(520px, 62vh, 720px)" in styles.body
     assert b".insight-grid" in styles.body
+    assert b".draft-starter-options" in styles.body
+    assert b".draft-advanced" in styles.body
+    assert b".workflow-next-step" in styles.body
+    assert b"@media (max-width: 1400px)" in styles.body
     assert b"instance-insights" in page.body
     assert b"attention-center" in page.body
     assert b"attention-nav" in page.body
     assert b"workflow-library" in page.body
     assert b"draft-studio" in page.body
+    assert b"draft-advanced" in page.body
+    assert page.body.count(b"data-draft-starter=") == 3
+    assert "示例只会填入表单".encode() in page.body
+    assert "默认隐藏已经结束的历史记录".encode() in page.body
+    assert b"workflow-next-step" in page.body
     assert b"graph-edit-dialog" in page.body
     assert b"graph-edit-dependency-list" in page.body
     assert "生成流程草稿".encode() in page.body

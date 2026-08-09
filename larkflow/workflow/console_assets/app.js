@@ -59,7 +59,7 @@ const state = {
   ownerSection: "attention",
   returnSection: "attention",
   detailTab: "overview",
-  workflowFilter: "all",
+  workflowFilter: "open",
   workflowQuery: "",
   expandedAttentionKinds: new Set(),
   graphEditor: null,
@@ -360,6 +360,21 @@ const DRAFT_STATUS = {
   failed: "生成失败",
 };
 
+const DRAFT_STARTERS = {
+  material: {
+    brief: "把一份现有材料整理成清晰摘要，由我确认输入，AI 生成草稿，最后由人工检查是否准确。",
+    context: "只依据已有材料，不补写来源之外的事实；无法确认的内容单独列出。",
+  },
+  release: {
+    brief: "根据已有发布说明整理上线检查清单，由我确认范围，AI 生成初稿，最后由人工判断是否可以发布。",
+    context: "检查清单需要包含风险、回滚条件和发布后的观察项。",
+  },
+  meeting: {
+    brief: "把会议结论整理成行动清单，明确每项工作的交付物和完成条件，最后由人工确认没有遗漏。",
+    context: "只提取会议中明确达成的结论，不推测尚未形成共识的事项。",
+  },
+};
+
 function newDraftRequestId() {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
@@ -368,7 +383,6 @@ function newDraftRequestId() {
 
 function syncDraftRequests(requests) {
   state.draftRequests = requests;
-  renderDraftRequests();
   const current = state.currentDraft
     ? requests.find((item) => item.id === state.currentDraft.id)
     : null;
@@ -381,34 +395,42 @@ function syncDraftRequests(requests) {
     renderCurrentDraft(active);
     pollDraftRequest(active.id);
   }
+  renderDraftRequests();
 }
 
 function renderDraftRequests() {
   const list = el("draft-recent");
+  const panel = el("draft-recent-panel");
   list.replaceChildren();
-  if (state.draftRequests.length === 0) {
-    list.append(node("p", "draft-recent-empty", "还没有流程草稿。输入目标后，生成进度会自动保存。"));
+  const resumable = state.draftRequests.find((item) => (
+    DRAFT_ACTIVE_STATUSES.has(item.status) || item.status === "ready"
+  ));
+  if (resumable && state.currentDraft?.id === resumable.id) {
+    panel.hidden = true;
     return;
   }
-  state.draftRequests.slice(0, 6).forEach((requestItem) => {
-    const item = node("article", "draft-recent-item");
-    const open = node("button", "", requestItem.brief || "未命名草稿请求");
-    open.type = "button";
-    open.disabled = requestItem.status !== "ready" && !DRAFT_ACTIVE_STATUSES.has(requestItem.status);
-    open.addEventListener("click", () => {
-      state.currentDraft = requestItem;
-      renderCurrentDraft(requestItem);
-      if (requestItem.status === "ready") openDraftInstance(requestItem).catch(showWorkspaceError);
-      else pollDraftRequest(requestItem.id);
-    });
-    const meta = node("div", "draft-recent-meta");
-    meta.append(
-      node("span", "", DRAFT_STATUS[requestItem.status] || requestItem.status),
-      node("time", "", formatDate(requestItem.created_at)),
-    );
-    item.append(open, meta);
-    list.append(item);
+  panel.hidden = false;
+  if (!resumable) {
+    list.append(node("p", "draft-recent-empty", "没有尚待继续的草稿。以前的流程仍可在“流程记录”中查看。"));
+    return;
+  }
+  const item = node("article", "draft-recent-item");
+  const open = node("button", "", resumable.brief || "未命名草稿请求");
+  open.type = "button";
+  open.addEventListener("click", () => {
+    state.currentDraft = resumable;
+    renderCurrentDraft(resumable);
+    renderDraftRequests();
+    if (resumable.status === "ready") openDraftInstance(resumable).catch(showWorkspaceError);
+    else pollDraftRequest(resumable.id);
   });
+  const meta = node("div", "draft-recent-meta");
+  meta.append(
+    node("span", "", DRAFT_STATUS[resumable.status] || resumable.status),
+    node("time", "", formatDate(resumable.created_at)),
+  );
+  item.append(open, meta);
+  list.append(item);
 }
 
 function renderCurrentDraft(requestItem) {
@@ -436,7 +458,9 @@ function renderCurrentDraft(requestItem) {
   submit.dataset.state = requestItem.status === "ready" ? "done" : terminal ? "idle" : "working";
   submit.textContent = !terminal
     ? DRAFT_STATUS[requestItem.status] || "生成中"
-    : "生成另一个流程草稿";
+    : requestItem.status === "ready"
+      ? "调整描述后再生成"
+      : "调整后重新生成";
 }
 
 async function refreshDraftRequests() {
@@ -534,7 +558,7 @@ async function openDraftInstance(requestItem = state.currentDraft) {
   showDetailLoading(requestItem.brief || "正在读取流程草稿");
   try {
     await loadDetail(requestItem.instance_id);
-    setDetailTab("execution");
+    setDetailTab("overview");
     showToast("草稿已生成，请核对流程后确认启动");
   } catch (error) {
     showOwnerSection("drafts");
@@ -1441,9 +1465,18 @@ function chooseNode(nodes) {
     || null;
 }
 
+function setWorkflowFilter(filter, rerender = true) {
+  state.workflowFilter = filter;
+  el("workflow-filters").querySelectorAll("button").forEach((button) => {
+    button.dataset.active = String(button.dataset.filter === filter);
+  });
+  if (rerender) renderInstances();
+}
+
 function renderInstances() {
   instanceList.replaceChildren();
-  el("instance-count").textContent = state.instances.length;
+  const openInstances = state.instances.filter((item) => ["draft", "running", "paused", "failed"].includes(item.status));
+  el("instance-count").textContent = openInstances.length;
   const query = state.workflowQuery.trim().toLocaleLowerCase("zh-CN");
   const visible = state.instances.filter((item) => {
     const matchesQuery = !query
@@ -1451,6 +1484,7 @@ function renderInstances() {
       || (item.goal || "").toLocaleLowerCase("zh-CN").includes(query);
     if (!matchesQuery) return false;
     if (state.workflowFilter === "all") return true;
+    if (state.workflowFilter === "open") return ["draft", "running", "paused", "failed"].includes(item.status);
     if (state.workflowFilter === "active") return ["running", "paused"].includes(item.status);
     if (state.workflowFilter === "draft") return item.status === "draft";
     if (state.workflowFilter === "done") return item.status === "done";
@@ -1464,7 +1498,21 @@ function renderInstances() {
   }
   if (visible.length === 0) {
     const empty = node("div", "list-empty");
-    empty.append(node("strong", "", "没有匹配的流程"), node("p", "", "可以清除搜索词或切换状态筛选。"));
+    if (state.workflowFilter === "open" && !query) {
+      const start = node("button", "list-empty-action", "发起一项工作");
+      start.type = "button";
+      start.addEventListener("click", () => {
+        showOwnerSection("drafts");
+        loadDraftCollaborators().catch(showWorkspaceError);
+      });
+      empty.append(
+        node("strong", "", "没有需要继续跟进的流程"),
+        node("p", "", "已经结束的记录默认隐藏，可以切换到“已完成”或“全部”查看。"),
+        start,
+      );
+    } else {
+      empty.append(node("strong", "", "没有匹配的流程"), node("p", "", "可以清除搜索词或切换状态筛选。"));
+    }
     instanceList.append(empty);
     return;
   }
@@ -1518,6 +1566,7 @@ function renderDetail() {
   el("progress-ring").style.setProperty("--progress", `${percent * 3.6}deg`);
   el("graph-revision").textContent = `流程图版本 ${instance.graph_revision}`;
   el("graph-action-preview").replaceChildren();
+  renderWorkflowNextStep(instance);
   renderDetailActions(instance);
   renderInsights(payload);
   renderOverviewNodes(payload.nodes);
@@ -1525,6 +1574,25 @@ function renderDetail() {
   renderAttempts(payload.nodes.find((item) => item.key === state.selectedNode));
   renderAudit(payload.audit);
   setDetailTab(state.detailTab);
+}
+
+function renderWorkflowNextStep(instance) {
+  const container = el("workflow-next-step");
+  const messages = {
+    draft: ["第 2 步：检查流程", "先核对下面的步骤和负责人。确认无误后，再启动并通知参与人。"],
+    running: ["第 3 步：推进工作", "需要你处理的任务会出现在“待处理”。飞书同时负责通知和待办提醒。"],
+    paused: ["流程已暂停", "确认当前情况后，可以继续流程或取消。"],
+    failed: ["流程需要处理", "先查看失败或退回位置，再预览重新执行会影响哪些步骤。"],
+    done: ["流程已经完成", "先查看流程摘要和各步骤结果。只有确实需要调整时才重新执行。"],
+    canceled: ["流程已经取消", "现有执行记录仍会保留，当前不需要继续处理。"],
+    discarded: ["草稿已经废弃", "如需继续这项工作，请重新发起一份流程草稿。"],
+  };
+  const [title, copy] = messages[instance.status] || ["查看流程状态", "根据下面的当前状态决定下一步。"];
+  container.replaceChildren(
+    node("strong", "", title),
+    node("p", "", copy),
+  );
+  container.dataset.status = instance.status;
 }
 
 function renderDetailActions(instance) {
@@ -2165,7 +2233,7 @@ function lockConsole() {
   state.ownerSection = "attention";
   state.returnSection = "attention";
   state.detailTab = "overview";
-  state.workflowFilter = "all";
+  setWorkflowFilter("open", false);
   state.workflowQuery = "";
   state.expandedAttentionKinds.clear();
   sessionStorage.removeItem("larkflow.console.token");
@@ -2204,6 +2272,8 @@ function showFeishuLogin(message = "") {
   state.autoOpenDraftId = null;
   state.view = "owner";
   state.ownerSection = "attention";
+  setWorkflowFilter("open", false);
+  state.workflowQuery = "";
   sessionStorage.removeItem("larkflow.console.token");
   adminViewButton.hidden = true;
   unlockCopy.textContent = "使用当前飞书身份进入，只展示你有权查看的流程和待处理事项。";
@@ -2346,8 +2416,28 @@ workflowNav.addEventListener("click", () => {
 });
 el("detail-back").addEventListener("click", () => showOwnerSection(state.returnSection));
 el("draft-form").addEventListener("submit", submitDraftRequest);
+document.querySelectorAll("[data-draft-starter]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const starter = DRAFT_STARTERS[button.dataset.draftStarter];
+    if (!starter) return;
+    el("draft-brief").value = starter.brief;
+    el("draft-context").value = starter.context;
+    el("draft-brief-count").textContent = starter.brief.length;
+    el("draft-context-count").textContent = starter.context.length;
+    el("draft-advanced").open = true;
+    document.querySelectorAll("[data-draft-starter]").forEach((candidate) => {
+      candidate.dataset.active = String(candidate === button);
+    });
+    el("draft-form-error").textContent = "";
+    el("draft-brief").focus();
+    showToast("示例已填入，可以继续修改");
+  });
+});
 el("draft-brief").addEventListener("input", (event) => {
   el("draft-brief-count").textContent = event.target.value.length;
+  document.querySelectorAll("[data-draft-starter]").forEach((button) => {
+    button.dataset.active = "false";
+  });
 });
 el("draft-context").addEventListener("input", (event) => {
   el("draft-context-count").textContent = event.target.value.length;
@@ -2367,11 +2457,7 @@ el("workflow-query").addEventListener("input", (event) => {
 });
 el("workflow-filters").querySelectorAll("button").forEach((button) => {
   button.addEventListener("click", () => {
-    state.workflowFilter = button.dataset.filter;
-    el("workflow-filters").querySelectorAll("button").forEach((candidate) => {
-      candidate.dataset.active = String(candidate === button);
-    });
-    renderInstances();
+    setWorkflowFilter(button.dataset.filter);
   });
 });
 
