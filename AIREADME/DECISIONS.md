@@ -924,3 +924,4 @@
 - Alternatives(否决)：浏览器提交完整 Snapshot 覆盖数据库；前端自行判断冻结线或 DAG 合法性；拖动节点同时改变依赖；把画板布局写入 Instance aggregate；为画板复制一套编辑状态机；直接从画板创建新 Attempt；第一版引入通用白板或多人协同协议。
 - Tradeoff：用户可以在同一工作台理解并操作流程，且领域安全边界不变，但个人布局目前只存在当前浏览器，不会跨设备同步。表单依赖选择比拖拽连边更保守；大型图、图形化 diff、草稿态自由编辑、协同布局和可访问性仍需后续验证。
 - Evidence：内容提交 `b60cbbd8beb98742cc80082df78ac185274e3a8a`；完整离线套件 `1019 passed, 23 skipped`。本地真实浏览器完成拖动持久化、节点增加、节点修改、删除预览取消与四节点返工确认。wheel SHA-256 为 `e558f75a2e495d7d1e79e52a1b36458fb55c76ed6eca608e365dc94d43f97221`，已部署到 `/srv/larkflow/target/releases/20260809_175848_console_canvas_b60cbbd/`。migration runner 返回空集，公网静态资源与安装资源哈希一致，未登录图编辑接口返回 401，十个 Python 服务和 Caddy 均为 `active / NRestarts=0`。服务器真实登录图编辑尚待下一步关闭。
+- Status addendum · 2026-08-09：真实登录公网验收已关闭。纯合成实例依次完成未来节点修改、三节点返工和未来 Human 节点新增，Graph 从 r1 进入 r3；故意形成循环依赖的候选被拒绝，PostgreSQL 保持 `graph_revision=3 / version=6`，没有产生第三条图编辑审计或未消费 preview。页面和数据库均显示两次合法图更新与一次节点重启，相关服务无重启或 warning。本补充保留 ADR 原始状态与发布时证据，并只把开发环境 authenticated graph mutation 标记为通过。

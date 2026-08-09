@@ -2,9 +2,11 @@
 
 > 飞书原生的企业协作 DAG：把多人流程拆成有依赖、有唯一责任人、可验收和可追溯的节点。
 >
-> 文档状态：2026-08-09 Phase 1 中央工作流基础实现。员工工作台已经覆盖 Owner 流程观察与受控操作、普通 Human Task 的参与者提交和运行时转交、受控自然语言流程发起，以及第一版受控 DAG 画板。画板支持节点拖动与浏览器本地布局、未来区域节点增删改预览确认、节点返工预览确认；所有结构变更和返工继续由中央领域服务重新授权、校验并写入 PostgreSQL，不把浏览器变成第二套工作流引擎。决定节点继续使用飞书决定卡。飞书 OAuth、PostgreSQL 耐久会话、管理员聚合、会话治理、公网 IP HTTPS 与安全响应头均已完成开发环境验证。十个 Python 服务、Caddy 和二十三份 migration 均已回读。下一产品门槛是用真实登录 Owner 完成一次公网画板增改和返工闭环，并继续增强逐条来源约束；拖拽连边、协同编辑和通用自由白板不属于当前版本。正式域名、生产容量、异机容灾和 Personal Agent Edge 正式分发仍缺。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+> 文档状态：2026-08-09 Phase 1 中央工作流基础实现。员工工作台已经覆盖 Owner 流程观察与受控操作、普通 Human Task 的参与者提交和运行时转交、受控自然语言流程发起，以及第一版受控 DAG 画板。画板支持节点拖动与浏览器本地布局、未来区域节点增删改预览确认、节点返工预览确认；所有结构变更和返工继续由中央领域服务重新授权、校验并写入 PostgreSQL，不把浏览器变成第二套工作流引擎。决定节点继续使用飞书决定卡。飞书 OAuth、PostgreSQL 耐久会话、管理员聚合、会话治理、公网 IP HTTPS 与安全响应头均已完成开发环境验证。十个 Python 服务、Caddy 和二十三份 migration 均已回读。真实登录 Owner 的公网画板修改、新增、返工与环路拒绝均已通过。下一产品门槛回到小范围真实业务试用和逐条来源约束增强；拖拽连边、协同编辑和通用自由白板不属于当前版本。正式域名、生产容量、异机容灾和 Personal Agent Edge 正式分发仍缺。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
 >
 > 内容提交 `b60cbbd8beb98742cc80082df78ac185274e3a8a` 增加基于 React Flow 12.11.2 与 ELK.js 0.12.0 的受控运行画板。节点拖动只保存当前浏览器布局；增加、修改和删除节点使用既有未来区域 GraphEditPreview，节点返工使用既有 RestartPreview，旧 Attempt、结果与审计继续保留。完整离线套件为 `1019 passed, 23 skipped`，wheel SHA-256 为 `e558f75a2e495d7d1e79e52a1b36458fb55c76ed6eca608e365dc94d43f97221`，已部署到 `/srv/larkflow/target/releases/20260809_175848_console_canvas_b60cbbd/`。migration runner 返回 `versions=[]`，长期 ledger 保持 `23 / 0023_console_draft_requests`；公网工作台返回 200，未登录图编辑接口返回 401，安装与公网静态资源哈希一致，十个 Python 服务和 Caddy 均为 `active / NRestarts=0`，部署窗口 warning 为 0。本地真实浏览器已完成拖动持久化、节点增加、节点修改、删除预览取消和四节点返工预览确认；本轮没有在服务器真实业务实例上执行图变更。
+>
+> 验收补充：真实登录 Owner 已在公网纯合成实例 `console_draft_2cd1ec1ad73e84abf9292ae0835c4fcc` 完成未来节点修改、三节点返工和末尾 Human 节点新增，Graph 从 r1 进入 r3，实例最终为 `running / version 6 / 4 nodes`。旧 Attempt 保留为 canceled，新返工节点进入 Attempt 2，新增节点为 `pending / Attempt 1`。故意为未来 Agent 节点选择下游节点作为上游依赖时，页面明确拒绝循环依赖；PostgreSQL 没有新增 preview、审计或 revision。页面审计显示两次合法图更新和一次节点重启，五个相关服务均为 `active / NRestarts=0`，验收窗口无 warning。
 >
 > 内容提交 `482c280cf9007951fb117b835086a4b19eb1f932` 为飞书 Task 描述增加 3000 字符和 10000 字节双重上限，截断时保留流程定位尾注，完整上下文仍以 PostgreSQL 为准。完整离线套件为 `1016 passed, 23 skipped`，wheel SHA-256 为 `9d1cbf7cd1a0880632cdabb2dc31a757e29230d63bf89afc24ccfa3e5e2f08af`，已部署到 `/srv/larkflow/target/releases/20260809_164706_task_desc_482c280/`。真实公开材料实例的失败 outbox 以原幂等键恢复，最终为 `done / version 7 / 3 Attempt 1`；Owner 退回内容并要求补齐官方逐条来源和真实运行约束。该样本关闭投影长度缺陷和首个公开材料真流程门槛，不证明草稿可用于生产决策。下一步同时推进来源约束增强与受控 DAG 画板，不建设通用自由白板。
 >
@@ -64,7 +66,7 @@
 >
 > 内容提交 `db7651228e26055eb1229ae9f451e3e87c31df38` 把来源约束型材料复核与决策生成拆成独立结果契约，新增 `source_decision.v1`、`source_decision.check` 与 `source_grounded_decision`，并用 JSON 代码块消除结构化卡片 URL 的 `%22` 污染。完整离线等价结果为 `988 passed, 21 skipped`，干净 wheel SHA-256 为 `54a4bbf4c96834d7d69a3434d01b083d2467f5df6dd129c9ac6e35876efb49ff`，已部署到 `/srv/larkflow/target/releases/20260808_040000_source_decision_db76512/`。真实实例 `source_decision_20260808_0405` 的四个 Attempt 1 均完成，Agent 回答 Q1、Q2、Q3，Tool 覆盖 6/6 个 F 和 3/3 个 Q、零违规且 `verdict=pass`。Owner 明确接受后实例为 `done / version 9`，终态决定卡已从飞书服务端回读为已接受、无按钮且无 `%22`。九个 Target 服务均为 `active / NRestarts=0`，legacy 消费者与 Caddy 仍 active，部署窗口 warning 为 0。该开发证据不等于业务建议正确、生产容量或生产发布。
 >
-> last-synced: b60cbbd8beb98742cc80082df78ac185274e3a8a · 2026-08-09
+> last-synced: dea2669bf29785167c37b93f1b29492b21871149 · 2026-08-09
 
 ## 阅读顺序
 
@@ -86,12 +88,12 @@
 | DAG_TEMPLATE_SPEC | ✅ | v0.2 模板、mention 角色绑定、草稿预览、未来区域编辑和两类重启已实现 |
 | ARCHITECTURE | ✅ | Target 模块化单体、飞书 OAuth 与 PostgreSQL 耐久会话工作台、受控 DAG 画板、耐久草稿请求与独立生成 Worker、Owner 受控流程操作、参与者任务面与运行时责任转交、管理员聚合与会话治理、投影有界终止、来源契约检查、失败恢复、Edge Proof 与剩余差距 |
 | RELATIONS | ✅ | Target 飞书、mention 与人员选择卡身份边界、中央 lark-cli、Edge HTTPS、Node Runner 与 LangGraph 边界 |
-| ROADMAP | ✅ | 网页受控流程输入、普通 Human 责任入口、跨成员飞书 Task 转交、Chrome 可见草稿生成与第一版受控 DAG 画板均已落地，下一步是真实登录画板闭环与小范围真实业务试用 |
+| ROADMAP | ✅ | 网页受控流程输入、普通 Human 责任入口、跨成员飞书 Task 转交、Chrome 可见草稿生成与真实登录受控 DAG 画板闭环均已落地，下一步是小范围真实业务试用 |
 | SPEC | ✅ | legacy 契约、Target CLI、Owner Console 读取与写入、受控 DAG 画板和图编辑 API、耐久草稿请求 API、OAuth v3、PostgreSQL 耐久会话、服务端管理员 allowlist、聚合与受审计会话撤销、公网请求预算和 429 契约、独立 interact 与 draft generation Worker、数据库通知唤醒、来源声明与确定性检查、必填退回意见的人类决定卡、十五个飞书窄命令、模板与无模板草稿、暂停继续取消、Task 入站、受控变化、完成投影与私有 Edge v1 HTTP、前台客户端、doctor 及 macOS manager |
 | DEPLOYMENT | ✅ | Legacy ECS 与 Target 十服务、二十三份 migration、耐久网页草稿、投影永久失败终止、公网 IP Console、Owner 工作台、真实飞书登录、管理员运维、Caddy 边界、Edge、备份与回滚实录 |
 | CONVENTIONS | ✅ | Target 与 As-built 的命名、状态、安全和文档约定 |
 | DECISIONS | ✅ | Append-only ADR 历史，最新为画板只提交受控领域命令并把布局留在浏览器 |
-| CHANGELOG | ✅ | Append-only 已实现变更，最新为受控 DAG 画板第一版 |
+| CHANGELOG | ✅ | Append-only 已实现变更，最新为受控 DAG 画板第一版及真实登录验收补充 |
 | MEMORY | ⚑ | Append-only 经验，仍含语义占位，已记录永久投影重试、psql 参数化、恢复会话、流程图手势、回调漂移、通知、虚拟环境与安装风险 |
 
 ## 按任务读取

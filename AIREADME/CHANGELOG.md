@@ -8,6 +8,7 @@
 - Verified：本地真实浏览器完成节点拖动与刷新持久化、未来 Agent 节点增加、标题和依赖修改、删除预览取消，以及从运行节点发起四节点返工并创建新 Attempt。完整离线套件为 `1019 passed, 23 skipped`；wheel 安装资源与源码的五项静态资源 SHA-256 一致。
 - Deployment：wheel SHA-256 为 `e558f75a2e495d7d1e79e52a1b36458fb55c76ed6eca608e365dc94d43f97221`，位于 `/srv/larkflow/target/releases/20260809_175848_console_canvas_b60cbbd/`。升级前备份成功，migration runner 返回 `versions=[]`，ledger 保持 23 份。公网工作台 200、未登录图编辑 API 401、静态资源哈希和安全响应头均已回读；十个 Python 服务与 Caddy 为 `active / NRestarts=0`，部署窗口 warning 为 0。
 - Boundary：本轮浏览器图变更使用本地模拟服务，没有修改服务器真实业务实例。开发服务器只完成制品、迁移、服务、公网静态资源和授权边界验收；真实登录 Owner 的公网图编辑与返工闭环是下一门槛。
+- Acceptance addendum · 2026-08-09：真实登录 Owner 已在公网纯合成实例完成未来 Agent 节点修改、根节点三节点返工和末尾 Human 节点新增，Graph 从 r1 进入 r3，实例为 `running / version 6 / 4 nodes`。三个既有节点保留 canceled Attempt 1 并进入 Attempt 2，新增节点为 `pending / Attempt 1`。故意提交的循环依赖候选被页面和中央 DAG 校验拒绝，没有生成 preview、revision 或审计。PostgreSQL、页面审计、任务投影和服务健康回读一致。本补充关闭开发环境真实登录画板增改、返工和非法 DAG 拒绝门槛，不改写发布时 Boundary，也不扩展到通用自由白板、协同编辑或生产发布。
 
 ## v0.71.0-draft · 2026-08-09 · 飞书 Task 长描述边界与公开材料试用
 
