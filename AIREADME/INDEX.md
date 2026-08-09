@@ -2,7 +2,9 @@
 
 > 飞书原生的企业协作 DAG：把多人流程拆成有依赖、有唯一责任人、可验收和可追溯的节点。
 >
-> 文档状态：2026-08-09 Phase 1 中央工作流基础实现。员工工作台已经覆盖 Owner 流程观察与受控操作、普通 Human Task 的参与者提交和运行时转交，以及受控自然语言流程发起。网页输入先进入 PostgreSQL 耐久队列，再由独立中央草稿 Worker 生成并校验候选 DAG；结果只保存为草稿，必须由本人再次确认才启动。决定节点继续使用飞书决定卡。飞书 OAuth、PostgreSQL 耐久会话、管理员聚合、会话治理、公网 IP HTTPS 与安全响应头均已完成开发环境验证。十个 Python 服务、Caddy、二十三份 migration、网页任务提交、跨成员飞书 Task 转交、受控草稿生成和三类真实 PostgreSQL 竞争均已回读。下一产品门槛是用真实业务材料开展小范围受控试用，不是扩建自由画布；正式域名、生产容量、异机容灾和 Personal Agent Edge 正式分发仍缺。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+> 文档状态：2026-08-09 Phase 1 中央工作流基础实现。员工工作台已经覆盖 Owner 流程观察与受控操作、普通 Human Task 的参与者提交和运行时转交，以及受控自然语言流程发起。网页输入先进入 PostgreSQL 耐久队列，再由独立中央草稿 Worker 生成并校验候选 DAG；结果只保存为草稿，必须由本人再次确认才启动。决定节点继续使用飞书决定卡。飞书 OAuth、PostgreSQL 耐久会话、管理员聚合、会话治理、公网 IP HTTPS 与安全响应头均已完成开发环境验证。十个 Python 服务、Caddy、二十三份 migration、网页任务提交、跨成员飞书 Task 转交、受控草稿生成和三类真实 PostgreSQL 竞争均已回读。首个公开材料受控试用已完成并退回，下一产品门槛是增强逐条来源约束，并把现有流程图推进为受控 DAG 画板而非通用自由白板；正式域名、生产容量、异机容灾和 Personal Agent Edge 正式分发仍缺。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+>
+> 内容提交 `482c280cf9007951fb117b835086a4b19eb1f932` 为飞书 Task 描述增加 3000 字符和 10000 字节双重上限，截断时保留流程定位尾注，完整上下文仍以 PostgreSQL 为准。完整离线套件为 `1016 passed, 23 skipped`，wheel SHA-256 为 `9d1cbf7cd1a0880632cdabb2dc31a757e29230d63bf89afc24ccfa3e5e2f08af`，已部署到 `/srv/larkflow/target/releases/20260809_164706_task_desc_482c280/`。真实公开材料实例的失败 outbox 以原幂等键恢复，最终为 `done / version 7 / 3 Attempt 1`；Owner 退回内容并要求补齐官方逐条来源和真实运行约束。该样本关闭投影长度缺陷和首个公开材料真流程门槛，不证明草稿可用于生产决策。下一步同时推进来源约束增强与受控 DAG 画板，不建设通用自由白板。
 >
 > 内容提交 `432fea77c210e7a2cfa5344054eb30d01706bf87` 增加工作台“发起流程”、耐久 `DraftRequest`、独立生成租约和三条草稿 API。重复 request ID 保持幂等，已生成候选在 Worker 接管时保持冻结，模型或基础设施失败最多尝试五次后进入保留历史的终态；只有生成成功后的独立确认才调用既有领域启动。完整离线套件为 `1015 passed, 23 skipped`。wheel SHA-256 为 `6b320b22804c02eaa2840d9a101bcf1b4ffe75287509816486727588ccdc0198`，已部署到 `/srv/larkflow/target/releases/20260809_0357_console_drafts_432fea7/`，长期库应用 `0023_console_draft_requests`。真实 PostgreSQL 双连接只产生一个 claim，全部服务与 Caddy 为 `active / NRestarts=0`，公网 200、未登录草稿 API 401、安全响应头、安装资源哈希和零 warning 均已读回。同一真实成员主体的五分钟临时会话先以纯合成文本通过同一 API 和真实中央模型创建三节点草稿，数据库保持 `draft / 0 Attempt / 0 Projection`，会话随即注销。随后真实 Chrome 会话从公网工作台点击生成，按钮立即进入“生成中”，页面自动打开草稿 `console_draft_a11c6bb9d2ae071d78b10f802f567119`；独立数据库回读为 `draft / version 0 / 3 nodes / 0 NodeInstance / 0 Attempt / 0 Projection`，请求为 `ready / attempt 1`。本轮没有确认启动或创建外部待办，真实浏览器点击验收已经关闭。
 >
@@ -60,7 +62,7 @@
 >
 > 内容提交 `db7651228e26055eb1229ae9f451e3e87c31df38` 把来源约束型材料复核与决策生成拆成独立结果契约，新增 `source_decision.v1`、`source_decision.check` 与 `source_grounded_decision`，并用 JSON 代码块消除结构化卡片 URL 的 `%22` 污染。完整离线等价结果为 `988 passed, 21 skipped`，干净 wheel SHA-256 为 `54a4bbf4c96834d7d69a3434d01b083d2467f5df6dd129c9ac6e35876efb49ff`，已部署到 `/srv/larkflow/target/releases/20260808_040000_source_decision_db76512/`。真实实例 `source_decision_20260808_0405` 的四个 Attempt 1 均完成，Agent 回答 Q1、Q2、Q3，Tool 覆盖 6/6 个 F 和 3/3 个 Q、零违规且 `verdict=pass`。Owner 明确接受后实例为 `done / version 9`，终态决定卡已从飞书服务端回读为已接受、无按钮且无 `%22`。九个 Target 服务均为 `active / NRestarts=0`，legacy 消费者与 Caddy 仍 active，部署窗口 warning 为 0。该开发证据不等于业务建议正确、生产容量或生产发布。
 >
-> last-synced: 4c97295c80b179c33d65f6e594a12f9d265218a8 · 2026-08-09
+> last-synced: 482c280cf9007951fb117b835086a4b19eb1f932 · 2026-08-09
 
 ## 阅读顺序
 

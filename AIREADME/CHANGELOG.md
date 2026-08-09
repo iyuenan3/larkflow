@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.71.0-draft · 2026-08-09 · 飞书 Task 长描述边界与公开材料试用
+
+- Fixed：内容提交 `482c280cf9007951fb117b835086a4b19eb1f932` 为飞书 Task 描述增加 3000 字符与 10000 字节双重上限。超限时只截断展示正文，保留明确提示、流程 ID、节点和 Attempt；完整输入与上游结果仍保存在 PostgreSQL，不把飞书 Task 当权威副本。
+- Regression：新增长中文 Agent 结果用例，验证最终 Human Task 仍能创建、首段结论仍可见、截断提示与流程定位尾注均保留。清空本机代理并允许进程树读取后的完整离线套件为 `1016 passed, 23 skipped`。
+- Deployment：wheel SHA-256 为 `9d1cbf7cd1a0880632cdabb2dc31a757e29230d63bf89afc24ccfa3e5e2f08af`，位于 `/srv/larkflow/target/releases/20260809_164706_task_desc_482c280/`。升级前备份为 305530 bytes，SHA-256 为 `93165424dc05e8c38d4bcf25184c19515ac5cef726be28cd6c21396b6bfd8b85`；服务器 `pip check` 通过，十个 Python 服务均为 `active / NRestarts=0`，部署窗口 warning 为 0。
+- Acceptance：真实公开材料实例的最终投影首次因飞书拒绝长 description 进入 failed。部署后原 outbox 以同一幂等键在第 9 次尝试发布，未生成重复 Task。Owner 在工作台完成全量复核并提交退回判断，实例为 `done / version 7`，三个节点均为 Attempt 1，两个 Task、完成文档和最终通知均已绑定。
+- Boundary：本次证明自然语言草稿可以用公开材料进入真实 Human、Agent、Human 链路，也证明错误修复后可由耐久 outbox 自动恢复。Owner 的退回结论说明当前草稿仍缺官方逐条来源登记和真实服务约束，不能解释为升级建议、生产决策或稳定内容质量。
+
 ## v0.70.0-draft · 2026-08-09 · 员工工作台受控流程发起
 
 - Added：内容提交 `432fea77c210e7a2cfa5344054eb30d01706bf87` 在工作台增加“发起流程”。员工填写目标、可选背景与可选协作者后，请求先进入 PostgreSQL 耐久队列；不持有飞书凭据的中央草稿 Worker 生成并确定性校验最多八个 Human 或 Agent 节点的候选 DAG。成功后页面自动打开既有草稿预览，只有本人再次确认才启动。
