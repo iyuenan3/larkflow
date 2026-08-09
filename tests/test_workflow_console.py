@@ -607,6 +607,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b".lfc-node" in canvas_styles.body
     assert b".lfc-minimap" in canvas_styles.body
     assert b".react-flow" in canvas_styles.body
+    assert b"width:24px!important" in canvas_styles.body
     assert styles.status == 200
     assert b".graph-fallback" in styles.body
     assert b'.detail-grid[data-canvas-expanded="true"]' in styles.body

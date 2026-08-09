@@ -84,10 +84,10 @@
 .lfc-node-meta span[data-executor="agent"] { color: #a9bffa; background: rgba(94, 140, 255, .07); }
 .lfc-node-meta span[data-executor="tool"] { color: #79dec1; background: rgba(88, 214, 176, .06); }
 .lfc-node-deps { margin: 9px 0 0; color: var(--muted-2); font-size: var(--font-caption); }
-.lfc-handle { width: 9px !important; height: 9px !important; border: 2px solid var(--surface) !important; background: #70809a !important; }
+.lfc-handle { width: 24px !important; height: 24px !important; border: 4px solid var(--surface) !important; cursor: crosshair !important; background: var(--blue) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 45%, transparent) !important; }
 .lfc-handle.connectingfrom,
 .lfc-handle.connectingto,
-.lfc-handle:hover { width: 13px !important; height: 13px !important; background: var(--blue) !important; }
+.lfc-handle:hover { width: 30px !important; height: 30px !important; background: var(--blue) !important; box-shadow: 0 0 0 5px color-mix(in srgb, var(--blue) 25%, transparent) !important; }
 
 .lfc-search-panel { width: min(330px, calc(100% - 118px)); margin: 14px !important; }
 .lfc-search { display: grid; height: 42px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 11px; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: 0 12px 28px rgba(0, 0, 0, .15); }
