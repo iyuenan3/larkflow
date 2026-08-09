@@ -1006,3 +1006,13 @@
 - Alternatives(否决)：继续让 Human 手工搜索；让普通 Agent 自行决定是否暗中联网；把搜索结果塞进同一个行程 Agent 而不形成独立节点；允许浏览器传搜索供应商配置；无引用时仍保存模型正文；搜索完成后自动接受方案；未开通搜索时退化成两节点浅流程。
 - Tradeoff：流程增加多个可见节点和供应商搜索费用，整体延迟高于一次模型生成；URL 来源只证明供应商把它作为引用返回，不证明该 URL 当前可访问、直接支持正文或来自权威机构，最终仍需 Human 判断。不同 OpenAI 兼容供应商未必支持相同 Responses Tool，因此当前真实兼容证据只覆盖开发环境已配置的火山方舟线路。安全的来源健康检查还必须处理 SSRF、重定向、DNS 与时效边界，不能用无约束服务器 GET 临时补丁代替。
 - Evidence：内容提交 `6d2d9fa22b7e6926cfe5a1bcf714ccccd073b6d3` 与装配修复 `c7e7d901237a3b72d3d265382e1e2239a0626abd` 已部署。真实样本生成结构化 Human 需求、景点/美食/交通三个并行 `web.search`、综合 Agent 与 Human 决定，并完成全部自动节点；三个搜索结果保存 6、4、7 个 URL。最终 Human 真实退回，因为抽查出现 404 和无证据重定向，而正文仍作绝对真实性声明。该证据关闭显式搜索节点、来源保存和依赖消费的开发真栈门槛，也明确证明“有 URL”不能作为来源完整性验收。
+
+## ADR-113 · 2026-08-10 · Human 决定的外部终态由 Projection 统一收口
+
+- **Status：Accepted，development deployed and real acceptance passed。**
+- Problem：Human 可以从飞书决定卡或 Console 任务面提交同一个版本绑定决定。卡片回调入口会快速更新原卡片，但 Console 直接调用领域服务后，数据库已经接受或退回，原飞书卡片仍保留按钮与旧绑定，形成可见状态分叉。
+- Constraint：PostgreSQL 继续是唯一业务真相；卡片回调快速反馈不能被删除；Console 不得复制卡片命令解析；终态更新必须可重试、幂等并保留原消息；陈旧卡片仍由服务端版本校验拒绝；接受、退回、取消和重启历史都不能留下看似可操作的控件。
+- Decision：任何入口提交 Human 决定后都由既有 `node.projection_sync_requested` 触发 Projection Worker。若现存决定卡对应 Attempt 已 `done / failed / canceled`，Worker 根据权威 Attempt 结果生成无按钮终态卡，原位更新消息，再保存 `settled / decision / node_status` 与同步版本。卡片回调链路继续承担首个快速视觉反馈，但最终卡片不再依赖回调专属 Worker。
+- Alternatives(否决)：Console 提交后直接调用飞书 API；只依赖陈旧卡片点击时返回错误；删除飞书决定卡；让前端伪造 Projection 已完成；为 Console 建立独立卡片状态表。
+- Tradeoff：同一卡片可能先由回调快速反馈、再由 Projection 幂等写入相同终态，多一次外部更新；但任何入口都共享同一耐久收口和失败重试。Projection 保存终态仍不等于用户客户端已经刷新，真实验收以服务端卡片更新成功和 Projection state 为边界。
+- Evidence：修复提交 `ba708724b5095f9185aa894ec381151f4305b91d`。离线新增 Console 退回后卡片收口回归，完整套件为 `1060 passed, 24 skipped`。真实苏州实例中，Attempt 1 通过 Console 退回后旧卡为 `settled=true / rejected / failed`；节点重启只创建 Agent 与 Human Attempt 2；Attempt 2 通过 Console 接受后新卡为 `settled=true / accepted / done`。两张卡均绑定原消息，Instance 最终为 `done / version 18`，完成文档和最终通知有独立外部绑定。

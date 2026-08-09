@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.81.0-draft · 2026-08-10 · 搜索引用边界与跨入口决定卡收口
+
+- Fixed：托管 Web Search 只保存供应商响应结构中的引用 URL，不再把模型正文里出现的裸 URL 提升为可信来源；供应商没有返回引用时 Attempt 明确失败。
+- Fixed：消费 `web.search` 结果的普通 Agent 在提示中被禁止声称“全部最新官方、已经完全核实或绝无虚构”，并由服务端在最终正文前固定附加“引用未独立验证，时效信息执行前复核”的来源提示。
+- Fixed：Human 决定通过 Console 提交后，Projection Worker 会原位更新既有飞书决定卡。接受、退回和取消都进入无按钮终态；卡片回调的快速反馈不再是唯一终态写入路径。
+- Verified：修复提交 `ba708724b5095f9185aa894ec381151f4305b91d` 已推送，完整离线套件为 `1060 passed, 24 skipped`。wheel SHA-256 为 `48abee97574fba4e157c7f15782c3c78fa2e5055fb1309219a3ec3c9f5cec90e`，已部署到 `/srv/larkflow/target/releases/20260810_0535_p0_source_cards_ba70872/`；`pip check`、migration、九个 Target 服务、公网 Console 200、未认证 API 401、安装代码和零 warning 均已回读。
+- Acceptance：真实苏州实例首轮退回后，同一耐久重启预览只影响行程 Agent 与最终 Human，各创建 Attempt 2。Agent Attempt 2 原样收到首轮意见，正文固定附加来源提示并逐项要求出行前复核；最终 Human 经真实 Console 接受，实例为 `done / version 18`。两轮决定卡分别为 `settled=true / rejected` 与 `settled=true / accepted`，完成文档和最终通知均已绑定。需求飞书 Task 从服务端回读为 `done / mode=1 / 单一负责人`。
+- Boundary：这次返工复用了部署前已经完成的三个研究 Attempt，因此只证明 Agent 来源披露和跨入口卡片收口进入真实链路，不证明新“仅供应商引用”解析已在第二批真实搜索中运行，也不证明引用当前可访问或正文事实正确。来源健康检查仍需先定义 SSRF、DNS、逐跳重定向、超时与响应上限，不能用无约束服务器抓取替代。
+
 ## v0.80.0-draft · 2026-08-10 · 节点交付物合同与深流程生成
 
 - Fixed：普通用户新增节点不再填写内部标识。服务端生成唯一 key，并把“插入到这些节点之前”展开为同一 GraphEditPreview 内的节点新增、目标依赖重连和 `work.inputs` 同步更新。
