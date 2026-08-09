@@ -99,7 +99,7 @@ MVP 只实现单个顶层 DAG，不实现子 DAG 和完整项目平台。个人 
 - Edge 不是飞书机器人，也不使用员工电脑上的 `lark-cli` 与中央节点通信；它只通过中央私有 HTTPS API 领取工作。
 - 管理员只能为指定 tenant 和 person 签发短时、一次性配对码；设备凭据可列出、撤销且服务端只保存哈希。
 - v0 唯一能力是 `personal.readonly`。设备只能领取 Owner 等于配对人员、执行器为 Agent 且显式声明该 kind 的节点。
-- 用户必须在本人电脑显式选择工作区，可以手工执行一次 `run-once`，也可以主动启动保持可见的前台 `serve` 会话。一个 `serve` 会话只使用启动时固定的单工作区和既有 `personal.readonly` capability，不注册操作系统后台服务。Codex 使用 `read-only + ephemeral + ignore-user-config` 启动，Edge 凭据、Target DSN 和飞书应用凭据不传给子进程。
+- 用户必须在本人电脑显式选择工作区，可以手工执行一次 `run-once`，也可以主动启动保持可见的前台 `serve` 会话。一个 `serve` 会话只使用启动时固定的单工作区和既有 `personal.readonly` capability，不注册操作系统后台服务。每次执行前必须通过目录级只读正反探针，并由用户为当前前台会话显式确认模型数据外发；未确认时不得加载设备凭据、领取中央工作或调用模型。Codex permission Profile 只允许读取所选工作区并排除环境文件、Agent 配置、证书和常见私钥名，Edge 凭据、Target DSN 和飞书应用凭据不传给子进程。完成任务所需的工作区内容仍可能发送给模型服务商，因此组织级数据政策和工作区分级仍是正式分发前置条件。
 - 长任务通过当前 Attempt、节点版本、Worker、token 和过期时间续租；撤销设备后不能续租或回传，迟到结果不能改变状态。
 - 本机执行器异常不直接把业务流程判为失败，中央等待租约过期后允许其他合法设备接管。
 - v0 不提供操作系统后台常驻、自动启动、任意 shell、文件写入、飞书操作、Human gate 代答、通用能力安装或公网直连 Gateway。

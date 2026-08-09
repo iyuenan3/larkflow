@@ -348,3 +348,9 @@
 - 现象（真实公开材料试用）：Agent 生成约六千字升级评审草稿后，最终 Human 节点已经进入 `waiting_human`，但飞书 Task 没有创建。对应 outbox 连续收到 `description too long`，中央工作台却只能显示节点等待，用户在飞书没有可操作入口。
 - 根因（已确认）：流程上下文允许保留较长输入与依赖结果，旧 Task 构建器把目标、验收、流程输入和上游结果直接拼入 description。内部依赖上下文的 6000 字符上限高于飞书 Task 的 3000 字符或 10000 字节限制，投影适配层没有再次收口外部契约。
 - 结论：每个外部投影都必须在请求生成边界同时校验字符数与 UTF-8 字节数，不能沿用内部存储上限。截断只能影响外部展示副本，必须保留流程定位和明确提示，完整上下文继续由 PostgreSQL 权威保存。修复后应让原 outbox 沿用稳定幂等键自然重试，并同时回读 outbox、Projection、飞书 Task 与领域终态，不能手工新建第二份任务。
+
+## 2026-08-09 · PostgreSQL peer auth 的 migration 必须使用服务运行用户
+
+- 现象（真实部署）：新 wheel 已完成替换且 `pip check` 通过，随后以 `sudo` root 直接运行 `larkflow-target --env-file /etc/larkflow-target.env migrate`。客户端通过本机 Unix socket 连接，PostgreSQL 返回 `FATAL: role "root" does not exist`；部署脚本因 fail-fast 在任何服务重启前停止。
+- 根因（已确认）：Target 开发库使用 Unix socket peer authentication，数据库角色与系统用户都固定为 `lf_target_dev`。读取同一个 env 文件不会改变 peer auth 映射；root 运行 CLI 会被数据库识别为 root，而不是服务角色。
+- 结论：服务器 migration 必须用 `sudo -u lf_target_dev /srv/larkflow/target/venv/bin/larkflow-target --env-file /etc/larkflow-target.env migrate`，或由同用户的 systemd `ExecStartPre` 执行。部署顺序继续保持备份、wheel 校验、安装、`pip check`、正确用户 migration、服务重启和读回。migration 失败时不得继续重启；若失败发生在重启前，应明确说明旧进程仍在运行，修正身份后再继续，而不是重复安装或修改数据库认证。

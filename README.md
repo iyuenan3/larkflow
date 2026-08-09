@@ -4,6 +4,8 @@
 
 ## 当前状态
 
+内容提交 `ab3ad5e8f00dded71763c70e6437ff0782050e8b` 为 Personal Agent Edge 增加目录级只读与模型外发确认。macOS Codex 子进程现在使用 fail-closed permission Profile：文件系统根默认拒绝，最小系统路径只读，只有启动时选定的工作区可读，并额外排除 `.agents`、`.codex`、`.env*`、私钥与证书文件；网络命令、网页搜索、浏览器、Computer Use、应用和图片生成均关闭。`doctor --workspace` 会真实证明工作区可读且外部哨兵不可读，`run-once` 与前台 `serve` 每次会话都必须显式传入 `--allow-model-egress`，结果记录执行策略。完整离线套件为 `1029 passed, 23 skipped`。真实 Codex 0.147 macOS 探针还验证了 `pyproject.toml` 可读而 `.env` 被拒绝。主 wheel SHA-256 为 `1330bd7c418a87241583b0b9fedccd766eea64951160ec855356d9fd18390042`，已部署到 `/srv/larkflow/target/releases/20260809_2122_edge_permissions_ab3ad5e/`；升级前备份可读，migration ledger 保持 `23 / 0023_console_draft_requests`，十个 Python 服务与 Caddy 均为 `active / NRestarts=0`，Console 内外网 200，未认证 Edge claim 401，部署窗口 warning 为 0。该机制减少本机越界读取，不阻止完成任务所需的工作区内容随提示发送给模型服务商，也不改变正式员工分发 No-Go 结论。
+
 内容提交 `d879a280d49e584d2d7e5927a498e7947544bb63` 收紧工作台自然语言流程的结构契约：只要候选图包含 Agent，所有终端节点都必须是明确接受或退回的 Human 决定节点，且 `reject_target` 必须指向它的直接上游 Agent；纯 Human 流程仍可使用普通待办。完整离线套件为 `1023 passed, 23 skipped`。wheel SHA-256 为 `95149af078a67cc36f87ae832d1f9764cd40f3b7378fe6a408cd90eae59074c7`，已部署到 `/srv/larkflow/target/releases/20260809_1929_generated_decision_d879a28/`，长期库 migration ledger 保持 23 份。真实合成实例 `console_draft_80707de5ea8149809d15433510e67128` 从自然语言请求生成 Human-Agent-Human 草稿并确认启动，首个 Task 完成后 Agent 生成摘要，最终 Human 在决定卡填写具体意见退回；Owner 预览并确认只重启 Agent 与最终 Human 后创建 Attempt 2，退回意见原样进入 Agent 新输入，两个旧结果均保留。第二版补充回滚条件和发布后监控窗口后被明确接受，实例最终为 `done / version 12 / graph_revision 1`；两轮 Agent 消息、两张决定卡、完成文档和最终通知均有独立外部绑定。该证据只验证开发环境中的结构安全、返工和历史保护，不证明模型内容质量、生产容量或生产发布。
 
 内容提交 `b60cbbd8beb98742cc80082df78ac185274e3a8a` 的受控 DAG 画板已完成真实登录 Owner 公网验收。纯合成实例 `console_draft_2cd1ec1ad73e84abf9292ae0835c4fcc` 先完成未来 Agent 节点修改和从根节点发起的三节点返工，Graph 从 r1 进入 r2，旧 Attempt 全部保留为 canceled，新 Attempt 进入 2；随后从画板增加依赖最终复核节点的 Human 节点“归档复核结论”，Graph 进入 r3，实例为 `running / version 6 / 4 nodes`。再为未来 Agent 节点选择下游复核节点作为上游依赖时，页面明确提示循环依赖并拒绝生成预览；PostgreSQL 回读仍为 Graph r3、version 6，只有两条合法 `instance.graph_edited` 和一条节点重启审计。五个相关服务均为 `active / NRestarts=0`，验收窗口无 warning。该证据关闭开发环境中的真实登录画板增改、返工、DAG 拒绝和审计门槛，不代表通用自由白板、多人协同编辑、生产容量或生产发布已经完成。
@@ -61,7 +63,7 @@ Personal Agent Edge 的 macOS 客户端现已接入登录 Keychain：设备密�
 - **失败恢复 as-built**：自动 Agent / Tool 节点失败会向节点 Owner 投影 Card 2.0，可选择“重新执行”或“人工接管”。卡片回调先进入耐久 IM 命令队列，并立即尝试撤下按钮、显示“处理中”；凭据侧随后重新校验当前企业成员，领域侧精确校验 Owner、Instance version、Node version 与 Attempt 编号，最终卡片显示成功或拒绝。重试创建新自动 Attempt；人工接管创建 `waiting_human` Attempt 和飞书 Task；原失败 Attempt、结果与审计均保留。该能力已在开发服务器与测试组织完成真实闭环：两个不同失败卡片分别创建 Attempt 2 和 3，人工接管创建 Attempt 4 与真实飞书 Task，完成 Task 后 Instance 与 Attempt 4 进入 `done`，前三次失败历史、审计和投影全部保留。新一轮恢复卡真实点击的首个服务端反馈耗时为 0.990 秒，飞书服务端读回终态标题为“恢复操作已处理”且不再包含按钮。
 - **legacy 原型**：LangGraph + SQLite + lark-cli 路径继续保留，用于回归已验证的飞书投影、打回、幂等和恢复机制。
 - **飞书入口 as-built**：已实现 `/larkflow help`、`/larkflow start`、`/larkflow draft`、`/larkflow confirm`、`/larkflow status`、`/larkflow list`、`/larkflow pause`、`/larkflow resume`、`/larkflow cancel`、`/larkflow cancel-confirm`、`/larkflow restart`、`/larkflow restart-all`、`/larkflow restart-confirm`、`/larkflow edit`、`/larkflow edit-confirm` 十五个窄命令，以及命令回执、Agent / Tool 结果消息、完成文档和最终通知。`start` 从启用模板创建草稿；`draft <JSON定义>` 是最多 100 个节点的结构化高级入口；裸 `draft` 打开 Card 2.0 自然语言引导，收集目标、可选背景和一名协作者，再由中央 Agent 生成最多八个 Human / Agent 节点的受限候选图。自然语言回调复用现有耐久动作链，重新校验操作人和冻结候选人；服务端覆盖模型返回的输入，限制 Owner 角色，拒绝 Tool、服务配置与 Personal Edge capability，并在最终卡片上展示无按钮图预览。首次候选校验失败时只允许同一中央 Agent 有界重生成一次，第二次失败仍拒绝，绝不绕过确定性校验。`start` 与两种 `draft` 都只创建草稿，`confirm` 才启动实例。人员选择卡、自然语言引导卡与失败恢复卡在动作耐久落库后立即尝试显示无按钮的“处理中”，最终再替换为成功或拒绝状态；服务端用单调时钟记录有效回调被接受到直接更新返回的耗时，不把它误写为客户端渲染耗时。`status` 只向 Instance Owner 返回单实例有界状态摘要，`list` 只返回本人拥有的最近十个实例摘要，restart 和 edit 命令只创建短期影响预览，对应 confirm 命令才执行原子变更。模板、结构化无模板、自然语言引导和跨人员正向分工均已在开发测试组织完成真实闭环。
-- **尚未实现**：上述十五类命令之外的通用飞书控制面、更多业务 Tool adapter、图形化编辑体验和生产装配。本轮新增的暂停、继续和取消已完成本地离线验证、开发服务器部署、真实 PostgreSQL 双连接竞争与真实飞书闭环。测试实例 `im_c1c472a12a8ea4a7c8d63480` 依次通过确认、暂停、继续、取消预览和版本绑定确认，普通 Human Task 在飞书服务端回读为 `done`；决定卡实例 `im_516c59e4082e82ab74b8bd14` 取消后，原卡片被原位更新为无操作控件的“复核已取消”。两个实例的 PostgreSQL Instance、Node、Attempt、Projection 和追加型审计均与飞书终态一致。企业目录草稿 Owner 全量校验已落码并部署但默认关闭；IM 命令发送者、mention 角色成员和 Card 2.0 候选人的活跃成员校验已完成开发真栈验证。Edge 已具备版本化开发安装、回滚、Keychain，以及不含中央运行时的独立 `larkflow-personal-edge` wheel。离线 bundle 会生成精确哈希 lock、SPDX SBOM 和构建证明，安装器在断网安装前逐项复核这些证据。正式员工分发仍为 No-Go：当前没有 Apple Developer ID 身份与公证凭据，也没有可信摘要发布、目录级读取隔离、数据外发治理和全新员工 Mac 验收。当前设计不提供操作系统级守护或隐藏后台常驻。可持续使用的公网 HTTPS 入口还必须先完成 ICP 接入备案，或迁移到合规的非中国内地环境。真实 Agent、确定性内容检查、模板入口和飞书 IM / Card / Doc 投影只在开发环境和测试组织验证，不能据此描述为生产上线。
+- **尚未实现**：上述十五类命令之外的通用飞书控制面、更多业务 Tool adapter、图形化编辑体验和生产装配。本轮新增的暂停、继续和取消已完成本地离线验证、开发服务器部署、真实 PostgreSQL 双连接竞争与真实飞书闭环。测试实例 `im_c1c472a12a8ea4a7c8d63480` 依次通过确认、暂停、继续、取消预览和版本绑定确认，普通 Human Task 在飞书服务端回读为 `done`；决定卡实例 `im_516c59e4082e82ab74b8bd14` 取消后，原卡片被原位更新为无操作控件的“复核已取消”。两个实例的 PostgreSQL Instance、Node、Attempt、Projection 和追加型审计均与飞书终态一致。企业目录草稿 Owner 全量校验已落码并部署但默认关闭；IM 命令发送者、mention 角色成员和 Card 2.0 候选人的活跃成员校验已完成开发真栈验证。Edge 已具备版本化开发安装、回滚、Keychain，以及不含中央运行时的独立 `larkflow-personal-edge` wheel。离线 bundle 会生成精确哈希 lock、SPDX SBOM 和构建证明，安装器在断网安装前逐项复核这些证据。Codex macOS 的目录级只读探针和会话级模型外发确认已完成开发验证，但正式员工分发仍为 No-Go：当前没有 Apple Developer ID 身份与公证凭据，也没有可信摘要发布、组织级数据分级与事件响应或全新员工 Mac 验收。当前设计不提供操作系统级守护或隐藏后台常驻。可持续使用的公网 HTTPS 入口还必须先完成 ICP 接入备案，或迁移到合规的非中国内地环境。真实 Agent、确定性内容检查、模板入口和飞书 IM / Card / Doc 投影只在开发环境和测试组织验证，不能据此描述为生产上线。
 - **证据边界**：本轮完成的是既有设计简化与一致性核验，不是访谈、市场或商业验证。
 - **重要边界**：`alicloud-sh` 已运行 Target Runtime、Projection、两个凭据侧 Interactive、凭据侧入站校验、领域侧入站、Draft Generation Worker、loopback Edge Gateway 和 Owner Console 九个 Target 服务，并保留一个 legacy 事件消费者，共十个 Python 服务。七条 PostgreSQL `LISTEN` 连接分属 `lf-dev` 四条和 `lf_target_dev` 三条。Caddy 现通过公网 IP 的 80 / 443 端口为员工工作台提供 HTTPS，并覆盖限流来源头、限制请求体与请求头、设置连接超时和浏览器安全响应头；Console 本身继续只监听 `127.0.0.1:8780`。这条无域名开发入口和单进程内存限流不等于正式生产发布，也不解除后续域名、证书、备案、容量和分布式防护边界。Projection 只负责飞书投影与 Task 状态读取；两个 Interactive 副本持有受限 bot profile；Draft Generation Worker 不持有飞书 profile。凭据侧重新读取外部资源后只写已验证 Inbox，领域侧不能读取 lark-cli profile。legacy 服务继续使用 SQLite，并仅作为事件桥接时写入 Target Inbox，不能把 checkpointer 或全局 LangGraph state 扩展为新产品领域模型。
 
@@ -240,7 +242,8 @@ python3 larkflow-edge-bundle/larkflow-edge-manager install \
 
 # 非敏感安装状态与本机离线诊断
 ~/.local/bin/larkflow-edge-manager status
-~/.local/bin/larkflow-edge doctor
+~/.local/bin/larkflow-edge doctor \
+  --workspace /absolute/path/to/approved/workspace
 
 # 需要时切回 previous
 ~/.local/bin/larkflow-edge-manager rollback
@@ -264,8 +267,10 @@ larkflow-edge pair --server http://127.0.0.1:18765 --name "My Mac"
 # 配置 HTTPS 后的员工电脑入口，pair 默认无回显读取一次性 code
 larkflow-edge pair --server https://edge.example.com --name "My Mac"
 larkflow-edge run-once --workspace /absolute/path/to/approved/workspace \
+  --allow-model-egress \
   --wait-seconds 20
 larkflow-edge serve --workspace /absolute/path/to/approved/workspace \
+  --allow-model-egress \
   --wait-seconds 20
 
 # 已有明文凭据的 macOS 客户端，验证 Keychain 回读后移除磁盘密钥
@@ -274,7 +279,9 @@ larkflow-edge credential-migrate --delete-source
 
 `serve` 是用户主动启动并保持可见的前台会话，不会注册操作系统后台服务，也不会扩大配对时固定的 `personal.readonly` 能力。SIGINT 或 SIGTERM 会停止长轮询并取消在途 Codex；同一设备凭据的第二个 `serve` 或 `run-once` 会被本机锁拒绝。
 
-macOS 默认把设备密钥保存在当前用户登录 Keychain，密钥不会进入命令行参数、环境变量、日志或磁盘元数据；非敏感引用文件仍以 `0600` 保存并拒绝符号链接。显式文件模式和非 macOS 兼容路径仍会把完整凭据写入 `0600` 文件。Codex 使用 `read-only + ephemeral + ignore-user-config`，子进程环境采用最小 allowlist，不继承任意 API key、代理、SSH agent、Edge、Target 或飞书变量。本机必须依赖 Clash 等环境代理时，可显式增加 `--inherit-loopback-proxy`；它只传递无用户名和密码的 loopback HTTP / HTTPS / SOCKS URL，远程或带凭据代理仍被丢弃。只读当前只证明写入受限，没有证据证明目录级读取被限制在所选工作区；恶意任务输入仍可能诱导读取其他可读文件，也不等于无数据外发。该 Proof 只能用于明确批准的测试工作区。
+macOS 默认把设备密钥保存在当前用户登录 Keychain，密钥不会进入命令行参数、环境变量、日志或磁盘元数据；非敏感引用文件仍以 `0600` 保存并拒绝符号链接。显式文件模式和非 macOS 兼容路径仍会把完整凭据写入 `0600` 文件。Codex 使用名为 `larkflow_edge_readonly` 的 permission Profile，根路径默认拒绝、最小系统路径只读、临时目录拒绝，只有命令指定的工作区可读；工作区内的 Agent 配置、环境文件、证书和常见私钥名仍显式拒绝。子进程环境采用最小 allowlist，不继承任意 API key、代理、SSH agent、Edge、Target 或飞书变量；网络命令与其他本机工具也被禁用。本机必须依赖 Clash 等环境代理时，可显式增加 `--inherit-loopback-proxy`；它只传递无用户名和密码的 loopback HTTP / HTTPS / SOCKS URL，远程或带凭据代理仍被丢弃。
+
+`doctor --workspace` 不调用模型或中央节点，只运行工作区可读和外部临时哨兵不可读两项真实 Codex sandbox 探针；任一结果不符合预期都 fail closed。`run-once` 与 `serve` 会把中央提示、节点输入以及完成任务所必需的选定工作区内容发送给 Codex 模型服务商，因此每个前台会话都必须显式提供 `--allow-model-egress`。目录隔离不等于无数据外发，也不能替代组织级数据分级、供应商条款、日志保留和事件响应。当前真机证据只覆盖这台 macOS 上的 Codex 0.147 permission Profile；该 Profile 仍是上游 beta 能力，其他模型工具、Codex 版本和全新员工 Mac 必须独立验收。该 Proof 只能用于不含敏感材料且已明确批准的测试工作区。
 
 真实飞书部署会创建任务、卡片和文档，只能在明确配置的开发环境中运行。现有单机部署是 legacy 原型实录，操作前先读 [AIREADME/DEPLOYMENT.md](AIREADME/DEPLOYMENT.md)。
 

@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.75.0-draft · 2026-08-09 · Personal Agent Edge 目录隔离与模型外发确认
+
+- Added：内容提交 `ab3ad5e8f00dded71763c70e6437ff0782050e8b` 新增 `larkflow_edge_readonly` Codex permission Profile。文件系统根默认拒绝、最小系统路径只读、临时目录拒绝，仅所选工作区只读，并在工作区内排除 `.agents`、`.codex`、`.env*`、证书和常见私钥名。网页搜索、浏览器、Computer Use、应用、图片生成和命令网络均关闭。
+- Safety：`doctor` 现在必须接收 `--workspace`，用独立临时 `CODEX_HOME` 真实验证所选工作区可读且外部临时哨兵不可读。执行器在每次前台会话再次运行同一探针。`run-once` 与 `serve` 缺少 `--allow-model-egress` 时，在加载设备凭据、领取中央工作或调用模型前 fail closed；成功结果携带工作区、敏感路径、命令网络、模型外发和 Profile 策略摘要。
+- Policy：模型仍会接收中央提示、节点输入以及完成任务所必需的工作区内容。目录隔离不是无数据外发保证，正式分发仍要求组织级数据分级、供应商条款、日志与保留边界和事件响应责任。上游 permission Profile 仍为 beta，当前真机证据只覆盖 macOS Codex 0.147。
+- Verified：Edge 聚焦套件为 `76 passed`，完整离线套件为 `1029 passed, 23 skipped`。真实系统 sandbox 正反探针通过，真实 Codex 工具调用验证 `pyproject.toml` 可读而 `.env` 被拒绝。宿主直连外部站点返回 200，同一 curl 进入 Edge Profile 后因 DNS 被拒绝返回 6，排除测试机本身断网造成的假通过。最小 macOS arm64、CPython 3.12 bundle 仍为 9 个 wheel；artifact 为 19827 bytes、SHA-256 为 `b59e918a2b823cd1c3c76349211b74615bcdda995c1c9645bfbcaa746cf64634`，manifest SHA-256 为 `a6074ab95cc9347b954cf611681a5244511cd02d48d7b02e303e04569440f771`。隔离前缀离线安装、`pip check`、CLI、status 与模块白名单均通过。
+- Deployment：中央主 wheel SHA-256 为 `1330bd7c418a87241583b0b9fedccd766eea64951160ec855356d9fd18390042`，位于 `/srv/larkflow/target/releases/20260809_2122_edge_permissions_ab3ad5e/`。升级前 custom-format 备份 SHA-256 为 `a48dee4d995c742bcf0e9759f7f9ea39de418f339533bb9532e44ce55032e117` 且可由 `pg_restore --list` 读取；migration runner 返回空集，ledger 保持 `23 / 0023_console_draft_requests`。十个 Python 服务与 Caddy 均为 `active / NRestarts=0`，Console loopback 与公网 200，未认证 Edge claim 401，部署窗口 warning 为 0。
+- Boundary：正式员工分发仍为 No-Go。Developer ID 签名、公证、可信摘要渠道、组织级数据政策、上游 beta 兼容门禁和全新员工 Mac 验收仍未完成；本轮不增加后台常驻、写 capability 或公网 Edge E2E。
+
 ## v0.74.0-draft · 2026-08-09 · Personal Agent Edge 最小可验证分发
 
 - Added：内容提交 `00067f717ca8e0258b234e81c56e1388226bc471` 新增无中央依赖的 `edge_contract.py`。bundle builder 从同一 clean commit 的完整 `larkflow` wheel 中按白名单提取 `edge_contract.py`、`edge_client.py`、`edge_agent.py` 和 `edge_cli.py`，生成独立 `larkflow-personal-edge` wheel；最小 package initializer 不加载中央 `workflow/__init__.py`。

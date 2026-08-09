@@ -2,7 +2,9 @@
 
 > 飞书原生的企业协作 DAG：把多人流程拆成有依赖、有唯一责任人、可验收和可追溯的节点。
 >
-> 文档状态：2026-08-09 Phase 1 中央工作流基础实现。员工工作台已经覆盖 Owner 流程观察与受控操作、普通 Human Task 的参与者提交和运行时转交、受控自然语言流程发起，以及第一版受控 DAG 画板。画板支持节点拖动与浏览器本地布局、未来区域节点增删改预览确认、节点返工预览确认；所有结构变更和返工继续由中央领域服务重新授权、校验并写入 PostgreSQL，不把浏览器变成第二套工作流引擎。决定节点继续使用飞书决定卡。飞书 OAuth、PostgreSQL 耐久会话、管理员聚合、会话治理、公网 IP HTTPS 与安全响应头均已完成开发环境验证。十个 Python 服务、Caddy 和二十三份 migration 均已回读。真实登录 Owner 的公网画板修改、新增、返工与环路拒绝均已通过。下一产品门槛回到小范围真实业务试用和逐条来源约束增强；拖拽连边、协同编辑和通用自由白板不属于当前版本。正式域名、生产容量、异机容灾和 Personal Agent Edge 正式分发仍缺。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+> 文档状态：2026-08-09 Phase 1 中央工作流基础实现。员工工作台已经覆盖 Owner 流程观察与受控操作、普通 Human Task 的参与者提交和运行时转交、受控自然语言流程发起，以及第一版受控 DAG 画板。画板支持节点拖动与浏览器本地布局、未来区域节点增删改预览确认、节点返工预览确认；所有结构变更和返工继续由中央领域服务重新授权、校验并写入 PostgreSQL，不把浏览器变成第二套工作流引擎。决定节点继续使用飞书决定卡。飞书 OAuth、PostgreSQL 耐久会话、管理员聚合、会话治理、公网 IP HTTPS 与安全响应头均已完成开发环境验证。十个 Python 服务、Caddy 和二十三份 migration 均已回读。真实登录 Owner 的公网画板修改、新增、返工与环路拒绝均已通过。下一产品门槛回到小范围真实业务试用和逐条来源约束增强；拖拽连边、协同编辑和通用自由白板不属于当前版本。正式域名、生产容量和异机容灾仍缺。Personal Agent Edge 已完成最小分发、macOS Codex 目录级只读探针和会话级模型外发确认的开发验证，但签名、公证、可信摘要渠道、组织级数据政策和全新员工 Mac 验收未完成，正式分发仍为 No-Go。`Target` 表示目标产品契约，`As-built` 表示当前代码事实，两者不得混写。
+>
+> 内容提交 `ab3ad5e8f00dded71763c70e6437ff0782050e8b` 把 Personal Agent Edge 从普通只读 sandbox 收紧为 `larkflow_edge_readonly` permission Profile。根路径默认拒绝，最小系统路径只读，仅所选工作区可读，并排除 Agent 配置、环境文件、证书和常见私钥名；网络命令与其他本机工具禁用。`doctor --workspace` 和每次执行器构造都运行工作区可读、外部哨兵不可读两项真实探针，`run-once` 与 `serve` 在加载凭据或领取工作前要求当前前台会话显式确认模型外发。完整离线套件为 `1029 passed, 23 skipped`，真实 Codex 0.147 还验证 `.env` 被拒绝。最小 bundle 为 9 个 wheel，artifact SHA-256 为 `b59e918a2b823cd1c3c76349211b74615bcdda995c1c9645bfbcaa746cf64634`，manifest SHA-256 为 `a6074ab95cc9347b954cf611681a5244511cd02d48d7b02e303e04569440f771`。主 wheel SHA-256 为 `1330bd7c418a87241583b0b9fedccd766eea64951160ec855356d9fd18390042`，已部署到 `/srv/larkflow/target/releases/20260809_2122_edge_permissions_ab3ad5e/`；备份、23 份 migration、十个 Python 服务、Caddy、公网 Console 200、Edge 401 与零 warning 均已读回。该证据不证明无模型数据外发或正式员工分发安全。
 >
 > 内容提交 `b60cbbd8beb98742cc80082df78ac185274e3a8a` 增加基于 React Flow 12.11.2 与 ELK.js 0.12.0 的受控运行画板。节点拖动只保存当前浏览器布局；增加、修改和删除节点使用既有未来区域 GraphEditPreview，节点返工使用既有 RestartPreview，旧 Attempt、结果与审计继续保留。完整离线套件为 `1019 passed, 23 skipped`，wheel SHA-256 为 `e558f75a2e495d7d1e79e52a1b36458fb55c76ed6eca608e365dc94d43f97221`，已部署到 `/srv/larkflow/target/releases/20260809_175848_console_canvas_b60cbbd/`。migration runner 返回 `versions=[]`，长期 ledger 保持 `23 / 0023_console_draft_requests`；公网工作台返回 200，未登录图编辑接口返回 401，安装与公网静态资源哈希一致，十个 Python 服务和 Caddy 均为 `active / NRestarts=0`，部署窗口 warning 为 0。本地真实浏览器已完成拖动持久化、节点增加、节点修改、删除预览取消和四节点返工预览确认；本轮没有在服务器真实业务实例上执行图变更。
 >
@@ -58,7 +60,7 @@
 >
 > 内容提交 `81bd43983598ff319150344e779223cd03731eba` 新增哈希锁定离线 bundle、精确 wheel 清单、目标 Mac 与 Python 绑定、修复版 bootstrap pip 和安装时强制断网。故意注入无效索引与代理后，45-wheel 测试 bundle 仍完成安装与 `pip check`；pip 26.1 的 `CVE-2026-8643` 已通过先离线升级至 26.2.1 缓解，复扫无已知漏洞。正式分发安全评审结论仍为 No-Go：员工端依赖面尚未最小化，本机没有 Developer ID 身份或公证凭据，构建来源证明与目录级读取隔离也未完成。代码签名、公证和全新员工 Mac 验收尚未执行。
 >
-> 内容提交 `00067f717ca8e0258b234e81c56e1388226bc471` 已关闭上述依赖面最小化和单次构建证据缺口。员工 artifact 只包含四个 Edge 模块与最小 initializer，不包含中央控制面；真实 bundle 从 45 个 wheel 降到 9 个，主 artifact 为 18367 bytes。schema v2 manifest 绑定精确哈希 lock、SPDX SBOM 和 build proof，安装器逐项校验后使用 `--require-hashes` 断网安装。完整离线套件为 `1025 passed, 23 skipped`。真实 macOS bundle manifest SHA-256 为 `c09dd9abda0e71934e4365b3d828f32dc1050651fe677db6e3143bd68b3cde29`，隔离前缀安装、CLI、status 和中央模块未导入检查均通过。中央开发 wheel 已部署到 `/srv/larkflow/target/releases/20260809_2050_edge_minimal_00067f7/`，真实 migration 无新增，十个 Python 服务、Console、Edge 401 边界和零 warning 均已回读。正式员工分发仍为 No-Go，尚缺 Developer ID 签名、公证、可信摘要发布、目录级读取与数据外发治理，以及全新员工 Mac 验收。
+> 内容提交 `00067f717ca8e0258b234e81c56e1388226bc471` 已关闭上述依赖面最小化和单次构建证据缺口。员工 artifact 只包含四个 Edge 模块与最小 initializer，不包含中央控制面；真实 bundle 从 45 个 wheel 降到 9 个，主 artifact 为 18367 bytes。schema v2 manifest 绑定精确哈希 lock、SPDX SBOM 和 build proof，安装器逐项校验后使用 `--require-hashes` 断网安装。完整离线套件为 `1025 passed, 23 skipped`。真实 macOS bundle manifest SHA-256 为 `c09dd9abda0e71934e4365b3d828f32dc1050651fe677db6e3143bd68b3cde29`，隔离前缀安装、CLI、status 和中央模块未导入检查均通过。中央开发 wheel 已部署到 `/srv/larkflow/target/releases/20260809_2050_edge_minimal_00067f7/`，真实 migration 无新增，十个 Python 服务、Console、Edge 401 边界和零 warning 均已读回。该提交发布时目录隔离和模型外发治理尚缺，现已由顶部 `ab3ad5e8f00dded71763c70e6437ff0782050e8b` 的后续证据关闭开发机制门槛；正式员工分发仍缺 Developer ID 签名、公证、可信摘要发布、组织级数据政策和全新员工 Mac 验收。
 >
 > 内容提交 `b7e589ba4af0398573ec995254dd61e9b1a4508c` 新增来源约束型材料复核：`source_claims.v1` 区分来源事实、推断和开放问题，`source_claims.check` 只校验确定性来源契约，最终 Human Owner 通过版本绑定 Card 2.0 明确接受或退回。完整离线套件为 `898 passed, 18 skipped`。该提交现已部署；候选 wheel SHA-256 为 `0dcccb7f674135dde8b44ab08d437ba397b92397b8456ede8a064f66f1eb2af1`，长期库保持十九份 migration，九个 Python 服务回读 `active / running / NRestarts=0`。两个公开材料实例已分别完成直接接受，以及退回后从 Agent 节点重启、Attempt 2 重新执行和最终接受恢复；证据仅覆盖开发测试组织，下一阶段转向受控内部试用。
 >
@@ -70,7 +72,7 @@
 >
 > 内容提交 `d879a280d49e584d2d7e5927a498e7947544bb63` 已把自然语言 Agent 候选的明确决定出口升级为服务端结构不变量，并完成真实开发部署与飞书返工验收。真实合成实例先退回 Agent Attempt 1，再通过节点重启只创建 Agent 与最终 Human Attempt 2；具体意见进入 Agent 新输入，第二版补充回滚条件和监控窗口后明确接受。旧结果、两张决定卡、完成文档、最终通知和审计均保留。该证据只适用于开发环境，不证明内容质量、业务价值、生产容量或生产发布。
 >
-> last-synced: 00067f717ca8e0258b234e81c56e1388226bc471 · 2026-08-09
+> last-synced: ab3ad5e8f00dded71763c70e6437ff0782050e8b · 2026-08-09
 
 ## 阅读顺序
 
