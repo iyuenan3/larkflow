@@ -376,20 +376,11 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             retry_base=settings.retry_base,
             retry_max=settings.retry_max,
         )
-        console_worker = ConsoleDraftWorker(
+        console_worker = _console_draft_worker(
             PostgresConsoleDraftRepository(connection_factory),
             service,
             generator,
-            tenant_id=settings.tenant_id,
-            worker_id=settings.worker_id,
-            claim_limit=settings.claim_limit,
-            claim_ttl=settings.claim_ttl,
-            retry_base=settings.retry_base,
-            retry_max=settings.retry_max,
-            max_attempts=settings.max_attempts,
-            workbench_base_url=os.environ.get(
-                "LARKFLOW_CONSOLE_PUBLIC_BASE_URL"
-            ),
+            settings,
         )
         worker = _CombinedDraftWorkers(console_worker, role_binding_worker)
         if namespace.command == "generate-drafts-once":
@@ -1195,6 +1186,27 @@ class _CombinedDraftWorkers:
             failed=console.failed + role_binding.failed,
             errors=tuple(console.errors) + tuple(role_binding.errors),
         )
+
+
+def _console_draft_worker(
+    repository: Any,
+    service: WorkflowService,
+    generator: DraftDefinitionGenerator,
+    settings: TargetDraftGenerationSettings,
+) -> ConsoleDraftWorker:
+    """Build the Console draft worker with its exact production contract."""
+    return ConsoleDraftWorker(
+        repository,
+        service,
+        generator,
+        tenant_id=settings.tenant_id,
+        worker_id=settings.worker_id,
+        claim_limit=settings.claim_limit,
+        claim_ttl=settings.claim_ttl,
+        retry_base=settings.retry_base,
+        retry_max=settings.retry_max,
+        max_attempts=settings.max_attempts,
+    )
 
 
 def _maximum_llm_route_seconds(roles: Mapping[str, Mapping[str, Any]]) -> float:

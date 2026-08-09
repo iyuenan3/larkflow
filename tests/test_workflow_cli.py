@@ -12,10 +12,13 @@ from larkflow.workflow import (
 )
 from larkflow.workflow.cli import _instance_payload, _load_mapping
 from larkflow.workflow.cli import (
+    _console_draft_worker,
     _draft_preview_payload,
     _load_optional_mapping,
     build_parser,
 )
+from larkflow.workflow.config import TargetDraftGenerationSettings
+from larkflow.workflow.console_drafts import InMemoryConsoleDraftRepository
 
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
@@ -107,6 +110,23 @@ def test_cli_exposes_isolated_draft_generation_commands():
 
     assert once.command == "generate-drafts-once"
     assert persistent.command == "generate-drafts"
+
+
+def test_cli_builds_console_draft_worker_with_production_contract():
+    repository = InMemoryConsoleDraftRepository()
+    service = WorkflowService(InMemoryWorkflowRepository(), clock=lambda: NOW)
+    settings = TargetDraftGenerationSettings(
+        dsn="postgresql:///test",
+        tenant_id="tenant_1",
+        worker_id="draft-worker",
+    )
+
+    worker = _console_draft_worker(repository, service, object(), settings)
+
+    assert worker.repository is repository
+    assert worker.service is service
+    assert worker.tenant_id == "tenant_1"
+    assert worker.worker_id == "draft-worker"
 
 
 def test_status_projection_never_exposes_claim_token():
