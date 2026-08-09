@@ -9,6 +9,7 @@
 - Deployment：发布件位于 `/srv/larkflow/target/releases/20260809_0357_console_drafts_432fea7/`。升级前 custom-format 备份为 285292 bytes，SHA-256 为 `ffb091224db79ab6bab92b9f42ad0b3af8963c1380f940b5fad52329777b1b61`，并已通过 `pg_restore --list`。长期库应用 `0023_console_draft_requests`，migration 总数为 23。真实 PostgreSQL 双连接竞争只得到一个 `generating / attempt 1` claim，测试行清理一条。十个 Python 服务与 Caddy 均为 `active / NRestarts=0`；公网 200、未登录草稿 API 401、安全响应头、安装资源哈希与部署窗口零 warning 均已回读。
 - Boundary：当前证据关闭代码、持久化、竞争、部署、本地界面和真实成员主体 API 到中央模型的门槛。真实浏览器仍停在飞书授权入口，尚未完成可见点击验收；本版本也不证明模型内容质量、生产容量或组织采用。
 - Acceptance addendum：同一真实成员主体签发的五分钟临时会话，以纯合成会议摘要文本调用正式草稿 API。首次请求因未显式携带空协作者字段返回 400，临时会话已注销且没有落库；补齐 `collaborator_person_id: null` 后，请求从 `queued` 一次领取进入 `ready`，生成三节点草稿 `console_draft_0dc8215ed17b411288ca451be615a074`。独立数据库回读为 `draft / version 0 / template_version_id NULL / confirmed_at NULL / 0 NodeInstance / 0 Attempt / 0 Projection`，第二条临时会话也已注销。验收文本不含内部提交、迁移、人员信息或真实业务数据。
+- Visible acceptance addendum：真实 Chrome 会话从公网工作台填写纯合成目标与背景并点击生成。按钮立即进入“生成中”，页面展示中央 Agent 进度，随后自动打开三节点草稿 `console_draft_a11c6bb9d2ae071d78b10f802f567119`。独立数据库回读请求为 `ready / attempt 1`，实例为 `draft / version 0 / template_version_id NULL / confirmed_at NULL / 3 nodes / 0 NodeInstance / 0 Attempt / 0 Projection`。本轮没有确认启动、创建飞书待办或发送消息；服务保持 `active / NRestarts=0`，验收窗口 warning 为 0。真实浏览器点击门槛已关闭，模型质量、生产容量和组织采用仍未证明。
 
 ## v0.69.0-draft · 2026-08-09 · 真实 Human Task 转交与异步状态表达
 
