@@ -58,6 +58,8 @@
 >
 > 内容提交 `81bd43983598ff319150344e779223cd03731eba` 新增哈希锁定离线 bundle、精确 wheel 清单、目标 Mac 与 Python 绑定、修复版 bootstrap pip 和安装时强制断网。故意注入无效索引与代理后，45-wheel 测试 bundle 仍完成安装与 `pip check`；pip 26.1 的 `CVE-2026-8643` 已通过先离线升级至 26.2.1 缓解，复扫无已知漏洞。正式分发安全评审结论仍为 No-Go：员工端依赖面尚未最小化，本机没有 Developer ID 身份或公证凭据，构建来源证明与目录级读取隔离也未完成。代码签名、公证和全新员工 Mac 验收尚未执行。
 >
+> 内容提交 `00067f717ca8e0258b234e81c56e1388226bc471` 已关闭上述依赖面最小化和单次构建证据缺口。员工 artifact 只包含四个 Edge 模块与最小 initializer，不包含中央控制面；真实 bundle 从 45 个 wheel 降到 9 个，主 artifact 为 18367 bytes。schema v2 manifest 绑定精确哈希 lock、SPDX SBOM 和 build proof，安装器逐项校验后使用 `--require-hashes` 断网安装。完整离线套件为 `1025 passed, 23 skipped`。真实 macOS bundle manifest SHA-256 为 `c09dd9abda0e71934e4365b3d828f32dc1050651fe677db6e3143bd68b3cde29`，隔离前缀安装、CLI、status 和中央模块未导入检查均通过。中央开发 wheel 已部署到 `/srv/larkflow/target/releases/20260809_2050_edge_minimal_00067f7/`，真实 migration 无新增，十个 Python 服务、Console、Edge 401 边界和零 warning 均已回读。正式员工分发仍为 No-Go，尚缺 Developer ID 签名、公证、可信摘要发布、目录级读取与数据外发治理，以及全新员工 Mac 验收。
+>
 > 内容提交 `b7e589ba4af0398573ec995254dd61e9b1a4508c` 新增来源约束型材料复核：`source_claims.v1` 区分来源事实、推断和开放问题，`source_claims.check` 只校验确定性来源契约，最终 Human Owner 通过版本绑定 Card 2.0 明确接受或退回。完整离线套件为 `898 passed, 18 skipped`。该提交现已部署；候选 wheel SHA-256 为 `0dcccb7f674135dde8b44ab08d437ba397b92397b8456ede8a064f66f1eb2af1`，长期库保持十九份 migration，九个 Python 服务回读 `active / running / NRestarts=0`。两个公开材料实例已分别完成直接接受，以及退回后从 Agent 节点重启、Attempt 2 重新执行和最终接受恢复；证据仅覆盖开发测试组织，下一阶段转向受控内部试用。
 >
 > 内容提交 `0dc5359e990635c7b6aa16ec0bcd798eb8df39d0` 已把具体退回意见纳入 Human 决定与节点返工契约，内容提交 `f6125331aa541e824675e25f9cd2d756cd4c6b56` 修正原生 Card 2.0 表单提交的服务端绑定。退回表单必填且最多 1000 字，服务端把规范化意见保存到 Attempt、质量证据和审计，并在 `reject_target` 节点重启时只注入该目标的新 Attempt 输入快照。接受路径忽略额外意见，冻结 Instance Snapshot、范围外上游与旧 Attempt 不变。完整离线套件为 `910 passed, 18 skipped`，无需新增 migration。开发服务器已部署该候选；真实实例 `im_5717aa5b9480d146239907d5` 已完成具体意见退回、三节点重启、Agent Attempt 2 接收意见、Tool 从失败转为通过和新决定卡投影，当前停在最终人工复核。
@@ -68,7 +70,7 @@
 >
 > 内容提交 `d879a280d49e584d2d7e5927a498e7947544bb63` 已把自然语言 Agent 候选的明确决定出口升级为服务端结构不变量，并完成真实开发部署与飞书返工验收。真实合成实例先退回 Agent Attempt 1，再通过节点重启只创建 Agent 与最终 Human Attempt 2；具体意见进入 Agent 新输入，第二版补充回滚条件和监控窗口后明确接受。旧结果、两张决定卡、完成文档、最终通知和审计均保留。该证据只适用于开发环境，不证明内容质量、业务价值、生产容量或生产发布。
 >
-> last-synced: d879a280d49e584d2d7e5927a498e7947544bb63 · 2026-08-09
+> last-synced: 00067f717ca8e0258b234e81c56e1388226bc471 · 2026-08-09
 
 ## 阅读顺序
 

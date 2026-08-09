@@ -925,3 +925,13 @@
 - Tradeoff：用户可以在同一工作台理解并操作流程，且领域安全边界不变，但个人布局目前只存在当前浏览器，不会跨设备同步。表单依赖选择比拖拽连边更保守；大型图、图形化 diff、草稿态自由编辑、协同布局和可访问性仍需后续验证。
 - Evidence：内容提交 `b60cbbd8beb98742cc80082df78ac185274e3a8a`；完整离线套件 `1019 passed, 23 skipped`。本地真实浏览器完成拖动持久化、节点增加、节点修改、删除预览取消与四节点返工确认。wheel SHA-256 为 `e558f75a2e495d7d1e79e52a1b36458fb55c76ed6eca608e365dc94d43f97221`，已部署到 `/srv/larkflow/target/releases/20260809_175848_console_canvas_b60cbbd/`。migration runner 返回空集，公网静态资源与安装资源哈希一致，未登录图编辑接口返回 401，十个 Python 服务和 Caddy 均为 `active / NRestarts=0`。服务器真实登录图编辑尚待下一步关闭。
 - Status addendum · 2026-08-09：真实登录公网验收已关闭。纯合成实例依次完成未来节点修改、三节点返工和未来 Human 节点新增，Graph 从 r1 进入 r3；故意形成循环依赖的候选被拒绝，PostgreSQL 保持 `graph_revision=3 / version=6`，没有产生第三条图编辑审计或未消费 preview。页面和数据库均显示两次合法图更新与一次节点重启，相关服务无重启或 warning。本补充保留 ADR 原始状态与发布时证据，并只把开发环境 authenticated graph mutation 标记为通过。
+
+## ADR-105 · 2026-08-09 · Personal Agent Edge 从主 wheel 白名单重封装而不复制代码树
+
+- **Status：Accepted，implemented and verified in an isolated macOS installation。**
+- Problem：既有离线 bundle 直接分发完整 `larkflow` wheel，员工 Mac 因此携带中央 PostgreSQL、飞书、Console、LangGraph 和模型路由代码及其 45 个 wheel 依赖。另建一套 Edge 源码可以缩小包，但会形成协议、凭据和执行行为的第二份实现，长期漂移风险高于当前团队可维护范围。
+- Constraint：员工 artifact 只能包含 `pair / credential-migrate / doctor / run-once / serve` 所需代码；不能导入中央 `workflow/__init__.py`；中央 Gateway 与员工端必须共享同一 capability 字符串；主仓库保持单一实现来源；构建来源、依赖、SBOM 与 artifact 必须可由一个受信 manifest 绑定；旧 bundle 与直接 wheel 开发入口不能在同一发布中被静默解释为正式分发件。
+- Decision：把 `personal.readonly` 常量移到只依赖标准库的 `edge_contract.py`。发布方先从 clean commit 构建完整主 wheel，再由 builder 按固定白名单读取四个员工端模块，合成最小 `larkflow` package initializer、独立 distribution metadata 和 console entry point，生成 `larkflow-personal-edge` wheel。builder 不复制仓库目录，也不接受调用者提供任意模块列表。schema v2 bundle 为最小 artifact 下载 binary-only 依赖，生成精确哈希 lock、SPDX 2.3 SBOM 和包含 source wheel 摘要、source commit、目标与模块白名单的 build proof。manager 校验这些证据并使用 `--require-hashes` 离线安装。schema v1 完整 bundle 仅保留兼容。
+- Alternatives(否决)：继续分发完整中央 wheel；维护独立 `larkflow_edge` 源码副本；让员工安装器从 Git checkout 现场复制文件；把中央 `workflow/__init__.py` 改成大规模延迟导入；允许构建命令通过参数任意选择模块；只记录 requirements 名称而不锁定 wheel SHA-256；把 SBOM 或 build proof 放在 manifest 外而不校验。
+- Tradeoff：员工 artifact 从约 991 KB 缩至 18367 bytes，wheelhouse 从 45 个包降到 9 个，且员工 CLI 不再加载中央模块。代价是 builder 承担一段受测试保护的 wheel 重封装逻辑，员工端新增模块时必须显式更新白名单、安装器常量与边界测试。单次 build proof 仍不是签名来源证明，依赖解析也发生在构建时；正式发布仍需要 Developer ID 签名、公证、可信摘要渠道和全新 Mac 验收。
+- Evidence：内容提交 `00067f717ca8e0258b234e81c56e1388226bc471`。聚焦套件为 `72 passed`，完整离线套件为 `1025 passed, 23 skipped`。真实 macOS bundle manifest SHA-256 为 `c09dd9abda0e71934e4365b3d828f32dc1050651fe677db6e3143bd68b3cde29`，最小 artifact SHA-256 为 `f181f8aced851f5cf53c468e90f00c08e97a37da56b67d5f0ab65feee462e267`。隔离前缀断网安装、CLI、status、`pip check` 与中央模块未导入均通过。中央开发 wheel 已部署，十个服务、23 份 migration、Console 和 Edge 未认证边界均回读正常。

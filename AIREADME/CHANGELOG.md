@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.74.0-draft · 2026-08-09 · Personal Agent Edge 最小可验证分发
+
+- Added：内容提交 `00067f717ca8e0258b234e81c56e1388226bc471` 新增无中央依赖的 `edge_contract.py`。bundle builder 从同一 clean commit 的完整 `larkflow` wheel 中按白名单提取 `edge_contract.py`、`edge_client.py`、`edge_agent.py` 和 `edge_cli.py`，生成独立 `larkflow-personal-edge` wheel；最小 package initializer 不加载中央 `workflow/__init__.py`。
+- Supply chain：schema v2 manifest 绑定精确哈希 `requirements.lock`、SPDX 2.3 `sbom.spdx.json` 与 `build-proof.json`。manager 在修改安装目录前验证精确文件集、wheel metadata、lock 与 wheel 清单一致性、SBOM、source commit、目标和 artifact，并使用 `--require-hashes --no-index --only-binary=:all:` 断网安装。旧 schema v1 完整 bundle 只保留兼容。
+- Verified：聚焦 Edge 套件为 `72 passed`。首次完整运行的 3 个失败均来自本机 SOCKS 环境和沙箱禁止 `ps`；清空代理并允许进程树读取后，完整离线套件为 `1025 passed, 23 skipped`。真实 macOS arm64、CPython 3.12 bundle 只有 9 个 wheel，员工 artifact 为 18367 bytes、SHA-256 为 `f181f8aced851f5cf53c468e90f00c08e97a37da56b67d5f0ab65feee462e267`，manifest SHA-256 为 `c09dd9abda0e71934e4365b3d828f32dc1050651fe677db6e3143bd68b3cde29`。隔离前缀完成 pip bootstrap、哈希锁定安装、`pip check`、CLI 与 status 回读；安装态没有导入中央 `edge.py`。
+- Deployment：中央主 wheel SHA-256 为 `5e40dedc6cc370713330655466e85a071ac941c686d71d62a8d0ec045772abb8`，已部署到 `/srv/larkflow/target/releases/20260809_2050_edge_minimal_00067f7/`。升级前备份可由 `pg_restore --list` 读取，migration runner 返回空集，ledger 保持 23 份。九个 Target 服务和一个 legacy 消费者均为 `active / running / NRestarts=0`，两个虚拟环境 `pip check` 通过，公网与 loopback Console 200，未认证 Console API 和 Edge claim 401，部署窗口 warning 为 0。
+- Boundary：正式员工分发安全结论仍为 No-Go。当前 bundle 未签名、未公证，manifest 摘要未通过正式可信渠道发布；目录级读取隔离、数据外发治理和全新员工 Mac 验收也未完成。本轮不增加后台常驻、写 capability、Gateway 公网可用性或生产上线证明。
+
 ## v0.73.0-draft · 2026-08-09 · 自然语言 Agent 流程强制决定出口
 
 - Fixed：内容提交 `d879a280d49e584d2d7e5927a498e7947544bb63` 要求工作台自然语言候选只要包含 Agent，所有终端节点就必须是 `accept_reject` Human 决定，且 `reject_target` 必须是决定节点的直接上游 Agent。服务端在模型生成和一次有界修复后确定性校验该结构；纯 Human 候选保持普通待办语义。
