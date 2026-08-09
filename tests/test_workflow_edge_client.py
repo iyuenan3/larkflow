@@ -416,6 +416,62 @@ class FakeProcess:
         return self.stdout, ""
 
 
+def test_codex_executor_requires_explicit_model_egress_acknowledgement(
+    tmp_path: Path,
+):
+    with pytest.raises(ValueError, match="explicitly acknowledged"):
+        CodexReadonlyExecutor(
+            tmp_path,
+            codex_binary="/fake/codex",
+            isolation_probe=lambda _workspace, _binary: None,
+        )
+
+
+def test_codex_workspace_isolation_probe_checks_allowed_and_blocked_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(edge_client.sys, "platform", "darwin")
+    invocations: list[list[str]] = []
+    returncodes = iter((0, 1))
+
+    class Result:
+        def __init__(self, returncode: int) -> None:
+            self.returncode = returncode
+
+    def run(argv: list[str], **_kwargs: Any) -> Result:
+        invocations.append(argv)
+        return Result(next(returncodes))
+
+    edge_client.probe_codex_workspace_isolation(
+        tmp_path,
+        "/fake/codex",
+        run=run,
+    )
+
+    assert len(invocations) == 2
+    assert invocations[0][-1] == str(tmp_path.resolve())
+    assert invocations[1][-1].endswith("outside-workspace-sentinel")
+    assert any('":root"="deny"' in item for item in invocations[0])
+
+
+def test_codex_workspace_isolation_probe_fails_if_outside_path_is_readable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(edge_client.sys, "platform", "darwin")
+
+    class Result:
+        returncode = 0
+
+    with pytest.raises(RuntimeError, match="can read outside"):
+        edge_client.probe_codex_workspace_isolation(
+            tmp_path,
+            "/fake/codex",
+            run=lambda _argv, **_kwargs: Result(),
+        )
+
+
 def test_codex_adapter_uses_ephemeral_readonly_sandbox_and_scrubs_edge_secrets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -437,17 +493,23 @@ def test_codex_adapter_uses_ephemeral_readonly_sandbox_and_scrubs_edge_secrets(
     executor = CodexReadonlyExecutor(
         tmp_path,
         codex_binary="/fake/codex",
+        model_egress_acknowledged=True,
         clock=lambda: NOW,
         popen_factory=popen,
+        isolation_probe=lambda _workspace, _binary: None,
     )
 
     result = executor.execute(lease_payload())
 
     argv = invocation["argv"]
     assert argv[:2] == ["/fake/codex", "exec"]
-    assert ["--sandbox", "read-only"] == argv[2:4]
+    assert "--sandbox" not in argv
+    assert any("default_permissions" in item for item in argv)
+    assert any('":root"="deny"' in item for item in argv)
+    assert any('":workspace_roots"' in item for item in argv)
     assert "--ephemeral" in argv
     assert "--ignore-user-config" in argv
+    assert "--ignore-rules" in argv
     assert "--skip-git-repo-check" in argv
     assert not any("dangerously" in item for item in argv)
     assert invocation["kwargs"]["start_new_session"] is True
@@ -459,6 +521,13 @@ def test_codex_adapter_uses_ephemeral_readonly_sandbox_and_scrubs_edge_secrets(
     assert "LARK_APP_SECRET" not in invocation["kwargs"]["env"]
     assert "HTTPS_PROXY" not in invocation["kwargs"]["env"]
     assert result["content"] == "reviewed"
+    assert result["execution_policy"] == {
+        "workspace_access": "selected_workspace_readonly",
+        "sensitive_paths": "denied",
+        "command_network": "denied",
+        "model_egress": "acknowledged",
+        "permission_profile": "larkflow_edge_readonly",
+    }
     assert "只读" in (process.input or "")
 
 
@@ -479,8 +548,10 @@ def test_codex_adapter_can_explicitly_inherit_only_credential_free_loopback_prox
         tmp_path,
         codex_binary="/fake/codex",
         inherit_loopback_proxy=True,
+        model_egress_acknowledged=True,
         clock=lambda: NOW,
         popen_factory=popen,
+        isolation_probe=lambda _workspace, _binary: None,
     )
 
     executor.execute(lease_payload())
@@ -509,8 +580,10 @@ def test_codex_timeout_terminates_the_process_group(
     executor = CodexReadonlyExecutor(
         tmp_path,
         codex_binary="/fake/codex",
+        model_egress_acknowledged=True,
         clock=lambda: NOW,
         popen_factory=lambda *_args, **_kwargs: process,
+        isolation_probe=lambda _workspace, _binary: None,
     )
 
     with pytest.raises(TimeoutError):
@@ -537,8 +610,10 @@ def test_codex_communication_error_also_terminates_the_process_group(
     executor = CodexReadonlyExecutor(
         tmp_path,
         codex_binary="/fake/codex",
+        model_egress_acknowledged=True,
         clock=lambda: NOW,
         popen_factory=lambda *_args, **_kwargs: process,
+        isolation_probe=lambda _workspace, _binary: None,
     )
 
     with pytest.raises(OSError, match="broken output"):
@@ -580,8 +655,10 @@ def test_codex_stop_event_terminates_the_process_group(tmp_path: Path):
         tmp_path,
         codex_binary="/fake/codex",
         timeout_seconds=5,
+        model_egress_acknowledged=True,
         clock=lambda: NOW,
         popen_factory=lambda *_args, **_kwargs: process,
+        isolation_probe=lambda _workspace, _binary: None,
     )
 
     with pytest.raises(EdgeExecutionCancelled):

@@ -29,6 +29,7 @@ from .edge_client import (
     load_edge_keychain_reference,
     load_edge_credential,
     replace_edge_credential_with_keychain_reference,
+    probe_codex_workspace_isolation,
     save_edge_keychain_credential,
     save_edge_keychain_reference,
     save_edge_credential,
@@ -80,6 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="validate local credentials and Codex without contacting the server",
     )
     doctor.add_argument("--codex-binary", default="codex")
+    doctor.add_argument(
+        "--workspace",
+        required=True,
+        help="selected directory used for the local isolation probe",
+    )
 
     run_once = commands.add_parser(
         "run-once",
@@ -90,6 +96,14 @@ def build_parser() -> argparse.ArgumentParser:
     run_once.add_argument("--codex-binary", default="codex")
     run_once.add_argument("--timeout-seconds", type=float, default=240)
     run_once.add_argument("--renew-seconds", type=float, default=30)
+    run_once.add_argument(
+        "--allow-model-egress",
+        action="store_true",
+        help=(
+            "confirm that the prompt, central input, and necessary content from "
+            "the selected workspace may be sent to the Codex model provider"
+        ),
+    )
     run_once.add_argument(
         "--inherit-loopback-proxy",
         action="store_true",
@@ -107,6 +121,13 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--retry-base-seconds", type=float, default=1)
     serve.add_argument("--retry-max-seconds", type=float, default=30)
     serve.add_argument("--heartbeat-seconds", type=float, default=60)
+    serve.add_argument(
+        "--allow-model-egress",
+        action="store_true",
+        help=(
+            "confirm model data egress for this visible foreground session"
+        ),
+    )
     serve.add_argument(
         "--max-tasks",
         type=int,
@@ -201,6 +222,10 @@ def _run(namespace: argparse.Namespace) -> int:
         raise ValueError("wait-seconds must be between 0 and 25")
     if namespace.timeout_seconds <= 0 or namespace.renew_seconds <= 0:
         raise ValueError("timeout-seconds and renew-seconds must be positive")
+    if not namespace.allow_model_egress:
+        raise ValueError(
+            "--allow-model-egress is required after reviewing the selected workspace"
+        )
     stored, credential_store, lock_path, credential_source_path = (
         _load_selected_credential(namespace, credential_path)
     )
@@ -209,13 +234,13 @@ def _run(namespace: argparse.Namespace) -> int:
         credential=stored.credential,
     )
     workspace_path = Path(namespace.workspace).expanduser().resolve(strict=True)
-    if namespace.command == "serve":
-        _validate_serve_workspace(workspace_path, credential_source_path)
+    _validate_serve_workspace(workspace_path, credential_source_path)
     executor = CodexReadonlyExecutor(
         workspace_path,
         codex_binary=namespace.codex_binary,
         timeout_seconds=namespace.timeout_seconds,
         inherit_loopback_proxy=namespace.inherit_loopback_proxy,
+        model_egress_acknowledged=namespace.allow_model_egress,
     )
     worker = EdgeWorker(
         transport,
@@ -244,6 +269,7 @@ def _run(namespace: argparse.Namespace) -> int:
                     "node_key": report.lease.node_key if report.lease else None,
                     "attempt_no": report.lease.attempt_no if report.lease else None,
                     "error_type": report.error,
+                    "model_egress_acknowledged": True,
                 }
             )
             return 0 if report.status in {"completed", "no_work"} else 2
@@ -268,6 +294,8 @@ def _run(namespace: argparse.Namespace) -> int:
                     "credential_store": credential_store,
                     "workspace": str(workspace_path),
                     "capability": PERSONAL_READONLY_CAPABILITY,
+                    "workspace_access": "selected_workspace_readonly",
+                    "model_egress_acknowledged": True,
                     "wait_seconds": namespace.wait_seconds,
                     "heartbeat_seconds": namespace.heartbeat_seconds,
                     "max_tasks": namespace.max_tasks,
@@ -394,7 +422,7 @@ def _migrate_credential_file(
 
 
 def _doctor(namespace: argparse.Namespace, credential_path: Path) -> int:
-    stored, credential_store, _lock_path, _source_path = _load_selected_credential(
+    stored, credential_store, _lock_path, source_path = _load_selected_credential(
         namespace,
         credential_path,
     )
@@ -405,13 +433,29 @@ def _doctor(namespace: argparse.Namespace, credential_path: Path) -> int:
             candidate.is_file() and os.access(candidate, os.X_OK)
         )
     else:
-        codex_available = shutil.which(codex_binary) is not None
+        resolved_binary = shutil.which(codex_binary)
+        codex_available = resolved_binary is not None
+    if os.path.sep in codex_binary:
+        resolved_binary = (
+            str(Path(codex_binary).expanduser()) if codex_available else None
+        )
+    workspace_path = Path(namespace.workspace).expanduser().resolve(strict=True)
+    _validate_serve_workspace(workspace_path, source_path)
+    isolation_status = "blocked"
+    isolation_error: str | None = None
+    if codex_available and resolved_binary is not None:
+        try:
+            probe_codex_workspace_isolation(workspace_path, resolved_binary)
+        except Exception as exc:
+            isolation_error = type(exc).__name__
+        else:
+            isolation_status = "ok"
     connection_mode = (
         "loopback_tunnel_required"
         if stored.server_url.startswith("http://")
         else "private_https"
     )
-    local_ready = codex_available
+    local_ready = codex_available and isolation_status == "ok"
     _print(
         {
             "event": "edge_doctor",
@@ -423,6 +467,11 @@ def _doctor(namespace: argparse.Namespace, credential_path: Path) -> int:
             },
             "codex": {
                 "status": "ok" if codex_available else "missing",
+            },
+            "workspace_isolation": {
+                "status": isolation_status,
+                "mode": "codex_permission_profile",
+                "error_type": isolation_error,
             },
             "network": {
                 "status": "not_checked",
@@ -446,7 +495,7 @@ def _validate_serve_workspace(
 ) -> None:
     home = Path.home().resolve()
     if workspace == Path(workspace.anchor) or workspace == home:
-        raise ValueError("serve workspace cannot be the filesystem root or user home")
+        raise ValueError("Edge workspace cannot be the filesystem root or user home")
     if credential_path is None:
         return
     credential = credential_path.expanduser().resolve(strict=True)

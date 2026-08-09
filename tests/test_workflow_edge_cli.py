@@ -32,10 +32,14 @@ def test_edge_cli_exposes_pair_doctor_run_once_and_foreground_serve_commands():
     paired = parser.parse_args(
         ["pair", "--server", "https://edge.example.com", "--name", "Mac"]
     )
-    run = parser.parse_args(["run-once", "--workspace", "/workspace"])
-    serve = parser.parse_args(["serve", "--workspace", "/workspace"])
+    run = parser.parse_args(
+        ["run-once", "--workspace", "/workspace", "--allow-model-egress"]
+    )
+    serve = parser.parse_args(
+        ["serve", "--workspace", "/workspace", "--allow-model-egress"]
+    )
     migrate = parser.parse_args(["credential-migrate", "--delete-source"])
-    doctor = parser.parse_args(["doctor"])
+    doctor = parser.parse_args(["doctor", "--workspace", "/workspace"])
 
     assert paired.command == "pair"
     assert run.command == "run-once"
@@ -43,6 +47,8 @@ def test_edge_cli_exposes_pair_doctor_run_once_and_foreground_serve_commands():
     assert migrate.command == "credential-migrate"
     assert doctor.command == "doctor"
     assert doctor.codex_binary == "codex"
+    assert run.allow_model_egress is True
+    assert serve.allow_model_egress is True
     assert migrate.delete_source is True
     assert serve.wait_seconds == 20
     assert serve.heartbeat_seconds == 60
@@ -61,15 +67,30 @@ def test_doctor_validates_local_keychain_and_codex_without_exposing_identity(
         credential="private-device-id.private-secret",
     )
     messages: list[dict[str, object]] = []
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    metadata = tmp_path / "metadata.json"
+    metadata.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
         edge_cli,
         "_load_selected_credential",
         lambda _namespace, path: (stored, "keychain", path, path),
     )
     monkeypatch.setattr(edge_cli.shutil, "which", lambda _name: "/usr/bin/codex")
+    monkeypatch.setattr(
+        edge_cli,
+        "probe_codex_workspace_isolation",
+        lambda _workspace, _binary: None,
+    )
     monkeypatch.setattr(edge_cli, "_print", lambda value: messages.append(value))
     namespace = build_parser().parse_args(
-        ["--credential-file", str(tmp_path / "metadata.json"), "doctor"]
+        [
+            "--credential-file",
+            str(metadata),
+            "doctor",
+            "--workspace",
+            str(workspace),
+        ]
     )
 
     assert _run(namespace) == 0
@@ -84,6 +105,11 @@ def test_doctor_validates_local_keychain_and_codex_without_exposing_identity(
                 "secret_in_metadata": False,
             },
             "codex": {"status": "ok"},
+            "workspace_isolation": {
+                "status": "ok",
+                "mode": "codex_permission_profile",
+                "error_type": None,
+            },
             "network": {
                 "status": "not_checked",
                 "mode": "loopback_tunnel_required",
@@ -104,6 +130,10 @@ def test_doctor_reports_missing_codex_as_blocked(tmp_path: Path, monkeypatch):
         credential="device_1.secret",
     )
     messages: list[dict[str, object]] = []
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    credential = tmp_path / "device.json"
+    credential.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
         edge_cli,
         "_load_selected_credential",
@@ -112,12 +142,28 @@ def test_doctor_reports_missing_codex_as_blocked(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(edge_cli.shutil, "which", lambda _name: None)
     monkeypatch.setattr(edge_cli, "_print", lambda value: messages.append(value))
     namespace = build_parser().parse_args(
-        ["--credential-file", str(tmp_path / "device.json"), "doctor"]
+        [
+            "--credential-file",
+            str(credential),
+            "doctor",
+            "--workspace",
+            str(workspace),
+        ]
     )
 
     assert _run(namespace) == 2
     assert messages[0]["status"] == "blocked"
     assert messages[0]["codex"] == {"status": "missing"}
+    assert messages[0]["workspace_isolation"]["status"] == "blocked"
+
+
+def test_execution_requires_explicit_model_egress_acknowledgement(tmp_path: Path):
+    namespace = build_parser().parse_args(
+        ["run-once", "--workspace", str(tmp_path)]
+    )
+
+    with pytest.raises(ValueError, match="--allow-model-egress"):
+        _run(namespace)
 
 
 def test_serve_workspace_cannot_contain_the_device_credential(tmp_path: Path):
