@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-内容提交 `4eb417cc9d020b2165b0fa8f857e3cdc8806d126` 修正草稿画板依赖端点在自动适配后过小的问题。真实登录验收发现旧标签页需要显式刷新才能加载草稿可编辑状态；刷新后增加节点和编辑节点已启用，但原 9 像素端点在当前约 0.38 倍缩放下只剩约 3 到 4 像素。端点现扩大为 24 像素，增加高亮、十字光标和更大的悬停反馈。完整离线套件仍为 `1034 passed, 24 skipped`。wheel SHA-256 为 `339c7ec280b4d3151dd49c33e9f5473433e26e9fe33009e0954e32ca1ed95686`，已部署到 `/srv/larkflow/target/releases/20260809_232154_canvas_handles_4eb417c/`；安装态、loopback 与公网 CSS SHA-256 均为 `229d2723513e6e828415b18f85030abb7d1f2ce2645fc99342b397f05f0f6726`，Console 与 Caddy 为 active，Console `NRestarts=0`，部署窗口无 warning。浏览器控制通道在部署后刷新时持续超时，因此最终可见拖拽确认仍保持待验收，不把静态资源回读描述为交互通过。
+内容提交 `4eb417cc9d020b2165b0fa8f857e3cdc8806d126` 修正草稿画板依赖端点在自动适配后过小的问题。真实登录验收发现旧标签页需要显式刷新才能加载草稿可编辑状态；刷新后增加节点和编辑节点已启用，但原 9 像素端点在当前约 0.38 倍缩放下只剩约 3 到 4 像素。端点现扩大为 24 像素，增加高亮、十字光标和更大的悬停反馈。完整离线套件仍为 `1034 passed, 24 skipped`。wheel SHA-256 为 `339c7ec280b4d3151dd49c33e9f5473433e26e9fe33009e0954e32ca1ed95686`，已部署到 `/srv/larkflow/target/releases/20260809_232154_canvas_handles_4eb417c/`；安装态、loopback 与公网 CSS SHA-256 均为 `229d2723513e6e828415b18f85030abb7d1f2ce2645fc99342b397f05f0f6726`，Console 与 Caddy 为 active，Console `NRestarts=0`，部署窗口无 warning。随后在公网真实登录工作台完成最终可见验收：纯合成草稿 `console_draft_a11c6bb9d2ae071d78b10f802f567119` 通过拖拽把第 1 节点直接连接到第 3 节点，确认 Graph r1 到 r2 的修改预览，再选中新增连线、断开并确认 Graph r2 到 r3。页面最终只保留原有两条依赖边，PostgreSQL 回读为 `draft / version 2 / graph_revision 3`，两条预览均已消费且恰有两条图编辑审计，NodeInstance、Attempt 与 Projection 均为 0。本轮没有启动流程或创建外部资源；该证据只关闭开发环境中的草稿连线可见手势门槛。
 
 内容提交 `f320fd5b9b200fae24cefeb6a853c684a38e7565` 把受控 DAG 画板扩展到草稿态，并增加画板依赖连线。Owner 现在可以在草稿启动前增加、修改、删除节点，也可以拖动节点端点增加依赖、选中连线后断开依赖；每次结构变化仍先创建 GraphEditPreview，再由本人确认。草稿确认图编辑时只更新冻结 Snapshot 与 graph revision，不创建 NodeInstance、Attempt、outbox 或外部待办，后续“确认并启动”才独立物化运行时。运行中流程继续只允许修改没有执行痕迹的未来区域。完整离线套件为 `1034 passed, 24 skipped`。wheel SHA-256 为 `fd164c85fe0d3f0076d9ed37a4d2212e149cc4cd394fe136ec21f13ce132c1d9`，已部署到 `/srv/larkflow/target/releases/20260809_223113_draft_canvas_f320fd5/`；升级前备份可读，23 份 migration、十个 Python 服务、Caddy、Console 200、未认证图编辑 401、安装资源与公网资源哈希和零 warning 均已读回。一次性真实 PostgreSQL 实例先在草稿态连接和断开依赖，两次确认后仍为 `draft / 0 NodeInstance / 0 Attempt`，随后独立启动并物化 3 个节点和 3 个 Attempt。开发服务器的登录工作台刷新后仍保持会话；本轮浏览器控制器在切换流程时超时，因此没有把可见拖拽手势复验描述为已通过。
 
@@ -315,3 +315,7 @@ macOS 默认把设备密钥保存在当前用户登录 Keychain，密钥不会�
 - 不提交凭证、token、真实人员 ID 或生产数据库。
 - 飞书对象和执行器回传都必须经过服务端授权、版本与幂等校验。
 - 测试不得构造 `build_real_service`，不得访问网络或真实飞书资源。
+
+## 致谢
+
+感谢 [AI自动推广系统](http://bizbot.zvo.cn/)（BizBot）对本项目的赞助与支持。
