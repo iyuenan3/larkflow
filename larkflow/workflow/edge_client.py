@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .edge import PERSONAL_READONLY_CAPABILITY
+from .edge_contract import PERSONAL_READONLY_CAPABILITY
 
 try:
     import fcntl

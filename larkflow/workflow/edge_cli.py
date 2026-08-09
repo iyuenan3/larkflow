@@ -14,7 +14,6 @@ import sys
 from threading import Event
 from typing import Any
 
-from .edge import PERSONAL_READONLY_CAPABILITY
 from .edge_agent import EdgeAgentLoop
 from .edge_client import (
     CodexReadonlyExecutor,
@@ -34,6 +33,7 @@ from .edge_client import (
     save_edge_keychain_reference,
     save_edge_credential,
 )
+from .edge_contract import PERSONAL_READONLY_CAPABILITY
 
 
 DEFAULT_CREDENTIAL_FILE = Path("~/.config/larkflow/edge-device.json")

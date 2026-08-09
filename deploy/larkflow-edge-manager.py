@@ -29,6 +29,16 @@ COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 MINIMUM_BOOTSTRAP_PIP = (26, 1, 2)
 BUNDLE_MANIFEST = "manifest.json"
 BUNDLE_MANAGER = "larkflow-edge-manager"
+BUNDLE_REQUIREMENTS_LOCK = "requirements.lock"
+BUNDLE_SBOM = "sbom.spdx.json"
+BUNDLE_BUILD_PROOF = "build-proof.json"
+EDGE_DISTRIBUTION = "larkflow-personal-edge"
+EDGE_MODULES = (
+    "larkflow/workflow/edge_agent.py",
+    "larkflow/workflow/edge_cli.py",
+    "larkflow/workflow/edge_client.py",
+    "larkflow/workflow/edge_contract.py",
+)
 
 
 class EdgeInstallError(RuntimeError):
@@ -45,6 +55,7 @@ class InstallSource:
         "source_commit",
         "bootstrap_pip",
         "bootstrap_pip_version",
+        "requirements_lock",
     )
 
     def __init__(
@@ -58,6 +69,7 @@ class InstallSource:
         source_commit: str | None = None,
         bootstrap_pip: Path | None = None,
         bootstrap_pip_version: str | None = None,
+        requirements_lock: Path | None = None,
     ) -> None:
         self.wheel = wheel
         self.wheel_sha256 = wheel_sha256
@@ -67,6 +79,7 @@ class InstallSource:
         self.source_commit = source_commit
         self.bootstrap_pip = bootstrap_pip
         self.bootstrap_pip_version = bootstrap_pip_version
+        self.requirements_lock = requirements_lock
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -210,6 +223,7 @@ def install(
                 source_commit=source.source_commit,
                 bootstrap_pip=source.bootstrap_pip,
                 bootstrap_pip_version=source.bootstrap_pip_version,
+                requirements_lock=source.requirements_lock,
             )
             if installed_version != package_version:
                 raise EdgeInstallError(
@@ -309,6 +323,7 @@ def _prepare_release(
     source_commit: str | None = None,
     bootstrap_pip: Path | None = None,
     bootstrap_pip_version: str | None = None,
+    requirements_lock: Path | None = None,
 ) -> str:
     venv = target / "venv"
     _run(
@@ -365,7 +380,10 @@ def _prepare_release(
                 str(wheelhouse),
             ]
         )
-    install_argv.append(str(wheel))
+    if requirements_lock is not None:
+        install_argv.extend(["--require-hashes", "-r", str(requirements_lock)])
+    else:
+        install_argv.append(str(wheel))
     _run(
         install_argv,
         label="install wheel and dependencies",
@@ -376,11 +394,16 @@ def _prepare_release(
         label="validate installed dependencies",
         offline=True,
     )
+    package_name, _wheel_version = _wheel_identity(wheel)
     package_version = _capture(
         [
             str(venv_python),
             "-c",
-            "from importlib.metadata import version; print(version('larkflow'))",
+            (
+                "from importlib.metadata import version; import sys; "
+                "print(version(sys.argv[1]))"
+            ),
+            package_name,
         ]
     ).strip()
     if not package_version or not re.fullmatch(r"[A-Za-z0-9._+-]+", package_version):
@@ -390,7 +413,7 @@ def _prepare_release(
         target / "manifest.json",
         {
             "schema_version": 2,
-            "package": "larkflow",
+            "package": package_name,
             "package_version": package_version,
             "wheel_filename": wheel.name,
             "wheel_sha256": wheel_sha256,
@@ -546,10 +569,16 @@ def _verified_bundle(
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EdgeInstallError("bundle manifest cannot be read") from exc
-    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") not in {1, 2}
+    ):
         raise EdgeInstallError("bundle manifest is invalid")
-    if payload.get("package") != "larkflow":
-        raise EdgeInstallError("bundle package must be larkflow")
+    schema_version = payload["schema_version"]
+    bundle_package = payload.get("package")
+    expected_package = "larkflow" if schema_version == 1 else EDGE_DISTRIBUTION
+    if bundle_package != expected_package:
+        raise EdgeInstallError(f"bundle package must be {expected_package}")
     source_commit = payload.get("source_commit")
     if not isinstance(source_commit, str) or not COMMIT_PATTERN.fullmatch(source_commit):
         raise EdgeInstallError("bundle source commit is invalid")
@@ -604,6 +633,7 @@ def _verified_bundle(
         payload.get("wheels"),
         wheel_paths=wheel_paths,
         expected_files=expected_files,
+        required_package=expected_package,
     )
     bootstrap = payload.get("bootstrap")
     if not isinstance(bootstrap, dict) or not isinstance(bootstrap.get("pip"), dict):
@@ -638,11 +668,29 @@ def _verified_bundle(
     wheel = _verified_wheel(bundle / wheel_relative, wheel_sha256)
     if expected_files[wheel_relative][0] != wheel_sha256.lower():
         raise EdgeInstallError("bundle artifact hash disagrees with the file list")
-    package_version = _wheel_package_version(wheel)
+    artifact_name, package_version = _wheel_identity(wheel)
+    if artifact_name != expected_package:
+        raise EdgeInstallError("bundle artifact package disagrees with the manifest")
     if payload.get("package_version") != package_version:
         raise EdgeInstallError("bundle package version disagrees with the artifact")
+    requirements_lock = _verify_bundle_evidence(
+        bundle,
+        schema_version=schema_version,
+        evidence=payload.get("evidence"),
+        expected_files=expected_files,
+        inventory=inventory,
+        source_commit=source_commit,
+        target=target,
+        artifact_path=wheel_relative,
+        artifact_sha256=wheel_sha256.lower(),
+    )
+    evidence_paths = (
+        {BUNDLE_REQUIREMENTS_LOCK, BUNDLE_SBOM, BUNDLE_BUILD_PROOF}
+        if schema_version == 2
+        else set()
+    )
     for relative in expected_files:
-        if relative == BUNDLE_MANAGER:
+        if relative == BUNDLE_MANAGER or relative in evidence_paths:
             continue
         if (
             not relative.startswith("wheelhouse/")
@@ -662,6 +710,7 @@ def _verified_bundle(
         source_commit=source_commit,
         bootstrap_pip=bundle / pip_path,
         bootstrap_pip_version=pip_version,
+        requirements_lock=requirements_lock,
     )
 
 
@@ -699,6 +748,7 @@ def _verify_bundle_inventory(
     *,
     wheel_paths: set[str],
     expected_files: dict[str, tuple[str, int]],
+    required_package: str,
 ) -> dict[str, tuple[str, str, str]]:
     if not isinstance(value, list) or not value:
         raise EdgeInstallError("bundle wheel inventory is invalid")
@@ -731,9 +781,141 @@ def _verify_bundle_inventory(
         declared_paths.add(relative)
         package_names.add(name)
         inventory[name] = (relative, version, digest.lower())
-    if declared_paths != wheel_paths or "larkflow" not in package_names:
+    if declared_paths != wheel_paths or required_package not in package_names:
         raise EdgeInstallError("bundle wheel inventory is incomplete")
     return inventory
+
+
+def _verify_bundle_evidence(
+    bundle: Path,
+    *,
+    schema_version: int,
+    evidence: Any,
+    expected_files: dict[str, tuple[str, int]],
+    inventory: dict[str, tuple[str, str, str]],
+    source_commit: str,
+    target: dict[str, Any],
+    artifact_path: str,
+    artifact_sha256: str,
+) -> Path | None:
+    if schema_version == 1:
+        if evidence is not None:
+            raise EdgeInstallError("legacy bundle cannot declare build evidence")
+        return None
+    if not isinstance(evidence, dict):
+        raise EdgeInstallError("bundle build evidence is missing")
+    expected = {
+        "requirements_lock": BUNDLE_REQUIREMENTS_LOCK,
+        "sbom": BUNDLE_SBOM,
+        "build_proof": BUNDLE_BUILD_PROOF,
+    }
+    evidence_digests: dict[str, str] = {}
+    for key, expected_path in expected.items():
+        item = evidence.get(key)
+        if not isinstance(item, dict):
+            raise EdgeInstallError("bundle build evidence is invalid")
+        relative = _safe_bundle_relative_path(item.get("path"))
+        digest = item.get("sha256")
+        if (
+            relative != expected_path
+            or not isinstance(digest, str)
+            or not SHA256_PATTERN.fullmatch(digest)
+            or expected_files.get(relative, (None, None))[0] != digest.lower()
+        ):
+            raise EdgeInstallError("bundle build evidence is invalid")
+        evidence_digests[key] = digest.lower()
+
+    lock_path = bundle / BUNDLE_REQUIREMENTS_LOCK
+    try:
+        actual_lock = lock_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise EdgeInstallError("bundle requirements lock cannot be read") from exc
+    runtime_inventory = {
+        name: value for name, value in inventory.items() if name != "pip"
+    }
+    if actual_lock != _requirements_lock(runtime_inventory):
+        raise EdgeInstallError("bundle requirements lock disagrees with wheel inventory")
+
+    try:
+        sbom = json.loads((bundle / BUNDLE_SBOM).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise EdgeInstallError("bundle SBOM cannot be read") from exc
+    if not isinstance(sbom, dict) or sbom.get("spdxVersion") != "SPDX-2.3":
+        raise EdgeInstallError("bundle SBOM is invalid")
+    sbom_packages = sbom.get("packages")
+    if not isinstance(sbom_packages, list):
+        raise EdgeInstallError("bundle SBOM package inventory is invalid")
+    described: dict[str, tuple[str, str]] = {}
+    for item in sbom_packages:
+        if not isinstance(item, dict):
+            raise EdgeInstallError("bundle SBOM package inventory is invalid")
+        name = item.get("name")
+        version = item.get("versionInfo")
+        checksums = item.get("checksums")
+        if (
+            not isinstance(name, str)
+            or not isinstance(version, str)
+            or not isinstance(checksums, list)
+        ):
+            raise EdgeInstallError("bundle SBOM package inventory is invalid")
+        sha256_values = {
+            value.get("checksumValue")
+            for value in checksums
+            if isinstance(value, dict) and value.get("algorithm") == "SHA256"
+        }
+        if len(sha256_values) != 1:
+            raise EdgeInstallError("bundle SBOM package inventory is invalid")
+        digest = next(iter(sha256_values))
+        if not isinstance(digest, str):
+            raise EdgeInstallError("bundle SBOM package inventory is invalid")
+        described[name] = (version, digest.lower())
+    expected_described = {
+        name: (version, digest)
+        for name, (_path, version, digest) in inventory.items()
+    }
+    if described != expected_described:
+        raise EdgeInstallError("bundle SBOM disagrees with wheel inventory")
+
+    try:
+        proof = json.loads((bundle / BUNDLE_BUILD_PROOF).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise EdgeInstallError("bundle build proof cannot be read") from exc
+    if (
+        not isinstance(proof, dict)
+        or proof.get("schema_version") != 1
+        or proof.get("source_commit") != source_commit
+        or proof.get("target") != target
+        or proof.get("edge_modules") != list(EDGE_MODULES)
+        or proof.get("artifact")
+        != {"path": artifact_path, "sha256": artifact_sha256}
+        or proof.get("requirements_lock")
+        != {
+            "path": BUNDLE_REQUIREMENTS_LOCK,
+            "sha256": evidence_digests["requirements_lock"],
+        }
+        or proof.get("sbom")
+        != {"path": BUNDLE_SBOM, "sha256": evidence_digests["sbom"]}
+    ):
+        raise EdgeInstallError("bundle build proof is invalid")
+    source_artifact = proof.get("source_artifact")
+    if (
+        not isinstance(source_artifact, dict)
+        or not isinstance(source_artifact.get("filename"), str)
+        or not isinstance(source_artifact.get("sha256"), str)
+        or not SHA256_PATTERN.fullmatch(source_artifact["sha256"])
+    ):
+        raise EdgeInstallError("bundle source artifact proof is invalid")
+    return lock_path
+
+
+def _requirements_lock(
+    inventory: dict[str, tuple[str, str, str]],
+) -> str:
+    lines = [
+        f"{name}=={version} --hash=sha256:{digest}"
+        for name, (_path, version, digest) in sorted(inventory.items())
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def _python_target(python: Path) -> dict[str, str]:
@@ -788,8 +970,8 @@ def _wheel_identity(path: Path) -> tuple[str, str]:
 
 def _wheel_package_version(path: Path) -> str:
     package_name, version = _wheel_identity(path)
-    if package_name != "larkflow":
-        raise EdgeInstallError("wheel package must be larkflow")
+    if package_name not in {"larkflow", EDGE_DISTRIBUTION}:
+        raise EdgeInstallError("wheel package must be larkflow or larkflow-personal-edge")
     return version
 
 

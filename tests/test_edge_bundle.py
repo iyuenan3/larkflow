@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import zipfile
 
@@ -31,6 +32,13 @@ def wheel(path: Path) -> Path:
             "larkflow-0.0.2.dist-info/METADATA",
             "Metadata-Version: 2.1\nName: larkflow\nVersion: 0.0.2\n",
         )
+        for name in (
+            "larkflow/workflow/edge_agent.py",
+            "larkflow/workflow/edge_cli.py",
+            "larkflow/workflow/edge_client.py",
+            "larkflow/workflow/edge_contract.py",
+        ):
+            archive.writestr(name, (ROOT / name).read_bytes())
     return path
 
 
@@ -88,16 +96,21 @@ def test_builder_creates_hash_locked_offline_bundle(tmp_path: Path, monkeypatch)
     assert manifest["source_commit"] == "a" * 40
     assert manifest["target"]["platform"] == "darwin"
     assert manifest["artifact"]["path"].startswith("wheelhouse/")
+    assert manifest["schema_version"] == 2
+    assert manifest["package"] == "larkflow-personal-edge"
     assert {(item["name"], item["version"]) for item in manifest["wheels"]} == {
         ("dependency", "1.0"),
-        ("larkflow", "0.0.2"),
+        ("larkflow-personal-edge", "0.0.2"),
         ("pip", "26.2.1"),
     }
     assert manifest["bootstrap"]["pip"]["name"] == "pip"
     assert manifest["bootstrap"]["pip"]["version"] == "26.2.1"
     assert {item["path"] for item in manifest["files"]} == {
+        "build-proof.json",
         "larkflow-edge-manager",
-        "wheelhouse/larkflow-0.0.2-py3-none-any.whl",
+        "requirements.lock",
+        "sbom.spdx.json",
+        "wheelhouse/larkflow_personal_edge-0.0.2-py3-none-any.whl",
         "wheelhouse/dependency-1.0-py3-none-any.whl",
         "wheelhouse/pip-26.2.1-py3-none-any.whl",
     }
@@ -105,6 +118,59 @@ def test_builder_creates_hash_locked_offline_bundle(tmp_path: Path, monkeypatch)
         candidate = output / item["path"]
         assert candidate.stat().st_size == item["size"]
         assert hashlib.sha256(candidate.read_bytes()).hexdigest() == item["sha256"]
+
+    artifact = output / manifest["artifact"]["path"]
+    with zipfile.ZipFile(artifact) as archive:
+        package_files = {
+            name
+            for name in archive.namelist()
+            if ".dist-info/" not in name and not name.endswith("/")
+        }
+    assert package_files == {
+        "larkflow/__init__.py",
+        "larkflow/workflow/__init__.py",
+        "larkflow/workflow/edge_agent.py",
+        "larkflow/workflow/edge_cli.py",
+        "larkflow/workflow/edge_client.py",
+        "larkflow/workflow/edge_contract.py",
+    }
+    assert "larkflow/workflow/edge.py" not in package_files
+
+    lock = (output / "requirements.lock").read_text(encoding="utf-8")
+    assert "larkflow-personal-edge==0.0.2 --hash=sha256:" in lock
+    assert "dependency==1.0 --hash=sha256:" in lock
+    assert "pip==" not in lock
+    sbom = json.loads((output / "sbom.spdx.json").read_text(encoding="utf-8"))
+    assert sbom["spdxVersion"] == "SPDX-2.3"
+    assert {item["name"] for item in sbom["packages"]} == {
+        "dependency",
+        "larkflow-personal-edge",
+        "pip",
+    }
+    proof = json.loads((output / "build-proof.json").read_text(encoding="utf-8"))
+    assert proof["source_commit"] == "a" * 40
+    assert proof["artifact"]["sha256"] == manifest["artifact"]["sha256"]
+    assert proof["edge_modules"] == list(module.EDGE_MODULES)
+
+    imported = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            (
+                "import sys; "
+                f"sys.path.insert(0, {str(artifact)!r}); "
+                "from larkflow.workflow import edge_cli; "
+                "assert edge_cli.build_parser().prog == 'larkflow-edge'; "
+                "assert 'larkflow.workflow.edge' not in sys.modules"
+            ),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert imported.returncode == 0, imported.stderr
 
 
 def test_builder_refuses_to_replace_an_existing_output(tmp_path: Path):

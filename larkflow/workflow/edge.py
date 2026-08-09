@@ -17,10 +17,7 @@ from .repository import ConcurrentUpdateError, WorkflowRepository
 from .runtime import ExecutionRequest
 from .serde import to_json_value
 from .service import WorkflowService
-
-
-PERSONAL_READONLY_CAPABILITY = "personal.readonly"
-DEFAULT_EDGE_CAPABILITIES = frozenset({PERSONAL_READONLY_CAPABILITY})
+from .edge_contract import DEFAULT_EDGE_CAPABILITIES, PERSONAL_READONLY_CAPABILITY
 
 
 class EdgeError(RuntimeError):

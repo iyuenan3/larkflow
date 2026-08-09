@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+from datetime import datetime, timezone
 from email.parser import Parser
 import hashlib
 import json
@@ -22,6 +24,17 @@ MANAGER_SOURCE = Path(__file__).with_name("larkflow-edge-manager.py")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 MINIMUM_BOOTSTRAP_PIP = (26, 1, 2)
+EDGE_DISTRIBUTION = "larkflow-personal-edge"
+EDGE_WHEEL_STEM = "larkflow_personal_edge"
+EDGE_MODULES = (
+    "larkflow/workflow/edge_agent.py",
+    "larkflow/workflow/edge_cli.py",
+    "larkflow/workflow/edge_client.py",
+    "larkflow/workflow/edge_contract.py",
+)
+REQUIREMENTS_LOCK = "requirements.lock"
+SBOM_NAME = "sbom.spdx.json"
+BUILD_PROOF_NAME = "build-proof.json"
 
 
 class BundleBuildError(RuntimeError):
@@ -97,7 +110,15 @@ def build_bundle(
     try:
         wheelhouse = staging / "wheelhouse"
         wheelhouse.mkdir(mode=0o755)
-        _download_wheelhouse(python, wheel, wheelhouse)
+        package_version = _source_larkflow_version(wheel)
+        edge_wheel = staging / (
+            f"{EDGE_WHEEL_STEM}-{package_version}-py3-none-any.whl"
+        )
+        _build_minimal_edge_wheel(wheel, edge_wheel, version=package_version)
+        source_wheel_sha256 = _sha256(wheel)
+        edge_wheel_sha256 = _sha256(edge_wheel)
+        _download_wheelhouse(python, edge_wheel, wheelhouse)
+        edge_wheel.unlink()
         _download_bootstrap_pip(python, wheelhouse)
         wheels = sorted(wheelhouse.iterdir(), key=lambda item: item.name.casefold())
         if not wheels or any(
@@ -109,12 +130,16 @@ def build_bundle(
         if len(casefolded) != len(set(casefolded)):
             raise BundleBuildError("wheelhouse filenames must be case-insensitively unique")
 
-        wheel_sha256 = _sha256(wheel)
-        artifact_matches = [item for item in wheels if _sha256(item) == wheel_sha256]
+        artifact_matches = [
+            item for item in wheels if _sha256(item) == edge_wheel_sha256
+        ]
         if len(artifact_matches) != 1:
-            raise BundleBuildError("downloaded wheelhouse does not contain the source wheel")
+            raise BundleBuildError("wheelhouse does not contain the minimal Edge wheel")
         artifact = artifact_matches[0]
-        package_version = _wheel_package_version(artifact)
+        artifact_name, artifact_version = _wheel_identity(artifact)
+        if artifact_name != EDGE_DISTRIBUTION or artifact_version != package_version:
+            raise BundleBuildError("minimal Edge wheel identity is invalid")
+        _verify_minimal_edge_wheel(artifact)
         inventory = []
         package_names: set[str] = set()
         for item in wheels:
@@ -142,7 +167,57 @@ def build_bundle(
         for item in wheels:
             os.chmod(item, 0o644)
 
-        files = [manager_target, *wheels]
+        target = _python_target(python)
+        runtime_inventory = [
+            item for item in inventory if item["name"] != "pip"
+        ]
+        requirements_lock = staging / REQUIREMENTS_LOCK
+        _write_text(requirements_lock, _requirements_lock(runtime_inventory))
+        sbom_path = staging / SBOM_NAME
+        _write_json(
+            sbom_path,
+            _spdx_sbom(
+                inventory,
+                source_commit=source_commit,
+                artifact_sha256=edge_wheel_sha256,
+            ),
+        )
+        build_proof_path = staging / BUILD_PROOF_NAME
+        _write_json(
+            build_proof_path,
+            {
+                "schema_version": 1,
+                "source_commit": source_commit,
+                "source_artifact": {
+                    "filename": wheel.name,
+                    "sha256": source_wheel_sha256,
+                },
+                "target": target,
+                "edge_modules": list(EDGE_MODULES),
+                "artifact": {
+                    "path": artifact.relative_to(staging).as_posix(),
+                    "sha256": edge_wheel_sha256,
+                },
+                "requirements_lock": {
+                    "path": REQUIREMENTS_LOCK,
+                    "sha256": _sha256(requirements_lock),
+                },
+                "sbom": {
+                    "path": SBOM_NAME,
+                    "sha256": _sha256(sbom_path),
+                },
+            },
+        )
+        for item in (requirements_lock, sbom_path, build_proof_path):
+            os.chmod(item, 0o644)
+
+        files = [
+            manager_target,
+            requirements_lock,
+            sbom_path,
+            build_proof_path,
+            *wheels,
+        ]
         file_entries = [
             {
                 "path": item.relative_to(staging).as_posix(),
@@ -152,21 +227,35 @@ def build_bundle(
             for item in files
         ]
         manifest = {
-            "schema_version": 1,
-            "package": "larkflow",
+            "schema_version": 2,
+            "package": EDGE_DISTRIBUTION,
             "package_version": package_version,
             "source_commit": source_commit,
-            "target": _python_target(python),
+            "target": target,
             "artifact": {
                 "path": artifact.relative_to(staging).as_posix(),
-                "sha256": wheel_sha256,
+                "sha256": edge_wheel_sha256,
             },
             "wheels": inventory,
             "bootstrap": {"pip": pip_items[0]},
+            "evidence": {
+                "requirements_lock": {
+                    "path": REQUIREMENTS_LOCK,
+                    "sha256": _sha256(requirements_lock),
+                },
+                "sbom": {
+                    "path": SBOM_NAME,
+                    "sha256": _sha256(sbom_path),
+                },
+                "build_proof": {
+                    "path": BUILD_PROOF_NAME,
+                    "sha256": _sha256(build_proof_path),
+                },
+            },
             "files": file_entries,
         }
         manifest_path = staging / "manifest.json"
-        _write_manifest(manifest_path, manifest)
+        _write_json(manifest_path, manifest)
         os.chmod(manifest_path, 0o644)
         os.chmod(staging, 0o755)
         os.replace(staging, output)
@@ -312,6 +401,181 @@ def _python_target(python: Path) -> dict[str, str]:
     return {str(key): str(value) for key, value in payload.items()}
 
 
+def _build_minimal_edge_wheel(
+    source: Path,
+    destination: Path,
+    *,
+    version: str,
+) -> None:
+    """Repackage only the employee-side modules from the verified source wheel."""
+    try:
+        with zipfile.ZipFile(source) as archive:
+            names = archive.namelist()
+            if len(names) != len(set(names)):
+                raise BundleBuildError("source wheel contains duplicate paths")
+            module_payloads = {name: archive.read(name) for name in EDGE_MODULES}
+    except KeyError as exc:
+        raise BundleBuildError(
+            f"source wheel is missing required Edge module: {exc.args[0]}"
+        ) from exc
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise BundleBuildError("source wheel cannot be read") from exc
+
+    dist_info = f"{EDGE_WHEEL_STEM}-{version}.dist-info"
+    payloads: dict[str, bytes] = {
+        "larkflow/__init__.py": (
+            '"""Minimal Personal Agent Edge package."""\n'
+            f'__version__ = "{version}"\n'
+        ).encode("utf-8"),
+        "larkflow/workflow/__init__.py": (
+            '"""Employee-side Personal Agent Edge runtime only."""\n'
+        ).encode("utf-8"),
+        **module_payloads,
+        f"{dist_info}/METADATA": (
+            "Metadata-Version: 2.1\n"
+            f"Name: {EDGE_DISTRIBUTION}\n"
+            f"Version: {version}\n"
+            "Summary: Minimal employee-side larkflow Personal Agent Edge\n"
+            "Requires-Python: >=3.10\n"
+            "Requires-Dist: httpx>=0.27\n"
+            "\n"
+        ).encode("utf-8"),
+        f"{dist_info}/WHEEL": (
+            "Wheel-Version: 1.0\n"
+            "Generator: larkflow-edge-bundle\n"
+            "Root-Is-Purelib: true\n"
+            "Tag: py3-none-any\n"
+            "\n"
+        ).encode("utf-8"),
+        f"{dist_info}/entry_points.txt": (
+            "[console_scripts]\n"
+            "larkflow-edge = larkflow.workflow.edge_cli:main\n"
+        ).encode("utf-8"),
+        f"{dist_info}/top_level.txt": b"larkflow\n",
+    }
+    record_path = f"{dist_info}/RECORD"
+    record_lines = [
+        f"{name},sha256={_record_digest(payload)},{len(payload)}"
+        for name, payload in sorted(payloads.items())
+    ]
+    record_lines.append(f"{record_path},,")
+    payloads[record_path] = ("\n".join(record_lines) + "\n").encode("utf-8")
+
+    try:
+        with zipfile.ZipFile(
+            destination,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+        ) as archive:
+            for name, payload in sorted(payloads.items()):
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o100644 << 16
+                archive.writestr(info, payload)
+    except OSError as exc:
+        raise BundleBuildError("minimal Edge wheel cannot be written") from exc
+
+
+def _verify_minimal_edge_wheel(path: Path) -> None:
+    expected_package_files = {
+        "larkflow/__init__.py",
+        "larkflow/workflow/__init__.py",
+        *EDGE_MODULES,
+    }
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise BundleBuildError("minimal Edge wheel cannot be inspected") from exc
+    if len(names) != len(set(names)):
+        raise BundleBuildError("minimal Edge wheel contains duplicate paths")
+    package_files = {
+        name for name in names if not name.endswith("/") and ".dist-info/" not in name
+    }
+    if package_files != expected_package_files:
+        raise BundleBuildError("minimal Edge wheel package boundary is invalid")
+    forbidden = {
+        "larkflow/workflow/edge.py",
+        "larkflow/workflow/edge_gateway_cli.py",
+        "larkflow/workflow/edge_http.py",
+        "larkflow/workflow/edge_postgres.py",
+    }
+    if forbidden.intersection(names):
+        raise BundleBuildError("minimal Edge wheel contains central runtime modules")
+
+
+def _record_digest(payload: bytes) -> str:
+    encoded = base64.urlsafe_b64encode(hashlib.sha256(payload).digest())
+    return encoded.rstrip(b"=").decode("ascii")
+
+
+def _requirements_lock(inventory: Sequence[dict[str, str]]) -> str:
+    lines = [
+        f"{item['name']}=={item['version']} --hash=sha256:{item['sha256']}"
+        for item in sorted(inventory, key=lambda value: value["name"])
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _spdx_sbom(
+    inventory: Sequence[dict[str, str]],
+    *,
+    source_commit: str,
+    artifact_sha256: str,
+) -> dict[str, Any]:
+    packages = []
+    relationships = []
+    for item in sorted(inventory, key=lambda value: value["name"]):
+        identifier = "SPDXRef-Package-" + re.sub(
+            r"[^A-Za-z0-9.-]",
+            "-",
+            item["name"],
+        )
+        packages.append(
+            {
+                "SPDXID": identifier,
+                "name": item["name"],
+                "versionInfo": item["version"],
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": False,
+                "licenseConcluded": "NOASSERTION",
+                "licenseDeclared": "NOASSERTION",
+                "supplier": "NOASSERTION",
+                "packageFileName": item["path"],
+                "checksums": [
+                    {
+                        "algorithm": "SHA256",
+                        "checksumValue": item["sha256"],
+                    }
+                ],
+            }
+        )
+        relationships.append(
+            {
+                "spdxElementId": "SPDXRef-DOCUMENT",
+                "relationshipType": "DESCRIBES",
+                "relatedSpdxElement": identifier,
+            }
+        )
+    return {
+        "spdxVersion": "SPDX-2.3",
+        "dataLicense": "CC0-1.0",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": f"larkflow-personal-edge-{source_commit[:12]}",
+        "documentNamespace": (
+            "https://larkflow.local/spdx/personal-edge/"
+            f"{source_commit}/{artifact_sha256}"
+        ),
+        "creationInfo": {
+            "created": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "creators": ["Tool: larkflow-edge-bundle"],
+        },
+        "packages": packages,
+        "relationships": relationships,
+    }
+
+
 def _wheel_identity(path: Path) -> tuple[str, str]:
     try:
         with zipfile.ZipFile(path) as archive:
@@ -339,10 +603,10 @@ def _wheel_identity(path: Path) -> tuple[str, str]:
     return package_name, version
 
 
-def _wheel_package_version(path: Path) -> str:
+def _source_larkflow_version(path: Path) -> str:
     package_name, version = _wheel_identity(path)
     if package_name != "larkflow":
-        raise BundleBuildError("wheel package must be larkflow")
+        raise BundleBuildError("source wheel package must be larkflow")
     return version
 
 
@@ -354,10 +618,20 @@ def _pip_version_supported(value: str) -> bool:
     return MINIMUM_BOOTSTRAP_PIP <= version < (27, 0, 0)
 
 
-def _write_manifest(path: Path, payload: dict[str, Any]) -> None:
-    encoded = (
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    _write_bytes(
+        path,
+        (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8"
+        ),
+    )
+
+
+def _write_text(path: Path, payload: str) -> None:
+    _write_bytes(path, payload.encode("utf-8"))
+
+
+def _write_bytes(path: Path, encoded: bytes) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
     try:
         written = 0

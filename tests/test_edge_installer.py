@@ -15,10 +15,23 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 INSTALLER = ROOT / "deploy" / "larkflow-edge-manager.py"
+BUILDER = ROOT / "deploy" / "build-larkflow-edge-bundle.py"
 
 
 def load_installer():
     loader = importlib.machinery.SourceFileLoader("larkflow_edge_manager", str(INSTALLER))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def load_builder():
+    loader = importlib.machinery.SourceFileLoader(
+        "larkflow_edge_bundle_for_installer",
+        str(BUILDER),
+    )
     spec = importlib.util.spec_from_loader(loader.name, loader)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
@@ -48,8 +61,9 @@ def fake_prepare(module, version: str):
         source_commit=None,
         bootstrap_pip=None,
         bootstrap_pip_version=None,
+        requirements_lock=None,
     ):
-        del python, wheelhouse, bootstrap_pip
+        del python, wheelhouse, bootstrap_pip, requirements_lock
         command = target / "venv" / "bin" / "larkflow-edge"
         command.parent.mkdir(parents=True)
         command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -142,6 +156,50 @@ def offline_bundle(module, root: Path, artifact: Path, digest: str) -> tuple[Pat
         encoding="utf-8",
     )
     return bundle, hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+
+def hardened_offline_bundle(root: Path) -> tuple[Path, str]:
+    builder = load_builder()
+    source = root / "larkflow-0.0.2-py3-none-any.whl"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr(
+            "larkflow-0.0.2.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: larkflow\nVersion: 0.0.2\n",
+        )
+        for name in builder.EDGE_MODULES:
+            archive.writestr(name, (ROOT / name).read_bytes())
+
+    def fake_download(_python, edge_wheel, wheelhouse):
+        shutil.copyfile(edge_wheel, wheelhouse / edge_wheel.name)
+        with zipfile.ZipFile(
+            wheelhouse / "dependency-1.0-py3-none-any.whl",
+            "w",
+        ) as archive:
+            archive.writestr(
+                "dependency-1.0.dist-info/METADATA",
+                "Metadata-Version: 2.1\nName: dependency\nVersion: 1.0\n",
+            )
+
+    def fake_pip(_python, wheelhouse):
+        with zipfile.ZipFile(
+            wheelhouse / "pip-26.2.1-py3-none-any.whl",
+            "w",
+        ) as archive:
+            archive.writestr(
+                "pip-26.2.1.dist-info/METADATA",
+                "Metadata-Version: 2.1\nName: pip\nVersion: 26.2.1\n",
+            )
+
+    builder._download_wheelhouse = fake_download
+    builder._download_bootstrap_pip = fake_pip
+    bundle = root / "hardened-bundle"
+    report = builder.build_bundle(
+        wheel=source,
+        output=bundle,
+        source_commit="b" * 40,
+        python=Path(sys.executable),
+    )
+    return bundle, report["manifest_sha256"]
 
 
 def test_install_upgrade_and_rollback_preserve_external_credentials(
@@ -446,6 +504,72 @@ def test_offline_bundle_install_verifies_all_files_before_switching(
     ).read_bytes()
 
 
+def test_hardened_bundle_verifies_evidence_and_forwards_the_lock(
+    tmp_path: Path,
+    monkeypatch,
+):
+    module = load_installer()
+    bundle, manifest_sha256 = hardened_offline_bundle(tmp_path)
+    prepared: list[dict[str, object]] = []
+    base_prepare = fake_prepare(module, "0.0.2")
+
+    def record_prepare(target, **kwargs):
+        prepared.append(kwargs)
+        return base_prepare(target, **kwargs)
+
+    monkeypatch.setattr(module, "_prepare_release", record_prepare)
+    report = module.install(
+        prefix=tmp_path / "prefix",
+        link_dir=tmp_path / "bin",
+        wheel=None,
+        expected_sha256=None,
+        python=sys.executable,
+        bundle=bundle,
+        expected_manifest_sha256=manifest_sha256,
+    )
+
+    assert report["offline_bundle"] is True
+    assert prepared[0]["requirements_lock"] == bundle / "requirements.lock"
+    assert prepared[0]["wheel"].name.startswith("larkflow_personal_edge-")
+    assert "pip==" not in (bundle / "requirements.lock").read_text(encoding="utf-8")
+
+
+def test_hardened_bundle_rejects_a_lock_that_disagrees_with_inventory(
+    tmp_path: Path,
+):
+    module = load_installer()
+    bundle, _manifest_sha256 = hardened_offline_bundle(tmp_path)
+    lock_path = bundle / "requirements.lock"
+    lock_path.write_text("dependency==9.9 --hash=sha256:" + "0" * 64 + "\n")
+    lock_sha256 = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["evidence"]["requirements_lock"]["sha256"] = lock_sha256
+    for item in manifest["files"]:
+        if item["path"] == "requirements.lock":
+            item["sha256"] = lock_sha256
+            item["size"] = lock_path.stat().st_size
+    proof_path = bundle / "build-proof.json"
+    proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    proof["requirements_lock"]["sha256"] = lock_sha256
+    proof_path.write_text(json.dumps(proof, sort_keys=True), encoding="utf-8")
+    proof_sha256 = hashlib.sha256(proof_path.read_bytes()).hexdigest()
+    manifest["evidence"]["build_proof"]["sha256"] = proof_sha256
+    for item in manifest["files"]:
+        if item["path"] == "build-proof.json":
+            item["sha256"] = proof_sha256
+            item["size"] = proof_path.stat().st_size
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    new_manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+    with pytest.raises(module.EdgeInstallError, match="lock disagrees"):
+        module._verified_bundle(
+            bundle,
+            expected_manifest_sha256=new_manifest_sha256,
+            python=Path(sys.executable).resolve(),
+        )
+
+
 def test_offline_bundle_tamper_fails_before_installation(tmp_path: Path):
     module = load_installer()
     artifact, digest = wheel(
@@ -534,8 +658,11 @@ def test_offline_prepare_forces_no_index_and_binary_wheels(
 
     monkeypatch.setattr(module, "_capture", fake_capture)
     monkeypatch.setattr(module, "_verify_edge_command", lambda _command: None)
-    wheel_path = tmp_path / "larkflow.whl"
-    wheel_path.write_bytes(b"wheel")
+    wheel_path, _wheel_digest = wheel(
+        tmp_path / "larkflow.whl",
+        b"wheel",
+        version="0.0.2",
+    )
     wheelhouse = tmp_path / "wheelhouse"
     wheelhouse.mkdir()
     bootstrap_pip = wheelhouse / "pip-26.2.1-py3-none-any.whl"
