@@ -1,6 +1,7 @@
 """Narrow Target Agent adapter and lease-budget tests."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -152,6 +153,33 @@ def test_agent_executor_keeps_unrecognized_json_as_text():
     result = LLMAgentExecutor(RecordingCompletion(content)).execute(request())
 
     assert result.result["content"] == content
+
+
+def test_agent_executor_discloses_unverified_hosted_search_sources():
+    completion = RecordingCompletion("建议按三天安排园林和博物馆。")
+    execution_request = request()
+    execution_request = replace(
+        execution_request,
+        input_snapshot={
+            **execution_request.input_snapshot,
+            "dependencies": {
+                "research": {
+                    "content": "公开信息研究结果",
+                    "sources": ["https://example.com/guide"],
+                    "tool_kind": "web.search",
+                }
+            },
+        },
+    )
+
+    result = LLMAgentExecutor(completion).execute(execution_request)
+
+    assert result.result["content"].startswith(
+        LLMAgentExecutor.WEB_RESEARCH_NOTICE
+    )
+    prompt = completion.calls[0]["prompt"]
+    assert "禁止声称全部信息均为最新官方数据" in prompt
+    assert "执行前通过官方渠道复核" in prompt
 
 
 def test_agent_executor_preserves_structured_source_claims_and_visible_labels():

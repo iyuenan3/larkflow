@@ -530,6 +530,66 @@ class WorkflowProjectionWorker:
             attempt_no,
             FEISHU_DECISION_CARD_KIND,
         )
+        if (
+            effective_status in {NodeStatus.DONE, NodeStatus.FAILED}
+            and existing is not None
+        ):
+            decision = (
+                attempt.result.get("decision")
+                if isinstance(attempt.result, Mapping)
+                else None
+            )
+            expected_decision = (
+                "accepted"
+                if effective_status == NodeStatus.DONE
+                else "rejected"
+            )
+            if decision != expected_decision:
+                return _ProjectionOutcome(noop=True)
+            desired_state = {
+                **dict(existing.state),
+                "node_status": effective_status.value,
+                "settled": True,
+                "decision": decision,
+            }
+            if (
+                existing.sync_version >= node.version
+                and dict(existing.state) == desired_state
+            ):
+                return _ProjectionOutcome(noop=True)
+            updater = getattr(
+                self.message_adapter,
+                "update_chat_card_message",
+                None,
+            )
+            if not callable(updater) or not existing.external_id:
+                raise ValueError(
+                    "settling a Human decision requires message card update support"
+                )
+            feedback = attempt.result.get("feedback")
+            text = (
+                "已接受。"
+                if decision == "accepted"
+                else "已退回。"
+            )
+            text += (
+                f"\n流程：{instance.id}\n节点：{node_key}\nAttempt：{attempt_no}"
+            )
+            if decision == "rejected" and isinstance(feedback, str) and feedback:
+                text += f"\n意见：{feedback}"
+            updater(
+                message_id=existing.external_id,
+                card=human_decision_result_card(text),
+            )
+            self.projections.save_projection(
+                replace(
+                    existing,
+                    sync_version=max(existing.sync_version, node.version),
+                    state=desired_state,
+                    updated_at=now,
+                )
+            )
+            return _ProjectionOutcome(card_updated=True)
         if effective_status == NodeStatus.CANCELED and existing is not None:
             desired_state = {
                 **dict(existing.state),

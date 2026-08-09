@@ -537,3 +537,53 @@ def test_decision_node_projects_a_card_instead_of_a_second_task():
     assert projection is not None
     assert projection.state["settled"] is True
     assert projection.state["node_status"] == NodeStatus.CANCELED.value
+
+
+def test_console_rejection_settles_the_existing_decision_card():
+    service, repository, review = waiting_decision()
+    messages = RecordingMessages()
+    worker = WorkflowProjectionWorker(
+        repository,
+        repository,
+        repository,
+        RecordingTasks(),
+        message_adapter=messages,
+        tenant_id=TENANT,
+        worker_id="projection-1",
+        clock=lambda: NOW,
+    )
+    assert worker.run_once().messages_sent == 1
+    before = service.get(TENANT, "instance_decision")
+
+    service.submit_human_decision(
+        TENANT,
+        "instance_decision",
+        "review",
+        HumanDecision.REJECT,
+        actor_person_id="person_reviewer",
+        attempt_no=review.attempt_no,
+        expected_instance_version=before.version,
+        expected_node_version=before.nodes["review"].version,
+        feedback=REJECTION_FEEDBACK,
+    )
+    report = worker.run_once()
+
+    assert report.cards_updated == 1
+    assert len(messages.card_updates) == 1
+    message_id, settled_card = messages.card_updates[0]
+    assert message_id == "message-1"
+    assert "已退回" in str(settled_card)
+    assert REJECTION_FEEDBACK in str(settled_card)
+    assert "button" not in str(settled_card)
+    assert "form" not in str(settled_card)
+    instance = service.get(TENANT, "instance_decision")
+    projection = repository.get_projection(
+        TENANT,
+        instance.nodes["review"].id,
+        review.attempt_no,
+        FEISHU_DECISION_CARD_KIND,
+    )
+    assert projection is not None
+    assert projection.state["settled"] is True
+    assert projection.state["node_status"] == NodeStatus.FAILED.value
+    assert projection.state["decision"] == "rejected"

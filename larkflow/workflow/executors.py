@@ -34,6 +34,10 @@ class LLMAgentExecutor:
     KIND = "llm.generate"
     SOURCE_CLAIMS_FORMAT = "source_claims.v1"
     SOURCE_DECISION_FORMAT = "source_decision.v1"
+    WEB_RESEARCH_NOTICE = (
+        "来源提示：上游链接是搜索服务返回的引用，larkflow 未独立验证其当前可访问性或事实准确性。"
+        "价格、开放时间、班次等时效信息请在执行前通过官方渠道复核。"
+    )
 
     def __init__(
         self,
@@ -69,6 +73,7 @@ class LLMAgentExecutor:
         }:
             raise ValueError(f"unsupported Agent result_format: {result_format!r}")
 
+        uses_web_research = self._contains_web_research(request.input_snapshot)
         prompt = self._prompt(
             request,
             instructions=instructions.strip(),
@@ -86,6 +91,8 @@ class LLMAgentExecutor:
         content = self._plain_text(content)
         if not content:
             raise ValueError("Agent returned an empty result")
+        if uses_web_research and result_format == "plain_text":
+            content = f"{self.WEB_RESEARCH_NOTICE}\n\n{content}"
         if len(content) > self.max_result_chars:
             raise ValueError(
                 f"Agent result exceeds {self.max_result_chars} characters"
@@ -163,6 +170,14 @@ class LLMAgentExecutor:
             final_instruction = (
                 "请直接给出可供下一人工节点审阅的正文，不要返回 JSON、代码块或字段包装。"
             )
+        research_boundary = ""
+        if LLMAgentExecutor._contains_web_research(request.input_snapshot):
+            research_boundary = (
+                "上游 web.search 的 sources 只是搜索供应商返回的引用，larkflow 尚未独立验证"
+                "链接可访问性、来源权威性或正文事实。禁止声称全部信息均为最新官方数据、"
+                "已经完全核实或绝无虚构。价格、开放时间、班次、客流和天气等时效事实必须"
+                "明确提示执行前通过官方渠道复核；无法从上游材料确认的内容必须标为未知。\n\n"
+            )
         return (
             "你是企业协作工作流中的 Agent 节点。只完成当前节点，不执行外部操作，"
             "不虚构未提供的事实。\n\n"
@@ -171,8 +186,25 @@ class LLMAgentExecutor:
             f"预期输出：\n{outputs}\n\n"
             f"验收条件：\n{acceptance}\n\n"
             f"已提交的输入与上游结果：\n{context}\n\n"
+            f"{research_boundary}"
             f"{final_instruction}"
         )
+
+    @classmethod
+    def _contains_web_research(cls, value: object) -> bool:
+        if isinstance(value, Mapping):
+            sources = value.get("sources")
+            if (
+                value.get("tool_kind") == WebSearchToolExecutor.KIND
+                and isinstance(sources, Sequence)
+                and not isinstance(sources, (str, bytes))
+                and bool(sources)
+            ):
+                return True
+            return any(cls._contains_web_research(item) for item in value.values())
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            return any(cls._contains_web_research(item) for item in value)
+        return False
 
     @staticmethod
     def _plain_text(content: str) -> str:

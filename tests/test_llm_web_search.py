@@ -89,7 +89,7 @@ def test_hosted_web_search_refuses_an_unsourced_answer():
         llm.web_search(prompt="核对苏州景点规则", model_role="default")
 
 
-def test_visible_url_extraction_stops_before_chinese_prose():
+def test_visible_url_without_provider_citation_is_not_trusted():
     value = response(annotations=[])
     value["output"][1]["content"][0]["text"] = (
         "官方来源：https://www.szmuseum.com/）「参观服务」栏目"
@@ -97,6 +97,5 @@ def test_visible_url_extraction_stops_before_chinese_prose():
     fake = FakeResponsesClient(value)
     llm = OpenAICompatLLM(ROLES, client_factory=lambda _cfg: fake)
 
-    result = llm.web_search(prompt="核对苏州景点规则", model_role="default")
-
-    assert result["sources"] == ["https://www.szmuseum.com/"]
+    with pytest.raises(LLMUnavailable, match="no cited sources"):
+        llm.web_search(prompt="核对苏州景点规则", model_role="default")
