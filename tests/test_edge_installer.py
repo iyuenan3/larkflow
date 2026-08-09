@@ -263,6 +263,95 @@ def test_install_upgrade_and_rollback_preserve_external_credentials(
     assert second_sha not in credential.read_text(encoding="utf-8")
 
 
+def test_uninstall_removes_only_managed_files_and_preserves_credentials(
+    tmp_path: Path,
+    monkeypatch,
+):
+    module = load_installer()
+    prefix = tmp_path / "Library" / "Application Support" / "larkflow-edge"
+    link_dir = tmp_path / ".local" / "bin"
+    credential = tmp_path / ".config" / "larkflow" / "edge-device.json"
+    credential.parent.mkdir(parents=True)
+    credential.write_text("do-not-touch-device-secret", encoding="utf-8")
+    artifact, digest = wheel(tmp_path / "edge.whl", b"wheel")
+    monkeypatch.setattr(module, "_prepare_release", fake_prepare(module, "0.0.1"))
+    module.install(
+        prefix=prefix,
+        link_dir=link_dir,
+        wheel=artifact,
+        expected_sha256=digest,
+        python=sys.executable,
+    )
+
+    report = module.uninstall(
+        prefix=prefix,
+        link_dir=link_dir,
+        confirm_prefix=prefix,
+    )
+
+    assert report == {
+        "event": "edge_uninstall_complete",
+        "operation": "uninstall",
+        "prefix": str(prefix),
+        "credential_store_touched": False,
+        "credential_metadata_touched": False,
+        "background_service_removed": False,
+    }
+    assert not prefix.exists()
+    assert not (link_dir / "larkflow-edge").exists()
+    assert not (link_dir / "larkflow-edge-manager").exists()
+    assert credential.read_text(encoding="utf-8") == "do-not-touch-device-secret"
+
+    absent = module.uninstall(
+        prefix=prefix,
+        link_dir=link_dir,
+        confirm_prefix=prefix,
+    )
+    assert absent["operation"] == "already_absent"
+
+
+def test_uninstall_refuses_unrelated_stable_commands_before_removal(
+    tmp_path: Path,
+    monkeypatch,
+):
+    module = load_installer()
+    prefix = tmp_path / "prefix"
+    link_dir = tmp_path / "bin"
+    artifact, digest = wheel(tmp_path / "edge.whl", b"wheel")
+    monkeypatch.setattr(module, "_prepare_release", fake_prepare(module, "0.0.1"))
+    module.install(
+        prefix=prefix,
+        link_dir=link_dir,
+        wheel=artifact,
+        expected_sha256=digest,
+        python=sys.executable,
+    )
+    unrelated = link_dir / "larkflow-edge"
+    unrelated.unlink()
+    unrelated.write_text("unrelated", encoding="utf-8")
+
+    with pytest.raises(module.EdgeInstallError, match="unrelated command"):
+        module.uninstall(
+            prefix=prefix,
+            link_dir=link_dir,
+            confirm_prefix=prefix,
+        )
+
+    assert prefix.exists()
+    assert unrelated.read_text(encoding="utf-8") == "unrelated"
+
+
+def test_uninstall_requires_the_exact_confirmed_prefix(tmp_path: Path):
+    module = load_installer()
+
+    with pytest.raises(module.EdgeInstallError, match="exactly match"):
+        module.uninstall(
+            prefix=tmp_path / "prefix",
+            link_dir=tmp_path / "bin",
+            confirm_prefix=tmp_path / "different",
+        )
+
+
 def test_reinstalling_the_current_release_is_idempotent(
     tmp_path: Path,
     monkeypatch,

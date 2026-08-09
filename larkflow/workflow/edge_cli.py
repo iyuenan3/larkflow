@@ -34,7 +34,11 @@ from .edge_client import (
     save_edge_keychain_reference,
     save_edge_credential,
 )
-from .edge_contract import PERSONAL_READONLY_CAPABILITY
+from .edge_contract import (
+    EDGE_ALLOWED_DATA_CLASSIFICATIONS,
+    EDGE_DATA_POLICY_VERSION,
+    PERSONAL_READONLY_CAPABILITY,
+)
 
 
 DEFAULT_CREDENTIAL_FILE = Path("~/.config/larkflow/edge-device.json")
@@ -105,6 +109,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     run_once.add_argument(
+        "--data-classification",
+        choices=EDGE_ALLOWED_DATA_CLASSIFICATIONS,
+        required=True,
+        help=f"approved workspace classification under {EDGE_DATA_POLICY_VERSION}",
+    )
+    run_once.add_argument(
         "--inherit-loopback-proxy",
         action="store_true",
         help="pass only credential-free loopback proxy URLs to Codex",
@@ -127,6 +137,12 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "confirm model data egress for this visible foreground session"
         ),
+    )
+    serve.add_argument(
+        "--data-classification",
+        choices=EDGE_ALLOWED_DATA_CLASSIFICATIONS,
+        required=True,
+        help=f"approved workspace classification under {EDGE_DATA_POLICY_VERSION}",
     )
     serve.add_argument(
         "--max-tasks",
@@ -241,6 +257,7 @@ def _run(namespace: argparse.Namespace) -> int:
         timeout_seconds=namespace.timeout_seconds,
         inherit_loopback_proxy=namespace.inherit_loopback_proxy,
         model_egress_acknowledged=namespace.allow_model_egress,
+        data_classification=namespace.data_classification,
     )
     worker = EdgeWorker(
         transport,
@@ -270,6 +287,8 @@ def _run(namespace: argparse.Namespace) -> int:
                     "attempt_no": report.lease.attempt_no if report.lease else None,
                     "error_type": report.error,
                     "model_egress_acknowledged": True,
+                    "data_policy_version": EDGE_DATA_POLICY_VERSION,
+                    "data_classification": namespace.data_classification,
                 }
             )
             return 0 if report.status in {"completed", "no_work"} else 2
@@ -296,6 +315,8 @@ def _run(namespace: argparse.Namespace) -> int:
                     "capability": PERSONAL_READONLY_CAPABILITY,
                     "workspace_access": "selected_workspace_readonly",
                     "model_egress_acknowledged": True,
+                    "data_policy_version": EDGE_DATA_POLICY_VERSION,
+                    "data_classification": namespace.data_classification,
                     "wait_seconds": namespace.wait_seconds,
                     "heartbeat_seconds": namespace.heartbeat_seconds,
                     "max_tasks": namespace.max_tasks,

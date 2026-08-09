@@ -423,6 +423,7 @@ def test_codex_executor_requires_explicit_model_egress_acknowledgement(
         CodexReadonlyExecutor(
             tmp_path,
             codex_binary="/fake/codex",
+            data_classification="synthetic",
             isolation_probe=lambda _workspace, _binary: None,
         )
 
@@ -494,6 +495,7 @@ def test_codex_adapter_uses_ephemeral_readonly_sandbox_and_scrubs_edge_secrets(
         tmp_path,
         codex_binary="/fake/codex",
         model_egress_acknowledged=True,
+        data_classification="synthetic",
         clock=lambda: NOW,
         popen_factory=popen,
         isolation_probe=lambda _workspace, _binary: None,
@@ -526,6 +528,8 @@ def test_codex_adapter_uses_ephemeral_readonly_sandbox_and_scrubs_edge_secrets(
         "sensitive_paths": "denied",
         "command_network": "denied",
         "model_egress": "acknowledged",
+        "data_policy_version": "edge-data-v0.1",
+        "data_classification": "synthetic",
         "permission_profile": "larkflow_edge_readonly",
     }
     assert "只读" in (process.input or "")
@@ -549,6 +553,7 @@ def test_codex_adapter_can_explicitly_inherit_only_credential_free_loopback_prox
         codex_binary="/fake/codex",
         inherit_loopback_proxy=True,
         model_egress_acknowledged=True,
+        data_classification="public",
         clock=lambda: NOW,
         popen_factory=popen,
         isolation_probe=lambda _workspace, _binary: None,
@@ -581,6 +586,7 @@ def test_codex_timeout_terminates_the_process_group(
         tmp_path,
         codex_binary="/fake/codex",
         model_egress_acknowledged=True,
+        data_classification="synthetic",
         clock=lambda: NOW,
         popen_factory=lambda *_args, **_kwargs: process,
         isolation_probe=lambda _workspace, _binary: None,
@@ -611,6 +617,7 @@ def test_codex_communication_error_also_terminates_the_process_group(
         tmp_path,
         codex_binary="/fake/codex",
         model_egress_acknowledged=True,
+        data_classification="synthetic",
         clock=lambda: NOW,
         popen_factory=lambda *_args, **_kwargs: process,
         isolation_probe=lambda _workspace, _binary: None,
@@ -656,6 +663,7 @@ def test_codex_stop_event_terminates_the_process_group(tmp_path: Path):
         codex_binary="/fake/codex",
         timeout_seconds=5,
         model_egress_acknowledged=True,
+        data_classification="synthetic",
         clock=lambda: NOW,
         popen_factory=lambda *_args, **_kwargs: process,
         isolation_probe=lambda _workspace, _binary: None,

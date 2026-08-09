@@ -131,6 +131,15 @@ def build_parser() -> argparse.ArgumentParser:
         "rollback",
         help="atomically switch current and previous releases",
     )
+    uninstall = commands.add_parser(
+        "uninstall",
+        help="remove only a validated manager-owned installation",
+    )
+    uninstall.add_argument(
+        "--confirm-prefix",
+        required=True,
+        help="repeat the exact installation prefix to confirm removal",
+    )
     return parser
 
 
@@ -162,6 +171,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif namespace.command == "rollback":
             report = rollback(prefix=prefix, link_dir=link_dir)
+        elif namespace.command == "uninstall":
+            report = uninstall(
+                prefix=prefix,
+                link_dir=link_dir,
+                confirm_prefix=_private_directory(
+                    Path(namespace.confirm_prefix).expanduser()
+                ),
+            )
         else:
             report = status(prefix=prefix, link_dir=link_dir)
         _print(report)
@@ -310,6 +327,90 @@ def rollback(*, prefix: Path, link_dir: Path) -> dict[str, Any]:
         "credential_store_touched": False,
         "background_service_installed": False,
     }
+
+
+def uninstall(
+    *,
+    prefix: Path,
+    link_dir: Path,
+    confirm_prefix: Path,
+) -> dict[str, Any]:
+    """Remove only a validated manager-owned installation and command links."""
+    resolved_prefix = prefix.resolve(strict=False)
+    if confirm_prefix.resolve(strict=False) != resolved_prefix:
+        raise EdgeInstallError("--confirm-prefix must exactly match --prefix")
+    if resolved_prefix in {Path(resolved_prefix.anchor), Path.home().resolve()}:
+        raise EdgeInstallError("refusing to uninstall from a broad filesystem root")
+    if link_dir.exists() or link_dir.is_symlink():
+        if link_dir.is_symlink() or not link_dir.is_dir():
+            raise EdgeInstallError("stable command directory must be a real directory")
+    for name in (EDGE_NAME, MANAGER_NAME):
+        destination = link_dir / name
+        stable = prefix / "bin" / name
+        if destination.exists() or destination.is_symlink():
+            if not _external_link_matches(destination, stable):
+                raise EdgeInstallError(
+                    f"refusing to remove unrelated command: {destination}"
+                )
+
+    installed = prefix.exists() or prefix.is_symlink()
+    if installed:
+        _validate_uninstall_layout(prefix)
+    for name in (EDGE_NAME, MANAGER_NAME):
+        destination = link_dir / name
+        if destination.exists() or destination.is_symlink():
+            destination.unlink()
+    if installed:
+        shutil.rmtree(prefix)
+    return {
+        "event": "edge_uninstall_complete",
+        "operation": "uninstall" if installed else "already_absent",
+        "prefix": str(prefix),
+        "credential_store_touched": False,
+        "credential_metadata_touched": False,
+        "background_service_removed": False,
+    }
+
+
+def _validate_uninstall_layout(prefix: Path) -> None:
+    if prefix.is_symlink() or not prefix.is_dir():
+        raise EdgeInstallError("installation prefix must be a real directory")
+    allowed_root = {"releases", "bin", "current", "previous"}
+    entries = {item.name for item in prefix.iterdir()}
+    if not entries or not entries.issubset(allowed_root):
+        raise EdgeInstallError("installation prefix contains unmanaged entries")
+    releases = prefix / "releases"
+    if releases.is_symlink() or not releases.is_dir():
+        raise EdgeInstallError("managed release root is missing")
+    release_entries = list(releases.iterdir())
+    if not release_entries:
+        raise EdgeInstallError("managed release root is empty")
+    for release in release_entries:
+        if not RELEASE_ID_PATTERN.fullmatch(release.name):
+            raise EdgeInstallError("managed release root contains an invalid entry")
+        _validate_release(release)
+    current = _linked_release_id(prefix, "current", required=True)
+    previous = _linked_release_id(prefix, "previous", required=False)
+    known_releases = {item.name for item in release_entries}
+    if current not in known_releases or (
+        previous is not None and previous not in known_releases
+    ):
+        raise EdgeInstallError("release links do not match the managed release root")
+    bin_dir = prefix / "bin"
+    if bin_dir.is_symlink() or not bin_dir.is_dir():
+        raise EdgeInstallError("managed command directory is missing")
+    command_entries = {item.name for item in bin_dir.iterdir()}
+    if command_entries != {EDGE_NAME, MANAGER_NAME}:
+        raise EdgeInstallError("managed command directory contains unexpected entries")
+    manager = bin_dir / MANAGER_NAME
+    if manager.is_symlink() or not manager.is_file():
+        raise EdgeInstallError("managed installer command is invalid")
+    edge = bin_dir / EDGE_NAME
+    if not _external_link_matches(
+        edge,
+        prefix / "current" / "venv" / "bin" / EDGE_NAME,
+    ):
+        raise EdgeInstallError("managed Edge command link is invalid")
 
 
 def _prepare_release(

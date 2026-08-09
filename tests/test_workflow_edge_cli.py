@@ -33,10 +33,24 @@ def test_edge_cli_exposes_pair_doctor_run_once_and_foreground_serve_commands():
         ["pair", "--server", "https://edge.example.com", "--name", "Mac"]
     )
     run = parser.parse_args(
-        ["run-once", "--workspace", "/workspace", "--allow-model-egress"]
+        [
+            "run-once",
+            "--workspace",
+            "/workspace",
+            "--allow-model-egress",
+            "--data-classification",
+            "synthetic",
+        ]
     )
     serve = parser.parse_args(
-        ["serve", "--workspace", "/workspace", "--allow-model-egress"]
+        [
+            "serve",
+            "--workspace",
+            "/workspace",
+            "--allow-model-egress",
+            "--data-classification",
+            "public",
+        ]
     )
     migrate = parser.parse_args(["credential-migrate", "--delete-source"])
     doctor = parser.parse_args(["doctor", "--workspace", "/workspace"])
@@ -49,6 +63,8 @@ def test_edge_cli_exposes_pair_doctor_run_once_and_foreground_serve_commands():
     assert doctor.codex_binary == "codex"
     assert run.allow_model_egress is True
     assert serve.allow_model_egress is True
+    assert run.data_classification == "synthetic"
+    assert serve.data_classification == "public"
     assert migrate.delete_source is True
     assert serve.wait_seconds == 20
     assert serve.heartbeat_seconds == 60
@@ -159,7 +175,13 @@ def test_doctor_reports_missing_codex_as_blocked(tmp_path: Path, monkeypatch):
 
 def test_execution_requires_explicit_model_egress_acknowledgement(tmp_path: Path):
     namespace = build_parser().parse_args(
-        ["run-once", "--workspace", str(tmp_path)]
+        [
+            "run-once",
+            "--workspace",
+            str(tmp_path),
+            "--data-classification",
+            "synthetic",
+        ]
     )
 
     with pytest.raises(ValueError, match="--allow-model-egress"):
