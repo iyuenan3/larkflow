@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.73.0-draft · 2026-08-09 · 自然语言 Agent 流程强制决定出口
+
+- Fixed：内容提交 `d879a280d49e584d2d7e5927a498e7947544bb63` 要求工作台自然语言候选只要包含 Agent，所有终端节点就必须是 `accept_reject` Human 决定，且 `reject_target` 必须是决定节点的直接上游 Agent。服务端在模型生成和一次有界修复后确定性校验该结构；纯 Human 候选保持普通待办语义。
+- Contract：提示词只允许 `work.decision` 用于最终 Human 决定，并明确只有 requester 可以修改 DAG，collaborator 只处理分配给自己的 Human 节点，不得凭空增加主管或管理员，也不得把开发验证描述为生产上线。
+- Verified：聚焦套件为 `60 passed`。清空代理并允许进程树读取后的完整离线套件为 `1023 passed, 23 skipped`。wheel 内源码、模板、Console 资源和 23 份 migration 完整，安装后的 `draft_generation.py` 与本地源码 SHA-256 一致。
+- Deployment：wheel SHA-256 为 `95149af078a67cc36f87ae832d1f9764cd40f3b7378fe6a408cd90eae59074c7`，位于 `/srv/larkflow/target/releases/20260809_1929_generated_decision_d879a28/`。升级前 custom-format 备份 SHA-256 为 `220237fd448e10d5d7a86251ab2bcc837ca2ebbb980eefff7ef85cf7bd7a23de`，且 `pg_restore --list` 可读取；migration runner 返回 `versions=[]`，ledger 保持 23 份。十个 Python 服务与 Caddy 均为 `active / NRestarts=0`，公网与 loopback Console 为 200，未认证 API 为 401，5432、8765 和 8780 继续只监听 loopback。
+- Acceptance：真实合成实例 `console_draft_80707de5ea8149809d15433510e67128` 生成三节点 Human-Agent-Human 草稿。首个 Human Task 完成后，Agent Attempt 1 生成摘要并投影决定卡；最终 Human 以具体意见退回，实例进入失败且旧结果与审计保留。Owner 的节点重启预览只影响 Agent 与最终 Human，确认后两者进入 Attempt 2，退回意见原样进入 Agent 新输入。修订结果补充回滚条件和发布后监控窗口后被明确接受，实例最终为 `done / version 12 / graph_revision 1`。两轮 Agent 消息、两张决定卡、完成文档和最终通知均有独立外部绑定。
+- Boundary：本次关闭工作台自然语言 Agent 流程可能没有明确验收出口的结构缺口，并证明开发环境中的退回返工与历史保护。合成输入、单次模型结果、单机部署和测试组织不能证明内容质量规模化、生产容量、业务价值或生产发布。
+
 ## v0.72.0-draft · 2026-08-09 · 受控 DAG 画板第一版
 
 - Added：内容提交 `b60cbbd8beb98742cc80082df78ac185274e3a8a` 增加基于 React Flow 12.11.2 与 ELK.js 0.12.0 的运行画板。节点可拖动、缩放、适配和恢复自动布局；位置按 Instance 保存到当前浏览器，不改变依赖或领域状态。

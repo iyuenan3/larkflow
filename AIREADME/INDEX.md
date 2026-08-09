@@ -66,7 +66,9 @@
 >
 > 内容提交 `db7651228e26055eb1229ae9f451e3e87c31df38` 把来源约束型材料复核与决策生成拆成独立结果契约，新增 `source_decision.v1`、`source_decision.check` 与 `source_grounded_decision`，并用 JSON 代码块消除结构化卡片 URL 的 `%22` 污染。完整离线等价结果为 `988 passed, 21 skipped`，干净 wheel SHA-256 为 `54a4bbf4c96834d7d69a3434d01b083d2467f5df6dd129c9ac6e35876efb49ff`，已部署到 `/srv/larkflow/target/releases/20260808_040000_source_decision_db76512/`。真实实例 `source_decision_20260808_0405` 的四个 Attempt 1 均完成，Agent 回答 Q1、Q2、Q3，Tool 覆盖 6/6 个 F 和 3/3 个 Q、零违规且 `verdict=pass`。Owner 明确接受后实例为 `done / version 9`，终态决定卡已从飞书服务端回读为已接受、无按钮且无 `%22`。九个 Target 服务均为 `active / NRestarts=0`，legacy 消费者与 Caddy 仍 active，部署窗口 warning 为 0。该开发证据不等于业务建议正确、生产容量或生产发布。
 >
-> last-synced: dea2669bf29785167c37b93f1b29492b21871149 · 2026-08-09
+> 内容提交 `d879a280d49e584d2d7e5927a498e7947544bb63` 已把自然语言 Agent 候选的明确决定出口升级为服务端结构不变量，并完成真实开发部署与飞书返工验收。真实合成实例先退回 Agent Attempt 1，再通过节点重启只创建 Agent 与最终 Human Attempt 2；具体意见进入 Agent 新输入，第二版补充回滚条件和监控窗口后明确接受。旧结果、两张决定卡、完成文档、最终通知和审计均保留。该证据只适用于开发环境，不证明内容质量、业务价值、生产容量或生产发布。
+>
+> last-synced: d879a280d49e584d2d7e5927a498e7947544bb63 · 2026-08-09
 
 ## 阅读顺序
 
