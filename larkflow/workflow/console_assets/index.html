@@ -267,17 +267,24 @@
               </div>
             </div>
 
+            <ol id="workflow-journey" class="workflow-journey" aria-label="首次成功路径"></ol>
+
             <section id="workflow-next-step" class="workflow-next-step" aria-live="polite"></section>
 
             <section id="detail-actions" class="detail-actions" aria-label="流程操作"></section>
 
-            <nav id="detail-tabs" class="detail-tabs" aria-label="流程详情视图">
-              <button id="detail-tab-overview" type="button" data-tab="overview" data-active="true">概览</button>
-              <button id="detail-tab-execution" type="button" data-tab="execution" data-active="false">流程图与执行记录</button>
-              <button id="detail-tab-audit" type="button" data-tab="audit" data-active="false">审计记录</button>
-            </nav>
-
             <div id="detail-overview-panel" class="detail-tab-panel">
+              <section id="workflow-results-panel" class="panel workflow-results-panel" aria-labelledby="workflow-results-title" hidden>
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">流程产出</p>
+                    <h2 id="workflow-results-title">流程结果</h2>
+                  </div>
+                  <span id="workflow-results-count" class="count">0</span>
+                </div>
+                <div id="workflow-results" class="workflow-results"></div>
+              </section>
+
               <section id="instance-insights" class="panel insight-panel" aria-labelledby="insight-title">
                 <div class="insight-heading">
                   <div>
@@ -315,49 +322,65 @@
               </section>
             </div>
 
-            <div id="detail-execution-panel" class="detail-tab-panel" hidden>
-              <div id="detail-grid" class="detail-grid" data-canvas-expanded="false">
-                <section class="panel graph-panel">
-                  <div class="panel-heading">
-                    <div>
-                      <p class="eyebrow">流程与结果</p>
-                      <h2>流程执行图</h2>
-                    </div>
-                    <div class="graph-heading-meta">
-                      <span class="graph-legend">拖动节点保存布局 · 拖动空白平移 · 滚轮缩放</span>
-                      <button id="graph-expand" class="graph-expand-button" type="button" aria-pressed="false">展开画板</button>
-                      <span id="graph-revision" class="revision"></span>
-                    </div>
-                  </div>
-                  <div id="graph-action-preview" class="graph-action-preview"></div>
-                  <div id="graph" class="graph" aria-label="受控流程运行画板"></div>
-                </section>
+            <details id="detail-advanced" class="detail-advanced">
+              <summary>
+                <span>
+                  <strong>高级视图</strong>
+                  <small>调整流程结构或排查问题时使用</small>
+                </span>
+                <span>画板、每次执行和审计</span>
+              </summary>
+              <div class="detail-advanced-body">
+                <nav id="detail-tabs" class="detail-tabs" aria-label="高级流程视图">
+                  <button id="detail-tab-execution" type="button" data-tab="execution" data-active="true">画板与执行记录</button>
+                  <button id="detail-tab-audit" type="button" data-tab="audit" data-active="false">审计记录</button>
+                </nav>
 
-                <section class="panel attempt-panel">
-                  <div class="panel-heading">
-                    <div>
-                      <p class="eyebrow">ATTEMPTS</p>
-                      <h2 id="attempt-heading">执行记录</h2>
-                    </div>
-                    <span id="attempt-count" class="count">0</span>
-                  </div>
-                  <div id="attempts" class="attempts"></div>
-                </section>
-              </div>
-            </div>
+                <div id="detail-execution-panel" class="detail-tab-panel" hidden>
+                  <div id="detail-grid" class="detail-grid" data-canvas-expanded="false">
+                    <section class="panel graph-panel">
+                      <div class="panel-heading">
+                        <div>
+                          <p class="eyebrow">流程结构</p>
+                          <h2>流程执行图</h2>
+                        </div>
+                        <div class="graph-heading-meta">
+                          <span class="graph-legend">拖动节点保存布局 · 拖动空白平移 · 滚轮缩放</span>
+                          <button id="graph-expand" class="graph-expand-button" type="button" aria-pressed="false">展开画板</button>
+                          <span id="graph-revision" class="revision"></span>
+                        </div>
+                      </div>
+                      <div id="graph-action-preview" class="graph-action-preview"></div>
+                      <div id="graph" class="graph" aria-label="受控流程运行画板"></div>
+                    </section>
 
-            <div id="detail-audit-panel" class="detail-tab-panel" hidden>
-              <section class="panel audit-panel">
-                <div class="panel-heading">
-                  <div>
-                    <p class="eyebrow">AUDIT TRAIL</p>
-                    <h2>审计时间线</h2>
+                    <section class="panel attempt-panel">
+                      <div class="panel-heading">
+                        <div>
+                          <p class="eyebrow">执行历史</p>
+                          <h2 id="attempt-heading">执行记录</h2>
+                        </div>
+                        <span id="attempt-count" class="count">0</span>
+                      </div>
+                      <div id="attempts" class="attempts"></div>
+                    </section>
                   </div>
-                  <span id="audit-count" class="count">0</span>
                 </div>
-                <div id="audit" class="audit"></div>
-              </section>
-            </div>
+
+                <div id="detail-audit-panel" class="detail-tab-panel" hidden>
+                  <section class="panel audit-panel">
+                    <div class="panel-heading">
+                      <div>
+                        <p class="eyebrow">AUDIT TRAIL</p>
+                        <h2>审计时间线</h2>
+                      </div>
+                      <span id="audit-count" class="count">0</span>
+                    </div>
+                    <div id="audit" class="audit"></div>
+                  </section>
+                </div>
+              </div>
+            </details>
           </section>
         </main>
       </div>

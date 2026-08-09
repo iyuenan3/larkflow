@@ -861,7 +861,11 @@ function showOwnerSection(section) {
   draftNav.dataset.active = String(section === "drafts");
   attentionNav.dataset.active = String(section === "attention");
   workflowNav.dataset.active = String(section === "workflows");
-  if (section === "detail" && state.detailTab === "execution") {
+  if (
+    section === "detail"
+    && el("detail-advanced").open
+    && state.detailTab === "execution"
+  ) {
     requestAnimationFrame(layoutGraphCanvas);
   }
   window.scrollTo({ top: 0, behavior: "auto" });
@@ -889,7 +893,6 @@ function setDetailTab(tab) {
     button.dataset.active = String(active);
     button.setAttribute("aria-selected", String(active));
   });
-  el("detail-overview-panel").hidden = tab !== "overview";
   el("detail-execution-panel").hidden = tab !== "execution";
   el("detail-audit-panel").hidden = tab !== "audit";
   if (tab === "execution") requestAnimationFrame(layoutGraphCanvas);
@@ -1208,6 +1211,11 @@ function taskWriteOptions(document) {
   };
 }
 
+async function reloadAfterTaskMutation(instanceId) {
+  const keepDetail = state.ownerSection === "detail" && state.detail?.instance.id === instanceId;
+  await loadInstances(keepDetail ? instanceId : null);
+}
+
 async function submitHumanTaskFromPage() {
   const button = el("human-task-submit");
   const transfer = el("human-task-transfer-open");
@@ -1236,7 +1244,7 @@ async function submitHumanTaskFromPage() {
     button.textContent = "已提交，流程已推进";
     el("human-task-result").disabled = true;
     showToast("待办已提交，中央工作流正在继续");
-    await loadInstances();
+    await reloadAfterTaskMutation(task.instance_id);
     setTimeout(() => humanTaskDialog.open && humanTaskDialog.close(), 700);
   } catch (error) {
     button.disabled = false;
@@ -1280,7 +1288,7 @@ async function submitHumanDecisionFromPage(decision) {
     activeButton.dataset.state = "done";
     activeButton.textContent = decision === "accept" ? "已接受" : "已退回";
     showToast(decision === "accept" ? "结果已接受，流程正在继续" : "结果已退回，意见已经保存");
-    await loadInstances();
+    await reloadAfterTaskMutation(task.instance_id);
     setTimeout(() => humanTaskDialog.open && humanTaskDialog.close(), 800);
   } catch (error) {
     accept.disabled = false;
@@ -1350,7 +1358,7 @@ async function transferHumanTaskFromPage() {
     showToast(
       result.projection?.message || "负责人已更换，飞书待办正在同步。",
     );
-    await loadInstances();
+    await reloadAfterTaskMutation(task.instance_id);
     setTimeout(() => humanTaskDialog.open && humanTaskDialog.close(), 900);
   } catch (error) {
     button.disabled = false;
@@ -1454,6 +1462,7 @@ async function loadDetail(instanceId) {
   state.selectedNode = chooseNode(payload.nodes);
   if (instanceChanged) {
     state.detailTab = "overview";
+    el("detail-advanced").open = false;
   }
   renderInstances();
   renderDetail();
@@ -1566,9 +1575,11 @@ function renderDetail() {
   el("progress-ring").style.setProperty("--progress", `${percent * 3.6}deg`);
   el("graph-revision").textContent = `流程图版本 ${instance.graph_revision}`;
   el("graph-action-preview").replaceChildren();
+  renderWorkflowJourney(instance);
   renderWorkflowNextStep(instance);
   renderDetailActions(instance);
   renderInsights(payload);
+  renderWorkflowResults(payload.nodes, instance);
   renderOverviewNodes(payload.nodes);
   renderGraph(payload.nodes);
   renderAttempts(payload.nodes.find((item) => item.key === state.selectedNode));
@@ -1576,52 +1587,149 @@ function renderDetail() {
   setDetailTab(state.detailTab);
 }
 
+const WORKFLOW_JOURNEY = [
+  "描述目标",
+  "核对流程",
+  "确认启动",
+  "完成或判断",
+  "查看结果",
+];
+
+function workflowJourneyPosition(instance) {
+  if (instance.status === "draft") return 1;
+  if (["running", "paused", "failed"].includes(instance.status)) return 3;
+  if (instance.status === "discarded") return 1;
+  if (instance.status === "canceled") return 3;
+  return 4;
+}
+
+function renderWorkflowJourney(instance) {
+  const container = el("workflow-journey");
+  const position = workflowJourneyPosition(instance);
+  container.replaceChildren();
+  WORKFLOW_JOURNEY.forEach((label, index) => {
+    const item = node("li", "workflow-journey-step");
+    item.dataset.state = index < position ? "done" : index === position ? "current" : "upcoming";
+    item.append(
+      node("span", "workflow-journey-number", index < position ? "✓" : index + 1),
+      node("span", "workflow-journey-label", label),
+    );
+    container.append(item);
+  });
+  container.dataset.status = instance.status;
+}
+
+function taskForInstance(instanceId) {
+  return state.humanTasks.find((task) => task.instance_id === instanceId) || null;
+}
+
 function renderWorkflowNextStep(instance) {
   const container = el("workflow-next-step");
-  const messages = {
-    draft: ["第 2 步：检查流程", "先核对下面的步骤和负责人。确认无误后，再启动并通知参与人。"],
-    running: ["第 3 步：推进工作", "需要你处理的任务会出现在“待处理”。飞书同时负责通知和待办提醒。"],
-    paused: ["流程已暂停", "确认当前情况后，可以继续流程或取消。"],
-    failed: ["流程需要处理", "先查看失败或退回位置，再预览重新执行会影响哪些步骤。"],
-    done: ["流程已经完成", "先查看流程摘要和各步骤结果。只有确实需要调整时才重新执行。"],
-    canceled: ["流程已经取消", "现有执行记录仍会保留，当前不需要继续处理。"],
-    discarded: ["草稿已经废弃", "如需继续这项工作，请重新发起一份流程草稿。"],
-  };
-  const [title, copy] = messages[instance.status] || ["查看流程状态", "根据下面的当前状态决定下一步。"];
-  container.replaceChildren(
-    node("strong", "", title),
-    node("p", "", copy),
-  );
+  const task = taskForInstance(instance.id);
+  const copy = node("div", "workflow-next-step-copy");
+  const controls = node("div", "workflow-next-step-controls");
+  let title = "查看流程状态";
+  let description = "根据当前状态决定下一步。";
+
+  if (instance.status === "draft") {
+    title = "核对步骤，然后启动";
+    description = "确认下方每一步和负责人符合预期。启动后，系统才会通知参与人并开始执行。";
+    controls.append(detailActionButton(
+      "确认并启动流程",
+      "primary",
+      (button) => runDetailDirectAction(instance, "confirm", button),
+    ));
+  } else if (instance.status === "running" && task) {
+    const isDecision = task.kind === "decision";
+    title = isDecision ? `现在由你判断：${task.node.title}` : `现在由你处理：${task.node.title}`;
+    description = isDecision
+      ? "查看已有结果后，直接在本页接受或填写意见退回。"
+      : "直接在本页提交结果，或者把这项待办转交给其他成员。";
+    const item = humanTaskAttentionItem(task);
+    const label = attentionActionLabel(item.action);
+    const button = detailActionButton(label, "primary", (sourceButton) => {
+      sourceButton.disabled = true;
+      sourceButton.dataset.state = "working";
+      sourceButton.textContent = "正在打开";
+      openHumanTask(item, sourceButton);
+    });
+    button.dataset.defaultLabel = label;
+    controls.append(button);
+  } else if (instance.status === "running") {
+    const activeNode = state.detail?.nodes.find((item) => ["running", "waiting_human", "ready"].includes(item.status));
+    title = "流程正在推进，目前无需你操作";
+    description = activeNode
+      ? `当前步骤是“${activeNode.title}”。轮到你处理时，入口会直接出现在这里，飞书也会同步提醒。`
+      : "系统正在调度后续步骤。轮到你处理时，入口会直接出现在这里。";
+  } else if (instance.status === "paused") {
+    title = "流程已暂停";
+    description = "确认当前情况后，可以继续推进。取消流程属于其他操作。";
+    controls.append(detailActionButton(
+      "继续流程",
+      "primary",
+      (button) => runDetailDirectAction(instance, "resume", button),
+    ));
+  } else if (instance.status === "failed") {
+    title = "流程需要恢复";
+    description = "先查看重新执行会影响哪些步骤，确认后再创建新一轮，旧结果和审计都会保留。";
+    controls.append(detailActionButton(
+      "查看恢复影响",
+      "primary",
+      (button) => previewDetailAction(instance, "restart", button),
+    ));
+  } else if (instance.status === "done") {
+    title = "流程已经完成";
+    description = "结果已整理在下方。只有确实需要调整时，才从其他操作重新执行。";
+    const button = detailActionButton("查看流程结果", "primary", () => {
+      const resultPanel = el("workflow-results-panel");
+      const target = resultPanel.hidden ? el("instance-insights") : resultPanel;
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    controls.append(button);
+  } else if (instance.status === "canceled") {
+    title = "流程已经取消";
+    description = "执行记录仍然保留，当前不需要继续处理。";
+  } else if (instance.status === "discarded") {
+    title = "草稿已经废弃";
+    description = "如需继续这项工作，请重新发起一份流程草稿。";
+  }
+
+  copy.append(node("span", "workflow-next-step-kicker", "当前要做"), node("strong", "", title), node("p", "", description));
+  container.replaceChildren(copy, controls);
   container.dataset.status = instance.status;
 }
 
 function renderDetailActions(instance) {
   const container = el("detail-actions");
   container.replaceChildren();
-  const copy = node("div", "detail-actions-copy");
-  copy.append(
-    node("strong", "", "流程操作"),
-    node("span", "", "所有操作都使用当前飞书身份重新校验权限和状态"),
-  );
   const controls = node("div", "detail-action-controls");
 
-  if (instance.status === "draft") {
-    controls.append(detailActionButton("确认并启动", "primary", (button) => runDetailDirectAction(instance, "confirm", button)));
-  } else if (instance.status === "running") {
+  if (instance.status === "running") {
     controls.append(detailActionButton("暂停流程", "secondary", (button) => runDetailDirectAction(instance, "pause", button)));
     controls.append(detailActionButton("重新执行", "secondary", (button) => previewDetailAction(instance, "restart", button)));
     controls.append(detailActionButton("取消流程", "danger", (button) => previewDetailAction(instance, "cancel", button)));
   } else if (instance.status === "paused") {
-    controls.append(detailActionButton("继续流程", "primary", (button) => runDetailDirectAction(instance, "resume", button)));
     controls.append(detailActionButton("取消流程", "danger", (button) => previewDetailAction(instance, "cancel", button)));
-  } else if (["done", "failed"].includes(instance.status)) {
-    controls.append(detailActionButton("重新执行", "primary", (button) => previewDetailAction(instance, "restart", button)));
+  } else if (instance.status === "done") {
+    controls.append(detailActionButton("重新执行", "secondary", (button) => previewDetailAction(instance, "restart", button)));
   }
 
   if (controls.childElementCount === 0) {
-    controls.append(node("span", "detail-action-empty", "当前状态没有可执行操作"));
+    container.hidden = true;
+    return;
   }
-  container.append(copy, controls);
+  container.hidden = false;
+  const disclosure = document.createElement("details");
+  disclosure.className = "detail-actions-disclosure";
+  const summary = document.createElement("summary");
+  const copy = node("span", "detail-actions-copy");
+  copy.append(
+    node("strong", "", "其他操作"),
+    node("span", "", "暂停、取消或重新执行时使用"),
+  );
+  summary.append(copy, node("span", "detail-actions-boundary", "所有操作都会重新校验权限和状态"));
+  disclosure.append(summary, controls);
+  container.append(disclosure);
 }
 
 function detailActionButton(label, tone, action) {
@@ -1685,8 +1793,10 @@ function renderOverviewNodes(nodes) {
       state.selectedNode = item.key;
       updateGraphSelection(nodes);
       renderAttempts(item);
+      el("detail-advanced").open = true;
       setDetailTab("execution");
-      showToast(`已打开节点：${item.title}`);
+      el("detail-advanced").scrollIntoView({ behavior: "smooth", block: "start" });
+      showToast(`已在高级视图打开：${item.title}`);
     });
     const ordinal = node("span", "overview-node-ordinal", String(index + 1).padStart(2, "0"));
     const copy = node("span", "overview-node-copy");
@@ -1699,6 +1809,55 @@ function renderOverviewNodes(nodes) {
     const action = node("span", "overview-node-action", "查看结果");
     button.append(ordinal, copy, action);
     container.append(button);
+  });
+}
+
+function renderWorkflowResults(nodes, instance) {
+  const panel = el("workflow-results-panel");
+  const container = el("workflow-results");
+  const results = [];
+  [...nodes].reverse().forEach((item) => {
+    const attempt = [...item.attempts].reverse().find((candidate) => candidate.result !== null);
+    if (attempt) results.push({ node: item, attempt });
+  });
+  results.sort((left, right) => {
+    const priority = (entry) => {
+      const keys = entry.attempt.result && typeof entry.attempt.result === "object"
+        ? Object.keys(entry.attempt.result)
+        : [];
+      if (keys.length > 0 && keys.every((key) => ["decision", "feedback"].includes(key))) return 2;
+      if (["agent", "tool"].includes(entry.node.executor)) return 0;
+      return 1;
+    };
+    return priority(left) - priority(right);
+  });
+
+  container.replaceChildren();
+  el("workflow-results-count").textContent = results.length;
+  panel.hidden = results.length === 0;
+  if (results.length === 0) return;
+  el("workflow-results-title").textContent = instance.status === "done" ? "流程结果" : "已产生的结果";
+
+  results.forEach((entry, index) => {
+    const item = document.createElement("details");
+    item.className = "workflow-result-item";
+    item.open = index === 0;
+    const summary = document.createElement("summary");
+    const copy = node("span", "workflow-result-heading");
+    copy.append(
+      node("strong", "", entry.node.title),
+      node("small", "", `第 ${entry.attempt.attempt_no} 次执行 · ${statusLabel(entry.attempt.status)}`),
+    );
+    summary.append(copy, node("span", "workflow-result-toggle", index === 0 ? "已展开" : "查看"));
+    item.addEventListener("toggle", () => {
+      item.querySelector(".workflow-result-toggle").textContent = item.open ? "已展开" : "查看";
+    });
+    const body = node("div", "workflow-result-body");
+    const pre = node("pre", "");
+    pre.textContent = readableValue(entry.attempt.result);
+    body.append(pre);
+    item.append(summary, body);
+    container.append(item);
   });
 }
 
@@ -2450,6 +2609,11 @@ el("draft-open-instance").addEventListener("click", () => {
 });
 el("detail-tabs").querySelectorAll("button").forEach((button) => {
   button.addEventListener("click", () => setDetailTab(button.dataset.tab));
+});
+el("detail-advanced").addEventListener("toggle", (event) => {
+  if (!event.currentTarget.open) return;
+  if (state.detailTab === "overview") setDetailTab("execution");
+  if (state.detailTab === "execution") requestAnimationFrame(layoutGraphCanvas);
 });
 el("workflow-query").addEventListener("input", (event) => {
   state.workflowQuery = event.target.value;

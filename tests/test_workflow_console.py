@@ -588,6 +588,10 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"setDetailTab" in script.body
     assert b"renderOverviewNodes" in script.body
     assert b"renderWorkflowNextStep" in script.body
+    assert b"renderWorkflowJourney" in script.body
+    assert b"renderWorkflowResults" in script.body
+    assert b"taskForInstance" in script.body
+    assert b"reloadAfterTaskMutation" in script.body
     assert b'ownerSection: "attention"' in script.body
     assert b'workflowFilter: "open"' in script.body
     assert b'setDetailTab("overview")' in script.body
@@ -622,6 +626,9 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b".draft-starter-options" in styles.body
     assert b".draft-advanced" in styles.body
     assert b".workflow-next-step" in styles.body
+    assert b".workflow-journey" in styles.body
+    assert b".workflow-results-panel" in styles.body
+    assert b".detail-advanced" in styles.body
     assert b"@media (max-width: 1400px)" in styles.body
     assert b"instance-insights" in page.body
     assert b"attention-center" in page.body
@@ -633,6 +640,9 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert "示例只会填入表单".encode() in page.body
     assert "默认隐藏已经结束的历史记录".encode() in page.body
     assert b"workflow-next-step" in page.body
+    assert b"workflow-journey" in page.body
+    assert b"workflow-results-panel" in page.body
+    assert b"detail-advanced" in page.body
     assert b"graph-edit-dialog" in page.body
     assert b"graph-edit-dependency-list" in page.body
     assert "生成流程草稿".encode() in page.body
@@ -644,6 +654,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"/decision`" in script.body
     assert b"workflow-filters" in page.body
     assert b"detail-tabs" in page.body
+    assert b"detail-tab-overview" not in page.body
     assert b"overview-nodes" in page.body
     assert b"detail-actions" in page.body
     assert page.body.count(b"theme-toggle") >= 2
