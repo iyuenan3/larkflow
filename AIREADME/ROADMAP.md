@@ -22,8 +22,8 @@
 在继续扩展执行器之前，先关闭云端 Agent 控制平面的四个合同：
 
 1. `Knowledge Context Service`：只支持管理员发布的企业共享资料与项目级上传，服务端在检索前完成 tenant、Instance、actor、数据分类和模型外发授权。
-2. `PlannerRuntime Port`：以当前有界 Python 生成器为基线，只返回候选图、校验报告、规划证据和用量，不写草稿、不启动流程。
-3. `AgentRuntime Port` 与 `Authorized Tool Gateway`：一次只执行一个节点的一个 Attempt，首版内部工具只读，所有业务写继续使用显式 Tool 节点。
+2. `PlannerRuntime Port`：Refactor Phase 1 基线已落码。当前 bounded adapter 只返回候选图与最小运行时摘要，不写草稿、不启动流程；`PlanningService` 会覆盖候选中的服务端输入并通过统一 validator 强制最终复验。真实网页与飞书草稿入口已经传入非空 tenant、actor 与耐久 request ID。授权知识、类型化只读工具和 A/B 仍未实现。
+3. `AgentRuntime Port` 与 `Authorized Tool Gateway`：completion 基线端口与 Worker bridge 已落码，一次只执行一个节点的一个 Attempt，claim 和版本继续留在 Worker。Tool Gateway、能力信封和候选 Runtime 仍未实现，所有业务写继续使用显式 Tool 节点。
 4. `NodeExecutionPolicy`：runtime、provider、model、allowed tools、knowledge scopes、data classification、egress、budget、timeout 和 retry 属于 NodeRun policy，不进入业务 DAG Contract。
 
 **采用门槛：** Pi 或 DSH 适配器必须在相同输入、上下文、工具和校验器下，对首次硬校验通过率、用户改图次数、遗漏输入、无效依赖、节点冗余、一次接受率、耗时和成本产生可测改善。要求数据库或飞书凭据、绕过确定性校验、把运行时概念写进 DAG，或没有材料改善时，停止适配器。
@@ -31,6 +31,8 @@
 **范围门槛：** 前五个真实项目中若至少两个需要多个独立 DAG 共享资料，再评估独立 Project 聚合。企业不能维护明确的全员共享语料时，MVP 只做项目上传。Personal Agent Edge 保持暂停，除非出现云端无法完成且有真实频率的任务。
 
 **LangGraph 退出门槛：** Refactor Phase 0 与 Phase 1 保留现有 legacy 依赖和入口，但新增 `planning/`、`agent_runtime/` 与 Target 测试不得导入 LangGraph。只有 Target 成为正式默认入口、基础 wheel 在不安装 LangGraph 时通过导入、启动和离线冒烟，并且 legacy 测试显式改由 `larkflow[legacy]` 运行后，才把 LangGraph 移出默认依赖。新的 LangGraph Adapter 不在默认路线图中，只有真实复杂 Attempt 证明需要内部图分支、checkpoint 或恢复时才单独立项。
+
+**Refactor Phase 0/1 当前证据：** characterization tests 已锁定草稿的一次修复上限和拒绝分类、Agent 输入快照与结果边界、Worker claim 提交、恢复、陈旧结果和稳定幂等键。Target 默认装配已显式使用 `bounded` 与 `completion`；空图、仅 Agent、缺少最终 Human Gate 和非法领域形状即使来自替换 Runtime，也会被 `PlanningService` 最终拒绝。网页与飞书入口的完整 Planner 身份已由路径测试锁定。P2 聚焦套件为 `75 passed`，完整离线套件为 `1085 passed, 24 skipped`；新增端口和 Target import 冒烟在阻断 LangGraph 时通过。本轮内容提交未改 DAG schema、数据库 schema、HTTP、飞书行为或现有 LangGraph 依赖；环境示例只新增本地基线选择，未执行部署。进入 Refactor Phase 2 前仍需单独确认项目上传与 ContextBundle 的数据、授权和 migration 边界。
 
 文件级执行边界、迁移批次、兼容方案、A/B 指标与停止开关见 [`docs/REFACTOR_BLUEPRINT.md`](../docs/REFACTOR_BLUEPRINT.md)。该文档是实施附录，不改变 AIREADME 的 Target 契约，也不代表代码、migration 或部署已经获准执行。
 

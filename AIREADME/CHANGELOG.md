@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.84.0-draft · 2026-08-14 · PlannerRuntime 与 AgentRuntime 基线端口
+
+- Added：新增纯本地 `planning/` 合同、bounded adapter 与 `PlanningService`，以及纯本地 `agent_runtime/` 合同、completion adapter 与 `AgentRuntimeExecutor`。Target 装配显式选择 `bounded` 和 `completion`，现有 `DraftDefinitionGenerator` 与 `LLMAgentExecutor` 继续作为兼容基线。生成专用规则已提取为 larkflow 自有的 `GeneratedDraftValidator`；bounded 内部继续用它支持最多一次修复，`PlanningService` 对任何 Runtime 的最终候选再次强制复验，并覆盖模型返回的 schema 与请求输入。
+- Safety：`PlannerRequest` 现在强制非空 tenant、actor 和耐久 request ID。网页草稿传入当前 tenant、requester 与 console request ID；飞书人员分工传入当前 tenant、initiator 与 action ID。Planner 不接收 claim token、数据库连接或飞书凭据。Agent Runtime 请求同样不包含 claim token、claim expiry 或 expected node version；这些字段继续只由 `WorkflowWorker` 用于提交和陈旧结果拒绝。runtime metadata 目前只存在于本地结果合同，不写入业务 DAG 或数据库。
+- Verified：迁移前聚焦基线为 `49 passed`；第一轮端口聚焦套件为 `107 passed`。P2 收口的草稿、网页入口、飞书入口与端口聚焦套件为 `75 passed`；完整离线套件在清空本机代理并允许既有停机测试只读进程树后为 `1085 passed, 24 skipped`。另有源码扫描、显式阻断 LangGraph 导入的 Target 冒烟、阻断 workflow 导入的合同独立性冒烟、`pip check` 和 wheel 文件清单检查；新增模块均已进入 wheel。
+- Boundary：实现内容提交为 `476b43491adeaf1bcde32185d9b9f036c3a9874a`，实施附录状态校正为 `ebfb5833f739ff411e535e27912ad892d7a8646c`。本轮没有数据库 migration、DAG schema、HTTP、飞书行为、Pi、DSH、项目上传、ContextBundle、Tool Gateway、Personal Agent Edge 或依赖变更；环境示例只新增显式本地基线选择，未执行部署或改变运行拓扑。`langgraph` 与 `langgraph-checkpoint-sqlite` 仍是默认依赖，只服务 legacy 入口与测试。
+
 ## v0.83.0-draft · 2026-08-14 · LangGraph 默认依赖退出方案
 
 - Changed：明确 LangGraph 不属于 Target 业务 DAG、Scheduler、Node Runner、PlannerRuntime 或默认 AgentRuntime。当前默认安装继续保留它，只为兼容 legacy `larkflow` 入口、旧引擎、SQLite checkpointer 和对应测试。

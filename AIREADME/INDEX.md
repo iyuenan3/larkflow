@@ -2,9 +2,9 @@
 
 > 飞书原生的企业协作与 Agent 工作流控制平面，把项目目标变成可确认、可执行、可返工和可追溯的 DAG。生命周期：active development。
 
-当前产品处于开发试用阶段，不是生产就绪版本。Target 中央工作流、飞书责任投影和员工工作台已经形成可运行闭环；企业共享知识、项目上传、PlannerRuntime、AgentRuntime 与 Tool Gateway 仍是目标设计，Personal Agent Edge 已暂停。最新实现与验收历史只记录在 [CHANGELOG.md](CHANGELOG.md)，当前推进边界见 [ROADMAP.md](ROADMAP.md)。
+当前产品处于开发试用阶段，不是生产就绪版本。Target 中央工作流、飞书责任投影和员工工作台已经形成可运行闭环；本地 `PlannerRuntime` 与 `AgentRuntime` 基线端口已经落码但尚未部署，企业共享知识、项目上传、ContextBundle 与 Tool Gateway 仍是目标设计，Personal Agent Edge 已暂停。最新实现与验收历史只记录在 [CHANGELOG.md](CHANGELOG.md)，当前推进边界见 [ROADMAP.md](ROADMAP.md)。
 
-last-synced: ba708724b5095f9185aa894ec381151f4305b91d · 2026-08-10
+last-synced: ebfb5833f739ff411e535e27912ad892d7a8646c · 2026-08-14
 
 ## 阅读顺序
 
