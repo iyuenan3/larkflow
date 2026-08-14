@@ -22,7 +22,7 @@
 在继续扩展执行器之前，先关闭云端 Agent 控制平面的四个合同：
 
 1. `Knowledge Context Service`：只支持管理员发布的企业共享资料与项目级上传，服务端在检索前完成 tenant、Instance、actor、数据分类和模型外发授权。
-2. `PlannerRuntime Port`：Refactor Phase 1 基线已落码。当前 bounded adapter 只返回候选图与最小运行时摘要，不写草稿、不启动流程；`PlanningService` 会覆盖候选中的服务端输入并通过统一 validator 强制最终复验。真实网页与飞书草稿入口已经传入非空 tenant、actor 与耐久 request ID。Phase 2A 未提交候选让 Console 草稿可携带服务端授权的 txt/md `ContextBundle`，附件正文位于独立 BlobStore，只把安全 refs 与 fingerprint 冻结到 Instance；真实 PostgreSQL 与 Caddy 验证仍未完成。类型化只读工具、企业共享资料和 A/B 仍未实现。
+2. `PlannerRuntime Port`：Refactor Phase 1 基线已落码。当前 bounded adapter 只返回候选图与最小运行时摘要，不写草稿、不启动流程；`PlanningService` 会覆盖候选中的服务端输入并通过统一 validator 强制最终复验。真实网页与飞书草稿入口已经传入非空 tenant、actor 与耐久 request ID。已提交的 Phase 2A 让 Console 草稿可携带服务端授权的 txt/md `ContextBundle`，附件正文位于独立 BlobStore，只把安全 refs 与 fingerprint 冻结到 Instance；真实 PostgreSQL 与 Caddy 验证、部署和 migration 应用仍未完成。类型化只读工具、企业共享资料和 A/B 仍未实现。
 3. `AgentRuntime Port` 与 `Authorized Tool Gateway`：completion 基线端口与 Worker bridge 已落码，一次只执行一个节点的一个 Attempt，claim 和版本继续留在 Worker。Tool Gateway、能力信封和候选 Runtime 仍未实现，所有业务写继续使用显式 Tool 节点。
 4. `NodeExecutionPolicy`：runtime、provider、model、allowed tools、knowledge scopes、data classification、egress、budget、timeout 和 retry 属于 NodeRun policy，不进入业务 DAG Contract。
 
@@ -34,7 +34,7 @@
 
 **Refactor Phase 0/1 当前证据：** characterization tests 已锁定草稿的一次修复上限和拒绝分类、Agent 输入快照与结果边界、Worker claim 提交、恢复、陈旧结果和稳定幂等键。Target 默认装配已显式使用 `bounded` 与 `completion`；空图、仅 Agent、缺少最终 Human Gate 和非法领域形状即使来自替换 Runtime，也会被 `PlanningService` 最终拒绝。网页与飞书入口的完整 Planner 身份已由路径测试锁定。P2 聚焦套件为 `75 passed`，完整离线套件为 `1085 passed, 24 skipped`；新增端口和 Target import 冒烟在阻断 LangGraph 时通过。本轮内容提交未改 DAG schema、数据库 schema、HTTP、飞书行为或现有 LangGraph 依赖；环境示例只新增本地基线选择，未执行部署。进入 Refactor Phase 2 前仍需单独确认项目上传与 ContextBundle 的数据、授权和 migration 边界。
 
-**Refactor Phase 2A 当前候选证据：** 当前未提交工作树已经形成 Console 项目附件参与 DAG 规划的首个垂直切片，但仍不能标记完成。`0024_console_project_attachments` 候选增加 collecting、冻结 manifest 和 tenant-first 附件元数据；Owner 通过两阶段页面上传、撤销并显式开始生成。Console 只在存储已配置且模型外发为 `allow` 时公布能力，不可完成的 defer 在持久化前拒绝；撤销对象继续占用 request 和 tenant 保留配额；临时 Blob I/O 故障进入 failed/backoff。Caddy 候选模板只对精确附件上传 POST 放宽到 262144 字节。服务端固定 `internal`，正文不进入 PostgreSQL 业务快照、浏览器 DTO 或 Runtime metadata，最终候选继续由统一 validator 复验。聚焦回归为 `146 passed`，完整离线套件为 `1116 passed, 26 skipped`。本轮尚未提交、部署或应用 migration；真实 PostgreSQL 合同测试因本机未配置一次性测试 DSN 而保持 skip，本机也未安装 Caddy，部署前必须补真库合同与 `caddy validate`。
+**Refactor Phase 2A 已提交证据：** 内容已纳入提交 `b2a13ff1eff796723774d42ca5d04556814a38c2` 并推送，但仍不能标记完成。`0024_console_project_attachments` 增加 collecting、冻结 manifest 和 tenant-first 附件元数据；Owner 通过两阶段页面上传、撤销并显式开始生成。Console 只在存储已配置且模型外发为 `allow` 时公布能力，不可完成的 defer 在持久化前拒绝；撤销对象继续占用 request 和 tenant 保留配额；临时 Blob I/O 故障进入 failed/backoff。已提交 Caddy 模板只对精确附件上传 POST 放宽到 262144 字节。服务端固定 `internal`，正文不进入 PostgreSQL 业务快照、浏览器 DTO 或 Runtime metadata，最终候选继续由统一 validator 复验。附件模块为 `35 passed`；完整套件清空六个代理变量后为 `1119 passed, 26 skipped`，唯一因沙箱禁止 `ps` 的既有测试在允许读取进程树后单独 `1 passed`，合并结果为 `1120 passed, 26 skipped`。本轮尚未部署或应用 migration；真实 PostgreSQL 合同测试因本机未配置一次性测试 DSN 而保持 skip，本机也未安装 Caddy，部署前必须补真库合同与 `caddy validate`。
 
 文件级执行边界、迁移批次、兼容方案、A/B 指标与停止开关见 [`docs/REFACTOR_BLUEPRINT.md`](../docs/REFACTOR_BLUEPRINT.md)。该文档是实施附录，不改变 AIREADME 的 Target 契约，也不代表代码、migration 或部署已经获准执行。
 
@@ -100,7 +100,7 @@ P0 结构能力已由 `6d2d9fa22b7e6926cfe5a1bcf714ccccd073b6d3` 与 `c7e7d90123
 
 ## Next · 受控内部试用与 Phase 2 恢复
 
-- Phase 2A 候选已完成离线验收，下一步先做真实一次性 PostgreSQL migration 与 Caddy 配置验证，再决定是否提交和部署；在这些阻断关闭前不得标记完成。Phase 2B 才让 Agent Attempt 消费冻结附件 refs；在此之前，项目附件只参与 DAG 规划。企业共享资料、生产对象存储、飞书消息附件、PDF/DOCX/OCR、向量检索和 Tool Gateway 继续后置。
+- Phase 2A 已提交并完成离线验收，下一步先做真实一次性 PostgreSQL migration 与 Caddy 配置验证，再决定是否部署；在这些阻断关闭前不得标记完成。Phase 2B 才让 Agent Attempt 消费冻结附件 refs；在此之前，项目附件只参与 DAG 规划。企业共享资料、生产对象存储、飞书消息附件、PDF/DOCX/OCR、向量检索和 Tool Gateway 继续后置。
 - Owner 流程操作、普通 Human 任务页面、受控流程输入与受控 DAG 画板均已提交和部署。公网纯合成实例已覆盖运行中未来节点修改与新增、图编辑确认、节点返工、旧 Attempt 保留、循环依赖拒绝和 PostgreSQL 审计回读；草稿态又完成真实登录拖拽连接、两次预览确认、选边断开和恢复原图。最终实例保持 `draft / graph_revision 3 / 0 NodeInstance / 0 Attempt / 0 Projection`，草稿依赖连线可见手势门槛已经关闭。下一步回到项目自身的真实工作，继续观察首次结果可用性、退回率、人工干预和重复副作用，不再为该结构路径创建纯合成点击样本。
 - 飞书应用内员工工作台登录、PostgreSQL 耐久会话、最小管理员聚合、其他会话撤销、公网有界限流与安全响应头均已通过开发真栈。root 侧 allowlist 工具现提供活跃会话解析、十分钟预览、env 指纹栅栏、原子更新、健康回读、失败自动恢复、显式回滚和追加型运维审计；真实服务器已通过无变化确认与唯一管理员保护，但尚未在没有明确授权对象的情况下执行真实提权。包含 Console 会话表的二十一份 migration 异库恢复也已完成，并验证暴露前清空会话不会删除撤销审计或流程数据。下一步回到真实内部工作：由 Owner 独立使用待处理中心处理一项自然产生的工作，并在确有第二名管理员需求时完成一次真实添加、普通成员与管理员回读及撤销闭环。正式域名因近期不备案保持后置；公网 IP、静态开发 token、进程内限流和单机部署都不作为正式员工交付方案。
 - 具体退回意见与目标 Attempt 返工上下文已完成真实飞书和 PostgreSQL 验收。下一批内部试用不再重复验证该状态机路径，转而观察 Agent 是否稳定理解意见、返工结果是否可直接接受，以及人类需要多少次补充说明。

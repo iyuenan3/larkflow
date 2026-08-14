@@ -1,5 +1,11 @@
 # CHANGELOG · larkflow
 
+## v0.85.1-draft · 2026-08-14 · Phase 2A 提交状态校正
+
+- Changed：Phase 2A 内容已纳入提交 `b2a13ff1eff796723774d42ca5d04556814a38c2` 并推送；本条修正下方 v0.85.0-draft 在候选阶段记录的“未提交工作树”状态，不改写当时的历史记录。
+- Verified：附件模块为 `35 passed`。完整套件清空六个代理变量后为 `1119 passed, 26 skipped`；唯一因沙箱禁止 `ps` 的既有测试在允许读取进程树后单独 `1 passed`，合并结果为 `1120 passed, 26 skipped`。JavaScript 语法、Python AST、`git diff --check` 与 AIREADME check 均通过。
+- Boundary：Phase 2A 尚未完成真实 PostgreSQL 与 Caddy 验证，尚未部署或应用 migration，不能标记正式完成或生产就绪。企业共享知识、Agent Attempt 附件上下文、Tool Gateway、生产对象存储、PDF/DOCX/OCR 和向量检索仍未实现或后置。
+
 ## v0.85.0-draft · 2026-08-14 · Console 项目附件参与 DAG 规划
 
 - Added：新增 `AttachmentBlobStore`、内存实现与显式绝对根目录的单机 filesystem adapter；新增 tenant-first PostgreSQL 元数据仓储、Owner 授权服务、逻辑撤销、冻结 manifest、`SourceRef / AttachmentRef / ContextChunk / ContextBundle` 和规范化 fingerprint。`0024_console_project_attachments` 同时为 Console 草稿增加 collecting 与服务器拥有的附件清单。
