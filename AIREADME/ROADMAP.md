@@ -1,8 +1,8 @@
 # ROADMAP · larkflow
 
-> 状态：Target Delivery Plan · 2026-08-10
+> 状态：Cloud-first Target Delivery Plan · 2026-08-14
 >
-> 原来的三级协作、个人 Agent Edge 产品化和完整能力治理路线已移出近期范围。现有代码作为 legacy 机制原型保留；一个不改变中央主线的只读 Edge Proof 单独验证架构边界。
+> 原来的三级协作、Personal Agent Edge 产品化和完整能力治理路线已移出近期范围。当前主线是云端 Agent 控制平面；既有 Edge 代码与证据作为暂停的历史 Proof 保留。
 
 ## Completed · Phase 0 既有设计简化与一致性核验
 
@@ -16,6 +16,21 @@
 - 统一 README、PRD、架构、契约、路线图和包描述。
 
 **Exit gate：** 每项 MVP 都有明确的产品理由和可判定验收；核心文档无范围冲突；市场结论仍标记为未知。
+
+### 2026-08-14 架构优先级
+
+在继续扩展执行器之前，先关闭云端 Agent 控制平面的四个合同：
+
+1. `Knowledge Context Service`：只支持管理员发布的企业共享资料与项目级上传，服务端在检索前完成 tenant、Instance、actor、数据分类和模型外发授权。
+2. `PlannerRuntime Port`：以当前有界 Python 生成器为基线，只返回候选图、校验报告、规划证据和用量，不写草稿、不启动流程。
+3. `AgentRuntime Port` 与 `Authorized Tool Gateway`：一次只执行一个节点的一个 Attempt，首版内部工具只读，所有业务写继续使用显式 Tool 节点。
+4. `NodeExecutionPolicy`：runtime、provider、model、allowed tools、knowledge scopes、data classification、egress、budget、timeout 和 retry 属于 NodeRun policy，不进入业务 DAG Contract。
+
+**采用门槛：** Pi 或 DSH 适配器必须在相同输入、上下文、工具和校验器下，对首次硬校验通过率、用户改图次数、遗漏输入、无效依赖、节点冗余、一次接受率、耗时和成本产生可测改善。要求数据库或飞书凭据、绕过确定性校验、把运行时概念写进 DAG，或没有材料改善时，停止适配器。
+
+**范围门槛：** 前五个真实项目中若至少两个需要多个独立 DAG 共享资料，再评估独立 Project 聚合。企业不能维护明确的全员共享语料时，MVP 只做项目上传。Personal Agent Edge 保持暂停，除非出现云端无法完成且有真实频率的任务。
+
+文件级执行边界、迁移批次、兼容方案、A/B 指标与停止开关见 [`docs/REFACTOR_BLUEPRINT.md`](../docs/REFACTOR_BLUEPRINT.md)。该文档是实施附录，不改变 AIREADME 的 Target 契约，也不代表代码、migration 或部署已经获准执行。
 
 ## Now · Phase 1 首次成功路径与可用性收口
 
@@ -85,7 +100,7 @@ P0 结构能力已由 `6d2d9fa22b7e6926cfe5a1bcf714ccccd073b6d3` 与 `c7e7d90123
 - 将 `source_decision_20260808_0405` 中 Owner 已接受的唯一优先级作为下一个真实工作周期的输入，用新流程记录实际完成标准、人工澄清次数和是否触发后置项重新评估。不再为已通过的结构契约创建合成点击样本，也不把本次 Tool 通过描述为业务正确。
 - 首批三项真实工作基线已经建立，不再把样本数量本身当作门槛，也不为已通过的状态机路径创建纯合成点击任务。后续真实工作应围绕尚未回答的产品问题选择，并继续保留失败与返工作为有效信号。测试成员有空时再加入跨人员样本，不把其响应设为阻断条件。
 - 针对五次卡片验收暴露的队头阻塞，已部署两个独立 Interactive 副本，并把每条车道的单次 claim 固定为 1。三次真实飞书突发点击已确认共享 bot profile、租约、幂等、双副本分流和卡片终态均正常。后续只在真实业务或功能验收自然产生点击时继续采集耐久指标，不再把反复人工点击计时设为独立门槛；现有小样本仍不得外推生产容量。
-- Edge 的 macOS 开发试用已经完成最小 artifact、离线安装、升级、回滚、目录级只读、会话级模型外发确认、`edge-data-v0.1` 默认拒绝策略和安全卸载。内容提交 `e6106e5f218f9c520928bef0293899ace7a2395f` 又在一台初始无 Edge 状态的员工 Mac 上完成无效 manifest 故障保护、真实合成执行、中央 3/3 收口、设备撤销和精确清理。下一步先由员工在可见登录会话中完成一次首次 Keychain 配对与卸载后凭据处置体验，再建立可信摘要发布和上游 beta 版本兼容门禁；非公开数据继续默认拒绝，直到供应商条款、管理员批准和事件响应责任都明确。Developer ID 签名与公证本阶段后置，但正式分发前仍必须关闭。可持续远程连接仍需完成 ICP 接入备案或迁移合规地域。
+- Edge 的 macOS 开发试用已经完成最小 artifact、离线安装、升级、回滚、目录级只读、会话级模型外发确认、`edge-data-v0.1` 默认拒绝策略和安全卸载。自 2026-08-14 起该路线暂停，不再继续 Keychain 首次体验、可信摘要、兼容门禁、签名、公证或公网 E2E。既有缺口与 No-Go 结论保持有效，恢复时重新立项评估。
 
 目标：让运行中流程可以安全修改、重做和运营，而不覆盖历史。
 
@@ -102,8 +117,8 @@ P0 结构能力已由 `6d2d9fa22b7e6926cfe5a1bcf714ccccd073b6d3` 与 `c7e7d90123
 只有真实使用证明必要时，再评估：
 
 - 模板子 DAG、临时子 DAG和最多三级父子契约。
-- 个人 Agent Edge 的产品化、后台常驻、写能力、离在线状态和通用 Capability Lease。
-- Knowledge、Skill、MCP 注册表及 RAG 模板匹配。
+- Personal Agent Edge 的恢复、产品化、后台常驻、写能力、离在线状态和通用 Capability Lease。
+- 个人知识库、部门知识库、通用企业搜索、复杂源 ACL 同步、Knowledge、Skill、MCP 注册表及 RAG 模板匹配。
 - 字段级锁、复杂 ACL、模板 Fork、行业分发和图形化编辑器。
 - 数值评分、独立质量服务、Kafka、微服务和公开事件 API。
 - 企业访谈、飞书原生对照、首个场景与商业验证。
@@ -114,5 +129,8 @@ P0 结构能力已由 `6d2d9fa22b7e6926cfe5a1bcf714ccccd073b6d3` 与 `c7e7d90123
 
 - 继续把新产品语义写入 legacy LangGraph 全局 state。
 - 把 Agent 当组织责任人或可信权限来源。
+- 把 Pi、DSH、LangGraph session、运行时日志或向量索引当成业务真相或权限边界。
+- 让 Planner 或 Agent Runtime 直接持有 PostgreSQL 写权限、飞书应用凭据或生产密钥。
+- 在当前阶段向 Agent Attempt 内部开放未建模的业务写工具。
 - 用代码量、文档数量或测试通过数替代用户和市场证据。
 - 为尚未出现的规模提前引入 Kafka、微服务或复杂多租户治理。

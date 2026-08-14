@@ -1,7 +1,7 @@
 [project]
 name = "larkflow"
 version = "0.0.2"
-description = "飞书原生企业协作 DAG，含中央 PostgreSQL 工作流、飞书 Task 闭环与可选个人只读 Agent Edge"
+description = "飞书原生的企业协作与 Agent 工作流控制平面，使用可确认 DAG 编排 Human、Agent 与 Tool"
 # 3.10 而不是 3.11：Ubuntu 22.04 LTS 自带的就是 3.10，而 22.04 的 universe 里只有
 # python3.11 的 **rc1**。要么让客户加第三方 PPA，要么用一个 RC 跑生产，两条都不该选。
 # 依据不是推断：2026-07-27 在真机（Ubuntu 22.04.5 / Python 3.10.12）上全量 504 条测试

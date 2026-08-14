@@ -141,6 +141,8 @@ Secret、token、真实人员 ID、设备 ID、本地路径和供应商运行时
 
 Tool 节点还应声明数据化的 `tool.kind` 和非敏感参数。当前确定性 Tool kind 包含 `content.check / source_claims.check / source_decision.check`；后两者分别服务于材料复核和决策生成，不能互换。Agent 节点通过 `work.agent` 声明逻辑 kind、`model_role`、结果格式和节点指令，不得把模型供应商、base URL、长期凭证或 LangGraph checkpoint 固化为业务契约。
 
+`runtime / provider / model / allowed_tools / knowledge_scopes / data_classification / model_egress / budget / timeout / sandbox / fallback` 属于一次 NodeRun 的执行策略，不属于模板或 Instance Snapshot 的业务 DAG Contract。Pi、DeepSeek Harness、LangGraph 和其他运行时适配器不得要求把这些实现字段写入节点定义。
+
 ## 7. Owner 解析
 
 模板中的 `owner_role` 是逻辑角色。创建草稿时，调用方必须提供角色到人员的绑定。确认启动前，每个角色必须解析到当前企业中的唯一人员，否则阻止启动。

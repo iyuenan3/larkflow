@@ -37,6 +37,8 @@ MVP 不使用 `parent_instance_id`、`CapabilityLease`、Knowledge/Skill/MCP reg
 - 新业务优先增加模板或结构化无模板定义，不新增按业务命名的 Python executor 类型。
 - 每个节点必须有唯一 Owner、可判定目标、输出和验收条件。
 - 模板禁止 Secret、token、真实人员 ID、个人设备和供应商运行时 state。
+- Runtime、provider、model、allowed tools、knowledge scopes、data classification、model egress、budget、timeout、sandbox 和 fallback 属于 NodeRun policy，不进入 DAG Contract。
+- Pi、DeepSeek Harness、LangGraph 或其他框架的 session、workflow、checkpoint 和日志不得成为业务节点、依赖、Owner 或状态字段。
 - 修改 [DAG_TEMPLATE_SPEC.md](DAG_TEMPLATE_SPEC.md) 的强制不变量时，必须新增 ADR，并同步 PRD 和 ARCHITECTURE。
 
 当前 `larkflow/templates/*.yaml` 是 legacy compact form。代码迁移完成前，不得把它们描述为符合 v0.2；兼容范围以 [SPEC.md](SPEC.md) 为准。
@@ -56,10 +58,18 @@ MVP 不使用 `parent_instance_id`、`CapabilityLease`、Knowledge/Skill/MCP reg
 - 凭证、token、真实用户 ID 和生产数据库不得进入 git 或 AIREADME。
 - Human、Agent 和 Tool 节点都保留唯一人类 Owner。
 - Agent 与 Tool 只能提交当前节点、当前 Attempt 的结果，不能声明自身权限。
+- 知识范围、工具能力和业务状态转换分别授权。检索索引、模型上下文与运行时日志不是授权边界。
+- Planner 与 Agent Runtime 只接收当前 Attempt 的短时能力，不持有 PostgreSQL 写权限、飞书应用凭据、租户级存储密钥或生产密钥。
+- Agent Attempt 内部工具默认只读。外部业务写必须建模为 DAG 上显式 Tool 节点，绑定唯一 Human Owner、幂等键和审计。
 - 数据和历史使用逻辑失效或墓碑，不通过物理删除抹除审计。
 
 ## 写作与提交
 
+- 仓库根目录只保留一个面向人的 `README.md`，它只负责项目简介、快速开始和文档导航，不记录部署流水、提交清单或单次验收明细。
+- 禁止创建 `README 2.md`、`README-old.md`、`README-copy.md` 等平行入口。旧入口按内容归入 AIREADME 后删除，不通过重命名继续保留第二份真相源。
+- 产品身份与边界写 CORE，产品需求写 PRD，外部契约写 SPEC，内部结构写 ARCHITECTURE，部署与运维写 DEPLOYMENT，里程碑写 CHANGELOG，决策理由写 DECISIONS，事故与经验写 MEMORY。
+- `docs/` 只保留面向不同受众的使用说明、生成物或超大附录。它不得独立定义产品、架构、公共契约、部署状态或变更历史；与 AIREADME 冲突时，以对应 AIREADME 文件为准，并在同一次修改中修正文档。
+- AIREADME/INDEX 只承担定位、状态表和阅读路由，不堆放提交、发布、部署或验收流水。
 - 产品结论同时写证据等级、边界、取舍和可判定验收。
 - 合同、招聘等案例只作例子，通用规则必须能替换案例后仍成立。
 - 不把功能设计写成市场验证，不把 legacy 测试写成 Target 已实现。

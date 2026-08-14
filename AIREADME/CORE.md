@@ -1,10 +1,12 @@
 # CORE · larkflow（飞流）
 
-> 状态：Target + Experimental Edge · 既有设计简化版 · 2026-08-10
+> 状态：Cloud-first Target + Paused Edge Proof · 既有设计简化版 · 2026-08-14
 
 ## 身份
 
-larkflow 是基于飞书的企业协作 DAG 系统。它把一个多人协作目标拆成有依赖、有唯一责任人、可验收和可追溯的节点。飞书承载消息、任务、文档和组织身份；larkflow 负责模板、实例、调度、变更、重做和审计。
+larkflow 是基于飞书的企业协作与 Agent 工作流控制平面。它把一个项目目标拆成有依赖、有唯一责任人、可验收和可追溯的 DAG 节点。飞书承载消息、任务、文档、组织身份和企业资料入口；larkflow 负责受控取用上下文、生成候选流程、调度 Human、Agent 与 Tool、处理变更和返工，并把业务真相与审计保存在 PostgreSQL。
+
+当前产品主线只在云端运行。用户向 larkflow 发起项目请求，系统在授权范围内读取企业共享资料与本项目上传件，生成不执行的 DAG 草稿，经人确认后才启动。一个“项目工作区”首版由一个 Workflow Instance、其图快照和项目级附件承载，不先增加独立 Project 聚合。
 
 当前设计不是从零重建。它沿用既有产品设计，并围绕最小闭环做减法。合同、招聘等内容只是示例，不是产品定位。
 
@@ -28,22 +30,27 @@ larkflow 是基于飞书的企业协作 DAG 系统。它把一个多人协作目
 6. 节点重启会重置目标节点和所有可达下游；历史通过新的 Attempt 保留，DAG 不画回边。
 7. 中央数据库是业务真相源，飞书是交互入口和可恢复投影。
 8. 权限、责任、状态转换和图修改合法性由服务端计算，不信任卡片或执行器回传的身份。
-9. LangGraph 只可作为单个复杂 Agent 节点的可选内部运行时，不承载跨人流程的唯一状态。
+9. LangGraph、Pi 或 DeepSeek Harness 只可作为单个 Planner 或 Agent Attempt 的可替换内部运行时，不承载跨人流程的业务 DAG、授权或耐久状态。
+10. Planner 只能返回候选 DAG、校验报告和证据，最终草稿仍由 larkflow 确定性校验并写入。
+11. Agent Runtime 只获得当前 Attempt 的短时上下文和能力，不持有 PostgreSQL 写权限、飞书凭据或租户级生产密钥。
+12. 知识范围、工具能力和业务状态转换分别授权；检索索引、模型提示词和运行时日志都不是权限边界。
 
 ## 当前 MVP 不做什么
 
-- 不建设独立 Project、IM、搜索、知识库和应用市场全套平台。
+- 不建设独立 Project、IM、企业搜索、完整知识库和应用市场全套平台；首版只提供管理员发布的企业共享资料与项目级上传件。
 - 不实现模板子 DAG、临时子 DAG或三级下钻。
-- 不把个人 Agent Edge 产品化为默认执行路径，不提供任意命令、写权限、后台常驻或通用 Capability Registry。
-- 不建设 Knowledge、Skill、MCP 注册表或 RAG 模板匹配。
+- 暂停 Personal Agent Edge 的继续开发，不把它作为默认或近期执行路径。
+- 不建设个人或部门知识库、通用 Knowledge、Skill、MCP 注册表或 RAG 模板市场。
+- 不允许 Planner 或 Agent Runtime 直接写业务数据库、操作飞书或获得任意代码执行权；首版 Attempt 内部工具只读，业务副作用继续由显式 Tool 节点承担。
+- 不为采用而采用 Pi 或 DeepSeek Harness，也不把任一框架包进领域内核。
 - 不引入 Kafka、微服务拆分、字段级锁、复杂 ACL 或完整图形化编辑器。
 - 不把五维百分制评分作为首版质量模型。
 - 不声称市场需求、频率、降本或付费意愿已经得到验证。
 
 ## 当前阶段
 
-当前阶段是中央工作流基础实现。设计取舍见 [`research/design-simplification.md`](../research/design-simplification.md)。仓库中的 LangGraph + SQLite + lark-cli 代码仍是 legacy 机制原型，不是上述目标架构的已实现版本。
+当前阶段是中央工作流基础实现向云端 Agent 控制平面收敛。设计取舍见 [`research/design-simplification.md`](../research/design-simplification.md)。PostgreSQL 工作流、飞书投影、员工工作台和固定 `llm.generate` Agent 已落码；企业知识上下文、项目上传、`PlannerRuntime`、通用 `AgentRuntime` 与受权 Tool Gateway 仍是 Target，不是 As-built。
 
 当前前端边界是员工工作台加飞书责任投影。员工可以在工作台描述目标、生成并修改流程草稿、确认启动、查看本人流程、处理或转交普通人工任务，以及对版本绑定的结果作出接受或退回决定；Instance Owner 还可执行暂停、继续、取消、重启和未来区域图编辑。所有动作仍由服务端按 tenant、当前责任人、状态、Attempt 和版本重新校验，参与者不会因此获得完整实例可见性。飞书继续承载通知、待办和决定卡投影，但用户不必复制命令或返回飞书才能推进流程。飞书 OAuth 与 PostgreSQL 耐久会话已经通过公网 IP HTTPS 开发部署；服务端 allowlist 命中的成员还可查看当前企业聚合并治理其他浏览器会话。正式域名、allowlist 自助管理、批量会话治理和生产装配仍未实现。
 
-仓库允许一个不改变 MVP 主线的 Personal Agent Edge Proof v0：用户用一次性配对码注册本人设备，可手工运行一次只读 `personal.readonly` 节点，也可主动启动一个固定单工作区的前台领取会话。设备通过中央 HTTPS 边界领取短时执行租约并回传结果。前台会话不是操作系统后台服务，不改变配对 capability，也不构成产品化。中央 PostgreSQL、节点 Owner、Human gate 和服务端授权不变；设备不是责任主体，也不能经该通道修改文件、执行任意 shell、操作飞书或更改流程图。macOS Codex 开发路径已经用 fail-closed permission Profile 限定为所选工作区只读，并要求每次前台会话显式确认模型外发。`edge-data-v0.1` 进一步默认拒绝数据外发，当前只放行明确标记的合成或公开材料；目录隔离和分类都不代表工作区内容不会发送给模型服务商。本机安全卸载与中央撤销保持分离，防止删除文件被误认为凭据已经失效。该 Proof 只验证架构可行性，不代表真实采用、市场需求或生产安全已经成立。
+仓库已经实现 Personal Agent Edge Proof v0，但自 2026-08-14 起暂停继续投入。既有代码、测试、ADR 和安全证据作为历史保留，不删除也不改写；它不进入当前产品主线、默认部署或近期 Roadmap。若未来恢复，仍必须重新完成数据外发政策、分发安全、用户需求和云端不可替代性评估。

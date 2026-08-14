@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.82.0-draft · 2026-08-14 · 云端 Agent 控制平面方案收敛
+
+- Reviewed：使用 pm-skills 的 intended-vs-implemented、strategy red-team 与 shipping-artifacts 方法核对产品意图、当前代码、信任边界、运行时控制和采用假设。
+- Changed：产品主线收敛为部署在云端的企业协作与 Agent 工作流控制平面。项目工作区首版由一个 Workflow Instance 与项目级上传件承载；Personal Agent Edge 降为暂停的历史 Proof。
+- Added：定义企业共享资料与项目上传的知识边界、`ContextBundle`、`PlannerRuntime`、`AgentRuntime`、`Authorized Tool Gateway`、NodeRun policy、三层授权和 Pi / DSH A/B 采用门槛。
+- Added：新增面向人的 [`docs/ARCHITECTURE_OVERVIEW.md`](../docs/ARCHITECTURE_OVERVIEW.md)，用完整项目生命周期解释上述总体方案，并明确 AIREADME 仍是产品与架构真相源。
+- Added：新增 [`docs/REFACTOR_BLUEPRINT.md`](../docs/REFACTOR_BLUEPRINT.md)，把 ADR-114 展开为文件级边界、内部合同草案、分阶段迁移、兼容与回滚策略、A/B 指标、风险停止条件和验收清单；ROADMAP 与 README 增加入口。
+- Boundary：本次只更新设计文档、README、包描述与 GitHub About，不实现知识检索、上传、Runtime 端口或部署变更，不把 Target 描述为 As-built。
+
 ## v0.81.0-draft · 2026-08-10 · 搜索引用边界与跨入口决定卡收口
 
 - Fixed：托管 Web Search 只保存供应商响应结构中的引用 URL，不再把模型正文里出现的裸 URL 提升为可信来源；供应商没有返回引用时 Attempt 明确失败。

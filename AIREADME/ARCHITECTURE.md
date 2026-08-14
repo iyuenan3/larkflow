@@ -1,6 +1,6 @@
 # ARCHITECTURE · larkflow
 
-> 状态：Target + Gap · 既有架构简化版 · 2026-08-10
+> 状态：Cloud-first Target + Gap · 既有架构简化版 · 2026-08-14
 
 ## 1. 架构原则
 
@@ -11,6 +11,8 @@
 5. 生成、编辑和重启都先预览后确认。
 6. 所有外部写入幂等，权限由服务端重算，关键变化可审计。
 7. MVP 采用模块化单体，不预先引入 Kafka 或微服务。
+8. 知识授权、工具授权和业务状态转换是三个独立边界。
+9. Planner 与 Agent Runtime 可替换，只执行一个受限 Attempt，不持有业务真相或生产凭据。
 
 ## 2. 目标系统
 
@@ -18,12 +20,17 @@
 flowchart LR
     F["飞书<br/>IM / Task / Doc / Drive / Directory"] <-->|"事件、命令、投影、对账"| C["larkflow 模块化单体"]
     W["项目 Owner<br/>飞书应用或浏览器工作台"] -->|"OAuth 会话<br/>Owner 范围查询"| C
-    E["员工电脑<br/>Personal Agent Edge"] -->|"私有 HTTPS<br/>配对、领取、续租、回传"| C
+    K["授权知识来源<br/>企业共享资料 / 项目上传"] -->|"ContextBundle"| C
     C --> D[("PostgreSQL<br/>Template / Instance / Attempt / Audit")]
     C --> S["DAG Scheduler"]
     C --> P["Feishu Projection"]
+    C --> G["Authorized Tool Gateway<br/>短时只读能力"]
+    C --> PR["PlannerRuntime Port<br/>候选 DAG"]
     S --> R["Human / Agent / Tool Node Runner"]
-    R -.-> L["可选 LangGraph<br/>单个 Agent 节点内部"]
+    R --> AR["AgentRuntime Port<br/>单节点 Attempt"]
+    PR -.-> X["可选 DSH Adapter"]
+    AR -.-> Y["可选 Pi / DSH / LangGraph Adapter"]
+    E["Personal Agent Edge<br/>Paused Proof"] -.-> C
 ```
 
 ### 模块边界
@@ -32,7 +39,11 @@ flowchart LR
 - Instance Service：草稿、确认、快照、状态、编辑、重启和进度。
 - Scheduler：依据依赖和状态解锁节点。
 - Node Runner：运行 Agent 与 Tool 节点，接收 Human 节点提交。
-- Edge Control：管理本人设备配对、撤销和窄 capability，把合法设备映射到现有 Node Runner 租约，不另建业务状态机。
+- Knowledge Context Service：只从管理员发布的企业共享资料和当前项目上传件生成授权 `ContextBundle`，记录来源 ID、摘要指纹与数据分类，不把检索索引当成权限边界。
+- PlannerRuntime Port：接收目标、授权上下文和只读工具清单，只返回 `DAGCandidate`、`ValidationReport`、`PlanningEvidence` 与 `Usage`。larkflow 确定性复验后才可创建草稿。
+- AgentRuntime Port：接收一个 Node、一个 Attempt、最小上下文和短时能力，返回节点交付物、执行轨迹与用量，不直接修改 Instance。
+- Authorized Tool Gateway：校验 tenant、Instance、Node、Attempt、actor、允许工具、知识范围、过期时间与数据外发政策。Attempt 内部首版工具只读，业务写入保持为显式 Tool 节点。
+- Edge Control：历史 Proof，管理本人设备配对、撤销和窄 capability。当前暂停，不进入云端主线或默认部署。
 - Console：把一个服务端认证主体映射到 tenant 与 person。Instance Owner 可以读取本人流程并执行服务端允许的确认、暂停、继续、取消、重启和未来区域图编辑；当前 Human 负责人只能读取有界任务上下文，普通任务可以提交或转交，决定任务可以接受或退回，但不能因此读取完整实例。管理员可额外读取当前 tenant 聚合，并通过耐久预览、显式确认和追加型审计撤销其他浏览器会话；当前会话只能注销。所有写入都调用既有领域服务并重新校验状态、责任人、Attempt 和版本，待处理项从同一 PostgreSQL 聚合即时派生，不形成第二套状态。
 - Projection Service：创建和对账飞书任务、卡片、消息及文档。
 - Audit Service：追加 actor、来源、状态、revision 和相关对象。
@@ -49,10 +60,12 @@ flowchart LR
 | Attempt | PostgreSQL | 每次执行、提交、质量结果和交付物引用 |
 | Projection | PostgreSQL + 飞书对象 | 记录外部对象和同步版本，可重建 |
 | AuditEvent | Append-only 审计表 | 客户端不能改写 |
+| Project attachment / Context manifest | PostgreSQL + 受控对象存储 | Target：项目级资料、来源摘要与授权范围；当前未实现 |
+| Runtime trace / Tool invocation | PostgreSQL 中的 Attempt 附件或审计 | Target：观察与对账记录，不反向成为业务状态 |
 | EdgeDevice / Pairing / EdgeEvent | PostgreSQL | 设备身份、一次性配对、撤销与追加型审计，不保存原始 secret |
 | NodeRun checkpoint | 节点执行运行时 | 只属于一个 Agent 节点的一次 Attempt |
 
-MVP 不建立独立 Project 聚合。`Instance` 只保存目标、项目 Owner、参与人和材料引用等最小元数据。首个部署按单企业实现，schema 保留 `tenant_id`，但不把完整多租户产品化作为首版交付条件。
+MVP 不建立独立 Project 聚合。产品界面的“项目工作区”先由一个 `Instance`、完整图快照、项目 Owner、参与人和项目级上传引用承载。若真实试用中一个项目经常需要多个独立 DAG 共享材料，再重新评估 Project 聚合。首个部署按单企业实现，schema 保留 `tenant_id`，但不把完整多租户产品化作为首版交付条件。
 
 ## 4. 生命周期
 
@@ -89,15 +102,16 @@ pending | ready | running | waiting_human -> canceled
 
 ### 创建与启动
 
-1. 用户选择启用模板，或通过自然语言引导、结构化高级入口提交无模板定义。
-2. 服务端保留原始输入并校验 DAG、责任人和验收字段，创建 `draft`。
-3. 用户查看预览并确认或丢弃。
-4. 确认事务冻结快照、创建节点和初始 Attempt，并写入 outbox。
-5. 投影服务创建飞书责任入口，Scheduler 解锁根节点。
+1. 用户选择启用模板，或通过自然语言引导、结构化高级入口提交无模板定义，并按需上传当前项目资料。
+2. 服务端先解析 tenant、actor、企业共享资料范围、项目上传范围、数据分类与模型外发政策，形成有界 `ContextBundle`。
+3. PlannerRuntime 使用只读工具生成候选图，larkflow 确定性校验 DAG、责任人、交付物、能力与验收字段。
+4. 服务端保存 `draft`，用户查看节点、依赖、Owner、资料范围、执行方式和风险后确认或丢弃。
+5. 确认事务冻结快照、创建节点和初始 Attempt，并写入 outbox。
+6. 投影服务创建飞书责任入口，Scheduler 解锁根节点。
 
 ### 执行与质量
 
-Human 节点等待 Owner 提交。Agent 与 Tool 节点由中央 Node Runner 运行。所有节点都保留唯一 Owner。自动执行失败、重试超限或需要人工判断时，节点进入可见的人工处理路径。
+Human 节点等待 Owner 提交。Agent 与 Tool 节点由中央 Node Runner 运行。AgentRuntime 每次只处理当前 Node 的当前 Attempt；内部可使用只读检索、校验或分析工具，但不能修改 DAG、调用 Human Gate 或执行未声明的外部业务写。所有节点都保留唯一 Owner。自动执行失败、重试超限或需要人工判断时，节点进入可见的人工处理路径。
 
 质量结果使用 `pass/fail + evidence + suggestion`。Agent 自动重试上限由服务配置，并且只由一个层次负责重试，避免 SDK 与业务层叠加。
 
@@ -117,9 +131,13 @@ Human 节点等待 Owner 提交。Agent 与 Tool 节点由中央 Node Runner 运
 
 Projection 记录外部对象 ID、幂等键和已同步版本。缺失对象可重建，重复事件被忽略，冲突按服务端合法状态重新投影并记录告警。
 
-## 6. LangGraph 边界
+## 6. Agent Runtime 边界
 
-业务 DAG 不使用 LangGraph 图或 checkpointer 作为产品模型。LangGraph 可以实现一个复杂 Agent 节点内部的检索、生成和自检，checkpoint 只服务该次 NodeRun 的恢复。简单 Agent 或 Tool 节点无需 LangGraph。
+业务 DAG 不使用 Pi session、DeepSeek Harness workflow、LangGraph 图或任何运行时 checkpoint 作为产品模型。它们只可以实现一次 Planner 或 Agent Attempt 内部的检索、工具组合、并行 Subagent、生成和自检。内部 Subagent 不成为业务节点或 Owner，内部进度事件不替代 PostgreSQL 状态。
+
+PTC 只允许在隔离的 Planner Attempt 中编排只读工具并返回候选图。worker thread 只能作为故障 containment，不能作为多租户安全边界；生产试验必须使用 OS 级隔离或服务端固定编排。普通工具副作用不会因 Cordis effect 生命周期或会话回滚而撤销，因此当前不向 Planner 或 Agent 内部开放写能力。
+
+运行时切换与模型 fallback 只能发生在明确策略内。若需要更换 provider 或 runtime，必须结束当前 Attempt 并创建新 Attempt，不能在一次执行中静默改变审计身份。Pi session 与 DSH 日志只作为 trace 附件，PostgreSQL 中的 Attempt 仍是耐久历史。
 
 ## 7. 当前 Target 内核 As-built
 
@@ -198,7 +216,10 @@ PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration �
 | 飞书集成 | PostgreSQL outbox / Inbox、幂等、服务端授权、对账 | Human Task 创建 / 完成、可靠轮询、可选事件、服务端详情回读、两阶段授权、启动对账、受控 Task 重建、十五个窄命令、模板与无模板草稿、人员选择卡、失败恢复卡、自动节点消息、暂停继续取消、两类重启、未来区域编辑、跨人员分工、完成 Docx 与最终通知已落码并完成相应开发真栈验收；凭据侧交互已拆为两个单项领取副本 | 需要更多业务命令、更高强度限流回归和生产拓扑 |
 | 工作台与管理员控制面 | Owner 浏览流程、DAG、跨轮次 Attempt、审计与派生待处理提示，发起受控自然语言流程，并执行本人实例的受控流程操作；普通 Human Task 参与者读取有界任务上下文并提交或转交；管理员查看当前企业聚合并治理其他浏览器会话 | 飞书 OAuth、PostgreSQL 耐久会话、耐久草稿请求、独立中央生成 Worker、Owner 流程操作、参与者任务 API、运行时责任转交、受控 DAG 画板、服务端 allowlist 管理员聚合、会话撤销、Caddy 安全边界与有界令牌桶均已开发部署。真实 PostgreSQL 已验证草稿领取竞争、草稿连接与断开依赖、独立启动和转交竞争；真实登录浏览器已完成普通 Human 提交、跨成员转交和运行中画板增改返工。受控输入已完成真实登录模型生成 | 仍需草稿画板拖拽连线的真实登录可见复验、生产容量和分布式限流；还缺任意自由图形、多人实时协同、批量撤销、设备命名、分页筛选、完整协作者实例视图和跨轮次对比 |
 | 运行时 | 独立 Scheduler + Node Runner | 新内核已实现 Scheduler、Node Runner、持久化 runnable scan、`llm.generate`、`content.check`、Runtime / Projection / Interactive / Inbound Worker、能力过滤、优雅停机、过期 claim 恢复，以及失败自动节点的 Owner 重试与人工接管 | 需要更多业务 Tool、自动重试策略配置、恢复运营视图和生产装配 |
-| Personal Agent Edge | 默认关闭、本人设备、窄 capability、中央真相 | Proof v0 已实现配对、撤销、私有 HTTP、手工 run-once、前台 serve、只读 Codex adapter、续租失败取消、单设备锁与迟到结果拒绝；员工 Mac 前台 serve 已通过受控真机验收。macOS Keychain、开发试用 manager、安装、升级、回滚、安全卸载、独立最小 Edge wheel、精确 lock、SPDX SBOM、构建证明、bootstrap pip 修复和真实断网安装均已验证。`edge-data-v0.1` 默认拒绝且只允许显式 `synthetic / public`；一台初始无 Edge 状态的员工 Mac 已完成故障保护、真实合成执行、撤销和精确清理 | 安全评审结论仍为正式分发 No-Go。仍缺 Developer ID 签名、公证、可信摘要渠道、真实登录 Keychain 首次体验、上游 beta Profile 的版本兼容门禁、供应商与管理员对非公开数据的正式批准，以及合规公网 E2E；产品化仍为 Later |
+| PlannerRuntime | 运行时中立的候选图生成端口、只读工具和确定性复验 | 当前 `DraftDefinitionGenerator` 直接调用一次中央 LLM，最多一次有界修复，随后本地校验 | 缺少端口、授权知识上下文、类型化工具、规划证据和 A/B harness |
+| AgentRuntime | 单节点、单 Attempt 的可替换执行端口 | 当前 Agent 只接受声明式 `llm.generate`，每次执行一次 completion；没有通用工具循环 | 缺少能力信封、只读 Tool Gateway、统一 trace 与可替换适配器 |
+| Knowledge Context | 企业共享资料加项目上传，服务端授权后形成 `ContextBundle` | 尚无项目上传、知识清单、检索授权和数据外发策略实现 | 先实现管理员发布的全员语料与项目级上传，不复制个人或部门 ACL |
+| Personal Agent Edge | 暂停的历史 Proof | Proof v0 已实现配对、撤销、私有 HTTP、只读领取、受控分发和真机合成验收 | 不继续产品化；恢复必须有云端不可替代的需求证据并重做安全评估 |
 
 [SPEC.md](SPEC.md) 和 [DEPLOYMENT.md](DEPLOYMENT.md) 继续描述 As-built 原型，不作为目标产品已实现证据。
 
@@ -207,7 +228,10 @@ PostgreSQL adapter 已在一次性 PostgreSQL 14 数据库上验证 migration �
 - 凭证、token、真实人员 ID 和生产数据不进入模板、日志或仓库。
 - 控制台身份只由服务端认证结果映射，不从查询参数、卡片 payload 或浏览器提交的 person 字段取值。非 Owner 与不存在资源使用相同 404；开发静态 token 不得暴露到公网。
 - 每个命令按当前 actor、tenant、责任关系、状态和 expected revision 重新授权。
+- 知识访问、工具执行和业务状态转换分别授权。检索服务不得先取回跨权限正文再依赖提示词过滤。
+- PlannerRuntime 与 AgentRuntime 不获得 PostgreSQL 写权限、飞书应用凭据、租户级对象存储密钥或生产密钥，只接收当前 Attempt 的短时能力信封。
+- 数据分类和模型外发政策分别于执行位置建模。云端运行不自动等于允许把内容发送给外部模型供应商。
 - 人员、模板或实例失效必须有可审计的逻辑终态，不通过物理删除抹除历史。
 - 状态事务与飞书副作用通过 outbox 或等价机制解耦。
 - 测试继续使用 Mock Lark I/O、Stub LLM 和临时或内存数据库，不访问真实飞书。
-- Edge 子进程不得获得设备凭据、Target DSN 或飞书应用凭据；Human gate 永远不能由 Edge 代答。
+- Human Gate 永远不能由 Planner、Agent Runtime、内部 Subagent 或 Edge 代答。

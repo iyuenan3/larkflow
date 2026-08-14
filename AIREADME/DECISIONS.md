@@ -1016,3 +1016,14 @@
 - Alternatives(否决)：Console 提交后直接调用飞书 API；只依赖陈旧卡片点击时返回错误；删除飞书决定卡；让前端伪造 Projection 已完成；为 Console 建立独立卡片状态表。
 - Tradeoff：同一卡片可能先由回调快速反馈、再由 Projection 幂等写入相同终态，多一次外部更新；但任何入口都共享同一耐久收口和失败重试。Projection 保存终态仍不等于用户客户端已经刷新，真实验收以服务端卡片更新成功和 Projection state 为边界。
 - Evidence：修复提交 `ba708724b5095f9185aa894ec381151f4305b91d`。离线新增 Console 退回后卡片收口回归，完整套件为 `1060 passed, 24 skipped`。真实苏州实例中，Attempt 1 通过 Console 退回后旧卡为 `settled=true / rejected / failed`；节点重启只创建 Agent 与 Human Attempt 2；Attempt 2 通过 Console 接受后新卡为 `settled=true / accepted / done`。两张卡均绑定原消息，Instance 最终为 `done / version 18`，完成文档和最终通知有独立外部绑定。
+
+## ADR-114 · 2026-08-14 · 云端 Agent 控制平面采用可替换 Runtime 与受控知识边界
+
+- **Status：Accepted，Target 设计，尚未实现。**
+- Problem：larkflow 已有 PostgreSQL 工作流、飞书投影和固定 `llm.generate` Agent，但还没有企业知识上下文、项目上传、运行时中立的规划端口或 Agent 工具循环。Pi 与 DeepSeek Harness 提供了可借鉴的 Agent loop、provider seam、插件、PTC、类型化工具和 Subagent 能力；直接引入任一框架会把临时运行时、模型代码和日志抬升为业务状态，并扩大数据库、飞书和企业资料的权限面。Personal Agent Edge 又分散了当前云端主线。
+- Constraint：PostgreSQL 继续保存业务真相，飞书继续是投影；业务 DAG、唯一 Human Owner、Human Gate、确定性校验、草稿确认和 Attempt 历史不能交给 Agent Runtime。Cordis effect 生命周期不能撤销已经发生的外部副作用，worker thread 也不是多租户安全边界。企业资料仍可能带有部门或个人 ACL，向量索引不能替代授权。
+- Decision：当前产品主线收敛为云端 Agent 工作流控制平面。首版“项目工作区”由一个 Workflow Instance 与项目级上传件承载，不新增独立 Project 聚合。知识只接入管理员明确发布为当前企业全员可用的共享资料与当前项目上传件；个人知识库、部门知识库和复杂源 ACL 同步后置。服务端在检索前分别校验知识范围、工具能力与业务状态转换，并形成带来源 ID、摘要指纹、数据分类和外发政策的 `ContextBundle`。
+- Runtime：新增稳定 `PlannerRuntime` 与 `AgentRuntime` 端口，以及 `Authorized Tool Gateway`。Planner 只返回 `DAGCandidate + ValidationReport + PlanningEvidence + Usage`，由 larkflow 确定性复验并写成草稿。Agent Runtime 一次只完成一个节点的一个 Attempt。两者不持有 PostgreSQL 写权限、飞书应用凭据或租户级生产密钥；首版内部工具只读，所有外部业务写继续建模为 DAG 上显式 Tool 节点。Runtime、provider、model、allowed tools、knowledge scopes、data classification、egress、budget、timeout、retry、sandbox 与 fallback 属于 NodeRun policy，不进入业务 DAG Contract。
+- Adapters：Pi 与 DeepSeek Harness 只作为端口后的参考或实验适配器。PTC 仅可在隔离的 Planner Attempt 中组合只读工具并返回候选图；Subagent 只属于当前 Attempt，不能成为业务节点、Owner 或 Human Gate。适配器采用必须与 Python 基线使用同一输入、上下文、工具和校验器，对首次硬校验通过率、用户改图次数、遗漏输入、无效依赖、节点冗余、一次接受率、耗时与成本产生可测改善。Personal Agent Edge 自本 ADR 起暂停继续投入，既有代码、ADR 和安全证据保留。
+- Alternatives(否决)：直接把 DSH 包进 Python 领域内核；完全照搬 Pi；把每个 Agent 永久限制为单次 completion；立即建设独立 Project 与个人知识库。前两者会让框架侵入业务层，第三项只能作为对照基线，第四项缺少真实多 DAG 项目与复杂 ACL 需求证据。
+- Tradeoff：多一层端口、能力信封、上下文清单和 A/B harness 会增加前期设计成本。前五个真实项目中若至少两个需要多个独立 DAG 共享资料，则重新评估 Project 聚合；企业无法维护全员共享语料时，MVP 只做项目上传；DSH 或 Pi 适配器没有材料改善，或要求数据库、飞书凭据、DAG schema 污染或绕过确定性校验时，停止该适配器；出现云端无法完成且有真实频率的任务时，再单独恢复 Edge 评估。
