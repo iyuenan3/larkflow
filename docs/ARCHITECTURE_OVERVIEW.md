@@ -279,6 +279,8 @@ Pi、DSH、LangGraph 或普通模型调用都属于这一层。
 
 它们可以保存一次 Attempt 的内部 trace、工具调用和中间步骤，但不能成为项目状态源。
 
+LangGraph 在当前代码里还有一个过渡身份：旧 `larkflow` 入口、legacy 引擎和旧测试仍依赖它，所以现在不能直接从默认安装删除。但新的 PlannerRuntime、AgentRuntime 和 Target 工作流不会继续建立在它上面。等 Target 成为默认入口，并完成一个完全不安装 LangGraph 的基础 wheel 冒烟后，旧依赖才会移到 `larkflow[legacy]`。如果以后没有真实的复杂 Agent Attempt 需要内部图分支、checkpoint 或恢复，就不会再建设新的 LangGraph Adapter。
+
 如果 Runtime 说“我完成了”，larkflow 仍要检查：
 
 - 回传的是不是当前 Attempt。

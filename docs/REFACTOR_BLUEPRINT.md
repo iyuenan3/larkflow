@@ -554,6 +554,27 @@ Exit gate：适配器在至少一项核心质量指标上产生材料改善，�
 - additive migration 不通过删除列回滚，应用层先停止读取新字段并保留历史。
 - 不允许 baseline 与新 Runtime 各自写一份业务结果形成双真相。
 
+### 15.4 LangGraph 默认依赖退出门槛
+
+当前 `pyproject.toml` 仍把 `langgraph` 与 `langgraph-checkpoint-sqlite` 列为默认依赖。原因不是 Target 需要 LangGraph，而是 legacy `larkflow` CLI、`engine/orchestrator.py`、`app.py`、`service.py` 和对应测试仍直接使用 StateGraph、interrupt、Command 与 SQLite checkpointer。Target `larkflow/workflow/` 已与这套状态模型隔离，因此本轮采用兼容迁移，不立即删除依赖。
+
+分三步处理：
+
+1. Refactor Phase 0 与 Phase 1 保留现有依赖、legacy 文件和脚本行为。新增 `planning/`、`agent_runtime/`、Target 装配和对应测试不得导入 LangGraph，也不得使用它表达跨节点状态。
+2. Target 成为正式默认入口后，增加一个只安装基础 wheel 的独立测试环境。该环境不安装 LangGraph，必须通过 Target CLI 导入、帮助命令、最小启动和离线工作流冒烟。legacy 测试改为显式安装 `larkflow[legacy]`，继续证明旧入口没有被无声破坏。
+3. 上述门槛全部关闭后，才把现有 LangGraph 依赖从默认依赖移到 `legacy` optional dependency。迁移提交必须同时更新安装说明、CI 矩阵和 legacy 入口在缺少 extra 时的明确错误，不能让用户遇到隐蔽的 `ModuleNotFoundError`。
+
+是否新增 `larkflow[langgraph]` 是另一项独立决策。只有真实单节点 Attempt 需要内部图分支、checkpoint 或恢复，并且 completion、有界工具 loop、Pi 与 DSH 方案都无法以更小复杂度满足时，才实现 `LangGraphAgentRuntimeAdapter`。该适配器仍只处理一个 Node 的一个 Attempt，checkpoint 不能成为业务 DAG、跨节点状态、Owner、Human Gate 或授权边界。没有这类证据时，不创建 extra，也不为保留依赖寻找用途。
+
+Dependency Exit Gate：
+
+- `planning/`、`agent_runtime/` 与 Target `workflow/` 的 import graph 中没有 LangGraph。
+- 默认入口已经指向 Target，或 legacy 入口在缺少 `legacy` extra 时给出可执行的安装提示。
+- 无 LangGraph 的基础 wheel 通过导入、CLI、最小启动和离线冒烟。
+- legacy 测试任务显式安装并验证 `larkflow[legacy]`。
+- 包文档清楚区分 base、legacy 和证据驱动的可选 Adapter。
+- 本次退出不删除 legacy 源码、历史 ADR、Attempt 或测试证据。
+
 ## 16. A/B 评估设计
 
 比较对象必须使用相同用户目标、ContextBundle、允许工具、调用预算和最终确定性校验器。

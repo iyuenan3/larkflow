@@ -1,5 +1,11 @@
 # CHANGELOG · larkflow
 
+## v0.83.0-draft · 2026-08-14 · LangGraph 默认依赖退出方案
+
+- Changed：明确 LangGraph 不属于 Target 业务 DAG、Scheduler、Node Runner、PlannerRuntime 或默认 AgentRuntime。当前默认安装继续保留它，只为兼容 legacy `larkflow` 入口、旧引擎、SQLite checkpointer 和对应测试。
+- Added：定义 Dependency Exit Gate。Refactor Phase 0 与 Phase 1 的新增端口和 Target 测试保持零 LangGraph 导入；待 Target 成为默认入口、无 LangGraph 的基础 wheel 完成导入、启动与离线冒烟，且 legacy 测试显式安装 `larkflow[legacy]` 后，再把旧依赖移出默认安装。
+- Boundary：本轮不修改 `pyproject.toml`、代码、测试、CLI、部署或现有依赖。新的 `LangGraphAgentRuntimeAdapter` 与 `larkflow[langgraph]` 不是默认待办，只在真实复杂 Attempt 证明需要内部图分支、checkpoint 或恢复时另行决策。
+
 ## v0.82.0-draft · 2026-08-14 · 云端 Agent 控制平面方案收敛
 
 - Reviewed：使用 pm-skills 的 intended-vs-implemented、strategy red-team 与 shipping-artifacts 方法核对产品意图、当前代码、信任边界、运行时控制和采用假设。

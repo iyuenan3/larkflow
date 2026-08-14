@@ -139,6 +139,10 @@ PTC 只允许在隔离的 Planner Attempt 中编排只读工具并返回候选�
 
 运行时切换与模型 fallback 只能发生在明确策略内。若需要更换 provider 或 runtime，必须结束当前 Attempt 并创建新 Attempt，不能在一次执行中静默改变审计身份。Pi session 与 DSH 日志只作为 trace 附件，PostgreSQL 中的 Attempt 仍是耐久历史。
 
+LangGraph 的依赖生命周期也服从这一边界。当前默认安装仍包含 LangGraph，只是为了维持 legacy `larkflow` 入口、`engine/`、`service.py`、SQLite checkpointer 和对应测试；Target `workflow/` 不使用它保存业务状态。Refactor Phase 0 与 Phase 1 不删除现有依赖，但新增的 `planning/`、`agent_runtime/` 和 Target 测试不得导入 LangGraph。待 Target 成为正式默认入口、无 LangGraph 的基础 wheel 完成导入、启动和离线冒烟，且 legacy 测试能显式安装 `larkflow[legacy]` 后，才把 LangGraph 从默认依赖移入 legacy extra。
+
+这不是为新架构预留一个必做的 LangGraph 版本。只有真实的单节点复杂 Attempt 证明需要内部图分支、checkpoint 或恢复，且普通 completion、有界 loop、Pi 或 DSH 基线无法满足时，才评估独立的 `LangGraphAgentRuntimeAdapter` 与 `larkflow[langgraph]`。没有需求证据就不实现该适配器；即使实现，它也只能保存当前 Attempt 的临时执行状态。
+
 ## 7. 当前 Target 内核 As-built
 
 `larkflow/workflow/` 是目标架构代码，与 legacy `engine/`、`service.py` 和 LangGraph checkpointer 隔离：

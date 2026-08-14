@@ -1027,3 +1027,13 @@
 - Adapters：Pi 与 DeepSeek Harness 只作为端口后的参考或实验适配器。PTC 仅可在隔离的 Planner Attempt 中组合只读工具并返回候选图；Subagent 只属于当前 Attempt，不能成为业务节点、Owner 或 Human Gate。适配器采用必须与 Python 基线使用同一输入、上下文、工具和校验器，对首次硬校验通过率、用户改图次数、遗漏输入、无效依赖、节点冗余、一次接受率、耗时与成本产生可测改善。Personal Agent Edge 自本 ADR 起暂停继续投入，既有代码、ADR 和安全证据保留。
 - Alternatives(否决)：直接把 DSH 包进 Python 领域内核；完全照搬 Pi；把每个 Agent 永久限制为单次 completion；立即建设独立 Project 与个人知识库。前两者会让框架侵入业务层，第三项只能作为对照基线，第四项缺少真实多 DAG 项目与复杂 ACL 需求证据。
 - Tradeoff：多一层端口、能力信封、上下文清单和 A/B harness 会增加前期设计成本。前五个真实项目中若至少两个需要多个独立 DAG 共享资料，则重新评估 Project 聚合；企业无法维护全员共享语料时，MVP 只做项目上传；DSH 或 Pi 适配器没有材料改善，或要求数据库、飞书凭据、DAG schema 污染或绕过确定性校验时，停止该适配器；出现云端无法完成且有真实频率的任务时，再单独恢复 Edge 评估。
+
+## ADR-115 · 2026-08-14 · LangGraph 退出默认依赖并仅保留兼容或证据驱动用途
+
+- **Status：Accepted，Target 设计，尚未实施依赖迁移。**
+- Problem：Target 工作流已经以 PostgreSQL aggregate、显式状态转换、Scheduler、Node Runner 和 Attempt 保存业务真相，但默认 package 仍依赖 LangGraph。现有依赖来自 legacy `larkflow` CLI、`engine/`、`service.py`、SQLite checkpointer 和旧测试，而不是 Target 的产品需求。立即删除会破坏兼容，永久保留又会让过渡实现看起来像新架构前提。
+- Constraint：Refactor Phase 0 与 Phase 1 只允许行为锁定和稳定端口，不得顺手改写 legacy 行为；新 PlannerRuntime 与 AgentRuntime 不能依赖 LangGraph；旧入口在迁移期仍要可验证；依赖退出必须通过真实安装态冒烟，不能只依赖源码测试；可选 Adapter 不能成为业务 DAG、Owner、Human Gate、跨节点状态或授权边界。
+- Decision：当前保留默认 LangGraph 依赖，不在 Phase 0 或 Phase 1 删除。新增 `planning/`、`agent_runtime/`、Target 装配和 Target 测试保持零 LangGraph 导入。待 Target 成为正式默认入口、无 LangGraph 的基础 wheel 通过导入、CLI、最小启动与离线工作流冒烟，且 legacy 测试显式安装 `larkflow[legacy]` 后，把 `langgraph` 与 `langgraph-checkpoint-sqlite` 从默认依赖移入 legacy extra。缺少 extra 的 legacy 入口必须给出明确安装提示。
+- Adapter：不预建新的 LangGraph 适配器。只有真实单节点复杂 Attempt 证明需要内部图分支、checkpoint 或恢复，并且 completion、有界工具 loop、Pi 或 DSH 不能以更小复杂度满足时，才单独评估 `LangGraphAgentRuntimeAdapter` 与 `larkflow[langgraph]`。即使采用，checkpoint 也只属于当前 Attempt 的临时运行状态。
+- Alternatives(否决)：现在直接删除 LangGraph；让 Target 新端口继续复用 legacy StateGraph；为保持技术选项永久放在默认依赖；在没有真实需求前预建 Adapter。第一项破坏现有入口与测试，第二项延续双真相风险，后两项增加默认安装面和维护成本，却没有产品证据。
+- Tradeoff：迁移期默认 wheel 仍携带一组 Target 不需要的依赖，代码库也继续并存 Target 与 legacy。退出后需要维护 base 与 legacy 两套安装测试；若未来真的采用 LangGraph Adapter，还会增加第三个可选安装矩阵。但每一步都有独立门槛和回滚点，且不会为了缩减依赖而提前扩大当前重构范围。

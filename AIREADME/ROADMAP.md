@@ -30,6 +30,8 @@
 
 **范围门槛：** 前五个真实项目中若至少两个需要多个独立 DAG 共享资料，再评估独立 Project 聚合。企业不能维护明确的全员共享语料时，MVP 只做项目上传。Personal Agent Edge 保持暂停，除非出现云端无法完成且有真实频率的任务。
 
+**LangGraph 退出门槛：** Refactor Phase 0 与 Phase 1 保留现有 legacy 依赖和入口，但新增 `planning/`、`agent_runtime/` 与 Target 测试不得导入 LangGraph。只有 Target 成为正式默认入口、基础 wheel 在不安装 LangGraph 时通过导入、启动和离线冒烟，并且 legacy 测试显式改由 `larkflow[legacy]` 运行后，才把 LangGraph 移出默认依赖。新的 LangGraph Adapter 不在默认路线图中，只有真实复杂 Attempt 证明需要内部图分支、checkpoint 或恢复时才单独立项。
+
 文件级执行边界、迁移批次、兼容方案、A/B 指标与停止开关见 [`docs/REFACTOR_BLUEPRINT.md`](../docs/REFACTOR_BLUEPRINT.md)。该文档是实施附录，不改变 AIREADME 的 Target 契约，也不代表代码、migration 或部署已经获准执行。
 
 ## Now · Phase 1 首次成功路径与可用性收口
