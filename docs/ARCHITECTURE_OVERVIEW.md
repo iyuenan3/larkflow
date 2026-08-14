@@ -16,7 +16,7 @@ larkflow 不是“一个会自己做完所有事情的超级 Agent”，而是�
 
 ```mermaid
 flowchart TD
-    U["用户通过飞书或工作台<br/>提出项目目标"] --> K["知识上下文服务<br/>企业共享资料 + 项目上传"]
+    U["用户通过飞书或工作台<br/>提出项目目标"] --> K["知识上下文服务<br/>当前项目 txt/md 切片 + 后续企业共享资料"]
     K --> P["PlannerRuntime<br/>生成候选 DAG"]
     P --> V["larkflow 确定性校验<br/>结构、责任、输入、权限、验收"]
     V --> D["DAG 草稿<br/>等待用户预览确认"]
@@ -79,12 +79,12 @@ flowchart TD
 
 larkflow 不会把整个企业飞书云盘都交给模型。
 
-首版只使用两类资料：
+目标方案使用两类资料：
 
 - 企业共享资料：由管理员明确发布为企业全员可以使用的资料。
 - 项目资料：由项目发起人直接上传，只属于当前项目。
 
-当前未提交候选只覆盖第二类资料的第一个切片：Console 仅在存储和模型外发都已启用时展示 UTF-8 txt/md 入口，资料先绑定未生成的草稿请求，确认清单后才进入 Planner。能力未启用时，服务端在落库前拒绝附件模式，原有无附件流程继续可用。企业共享资料仍是目标设计；Agent 节点也还不会在运行时读取附件。
+已提交的 Phase 2A 只覆盖第二类资料的第一个切片：Console 仅在存储和模型外发都已启用时展示 UTF-8 txt/md 入口，资料先绑定未生成的草稿请求，确认清单后才进入 Planner。能力未启用时，服务端在落库前拒绝附件模式，原有无附件流程继续可用。该切片尚未完成真实 PostgreSQL 与 Caddy 验证、部署或 migration 应用。企业共享资料仍是目标设计；Agent 节点也还不会在运行时读取附件。
 
 这里最重要的不是检索能力，而是授权顺序：
 
@@ -398,9 +398,11 @@ Edge 已经做过一个只读 Proof，代码和安全证据都保留。
 - 审计、Outbox、Inbox 和投影对账。
 - 本地 PlannerRuntime 合同、bounded 基线适配器、统一最终候选 validator 和兼容草稿服务。
 - 本地 AgentRuntime 合同、completion 基线适配器和 Worker bridge。
-- Console txt/md 项目附件候选、collecting 状态、逻辑撤销、保留配额与显式开始生成。
+- 已提交的 Console txt/md 项目附件切片、collecting 状态、逻辑撤销、保留配额与显式开始生成。
 - 规划专用 `ContextBundle`、安全来源引用、内容指纹和默认 deny 的模型外发策略。
 - Planner 使用附件后，Instance 只冻结安全 refs 与 fingerprint，不保存正文。
+
+上述 PlannerRuntime、AgentRuntime 与 Phase 2A 代码均已提交，但尚未部署；Phase 2A 也尚未完成真实 PostgreSQL、Caddy 和 migration 应用验证，不能视为正式完成或生产就绪。
 
 目前仍是目标设计、尚未实现的有：
 
