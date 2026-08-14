@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.85.0-draft · 2026-08-14 · Console 项目附件参与 DAG 规划
+
+- Added：新增 `AttachmentBlobStore`、内存实现与显式绝对根目录的单机 filesystem adapter；新增 tenant-first PostgreSQL 元数据仓储、Owner 授权服务、逻辑撤销、冻结 manifest、`SourceRef / AttachmentRef / ContextChunk / ContextBundle` 和规范化 fingerprint。`0024_console_project_attachments` 同时为 Console 草稿增加 collecting 与服务器拥有的附件清单。
+- Changed：工作台选择 txt/md 时先创建 collecting 请求，上传完成后由用户显式确认资料并开始生成；无附件的既有 `POST /console/api/v1/drafts` 仍直接 pending。Console Draft Worker 在规划前构建 bundle，Bounded Planner 把附件放入独立“不可信来源资料”区块，候选继续经过 larkflow 的统一确定性复验。Instance 只冻结安全 refs 与 fingerprint，正文仍由 BlobStore 持有。
+- Fixed：不可完成的 `defer_generation=true` 现在会在持久化前以 `attachment_planning_unavailable` 拒绝，工作台按安全能力标志隐藏附件入口。逻辑撤销不再释放 request 或 tenant 保留配额；PostgreSQL 使用 tenant advisory transaction lock 防止跨请求并发绕过。Blob 缺失、损坏和策略违规保持终态拒绝，权限、I/O 与挂载故障改走 Worker 的 failed/backoff。Caddy 候选模板只对精确附件上传 POST 放宽为 262144 字节，其他路径保留 65536 字节。
+- Safety：上传、列表、撤销和开始生成只允许 requester，跨 tenant、同 tenant 非 Owner 和 collaborator 都统一 404。服务端固定 `internal` 分级并生成 object key，默认模型外发 `deny`；读取前复验 manifest、ready 状态、大小、SHA-256 与外发决策，任何确定性失败都整体拒绝。Runtime 和浏览器不获得 object key、路径、上传人、数据库连接、claim token、飞书凭据或存储根。附件中的提示注入不能修改 Owner、Human Gate、工具权限或最终 validator。策略在 collecting 期间变为 deny 时，Owner 可撤销全部 ready 附件后按空 manifest 恢复原有无附件生成。
+- Verified：附件、草稿、Runtime 端口、migration/package-data、Console、配置、CLI 与 Caddy 静态契约聚焦套件为 `146 passed`。完整离线套件在清空本机代理并允许既有停机测试读取进程树后为 `1116 passed, 26 skipped`；额外通过 `node --check`、Python compile、`git diff --check` 和零 LangGraph 导入扫描。PostgreSQL retained 配额合同测试已编写，但本机没有配置 `LARKFLOW_TEST_POSTGRES_DSN`，因此该项仍在 26 个 skip 内；本机也没有 Caddy 二进制，不能声称 migration 真库或 `caddy validate` 已通过。
+- Boundary：本轮工作树尚未提交、推送、部署或应用 migration，Phase 2A 仍是待真库与 Caddy 复审的候选，不能标记完成。只接受 UTF-8 txt/md；不做企业共享资料、PDF/DOCX/OCR、飞书消息附件、Agent Attempt 读取、Tool Gateway、Harness、Edge、向量检索或生产对象存储。filesystem adapter 只适合 Console 与 Draft Worker 共享同一绝对目录的单机开发环境；Phase 2B 才处理 AgentRuntime 的附件上下文。
+
 ## v0.84.0-draft · 2026-08-14 · PlannerRuntime 与 AgentRuntime 基线端口
 
 - Added：新增纯本地 `planning/` 合同、bounded adapter 与 `PlanningService`，以及纯本地 `agent_runtime/` 合同、completion adapter 与 `AgentRuntimeExecutor`。Target 装配显式选择 `bounded` 和 `completion`，现有 `DraftDefinitionGenerator` 与 `LLMAgentExecutor` 继续作为兼容基线。生成专用规则已提取为 larkflow 自有的 `GeneratedDraftValidator`；bounded 内部继续用它支持最多一次修复，`PlanningService` 对任何 Runtime 的最终候选再次强制复验，并覆盖模型返回的 schema 与请求输入。
