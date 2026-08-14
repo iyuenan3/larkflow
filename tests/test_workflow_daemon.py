@@ -603,6 +603,8 @@ def test_draft_generation_settings_are_single_claim_and_independent(monkeypatch)
             "LARKFLOW_TARGET_DRAFT_CLAIM_SAFETY_SECONDS": "40",
             "LARKFLOW_TARGET_DRAFT_IDLE_MIN_SECONDS": "0.5",
             "LARKFLOW_TARGET_DRAFT_IDLE_MAX_SECONDS": "2",
+            "LARKFLOW_TARGET_ATTACHMENT_ROOT": "/tmp/larkflow-attachments",
+            "LARKFLOW_TARGET_ATTACHMENT_MODEL_EGRESS": "allow",
         }
     )
 
@@ -612,6 +614,8 @@ def test_draft_generation_settings_are_single_claim_and_independent(monkeypatch)
     assert settings.claim_safety == timedelta(seconds=40)
     assert settings.max_attempts == 5
     assert settings.loop == WorkerLoopSettings(0.5, 2.0)
+    assert settings.attachment_blob_root == "/tmp/larkflow-attachments"
+    assert settings.attachment_model_egress_policy == "allow"
 
     with pytest.raises(ValueError, match="claim_limit must be 1"):
         TargetDraftGenerationSettings.from_environ(
@@ -619,6 +623,14 @@ def test_draft_generation_settings_are_single_claim_and_independent(monkeypatch)
                 "LARKFLOW_TARGET_DSN": "postgresql:///larkflow_target_dev",
                 "LARKFLOW_TARGET_TENANT": "dev",
                 "LARKFLOW_TARGET_DRAFT_CLAIM_LIMIT": "2",
+            }
+        )
+    with pytest.raises(ValueError, match="blob root must be absolute"):
+        TargetDraftGenerationSettings.from_environ(
+            {
+                "LARKFLOW_TARGET_DSN": "postgresql:///larkflow_target_dev",
+                "LARKFLOW_TARGET_TENANT": "dev",
+                "LARKFLOW_TARGET_ATTACHMENT_ROOT": "relative/path",
             }
         )
 

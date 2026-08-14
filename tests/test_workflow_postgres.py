@@ -69,6 +69,15 @@ from larkflow.workflow.console_admin_sessions import (
     PostgresConsoleAdminSessionRepository,
 )
 from larkflow.workflow.console_drafts import PostgresConsoleDraftRepository
+from larkflow.workflow.console_attachments import (
+    ConsoleAttachmentConflictError,
+    ConsoleAttachmentNotFoundError,
+    ConsoleAttachmentService,
+    InMemoryAttachmentBlobStore,
+    MAX_ATTACHMENT_BYTES,
+    MAX_ATTACHMENTS_PER_REQUEST,
+    PostgresConsoleAttachmentRepository,
+)
 from larkflow.workflow.directory import DirectoryPerson
 
 
@@ -184,7 +193,7 @@ def test_postgres_admin_overview_reads_all_tenant_scoped_operational_lanes():
         "role_progress",
     }
     assert all(lane.total == 0 for lane in snapshot.queue_lanes)
-    assert snapshot.applied_migrations[-1] == "0023_console_draft_requests"
+    assert snapshot.applied_migrations[-1] == "0024_console_project_attachments"
 
 
 def test_postgres_console_draft_request_is_idempotent_and_claimed_once():
@@ -230,6 +239,157 @@ def test_postgres_console_draft_request_is_idempotent_and_claimed_once():
     assert claims[0].request.id == request_id
     assert claims[0].request.status == "generating"
     assert claims[0].request.attempt_count == 1
+
+
+def test_postgres_console_attachment_contract_matches_owner_scoped_freeze():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_attachment_{suffix}"
+    owner_id = f"person_owner_{suffix}"
+    request_id = uuid4().hex
+    now = datetime(2026, 8, 14, 4, 0, tzinfo=timezone.utc)
+    drafts = PostgresConsoleDraftRepository(connection_factory)
+    drafts.create(
+        ConsoleDraftRequest(
+            id=request_id,
+            tenant_id=tenant_id,
+            requester_person_id=owner_id,
+            collaborator_person_id=owner_id,
+            brief="Summarize the attached project material",
+            context="Use only the attached facts",
+            status="collecting",
+            attempt_count=0,
+            available_at=now,
+            created_at=now,
+            updated_at=now,
+            generation_deferred=True,
+        )
+    )
+    metadata = PostgresConsoleAttachmentRepository(connection_factory)
+    attachments = ConsoleAttachmentService(
+        metadata,
+        InMemoryAttachmentBlobStore(),
+        model_egress_policy="allow",
+        clock=lambda: now,
+    )
+    principal = ConsolePrincipal(tenant_id, owner_id)
+
+    uploaded = attachments.upload(
+        principal,
+        request_id,
+        display_filename="facts.md",
+        media_type="text/markdown",
+        content="Grounded project facts",
+    )["attachment"]
+    assert attachments.list(principal, request_id)["total"] == 1
+    with pytest.raises(ConsoleAttachmentNotFoundError):
+        attachments.list(ConsolePrincipal(tenant_id, f"other_{suffix}"), request_id)
+
+    assert attachments.generate(principal, request_id)["request"]["status"] == "queued"
+    frozen = drafts.get_for_owner(
+        tenant_id,
+        request_id,
+        requester_person_id=owner_id,
+    )
+    assert frozen.status == "pending"
+    assert [item.attachment_id for item in frozen.attachment_manifest] == [
+        uploaded["id"]
+    ]
+
+
+def test_postgres_console_attachment_retained_quota_counts_revoked_objects():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_attachment_quota_{suffix}"
+    owner_id = f"person_owner_{suffix}"
+    now = datetime(2026, 8, 14, 4, 30, tzinfo=timezone.utc)
+    drafts = PostgresConsoleDraftRepository(connection_factory)
+
+    def create_collecting(request_id: str) -> None:
+        drafts.create(
+            ConsoleDraftRequest(
+                id=request_id,
+                tenant_id=tenant_id,
+                requester_person_id=owner_id,
+                collaborator_person_id=owner_id,
+                brief="Verify retained attachment quota",
+                context="",
+                status="collecting",
+                attempt_count=0,
+                available_at=now,
+                created_at=now,
+                updated_at=now,
+                generation_deferred=True,
+            )
+        )
+
+    revoked_request_id = uuid4().hex
+    total_request_id = uuid4().hex
+    create_collecting(revoked_request_id)
+    create_collecting(total_request_id)
+    metadata = PostgresConsoleAttachmentRepository(connection_factory)
+    blobs = InMemoryAttachmentBlobStore()
+    service = ConsoleAttachmentService(
+        metadata,
+        blobs,
+        model_egress_policy="allow",
+        clock=lambda: now,
+    )
+    principal = ConsolePrincipal(tenant_id, owner_id)
+
+    for index in range(MAX_ATTACHMENTS_PER_REQUEST):
+        uploaded = service.upload(
+            principal,
+            revoked_request_id,
+            display_filename=f"revoked-{index}.txt",
+            media_type="text/plain",
+            content="x",
+        )["attachment"]
+        service.revoke(principal, revoked_request_id, uploaded["id"])
+    with pytest.raises(ConsoleAttachmentConflictError) as count_error:
+        service.upload(
+            principal,
+            revoked_request_id,
+            display_filename="replacement.txt",
+            media_type="text/plain",
+            content="x",
+        )
+    assert count_error.value.code == "too_many_attachments"
+
+    for index in range(4):
+        service.upload(
+            principal,
+            total_request_id,
+            display_filename=f"exact-{index}.txt",
+            media_type="text/plain",
+            content="x" * MAX_ATTACHMENT_BYTES,
+        )
+    with pytest.raises(ConsoleAttachmentConflictError) as total_error:
+        service.upload(
+            principal,
+            total_request_id,
+            display_filename="over-total.txt",
+            media_type="text/plain",
+            content="x",
+        )
+    assert total_error.value.code == "attachments_too_large"
+    assert len(blobs._items) == MAX_ATTACHMENTS_PER_REQUEST + 4
+
+    with connection_factory() as connection:
+        retained = connection.execute(
+            """
+            SELECT count(*) AS count, sum(size_bytes) AS total
+            FROM workflow_project_attachments
+            WHERE tenant_id = %s
+            """,
+            (tenant_id,),
+        ).fetchone()
+    assert int(retained["count"]) == MAX_ATTACHMENTS_PER_REQUEST + 4
+    assert int(retained["total"]) == MAX_ATTACHMENTS_PER_REQUEST + 4 * MAX_ATTACHMENT_BYTES
 
 
 def test_postgres_competing_session_revocations_are_idempotent_and_audited_once():

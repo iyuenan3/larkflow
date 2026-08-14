@@ -571,6 +571,9 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"submitDraftRequest" in script.body
     assert b"pollDraftRequest" in script.body
     assert b"openDraftInstance" in script.body
+    assert b"loadDraftAttachments" in script.body
+    assert b"generateCurrentDraft" in script.body
+    assert b"revokeDraftAttachment" in script.body
     assert b"loadAuthConfiguration" in script.body
     assert b"loadAdminOverview" in script.body
     assert b"renderAdminOverview" in script.body
@@ -625,6 +628,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b".insight-grid" in styles.body
     assert b".draft-starter-options" in styles.body
     assert b".draft-advanced" in styles.body
+    assert b".draft-attachment-panel" in styles.body
     assert b".workflow-next-step" in styles.body
     assert b".workflow-journey" in styles.body
     assert b".workflow-results-panel" in styles.body
@@ -636,6 +640,8 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"workflow-library" in page.body
     assert b"draft-studio" in page.body
     assert b"draft-advanced" in page.body
+    assert b"draft-attachments" in page.body
+    assert b"draft-generate" in page.body
     assert page.body.count(b"data-draft-starter=") == 3
     assert "示例只会填入表单".encode() in page.body
     assert "默认隐藏已经结束的历史记录".encode() in page.body
@@ -685,6 +691,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
         "admin": False,
         "login_url": None,
         "logout_available": False,
+        "capabilities": {"attachment_planning": False},
     }
     assert missing_auth.status == 401
     assert missing_auth.headers["WWW-Authenticate"] == "Bearer"

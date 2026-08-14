@@ -6,10 +6,15 @@ from .contracts import (
     PlannerResult,
     PlannerRuntime,
 )
+from .context import AttachmentRef, ContextBundle, ContextChunk, SourceRef
 
 __all__ = [
     "DraftGenerator",
+    "AttachmentRef",
+    "ContextBundle",
+    "ContextChunk",
     "PlannerRequest",
     "PlannerResult",
     "PlannerRuntime",
+    "SourceRef",
 ]

@@ -127,6 +127,7 @@ def test_cli_builds_console_draft_worker_with_production_contract():
     assert worker.service is service
     assert worker.tenant_id == "tenant_1"
     assert worker.worker_id == "draft-worker"
+    assert worker.context_service is None
 
 
 def test_status_projection_never_exposes_claim_token():

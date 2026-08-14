@@ -39,6 +39,12 @@ from .console_drafts import (
     ConsoleDraftNotFoundError,
     ConsoleDraftService,
 )
+from .console_attachments import (
+    ConsoleAttachmentConflictError,
+    ConsoleAttachmentNotFoundError,
+    ConsoleAttachmentService,
+    MAX_ATTACHMENT_UPLOAD_BODY_BYTES,
+)
 from .console_rate_limit import ConsoleRequestRateLimiter
 from .console_tasks import (
     ConsoleTaskConflictError,
@@ -87,6 +93,16 @@ _TASK_ACTION_ROUTE = re.compile(
 )
 _DRAFT_ROUTE = re.compile(
     r"^/console/api/v1/drafts/([0-9a-f]{32})$"
+)
+_DRAFT_ATTACHMENTS_ROUTE = re.compile(
+    r"^/console/api/v1/drafts/([0-9a-f]{32})/attachments$"
+)
+_DRAFT_ATTACHMENT_REVOKE_ROUTE = re.compile(
+    r"^/console/api/v1/drafts/([0-9a-f]{32})/attachments/"
+    r"([0-9a-f]{32})/revoke$"
+)
+_DRAFT_GENERATE_ROUTE = re.compile(
+    r"^/console/api/v1/drafts/([0-9a-f]{32})/generate$"
 )
 _ADMIN_SESSION_PREVIEW_ROUTE = re.compile(
     r"^/console/api/v1/admin/sessions/([0-9a-f]{32})/revoke-preview$"
@@ -163,6 +179,7 @@ class ConsoleHttpApplication:
         action_service: ConsoleActionService | None = None,
         task_service: ConsoleTaskService | None = None,
         draft_service: ConsoleDraftService | None = None,
+        attachment_service: ConsoleAttachmentService | None = None,
     ) -> None:
         self.service = service
         self.authenticator = authenticator
@@ -172,6 +189,7 @@ class ConsoleHttpApplication:
         self.action_service = action_service
         self.task_service = task_service
         self.draft_service = draft_service
+        self.attachment_service = attachment_service
         if authenticator.mode not in {"static", "feishu"}:
             raise ValueError("console authenticator mode is unsupported")
         if (authenticator.mode == "feishu") != (oauth is not None):
@@ -226,6 +244,9 @@ class ConsoleHttpApplication:
                         else None
                     ),
                     "logout_available": self.authenticator.mode == "feishu",
+                    "capabilities": {
+                        "attachment_planning": self._attachment_planning_enabled(),
+                    },
                 },
             )
 
@@ -330,6 +351,16 @@ class ConsoleHttpApplication:
 
         if method == "POST" and parsed.path == "/console/api/v1/drafts":
             return self._handle_draft_write(
+                parsed.query,
+                request_headers,
+                body,
+            )
+
+        if method == "POST" and parsed.path.startswith(
+            "/console/api/v1/drafts/"
+        ):
+            return self._handle_attachment_write(
+                parsed.path,
                 parsed.query,
                 request_headers,
                 body,
@@ -468,6 +499,18 @@ class ConsoleHttpApplication:
                     self.draft_service.list(principal, limit=limit),
                 )
 
+            attachments_match = _DRAFT_ATTACHMENTS_ROUTE.fullmatch(parsed.path)
+            if attachments_match is not None and not parsed.query:
+                if self.attachment_service is None:
+                    raise ConsoleAttachmentNotFoundError("attachments")
+                return self._json(
+                    200,
+                    self.attachment_service.list(
+                        principal,
+                        attachments_match.group(1),
+                    ),
+                )
+
             draft_match = _DRAFT_ROUTE.fullmatch(parsed.path)
             if draft_match is not None and not parsed.query:
                 if self.draft_service is None:
@@ -511,9 +554,14 @@ class ConsoleHttpApplication:
             ConsoleResourceNotFoundError,
             ConsoleTaskNotFoundError,
             ConsoleDraftNotFoundError,
+            ConsoleAttachmentNotFoundError,
         ):
             return self._error(404, "not_found", "resource does not exist")
-        except (ConsoleTaskConflictError, ConsoleDraftConflictError) as exc:
+        except (
+            ConsoleTaskConflictError,
+            ConsoleDraftConflictError,
+            ConsoleAttachmentConflictError,
+        ) as exc:
             return self._error(409, exc.code, str(exc))
         except (TypeError, ValueError) as exc:
             return self._error(400, "invalid_request", str(exc))
@@ -659,16 +707,28 @@ class ConsoleHttpApplication:
                 raise ConsoleDraftNotFoundError("draft requests")
             self._validate_draft_write_request(query, headers, body)
             document = _json_object_body(body)
-            if set(document) != {
+            required_fields = {
                 "request_id",
                 "brief",
                 "context",
                 "collaborator_person_id",
+            }
+            if not required_fields <= set(document) or not set(document) <= {
+                *required_fields,
+                "defer_generation",
             }:
                 raise ValueError("draft request fields are invalid")
             collaborator = document["collaborator_person_id"]
             if collaborator is not None and not isinstance(collaborator, str):
                 raise ValueError("collaborator_person_id must be a string or null")
+            defer_generation = document.get("defer_generation", False)
+            if not isinstance(defer_generation, bool):
+                raise ValueError("defer_generation must be a boolean")
+            if defer_generation and not self._attachment_planning_enabled():
+                raise ConsoleDraftConflictError(
+                    "attachment_planning_unavailable",
+                    "当前部署未启用项目资料规划。",
+                )
             return self._json(
                 202,
                 self.draft_service.create(
@@ -677,6 +737,7 @@ class ConsoleHttpApplication:
                     brief=document["brief"],
                     context=document["context"],
                     collaborator_person_id=collaborator,
+                    defer_generation=defer_generation,
                 ),
             )
         except InvalidConsoleCredentialError:
@@ -700,6 +761,84 @@ class ConsoleHttpApplication:
                 "workflow action request was rejected",
             )
         except ConsoleDraftConflictError as exc:
+            return self._error(409, exc.code, str(exc))
+        except (TypeError, ValueError) as exc:
+            return self._error(400, "invalid_request", str(exc))
+        except Exception:
+            return self._error(500, "internal_error", "internal server error")
+
+    def _attachment_planning_enabled(self) -> bool:
+        return (
+            self.attachment_service is not None
+            and self.attachment_service.planning_enabled
+        )
+
+    def _handle_attachment_write(
+        self,
+        path: str,
+        query: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> ConsoleHttpResponse:
+        try:
+            principal = self.authenticator.authenticate_context(headers).principal
+            if self.attachment_service is None:
+                raise ConsoleAttachmentNotFoundError("attachments")
+            upload = _DRAFT_ATTACHMENTS_ROUTE.fullmatch(path)
+            revoke = _DRAFT_ATTACHMENT_REVOKE_ROUTE.fullmatch(path)
+            generate = _DRAFT_GENERATE_ROUTE.fullmatch(path)
+            if upload is not None:
+                self._validate_attachment_upload_request(query, headers, body)
+                document = _json_object_body(body)
+                if set(document) != {"display_filename", "media_type", "content"}:
+                    raise ValueError("attachment upload fields are invalid")
+                return self._json(
+                    201,
+                    self.attachment_service.upload(
+                        principal,
+                        upload.group(1),
+                        display_filename=document["display_filename"],
+                        media_type=document["media_type"],
+                        content=document["content"],
+                    ),
+                )
+            self._validate_workflow_write_request(query, headers, body)
+            if revoke is not None:
+                return self._json(
+                    200,
+                    self.attachment_service.revoke(
+                        principal,
+                        revoke.group(1),
+                        revoke.group(2),
+                    ),
+                )
+            if generate is not None:
+                return self._json(
+                    202,
+                    self.attachment_service.generate(principal, generate.group(1)),
+                )
+            raise ConsoleAttachmentNotFoundError("attachment action")
+        except InvalidConsoleCredentialError:
+            challenge = (
+                {"WWW-Authenticate": "Bearer"}
+                if self.authenticator.mode == "static"
+                else {}
+            )
+            return self._error(
+                401,
+                "invalid_credential",
+                "console credential is invalid",
+                headers=challenge,
+            )
+        except (ConsoleAttachmentNotFoundError, ConsoleDraftNotFoundError):
+            return self._error(404, "not_found", "resource does not exist")
+        except _WorkflowWriteRequestError:
+            return self._error(
+                403,
+                "request_rejected",
+                "workflow action request was rejected",
+            )
+        except ConsoleAttachmentConflictError as exc:
             return self._error(409, exc.code, str(exc))
         except (TypeError, ValueError) as exc:
             return self._error(400, "invalid_request", str(exc))
@@ -1057,6 +1196,51 @@ class ConsoleHttpApplication:
     ) -> None:
         self._validate_task_write_request(query, headers, body)
 
+    def _validate_attachment_upload_request(
+        self,
+        query: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> None:
+        if query:
+            raise ValueError("attachment upload query is not accepted")
+        if _header(headers, "transfer-encoding") is not None:
+            raise ValueError("attachment transfer encoding is not accepted")
+        raw_length = _header(headers, "content-length")
+        if raw_length is None:
+            raise ValueError("attachment content length is required")
+        try:
+            content_length = int(raw_length)
+        except ValueError as exc:
+            raise ValueError("attachment content length is invalid") from exc
+        if (
+            content_length < 1
+            or content_length > MAX_ATTACHMENT_UPLOAD_BODY_BYTES
+            or content_length != len(body)
+        ):
+            raise ValueError("attachment body size is invalid")
+        content_type = (_header(headers, "content-type") or "").lower()
+        if content_type not in {
+            "application/json",
+            "application/json; charset=utf-8",
+        }:
+            raise ValueError("attachment content type must be application/json")
+        if not secrets.compare_digest(
+            _header(headers, _ADMIN_ACTION_HEADER) or "",
+            _WORKFLOW_ACTION_VALUE,
+        ):
+            raise _WorkflowWriteRequestError(
+                "workflow action request header is invalid"
+            )
+        if self.authenticator.mode == "feishu":
+            if self.oauth is None or not secrets.compare_digest(
+                _header(headers, "origin") or "",
+                self.oauth.public_base_url,
+            ):
+                raise _WorkflowWriteRequestError(
+                    "workflow action origin is invalid"
+                )
+
     @staticmethod
     def _json(status: int, payload: Mapping[str, Any]) -> ConsoleHttpResponse:
         return ConsoleHttpResponse(
@@ -1152,7 +1336,8 @@ def build_console_http_server(
                     )
                     self._send(response, include_body=include_body)
                     return
-                if content_length < 0 or content_length > _MAX_TASK_BODY_BYTES:
+                body_limit = _request_body_limit(self.path)
+                if content_length < 0 or content_length > body_limit:
                     response = application._error(
                         413,
                         "request_too_large",
@@ -1218,6 +1403,13 @@ def _rate_limit_response(
         headers={"Retry-After": str(decision.retry_after_seconds)},
     )
     return response
+
+
+def _request_body_limit(target: str) -> int:
+    path = urlsplit(target).path
+    if _DRAFT_ATTACHMENTS_ROUTE.fullmatch(path) is not None:
+        return MAX_ATTACHMENT_UPLOAD_BODY_BYTES
+    return _MAX_TASK_BODY_BYTES
 
 
 def _require_loopback(host: str) -> None:

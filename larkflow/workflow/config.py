@@ -369,6 +369,8 @@ class TargetDraftGenerationSettings:
     max_result_chars: int = 30_000
     enable_web_search: bool = False
     planner_runtime: str = "bounded"
+    attachment_blob_root: str | None = None
+    attachment_model_egress_policy: str = "deny"
     loop: WorkerLoopSettings = WorkerLoopSettings()
 
     def __post_init__(self) -> None:
@@ -392,6 +394,12 @@ class TargetDraftGenerationSettings:
             raise ValueError("draft max_result_chars must be positive")
         if self.planner_runtime != "bounded":
             raise ValueError("Target planner_runtime must be bounded")
+        if self.attachment_blob_root is not None:
+            root = self.attachment_blob_root.strip()
+            if not root or not os.path.isabs(root):
+                raise ValueError("Target attachment blob root must be absolute")
+        if self.attachment_model_egress_policy not in {"allow", "deny"}:
+            raise ValueError("Target attachment model egress policy is invalid")
 
     @classmethod
     def from_environ(
@@ -447,6 +455,14 @@ class TargetDraftGenerationSettings:
             planner_runtime=values.get(
                 "LARKFLOW_TARGET_PLANNER_RUNTIME",
                 "bounded",
+            ).strip(),
+            attachment_blob_root=(
+                values.get("LARKFLOW_TARGET_ATTACHMENT_ROOT", "").strip()
+                or None
+            ),
+            attachment_model_egress_policy=values.get(
+                "LARKFLOW_TARGET_ATTACHMENT_MODEL_EGRESS",
+                "deny",
             ).strip(),
             loop=WorkerLoopSettings(
                 idle_min_seconds=_positive_float(

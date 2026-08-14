@@ -33,14 +33,29 @@ http://PUBLIC_IP {
 https://PUBLIC_IP {
 	tls /etc/caddy/certs/larkflow-console/current/fullchain.pem /etc/caddy/certs/larkflow-console/current/privkey.pem
 
-	request_body {
-		max_size 64KB
+	@attachment_upload {
+		method POST
+		path_regexp ^/console/api/v1/drafts/[0-9a-f]{32}/attachments$
+	}
+	handle @attachment_upload {
+		request_body {
+			max_size 262144
+		}
+		reverse_proxy 127.0.0.1:8780 {
+			# Overwrite any client-supplied value. The loopback Console trusts this
+			# header only for rate-limit fairness, never for identity or authorization.
+			header_up X-Larkflow-Client-IP {http.request.remote.host}
+		}
 	}
 
-	reverse_proxy 127.0.0.1:8780 {
-		# Overwrite any client-supplied value. The loopback Console trusts this
-		# header only for rate-limit fairness, never for identity or authorization.
-		header_up X-Larkflow-Client-IP {http.request.remote.host}
+	handle {
+		request_body {
+			max_size 65536
+		}
+		reverse_proxy 127.0.0.1:8780 {
+			# Keep the same trusted-source overwrite on every proxied route.
+			header_up X-Larkflow-Client-IP {http.request.remote.host}
+		}
 	}
 
 	header {

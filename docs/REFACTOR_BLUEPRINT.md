@@ -1,6 +1,6 @@
 # larkflow 云端 Agent 控制平面重构蓝图
 
-> 状态：Target 迁移附录，设计已确认，尚未实施。
+> 状态：Target 迁移附录。Refactor Phase 0、Phase 1 已提交；Phase 2A 当前只有未提交候选和离线验证，真实 PostgreSQL 与 Caddy 验证仍是完成前阻断。
 >
 > 本文只把既有目标架构翻译成文件级边界、迁移批次和验收门槛，不构成代码、数据库 migration、依赖安装、部署、提交或发布授权。
 >
@@ -119,7 +119,7 @@ Refactor Phase 1 已在 `larkflow/agent_runtime/` 增加纯本地 `AgentRunReque
 
 ### 6.3 知识与工具链路
 
-当前没有正式的项目上传、企业共享资料清单、`ContextBundle`、检索授权和模型外发政策。现有 `web.search` 与确定性检查器属于显式业务 Tool 节点，不等于 Attempt 内部的只读 Tool Gateway。
+Phase 2A 当前未提交候选已形成 Console txt/md 项目上传参与 DAG 规划的代码路径：附件先绑定 collecting 草稿请求，Owner 显式确认后冻结 manifest，规划 Worker 通过 `PlanningContextService` 构建类型化 `ContextBundle`，安全 refs 与 fingerprint 随 draft Instance 冻结。只有存储已配置且模型外发为 `allow` 时，Console 才公布能力并接受 defer；撤销对象继续占用保留配额，临时 Blob I/O 故障走 failed/backoff。默认 `deny` 不会留下新的 collecting 请求。当前仍没有真实 PostgreSQL 与 Caddy 验证、企业共享资料清单、检索、Agent Attempt 附件上下文、Attempt 级能力信封或只读 Tool Gateway。现有 `web.search` 与确定性检查器属于显式业务 Tool 节点，不等于 Attempt 内部的只读 Tool Gateway。
 
 这两类工具必须保持不同语义：
 
@@ -128,18 +128,20 @@ Refactor Phase 1 已在 `larkflow/agent_runtime/` 增加纯本地 `AgentRunReque
 
 ## 7. 目标模块边界
 
-建议新增以下模块。目录名称是执行蓝图，不是已经存在的事实；正式落码前仍应以最小改动为原则。
+以下同时列出当前最小落点与后续目标。Phase 2A 没有为了目录整齐提前建立完整 `knowledge/` 子系统。
 
 ```text
 larkflow/
 ├── workflow/                       # 保留领域内核、Worker、仓储与投影
 │   ├── draft_generation.py         # 第一阶段保留，作为现有基线实现
+│   ├── console_attachments.py      # Phase 2A 附件 Port、仓储、授权与规划上下文服务
 │   ├── executors.py                # 第一阶段保留，作为兼容门面
 │   ├── runtime.py                  # 继续拥有 claim 与执行结果提交
 │   └── ...
 ├── planning/
 │   ├── __init__.py
 │   ├── contracts.py                # PlannerRequest、PlannerResult 等纯数据合同
+│   ├── context.py                  # Phase 2A 类型化规划 ContextBundle 与 fingerprint
 │   ├── bounded.py                  # 现有 DraftDefinitionGenerator 的适配器
 │   └── service.py                  # 调用、复验、指标和草稿写入编排
 ├── agent_runtime/
@@ -147,7 +149,7 @@ larkflow/
 │   ├── contracts.py                # AgentRunRequest、AgentRunResult
 │   ├── completion.py               # 当前单 completion 基线
 │   └── executor.py                 # AutomatedExecutor 到 AgentRuntime 的桥接
-├── knowledge/
+├── knowledge/                      # 后续企业共享资料与通用 Attempt 上下文，尚未创建
 │   ├── __init__.py
 │   ├── contracts.py                # SourceRef、AttachmentRef、ContextBundle
 │   ├── authorization.py            # 检索前的资源与外发授权
@@ -238,9 +240,9 @@ Planner 不接收数据库连接、飞书凭据、对象存储主密钥或任意
 
 `ContextBundle` 是授权后的不可变清单，不是一个自动拥有所有知识的字符串。建议包含：
 
-- `bundle_id`、`tenant_id`、`instance_id`、`actor_person_id`、`attempt_id`。
+- `bundle_id`、`tenant_id`、scope kind/id、purpose、`actor_person_id`，运行时 bundle 再增加 Node 与 Attempt 绑定。
 - 每个 `SourceRef` 的稳定来源 ID、标题、来源类型、版本或 ETag、摘要指纹、数据分类和授权理由。
-- 项目附件的对象引用、MIME、大小、内容指纹、上传人、状态和保留策略。
+- 服务端附件元数据保存对象引用、上传人、状态和保留策略；交给 Runtime 的 `AttachmentRef` 只含稳定来源 ID、显示名、MIME、大小、内容指纹、数据分类与外发决策。
 - 可发送给当前模型的正文片段或安全读取引用。
 - `egress_policy`、生成时间、失效时间和整个清单的确定性 fingerprint。
 
@@ -434,15 +436,21 @@ Exit gate：同一 fixture 在迁移前后得到相同业务结果和错误分�
 
 目标：先关闭最简单、最有价值的知识边界，不等待企业知识库。
 
+Phase 2A 状态：当前工作树已形成候选并完成离线验证，尚未完成真实 PostgreSQL、Caddy 校验、提交、部署或 migration 应用，因此不能标记完成。范围只到“Console 上传 txt/md、显式开始生成、Planner 使用授权内容、创建 draft Instance、冻结安全 refs”。
+
 计划工作：
 
 - 增加项目附件的元数据、对象存储适配器和逻辑失效。
 - 增加上传、列出和读取的服务端授权。
 - 实现 `SourceRef`、`AttachmentRef`、`ContextBundle` 和 fingerprint。
-- 草稿规划与 Agent 节点可以显式引用当前 Instance 上传件。
+- Phase 2A 让草稿规划显式引用当前请求上传件；Phase 2B 才让 Agent 节点使用提升到 Instance 的冻结 refs。
 - 增加文件类型、大小、恶意内容、提示注入和模型外发负向测试。
 
 Exit gate：跨 tenant、跨 Instance、非参与者、失效附件、禁止外发和陈旧读取全部 fail closed；Runtime 不获得对象存储主凭据；旧流程在没有附件时保持原行为。
+
+Phase 2A 当前候选证据：新增 `0024_console_project_attachments`、独立 BlobStore Port、内存与 PostgreSQL 元数据仓储、collecting 状态机、Owner-only HTTP、两阶段控制台、类型化 ContextBundle、规范化 fingerprint、Prompt Injection 隔离、Instance 安全 refs 与幂等 promotion。复审收口又增加持久化前能力门、浏览器能力协商、request 与 tenant retained 配额、Blob 终态与可重试错误分类，以及精确附件路径的 Caddy body limit。负向测试覆盖跨 tenant、真实 collaborator、状态冲突、逻辑撤销、重复上传撤销、真实 128 KB 上限、缺失或损坏 blob、临时 I/O、文件与上下文预算、默认外发拒绝、路径与 object key 伪造、崩溃窗口恢复和无附件兼容。聚焦套件为 `146 passed`，完整离线套件为 `1116 passed, 26 skipped`。本机没有配置一次性 PostgreSQL 测试 DSN，也没有 Caddy 二进制，因此 migration 应用、repository 真库合同和 `caddy validate` 仍是完成前阻断。
+
+Phase 2A 残余边界：只接受 UTF-8 txt/md；filesystem adapter 只适合显式共享绝对根目录的单机开发环境；不支持企业共享资料、飞书消息附件、PDF/DOCX/OCR、向量检索、生产对象存储或 Agent Attempt 读取附件。
 
 ### Refactor Phase 3：企业共享资料清单
 
@@ -660,7 +668,8 @@ Dependency Exit Gate：
 - `tests/test_workflow_draft_generation.py`：规划基线和非法候选。
 - `tests/test_workflow_agent.py`、`tests/test_workflow_runtime.py`：单 Attempt、claim 和陈旧结果。
 - `tests/test_workflow_tools.py`：业务 Tool 与内部只读工具不能混淆。
-- 新增 knowledge、gateway 和 adapter 测试：跨 tenant、跨 Instance、外发拒绝、预算、超时和 kill switch。
+- `tests/test_workflow_console_attachments.py` 与 PostgreSQL opt-in 合同：跨 tenant、真实 collaborator、外发拒绝、预算、完整性、promotion 与恢复。
+- 后续 knowledge、gateway 和 adapter 测试：跨 Instance、Attempt 授权、超时和 kill switch。
 - `AIREADME/`：Target、As-built、ADR、Roadmap 和 Changelog 是否同步。
 
 ## 20. 重构完成的定义
@@ -680,6 +689,6 @@ Dependency Exit Gate：
 
 ## 21. 开始实施前的授权边界
 
-Refactor Phase 0 与 Phase 1 的代码和离线验证已纳入内容提交 `476b43491adeaf1bcde32185d9b9f036c3a9874a`，本轮没有执行部署。任何后续部署仍需 Maxwell 单独授权。
+Refactor Phase 0 与 Phase 1 的代码和离线验证已纳入内容提交 `476b43491adeaf1bcde32185d9b9f036c3a9874a`。Phase 2A 已获单独实施授权，并在当前未提交工作树形成代码候选与离线验证。本轮没有提交、推送、部署或应用 migration，真实 PostgreSQL 与 Caddy 校验仍未完成。任何后续 Git 与部署动作仍需 Maxwell 单独授权。
 
-下一批若进入 Refactor Phase 2，应先单独评审项目上传、对象存储、ContextBundle、授权、数据分类、模型外发和 migration。企业共享资料、Tool Gateway、sidecar、依赖安装和开发部署仍应分别评审和授权。
+下一步先复审 Phase 2A，并在一次性真实 PostgreSQL 验证 `0024` 与 repository 合同。Phase 2B 的 Agent Attempt 附件读取、企业共享资料、Tool Gateway、sidecar、依赖安装和开发部署仍应分别评审和授权。

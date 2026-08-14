@@ -173,6 +173,11 @@ def test_console_public_ip_tls_uses_certbot_without_logging_oauth_codes():
     assert "idle 2m" in caddyfile
     assert "max_header_size 32KB" in caddyfile
     assert "0rtt off" in caddyfile
+    assert "method POST" in caddyfile
+    assert "path_regexp ^/console/api/v1/drafts/[0-9a-f]{32}/attachments$" in caddyfile
+    assert "max_size 262144" in caddyfile
+    assert "max_size 65536" in caddyfile
+    assert caddyfile.index("max_size 262144") < caddyfile.index("max_size 65536")
     assert "/var/lib/larkflow-certbot-webroot" in caddyfile
     assert "/etc/caddy/certs/larkflow-console/current/fullchain.pem" in caddyfile
     assert "reverse_proxy 127.0.0.1:8780" in caddyfile

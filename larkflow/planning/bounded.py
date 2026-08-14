@@ -25,6 +25,7 @@ class BoundedPlannerRuntime:
         candidate = self.generator.generate(
             brief=request.brief,
             context=request.context,
+            context_bundle=request.context_bundle,
             on_repair=on_repair,
         )
         return PlannerResult(

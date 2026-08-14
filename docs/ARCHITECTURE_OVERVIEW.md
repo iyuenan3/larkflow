@@ -84,6 +84,8 @@ larkflow 不会把整个企业飞书云盘都交给模型。
 - 企业共享资料：由管理员明确发布为企业全员可以使用的资料。
 - 项目资料：由项目发起人直接上传，只属于当前项目。
 
+当前未提交候选只覆盖第二类资料的第一个切片：Console 仅在存储和模型外发都已启用时展示 UTF-8 txt/md 入口，资料先绑定未生成的草稿请求，确认清单后才进入 Planner。能力未启用时，服务端在落库前拒绝附件模式，原有无附件流程继续可用。企业共享资料仍是目标设计；Agent 节点也还不会在运行时读取附件。
+
 这里最重要的不是检索能力，而是授权顺序：
 
 1. 先判断当前用户和项目有权使用哪些资料。
@@ -92,7 +94,7 @@ larkflow 不会把整个企业飞书云盘都交给模型。
 
 不能先从整个企业知识库检索，然后让模型自己“不要泄露无权限内容”。模型提示词不是权限系统，向量数据库也不是权限系统。
 
-系统最终会给 Planner 或 Agent 一份有界的 `ContextBundle`，里面包含：
+系统最终会给 Planner 或 Agent 一份有界的 `ContextBundle`。当前 Phase 2A 只给 Planner，里面包含：
 
 - 允许使用的资料片段。
 - 来源 ID。
@@ -396,16 +398,19 @@ Edge 已经做过一个只读 Proof，代码和安全证据都保留。
 - 审计、Outbox、Inbox 和投影对账。
 - 本地 PlannerRuntime 合同、bounded 基线适配器、统一最终候选 validator 和兼容草稿服务。
 - 本地 AgentRuntime 合同、completion 基线适配器和 Worker bridge。
+- Console txt/md 项目附件候选、collecting 状态、逻辑撤销、保留配额与显式开始生成。
+- 规划专用 `ContextBundle`、安全来源引用、内容指纹和默认 deny 的模型外发策略。
+- Planner 使用附件后，Instance 只冻结安全 refs 与 fingerprint，不保存正文。
 
 目前仍是目标设计、尚未实现的有：
 
 - 企业共享知识清单。
-- 项目文件上传。
-- Knowledge Context Service。
-- `ContextBundle`。
+- 企业共享资料与通用 Knowledge Context Service。
+- Agent Attempt 读取项目附件。
+- PDF、DOCX、图片 OCR、飞书消息附件和生产对象存储。
 - Authorized Tool Gateway。
 - Attempt 级能力信封。
-- 模型数据外发政策。
+- 持久化的 Attempt 级模型数据外发政策。
 - Pi Adapter。
 - DSH Adapter。
 - Planner A/B 评估系统。

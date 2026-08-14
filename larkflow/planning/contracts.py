@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Protocol
 
+from .context import ContextBundle
+
 
 def _freeze(value: Any) -> Any:
     if isinstance(value, Mapping):
@@ -38,7 +40,7 @@ class PlannerRequest:
     brief: str
     context: str = ""
     constraints: Mapping[str, Any] = field(default_factory=dict)
-    context_bundle: Mapping[str, Any] = field(default_factory=dict)
+    context_bundle: ContextBundle | None = None
     capability_envelope: Mapping[str, Any] = field(default_factory=dict)
     policy: Mapping[str, Any] = field(default_factory=dict)
 
@@ -48,7 +50,14 @@ class PlannerRequest:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"planner request {field_name} is required")
         object.__setattr__(self, "constraints", _freeze(self.constraints))
-        object.__setattr__(self, "context_bundle", _freeze(self.context_bundle))
+        if self.context_bundle is not None:
+            bundle = self.context_bundle
+            if bundle.tenant_id != self.tenant_id:
+                raise ValueError("planner context tenant does not match request")
+            if bundle.actor_person_id != self.actor_person_id:
+                raise ValueError("planner context actor does not match request")
+            if bundle.scope_id != self.request_id:
+                raise ValueError("planner context scope does not match request")
         object.__setattr__(
             self,
             "capability_envelope",
@@ -111,6 +120,7 @@ class DraftGenerator(Protocol):
         request_id: str,
         brief: str,
         context: str,
+        context_bundle: ContextBundle | None = None,
         on_repair: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         ...

@@ -24,6 +24,11 @@ from .console_admin_sessions import (
     PostgresConsoleAdminSessionRepository,
 )
 from .console_actions import ConsoleActionService
+from .console_attachments import (
+    ConsoleAttachmentService,
+    FilesystemAttachmentBlobStore,
+    PostgresConsoleAttachmentRepository,
+)
 from .console_drafts import ConsoleDraftService, PostgresConsoleDraftRepository
 from .console_http import ConsoleHttpApplication, build_console_http_server
 from .console_rate_limit import ConsoleRequestRateLimiter
@@ -92,6 +97,7 @@ def _run(namespace: argparse.Namespace) -> int:
     draft_service = ConsoleDraftService(
         PostgresConsoleDraftRepository(connection_factory),
     )
+    attachment_service = _build_attachment_service(connection_factory)
     admin_people = _person_id_list(
         os.environ.get("LARKFLOW_CONSOLE_ADMIN_PERSON_IDS", ""),
         label="LARKFLOW_CONSOLE_ADMIN_PERSON_IDS",
@@ -134,6 +140,7 @@ def _run(namespace: argparse.Namespace) -> int:
             action_service=action_service,
             task_service=task_service,
             draft_service=draft_service,
+            attachment_service=attachment_service,
         )
         access = "enter LARKFLOW_CONSOLE_ACCESS_TOKEN in the browser"
     else:
@@ -197,6 +204,7 @@ def _run(namespace: argparse.Namespace) -> int:
             action_service=action_service,
             task_service=task_service,
             draft_service=draft_service,
+            attachment_service=attachment_service,
         )
         rate_limiter = _build_rate_limiter()
         access = "Feishu OAuth with an opaque HttpOnly session"
@@ -254,6 +262,21 @@ def _preparse_env_file(args: Sequence[str]) -> str:
     parser.add_argument("--env-file", default=".env")
     namespace, _ = parser.parse_known_args(args)
     return namespace.env_file
+
+
+def _build_attachment_service(connection_factory: Any) -> ConsoleAttachmentService | None:
+    root = os.environ.get("LARKFLOW_TARGET_ATTACHMENT_ROOT", "").strip()
+    if not root:
+        return None
+    policy = os.environ.get(
+        "LARKFLOW_TARGET_ATTACHMENT_MODEL_EGRESS",
+        "deny",
+    ).strip()
+    return ConsoleAttachmentService(
+        PostgresConsoleAttachmentRepository(connection_factory),
+        FilesystemAttachmentBlobStore(root),
+        model_egress_policy=policy,
+    )
 
 
 def _required(value: Any, label: str) -> str:

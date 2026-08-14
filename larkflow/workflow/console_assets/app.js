@@ -66,10 +66,12 @@ const state = {
   humanTasks: [],
   draftRequests: [],
   currentDraft: null,
+  draftAttachments: [],
   autoOpenDraftId: null,
   activeTask: null,
   detail: null,
   isAdmin: false,
+  attachmentPlanningEnabled: false,
   view: "owner",
   adminOverview: null,
   adminSessions: null,
@@ -381,6 +383,14 @@ function humanTaskAttentionItem(task) {
 }
 
 const DRAFT_ACTIVE_STATUSES = new Set([
+  "collecting",
+  "queued",
+  "generating",
+  "repairing",
+  "preparing",
+  "retrying",
+]);
+const DRAFT_POLLING_STATUSES = new Set([
   "queued",
   "generating",
   "repairing",
@@ -389,6 +399,7 @@ const DRAFT_ACTIVE_STATUSES = new Set([
 ]);
 
 const DRAFT_STATUS = {
+  collecting: "整理资料",
   queued: "排队中",
   generating: "生成中",
   repairing: "重新校验",
@@ -432,7 +443,8 @@ function syncDraftRequests(requests) {
   } else if (!state.currentDraft && active) {
     state.currentDraft = active;
     renderCurrentDraft(active);
-    pollDraftRequest(active.id);
+    if (active.status === "collecting") loadDraftAttachments(active.id).catch(showWorkspaceError);
+    else pollDraftRequest(active.id);
   }
   renderDraftRequests();
 }
@@ -461,6 +473,7 @@ function renderDraftRequests() {
     renderCurrentDraft(resumable);
     renderDraftRequests();
     if (resumable.status === "ready") openDraftInstance(resumable).catch(showWorkspaceError);
+    else if (resumable.status === "collecting") loadDraftAttachments(resumable.id).catch(showWorkspaceError);
     else pollDraftRequest(resumable.id);
   });
   const meta = node("div", "draft-recent-meta");
@@ -478,11 +491,14 @@ function renderCurrentDraft(requestItem) {
   const terminal = !DRAFT_ACTIVE_STATUSES.has(requestItem.status);
   panel.hidden = false;
   panel.dataset.terminal = String(terminal);
+  panel.dataset.collecting = String(requestItem.status === "collecting");
   status.className = `status-pill ${requestItem.status === "ready" ? "status-done" : ["rejected", "failed"].includes(requestItem.status) ? "status-failed" : "status-running"}`;
   status.textContent = DRAFT_STATUS[requestItem.status] || requestItem.status;
   el("draft-current-id").textContent = requestItem.id.slice(-8);
   el("draft-current-title").textContent = requestItem.status === "ready"
     ? "流程草稿已经生成"
+    : requestItem.status === "collecting"
+      ? "资料已暂存，等待你确认"
     : requestItem.status === "rejected"
       ? "当前描述需要调整"
       : requestItem.status === "failed"
@@ -500,6 +516,81 @@ function renderCurrentDraft(requestItem) {
     : requestItem.status === "ready"
       ? "调整描述后再生成"
       : "调整后重新生成";
+  const attachmentPanel = el("draft-attachment-panel");
+  attachmentPanel.hidden = requestItem.status !== "collecting";
+  if (requestItem.status === "collecting") renderDraftAttachments();
+}
+
+function readableBytes(value) {
+  if (value < 1024) return `${value} B`;
+  return `${(value / 1024).toFixed(1)} KB`;
+}
+
+function renderDraftAttachments() {
+  const list = el("draft-attachment-list");
+  list.replaceChildren();
+  const ready = state.draftAttachments.filter((item) => item.status === "ready");
+  if (!ready.length) {
+    list.append(node("p", "draft-recent-empty", "尚未上传资料。可以直接开始生成。"));
+  }
+  ready.forEach((attachment) => {
+    const item = node("div", "draft-attachment-item");
+    const copy = document.createElement("div");
+    copy.append(
+      node("strong", "", attachment.display_filename),
+      node("small", "", `${readableBytes(attachment.size_bytes)} · 内部资料`),
+    );
+    const revoke = node("button", "", "撤销");
+    revoke.type = "button";
+    revoke.addEventListener("click", () => revokeDraftAttachment(attachment.id));
+    item.append(copy, revoke);
+    list.append(item);
+  });
+  el("draft-generate").disabled = false;
+}
+
+async function loadDraftAttachments(requestId) {
+  const payload = await request(`/console/api/v1/drafts/${encodeURIComponent(requestId)}/attachments`);
+  state.draftAttachments = payload.attachments || [];
+  if (state.currentDraft?.id === requestId) renderDraftAttachments();
+}
+
+async function revokeDraftAttachment(attachmentId) {
+  if (!state.currentDraft?.id) return;
+  const errorNode = el("draft-attachment-error");
+  errorNode.textContent = "";
+  try {
+    await request(
+      `/console/api/v1/drafts/${encodeURIComponent(state.currentDraft.id)}/attachments/${encodeURIComponent(attachmentId)}/revoke`,
+      { method: "POST" },
+    );
+    await loadDraftAttachments(state.currentDraft.id);
+    showToast("附件已撤销");
+  } catch (error) {
+    errorNode.textContent = error.message || "附件没有撤销，请重试。";
+  }
+}
+
+async function generateCurrentDraft() {
+  if (!state.currentDraft?.id || state.currentDraft.status !== "collecting") return;
+  const button = el("draft-generate");
+  const errorNode = el("draft-attachment-error");
+  button.disabled = true;
+  button.textContent = "正在冻结资料清单";
+  errorNode.textContent = "";
+  try {
+    const payload = await request(
+      `/console/api/v1/drafts/${encodeURIComponent(state.currentDraft.id)}/generate`,
+      { method: "POST" },
+    );
+    state.currentDraft = { ...state.currentDraft, ...payload.request, message: "已进入生成队列" };
+    renderCurrentDraft(state.currentDraft);
+    pollDraftRequest(state.currentDraft.id);
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "确认资料并开始生成";
+    errorNode.textContent = error.message || "资料清单没有冻结，请重试。";
+  }
 }
 
 async function refreshDraftRequests() {
@@ -519,8 +610,12 @@ async function pollDraftRequest(requestId) {
     else state.draftRequests.unshift(requestItem);
     renderCurrentDraft(requestItem);
     renderDraftRequests();
-    if (DRAFT_ACTIVE_STATUSES.has(requestItem.status)) {
+    if (DRAFT_POLLING_STATUSES.has(requestItem.status)) {
       pollDraftRequest.timer = setTimeout(() => pollDraftRequest(requestId), 1000);
+      return;
+    }
+    if (requestItem.status === "collecting") {
+      await loadDraftAttachments(requestItem.id);
       return;
     }
     if (requestItem.status === "ready" && state.autoOpenDraftId === requestItem.id) {
@@ -538,6 +633,7 @@ async function submitDraftRequest(event) {
   const brief = el("draft-brief").value.trim();
   const context = el("draft-context").value.trim();
   const collaborator = el("draft-collaborator").value || null;
+  const selectedFiles = Array.from(el("draft-attachments").files || []);
   const button = el("draft-submit");
   const errorNode = el("draft-form-error");
   errorNode.textContent = "";
@@ -546,15 +642,52 @@ async function submitDraftRequest(event) {
     el("draft-brief").focus();
     return;
   }
+  if (selectedFiles.length && !state.attachmentPlanningEnabled) {
+    errorNode.textContent = "当前部署未启用项目资料规划，请先移除附件后继续。";
+    return;
+  }
+  if (selectedFiles.length > 8) {
+    errorNode.textContent = "一次最多选择 8 个附件。";
+    return;
+  }
+  let totalBytes = 0;
+  for (const file of selectedFiles) {
+    const lowerName = file.name.toLowerCase();
+    if (!lowerName.endsWith(".txt") && !lowerName.endsWith(".md")) {
+      errorNode.textContent = `不支持 ${file.name}，请选择 txt 或 md。`;
+      return;
+    }
+    if (file.size < 1 || file.size > 32 * 1024) {
+      errorNode.textContent = `${file.name} 必须大于 0 字节且不超过 32 KB。`;
+      return;
+    }
+    totalBytes += file.size;
+  }
+  if (totalBytes > 128 * 1024) {
+    errorNode.textContent = "附件总量不能超过 128 KB。";
+    return;
+  }
+  const preparedFiles = [];
+  try {
+    for (const file of selectedFiles) {
+      preparedFiles.push({
+        file,
+        content: new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer()),
+      });
+    }
+  } catch (_error) {
+    errorNode.textContent = "附件必须是有效的 UTF-8 文本。";
+    return;
+  }
   const requestId = newDraftRequestId();
   button.disabled = true;
   button.dataset.state = "working";
-  button.textContent = "正在进入生成队列";
+  button.textContent = selectedFiles.length ? "正在创建资料工作区" : "正在进入生成队列";
   state.autoOpenDraftId = requestId;
   const optimistic = {
     id: requestId,
-    status: "queued",
-    message: "正在把请求写入中央耐久队列",
+    status: selectedFiles.length ? "collecting" : "queued",
+    message: selectedFiles.length ? "正在上传授权的项目资料" : "正在把请求写入中央耐久队列",
     brief,
     instance_id: null,
     created_at: new Date().toISOString(),
@@ -571,20 +704,49 @@ async function submitDraftRequest(event) {
         brief,
         context,
         collaborator_person_id: collaborator,
+        defer_generation: selectedFiles.length > 0,
       }),
     });
     state.currentDraft = payload.request;
     state.draftRequests.unshift(payload.request);
+    state.draftAttachments = [];
     renderCurrentDraft(payload.request);
     renderDraftRequests();
-    pollDraftRequest(requestId);
+    if (selectedFiles.length) {
+      for (const prepared of preparedFiles) {
+        const file = prepared.file;
+        const lowerName = file.name.toLowerCase();
+        const mediaType = lowerName.endsWith(".md") ? "text/markdown" : "text/plain";
+        const uploaded = await request(
+          `/console/api/v1/drafts/${encodeURIComponent(requestId)}/attachments`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              display_filename: file.name,
+              media_type: mediaType,
+              content: prepared.content,
+            }),
+          },
+        );
+        state.draftAttachments.push(uploaded.attachment);
+        renderDraftAttachments();
+      }
+      button.textContent = "资料已上传，请在右侧确认";
+      el("draft-attachments").value = "";
+      el("draft-attachment-selection").textContent = "资料已上传并绑定到当前草稿请求。";
+      showToast("资料已上传，确认清单后开始生成");
+    } else {
+      pollDraftRequest(requestId);
+    }
   } catch (error) {
     state.autoOpenDraftId = null;
-    button.disabled = false;
-    button.dataset.state = "idle";
-    button.textContent = "重新提交";
+    const collecting = state.currentDraft?.status === "collecting";
+    button.disabled = collecting;
+    button.dataset.state = collecting ? "working" : "idle";
+    button.textContent = collecting ? "资料未全部上传，请检查右侧状态" : "重新提交";
     errorNode.textContent = error.message || "草稿请求没有创建，请重试。";
-    el("draft-current").dataset.terminal = "true";
+    if (!collecting) el("draft-current").dataset.terminal = "true";
   }
 }
 
@@ -2660,6 +2822,15 @@ async function loadAuthConfiguration() {
     state.loginUrl = payload.login_url;
   }
   state.isAdmin = payload.admin === true;
+  if (
+    !payload.capabilities
+    || typeof payload.capabilities.attachment_planning !== "boolean"
+  ) {
+    throw new Error("服务能力配置无效");
+  }
+  state.attachmentPlanningEnabled = payload.capabilities.attachment_planning;
+  el("draft-attachment-input").hidden = !state.attachmentPlanningEnabled;
+  el("draft-attachments").disabled = !state.attachmentPlanningEnabled;
   adminViewButton.hidden = !state.isAdmin;
   el("view-switch").hidden = !state.isAdmin;
   return payload;
@@ -2736,6 +2907,13 @@ workflowNav.addEventListener("click", () => {
 });
 el("detail-back").addEventListener("click", () => showOwnerSection(state.returnSection));
 el("draft-form").addEventListener("submit", submitDraftRequest);
+el("draft-generate").addEventListener("click", generateCurrentDraft);
+el("draft-attachments").addEventListener("change", (event) => {
+  const files = Array.from(event.target.files || []);
+  el("draft-attachment-selection").textContent = files.length
+    ? `已选择 ${files.length} 个文件，共 ${readableBytes(files.reduce((sum, file) => sum + file.size, 0))}。提交后先上传，确认清单后才开始生成。`
+    : "未选择附件。无附件时仍按原方式直接生成。";
+});
 document.querySelectorAll("[data-draft-starter]").forEach((button) => {
   button.addEventListener("click", () => {
     const starter = DRAFT_STARTERS[button.dataset.draftStarter];

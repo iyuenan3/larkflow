@@ -30,6 +30,11 @@ from .console_drafts import (
     ConsoleDraftWorkerReport,
     PostgresConsoleDraftRepository,
 )
+from .console_attachments import (
+    FilesystemAttachmentBlobStore,
+    PlanningContextService,
+    PostgresConsoleAttachmentRepository,
+)
 from .config import (
     TargetDraftGenerationSettings,
     TargetInboundSettings,
@@ -386,6 +391,10 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             service,
             generator,
             settings,
+            context_service=_planning_context_service(
+                connection_factory,
+                settings,
+            ),
         )
         worker = _CombinedDraftWorkers(console_worker, role_binding_worker)
         if namespace.command == "generate-drafts-once":
@@ -1212,6 +1221,8 @@ def _console_draft_worker(
     service: WorkflowService,
     generator: DraftGenerator,
     settings: TargetDraftGenerationSettings,
+    *,
+    context_service: PlanningContextService | None = None,
 ) -> ConsoleDraftWorker:
     """Build the Console draft worker with its exact production contract."""
     return ConsoleDraftWorker(
@@ -1225,6 +1236,20 @@ def _console_draft_worker(
         retry_base=settings.retry_base,
         retry_max=settings.retry_max,
         max_attempts=settings.max_attempts,
+        context_service=context_service,
+    )
+
+
+def _planning_context_service(
+    connection_factory: Any,
+    settings: TargetDraftGenerationSettings,
+) -> PlanningContextService | None:
+    if settings.attachment_blob_root is None:
+        return None
+    return PlanningContextService(
+        PostgresConsoleAttachmentRepository(connection_factory),
+        FilesystemAttachmentBlobStore(settings.attachment_blob_root),
+        model_egress_policy=settings.attachment_model_egress_policy,
     )
 
 

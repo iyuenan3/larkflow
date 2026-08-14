@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from psycopg.types.json import Jsonb
 from larkflow.planning.contracts import DraftGenerator
+from larkflow.planning.context import AttachmentRef, ContextBundle
 
 from .console import ConsolePrincipal
 from .directory import DirectoryValidationError
@@ -64,6 +65,8 @@ class ConsoleDraftRequest:
     definition: Mapping[str, Any] | None = None
     instance_id: str | None = None
     completed_at: datetime | None = None
+    generation_deferred: bool = False
+    attachment_manifest: tuple[AttachmentRef, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -219,6 +222,37 @@ class InMemoryConsoleDraftRepository:
             ]
         items.sort(key=lambda item: (item.created_at, item.id), reverse=True)
         return tuple(items[:limit])
+
+    def queue_collecting(
+        self,
+        tenant_id: str,
+        request_id: str,
+        *,
+        requester_person_id: str,
+        manifest: tuple[AttachmentRef, ...],
+        now: datetime,
+    ) -> ConsoleDraftRequest:
+        with self._lock:
+            item = self._items.get((tenant_id, request_id))
+            if item is None or not secrets.compare_digest(
+                item.requester_person_id,
+                requester_person_id,
+            ):
+                raise ConsoleDraftNotFoundError(request_id)
+            if item.status != "collecting":
+                raise ConsoleDraftConflictError(
+                    "draft_not_collecting",
+                    "草稿请求已开始生成，附件清单不能再修改。",
+                )
+            updated = replace(
+                item,
+                status="pending",
+                attachment_manifest=tuple(manifest),
+                available_at=now,
+                updated_at=now,
+            )
+            self._items[(tenant_id, request_id)] = updated
+            return updated
 
     def claim(
         self,
@@ -406,9 +440,11 @@ class PostgresConsoleDraftRepository:
                     INSERT INTO workflow_console_draft_requests (
                         tenant_id, id, requester_person_id,
                         collaborator_person_id, brief, context, status,
+                        generation_deferred, attachment_manifest,
                         attempt_count, available_at, created_at, updated_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, 'pending', 0, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        0, %s, %s, %s
                     ) ON CONFLICT (tenant_id, id) DO NOTHING
                     """,
                     (
@@ -418,6 +454,14 @@ class PostgresConsoleDraftRepository:
                         request.collaborator_person_id,
                         request.brief,
                         request.context,
+                        request.status,
+                        request.generation_deferred,
+                        Jsonb(
+                            [
+                                item.snapshot_value()
+                                for item in request.attachment_manifest
+                            ]
+                        ),
                         request.available_at,
                         request.created_at,
                         request.updated_at,
@@ -728,6 +772,7 @@ class ConsoleDraftService:
         brief: str,
         context: str,
         collaborator_person_id: str | None,
+        defer_generation: bool = False,
     ) -> Mapping[str, Any]:
         request_id = _normalized_request_id(request_id)
         brief = _bounded_text(brief, required=True, field="brief")
@@ -737,6 +782,8 @@ class ConsoleDraftService:
             self._validate_collaborator(principal, collaborator)
         else:
             collaborator = principal.person_id
+        if not isinstance(defer_generation, bool):
+            raise ValueError("defer_generation must be a boolean")
         now = _utc(self.clock())
         request = self.repository.create(
             ConsoleDraftRequest(
@@ -746,11 +793,12 @@ class ConsoleDraftService:
                 collaborator_person_id=collaborator,
                 brief=brief,
                 context=context,
-                status="pending",
+                status="collecting" if defer_generation else "pending",
                 attempt_count=0,
                 available_at=now,
                 created_at=now,
                 updated_at=now,
+                generation_deferred=defer_generation,
             )
         )
         return {"request": _public_request(request, include_brief=True)}
@@ -839,6 +887,7 @@ class ConsoleDraftWorker:
         retry_base: timedelta = timedelta(seconds=5),
         retry_max: timedelta = timedelta(minutes=5),
         max_attempts: int = 5,
+        context_service: Any = None,
     ) -> None:
         _validate_claim(worker_id, claim_limit, claim_ttl)
         if not tenant_id.strip():
@@ -858,6 +907,7 @@ class ConsoleDraftWorker:
         self.retry_base = retry_base
         self.retry_max = retry_max
         self.max_attempts = max_attempts
+        self.context_service = context_service
 
     def run_once(self) -> ConsoleDraftWorkerReport:
         claims = self.repository.claim(
@@ -912,20 +962,32 @@ class ConsoleDraftWorker:
 
     def _apply(self, claim: ConsoleDraftClaim) -> None:
         request = claim.request
+        context_bundle: ContextBundle | None = None
+        if request.attachment_manifest:
+            if self.context_service is None:
+                raise DraftGenerationRejected("附件上下文服务未配置")
+            context_bundle = self.context_service.build_for_planning(request)
+            if context_bundle is None:
+                raise DraftGenerationRejected("附件上下文未能构建")
         definition = request.definition
         if definition is None:
-            definition = self.generator.generate(
-                tenant_id=self.tenant_id,
-                actor_person_id=request.requester_person_id,
-                request_id=request.id,
-                brief=request.brief,
-                context=request.context,
-                on_repair=lambda: self.repository.mark_repairing(
+            generation: dict[str, Any] = {
+                "tenant_id": self.tenant_id,
+                "actor_person_id": request.requester_person_id,
+                "request_id": request.id,
+                "brief": request.brief,
+                "context": request.context,
+                "on_repair": lambda: self.repository.mark_repairing(
                     self.tenant_id,
                     request.id,
                     claim_token=claim.claim_token,
                     now=_utc(self.clock()),
                 ),
+            }
+            if context_bundle is not None:
+                generation["context_bundle"] = context_bundle
+            definition = self.generator.generate(
+                **generation,
             )
             request = self.repository.save_candidate(
                 self.tenant_id,
@@ -943,6 +1005,16 @@ class ConsoleDraftWorker:
             definition,
             owner_bindings={role: available_bindings[role] for role in roles},
         )
+        if context_bundle is not None:
+            inputs = dict(snapshot.inputs)
+            manifest = context_bundle.snapshot_manifest()
+            inputs["project_attachments"] = manifest["attachments"]
+            inputs["context_manifest"] = {
+                key: value
+                for key, value in manifest.items()
+                if key != "attachments"
+            }
+            snapshot = replace(snapshot, inputs=inputs)
         instance_id = f"console_draft_{request.id}"
         try:
             instance = self.service.create_draft(
@@ -969,6 +1041,8 @@ class ConsoleDraftWorker:
                     "existing_draft_mismatch",
                     "request id is already bound to another draft",
                 )
+        if context_bundle is not None:
+            self.context_service.promote(request, instance_id=instance.id)
         self.repository.mark_ready(
             self.tenant_id,
             request.id,
@@ -984,6 +1058,7 @@ def _public_request(
     include_brief: bool,
 ) -> dict[str, Any]:
     status = {
+        "collecting": "collecting",
         "pending": "queued",
         "generating": "generating",
         "repairing": "repairing",
@@ -994,6 +1069,7 @@ def _public_request(
         "exhausted": "failed",
     }[request.status]
     message = {
+        "collecting": "可上传或撤销附件，确认后再开始生成",
         "queued": "已进入生成队列",
         "generating": "中央 Agent 正在生成候选流程",
         "repairing": "候选未通过校验，正在安全重生成",
@@ -1023,6 +1099,7 @@ def _public_request(
             if request.completed_at is not None
             else None
         ),
+        "attachment_count": len(request.attachment_manifest),
     }
     if include_brief:
         payload["brief"] = request.brief
@@ -1033,6 +1110,7 @@ def _request_from_row(row: Mapping[str, Any] | None) -> ConsoleDraftRequest:
     if row is None:
         raise ConsoleDraftNotFoundError("draft request")
     definition = row.get("definition")
+    raw_manifest = row.get("attachment_manifest") or []
     return ConsoleDraftRequest(
         id=str(row["id"]),
         tenant_id=str(row["tenant_id"]),
@@ -1048,6 +1126,20 @@ def _request_from_row(row: Mapping[str, Any] | None) -> ConsoleDraftRequest:
         definition=dict(definition) if isinstance(definition, Mapping) else None,
         instance_id=row.get("instance_id"),
         completed_at=row.get("completed_at"),
+        generation_deferred=bool(row.get("generation_deferred", False)),
+        attachment_manifest=tuple(
+            AttachmentRef(
+                attachment_id=str(item["attachment_id"]),
+                source_id=str(item["source_id"]),
+                display_filename=str(item["display_filename"]),
+                media_type=str(item["media_type"]),
+                size_bytes=int(item["size_bytes"]),
+                content_sha256=str(item["content_sha256"]),
+                data_classification=str(item["data_classification"]),
+                egress_decision=str(item["egress_decision"]),
+            )
+            for item in raw_manifest
+        ),
     )
 
 
@@ -1059,6 +1151,7 @@ def _same_request(left: ConsoleDraftRequest, right: ConsoleDraftRequest) -> bool
         and left.collaborator_person_id == right.collaborator_person_id
         and left.brief == right.brief
         and left.context == right.context
+        and left.generation_deferred == right.generation_deferred
     )
 
 

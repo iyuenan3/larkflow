@@ -162,6 +162,15 @@
                   </div>
                 </details>
 
+                <div id="draft-attachment-input" class="draft-attachment-input" hidden>
+                  <label for="draft-attachments">
+                    <span>项目资料</span>
+                    <small>选填，最多 8 个 txt 或 md，单个不超过 32 KB</small>
+                  </label>
+                  <input id="draft-attachments" type="file" accept=".txt,.md,text/plain,text/markdown" multiple>
+                  <p id="draft-attachment-selection">未选择附件。无附件时仍按原方式直接生成。</p>
+                </div>
+
                 <p id="draft-form-error" class="human-task-error" role="alert"></p>
                 <button id="draft-submit" class="draft-submit" type="submit">生成流程草稿</button>
                 <p class="draft-form-boundary">提交后只生成草稿，不会自动启动或通知其他人。</p>
@@ -176,6 +185,15 @@
                   <h2 id="draft-current-title">正在准备候选流程</h2>
                   <p id="draft-current-message"></p>
                   <div class="draft-progress" aria-hidden="true"><span></span><span></span><span></span></div>
+                  <div id="draft-attachment-panel" class="draft-attachment-panel" hidden>
+                    <div class="draft-attachment-heading">
+                      <strong>本次规划资料</strong>
+                      <span>确认后清单会冻结</span>
+                    </div>
+                    <div id="draft-attachment-list" class="draft-attachment-list"></div>
+                    <p id="draft-attachment-error" class="human-task-error" role="alert"></p>
+                    <button id="draft-generate" class="draft-generate" type="button">确认资料并开始生成</button>
+                  </div>
                   <button id="draft-open-instance" class="draft-open-instance" type="button" hidden>查看流程并确认</button>
                 </section>
 

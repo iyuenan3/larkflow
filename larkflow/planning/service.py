@@ -12,6 +12,7 @@ from .contracts import (
     PlannerRuntime,
     to_mutable,
 )
+from .context import ContextBundle
 
 
 class PlanningService:
@@ -61,6 +62,7 @@ class PlanningService:
         request_id: str,
         brief: str,
         context: str,
+        context_bundle: ContextBundle | None = None,
         on_repair: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         """Preserve the draft-worker facade while carrying server identity."""
@@ -71,6 +73,7 @@ class PlanningService:
                 request_id=request_id,
                 brief=brief,
                 context=context,
+                context_bundle=context_bundle,
             ),
             on_repair=on_repair,
         )
