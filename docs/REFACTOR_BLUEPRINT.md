@@ -396,7 +396,7 @@ Planner 超时、失败或候选不合法时，只记录失败的规划请求，
 
 ### Refactor Phase 0：锁定现状行为
 
-状态：当前工作区已完成，尚未提交或部署。
+状态：已纳入内容提交 `476b43491adeaf1bcde32185d9b9f036c3a9874a`，尚未部署。
 
 目标：在抽象接口前先证明当前基线行为是什么。
 
@@ -413,7 +413,7 @@ Exit gate：现有离线测试全绿；新增 characterization tests 能在破�
 
 ### Refactor Phase 1：增加端口与基线适配器，不改变行为
 
-状态：当前工作区已完成，尚未提交或部署。
+状态：已纳入内容提交 `476b43491adeaf1bcde32185d9b9f036c3a9874a`，尚未部署。
 
 目标：建立 `PlannerRuntime` 和 `AgentRuntime`，但默认结果与当前实现一致。
 
@@ -680,6 +680,6 @@ Dependency Exit Gate：
 
 ## 21. 开始实施前的授权边界
 
-Refactor Phase 0 与 Phase 1 已在当前工作区完成代码和离线验证，但尚未提交或部署。提交、推送和任何部署仍需 Maxwell 单独授权。
+Refactor Phase 0 与 Phase 1 的代码和离线验证已纳入内容提交 `476b43491adeaf1bcde32185d9b9f036c3a9874a`，本轮没有执行部署。任何后续部署仍需 Maxwell 单独授权。
 
 下一批若进入 Refactor Phase 2，应先单独评审项目上传、对象存储、ContextBundle、授权、数据分类、模型外发和 migration。企业共享资料、Tool Gateway、sidecar、依赖安装和开发部署仍应分别评审和授权。
