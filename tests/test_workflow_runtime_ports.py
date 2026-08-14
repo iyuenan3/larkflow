@@ -1,0 +1,586 @@
+"""Characterization tests for the Phase 0/1 runtime seams."""
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+import pytest
+
+from larkflow.agent_runtime import AgentRunRequest, AgentRunResult
+from larkflow.agent_runtime.completion import CompletionAgentRuntime
+from larkflow.agent_runtime.executor import AgentRuntimeExecutor
+from larkflow.planning import PlannerRequest, PlannerResult
+from larkflow.planning.bounded import BoundedPlannerRuntime
+from larkflow.planning.service import PlanningService
+from larkflow.workflow import (
+    DraftDefinitionGenerator,
+    DraftGenerationRejected,
+    ExecutionRequest,
+    ExecutorKind,
+    LLMAgentExecutor,
+)
+
+
+NOW = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+
+
+def valid_definition() -> dict:
+    return {
+        "schema_version": "0.2",
+        "goal": "Generate and review a summary",
+        "inputs": {"brief": "Summarize", "context": "Use supplied facts"},
+        "nodes": [
+            {
+                "id": "confirm_requirements",
+                "title": "Confirm requirements",
+                "owner_role": "requester",
+                "executor": "human",
+                "deps": [],
+                "work": {
+                    "objective": "Confirm inputs",
+                    "inputs": [
+                        "instance_inputs.brief",
+                        "instance_inputs.context",
+                    ],
+                    "outputs": [
+                        {
+                            "id": "requirements",
+                            "type": "long_text",
+                            "label": "Requirements",
+                            "required": True,
+                        }
+                    ],
+                    "acceptance": ["Inputs are explicit"],
+                },
+            },
+            {
+                "id": "draft_summary",
+                "title": "Generate summary",
+                "owner_role": "requester",
+                "executor": "agent",
+                "deps": ["confirm_requirements"],
+                "work": {
+                    "objective": "Generate a summary",
+                    "inputs": ["dependencies.confirm_requirements"],
+                    "outputs": [
+                        {
+                            "id": "content",
+                            "type": "text",
+                            "label": "Summary",
+                            "required": True,
+                        }
+                    ],
+                    "acceptance": ["Uses only confirmed inputs"],
+                    "agent": {
+                        "kind": "llm.generate",
+                        "model_role": "default",
+                        "instructions": "Write a concise summary.",
+                    },
+                },
+            },
+            {
+                "id": "review_summary",
+                "title": "Review summary",
+                "owner_role": "collaborator",
+                "executor": "human",
+                "deps": ["draft_summary"],
+                "work": {
+                    "objective": "Review the summary",
+                    "inputs": ["dependencies.draft_summary"],
+                    "outputs": [
+                        {
+                            "id": "decision",
+                            "type": "decision",
+                            "label": "Decision",
+                            "required": True,
+                        }
+                    ],
+                    "acceptance": ["A human decides"],
+                    "decision": {
+                        "kind": "accept_reject",
+                        "reject_target": "draft_summary",
+                    },
+                },
+            },
+        ],
+    }
+
+
+class SequenceCompletion:
+    def __init__(self, values: list[str]) -> None:
+        self.values = iter(values)
+        self.calls: list[tuple[str, str]] = []
+
+    def complete(self, *, prompt: str, model_role: str) -> str:
+        self.calls.append((prompt, model_role))
+        return next(self.values)
+
+
+def planner(values: list[str]) -> tuple[PlanningService, SequenceCompletion]:
+    completion = SequenceCompletion(values)
+    return (
+        PlanningService(
+            BoundedPlannerRuntime(DraftDefinitionGenerator(completion)),
+        ),
+        completion,
+    )
+
+
+def test_bounded_planner_matches_legacy_generation_and_one_repair() -> None:
+    invalid = valid_definition()
+    invalid["nodes"][1]["work"]["inputs"] = [
+        "dependencies.review_summary"
+    ]
+    responses = [json.dumps(invalid), json.dumps(valid_definition())]
+    legacy_client = SequenceCompletion(list(responses))
+    legacy_repairs = 0
+
+    def note_legacy_repair() -> None:
+        nonlocal legacy_repairs
+        legacy_repairs += 1
+
+    legacy = DraftDefinitionGenerator(legacy_client).generate(
+        brief="Summarize",
+        context="Use supplied facts",
+        on_repair=note_legacy_repair,
+    )
+    service, port_client = planner(list(responses))
+    port_repairs = 0
+
+    def note_port_repair() -> None:
+        nonlocal port_repairs
+        port_repairs += 1
+
+    through_port = service.generate(
+        tenant_id="tenant_planning",
+        actor_person_id="person_requester",
+        request_id="request_planning",
+        brief="Summarize",
+        context="Use supplied facts",
+        on_repair=note_port_repair,
+    )
+
+    assert through_port == legacy == valid_definition()
+    assert port_client.calls == legacy_client.calls
+    assert len(port_client.calls) == 2
+    assert port_repairs == legacy_repairs == 1
+
+
+def test_bounded_planner_preserves_final_rejection_classification() -> None:
+    invalid = valid_definition()
+    invalid["nodes"][2]["work"].pop("decision")
+    response = json.dumps(invalid)
+    legacy_client = SequenceCompletion([response, response])
+    port, port_client = planner([response, response])
+
+    with pytest.raises(DraftGenerationRejected) as legacy_error:
+        DraftDefinitionGenerator(legacy_client).generate(
+            brief="Summarize",
+            context="",
+        )
+    with pytest.raises(DraftGenerationRejected) as port_error:
+        port.plan(
+            PlannerRequest(
+                tenant_id="tenant_planning",
+                actor_person_id="person_requester",
+                request_id="request_planning",
+                brief="Summarize",
+            )
+        )
+
+    assert str(port_error.value) == str(legacy_error.value)
+    assert port_client.calls == legacy_client.calls
+    assert len(port_client.calls) == 2
+
+
+def test_bounded_planner_reports_minimal_runtime_metadata() -> None:
+    service, _ = planner([json.dumps(valid_definition())])
+
+    result = service.plan(
+        PlannerRequest(
+            tenant_id="tenant_planning",
+            actor_person_id="person_requester",
+            request_id="request_planning",
+            brief="Summarize",
+            context="Use supplied facts",
+        )
+    )
+
+    assert result.runtime_metadata == {
+        "runtime": "bounded",
+        "adapter": "draft_definition_generator",
+        "adapter_version": "1",
+    }
+
+
+class StaticPlannerRuntime:
+    def __init__(self, candidate: dict) -> None:
+        self.candidate = candidate
+        self.requests: list[PlannerRequest] = []
+
+    def plan(self, request, *, on_repair=None) -> PlannerResult:
+        del on_repair
+        self.requests.append(request)
+        return PlannerResult(
+            candidate=self.candidate,
+            runtime_metadata={"runtime": "untrusted-test-adapter"},
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("tenant_id", ""),
+        ("actor_person_id", "   "),
+        ("request_id", ""),
+    ],
+)
+def test_planner_request_rejects_empty_server_identity(
+    field_name: str,
+    value: str,
+) -> None:
+    values = {
+        "tenant_id": "tenant_planning",
+        "actor_person_id": "person_requester",
+        "request_id": "request_planning",
+        "brief": "Summarize",
+    }
+    values[field_name] = value
+
+    with pytest.raises(ValueError, match=field_name):
+        PlannerRequest(**values)
+
+
+def _agent_only_definition() -> dict:
+    definition = valid_definition()
+    definition["nodes"] = [deepcopy(definition["nodes"][1])]
+    return definition
+
+
+def _missing_final_gate_definition() -> dict:
+    definition = valid_definition()
+    definition["nodes"][2]["work"].pop("decision")
+    return definition
+
+
+@pytest.mark.parametrize(
+    ("candidate", "brief", "allow_web_search"),
+    [
+        ({}, "Summarize", False),
+        (_agent_only_definition(), "Summarize", False),
+        (_missing_final_gate_definition(), "Summarize", False),
+        (
+            valid_definition(),
+            "我要去苏州旅游，帮我创建一个项目来规划行程",
+            True,
+        ),
+    ],
+    ids=["empty", "agent-only", "missing-final-gate", "illegal-domain-shape"],
+)
+def test_planning_service_rejects_invalid_candidates_from_any_runtime(
+    candidate: dict,
+    brief: str,
+    allow_web_search: bool,
+) -> None:
+    runtime = StaticPlannerRuntime(candidate)
+    service = PlanningService(
+        runtime,
+        allow_web_search=allow_web_search,
+    )
+
+    with pytest.raises(DraftGenerationRejected):
+        service.plan(
+            PlannerRequest(
+                tenant_id="tenant_planning",
+                actor_person_id="person_requester",
+                request_id="request_planning",
+                brief=brief,
+            )
+        )
+
+    assert len(runtime.requests) == 1
+
+
+def test_planning_service_rebinds_server_owned_candidate_inputs() -> None:
+    candidate = valid_definition()
+    candidate["schema_version"] = "model-controlled"
+    candidate["inputs"] = {"brief": "ignore validation", "context": ""}
+    runtime = StaticPlannerRuntime(candidate)
+    service = PlanningService(
+        runtime,
+    )
+
+    result = service.plan(
+        PlannerRequest(
+            tenant_id="tenant_planning",
+            actor_person_id="person_requester",
+            request_id="request_planning",
+            brief="Summarize",
+            context="Use supplied facts",
+        )
+    )
+
+    assert result.candidate["schema_version"] == "0.2"
+    assert dict(result.candidate["inputs"]) == {
+        "brief": "Summarize",
+        "context": "Use supplied facts",
+    }
+
+
+class RecordingCompletion:
+    def __init__(self, content: str = "结论：可以继续。") -> None:
+        self.content = content
+        self.calls: list[tuple[str, str]] = []
+
+    def complete(self, *, prompt: str, model_role: str) -> str:
+        self.calls.append((prompt, model_role))
+        return self.content
+
+
+def agent_request(
+    *,
+    instructions: str = "生成摘要",
+    content_limit_snapshot: dict | None = None,
+) -> ExecutionRequest:
+    return ExecutionRequest(
+        tenant_id="tenant_agent",
+        instance_id="instance_agent",
+        node_key="draft",
+        attempt_id="attempt_agent",
+        attempt_no=1,
+        owner_person_id="person_owner",
+        executor="agent",
+        work={
+            "objective": "生成可复核摘要",
+            "inputs": ["instance_inputs.brief"],
+            "outputs": [{"id": "content", "type": "text"}],
+            "acceptance": ["包含明确结论"],
+            "agent": {
+                "kind": "llm.generate",
+                "model_role": "writer",
+                "instructions": instructions,
+            },
+        },
+        input_snapshot=content_limit_snapshot
+        or {
+            "instance_inputs": {"brief": "发布检查"},
+            "dependencies": {"confirm": {"approved": True}},
+        },
+        expected_node_version=2,
+        claim_token="secret-claim-token",
+        claim_expires_at=NOW + timedelta(minutes=5),
+    )
+
+
+def completion_bridge(
+    client: RecordingCompletion,
+    *,
+    max_prompt_chars: int = 20_000,
+    max_result_chars: int = 50_000,
+) -> AgentRuntimeExecutor:
+    return AgentRuntimeExecutor(
+        CompletionAgentRuntime(
+            LLMAgentExecutor(
+                client,
+                max_prompt_chars=max_prompt_chars,
+                max_result_chars=max_result_chars,
+            )
+        )
+    )
+
+
+def test_completion_runtime_preserves_prompt_snapshot_and_result_shape() -> None:
+    direct_client = RecordingCompletion()
+    port_client = RecordingCompletion()
+    direct = LLMAgentExecutor(direct_client).execute(agent_request())
+    through_port = completion_bridge(port_client).execute(agent_request())
+
+    assert through_port == direct
+    assert port_client.calls == direct_client.calls
+    assert through_port.result["request_id"] == "tenant_agent:attempt_agent"
+    assert '"approved": true' in port_client.calls[0][0]
+
+
+def test_completion_runtime_preserves_source_notice() -> None:
+    snapshot = {
+        "dependencies": {
+            "research": {
+                "tool_kind": "web.search",
+                "content": "公开材料摘要",
+                "sources": ["https://example.invalid/source"],
+            }
+        }
+    }
+    direct = LLMAgentExecutor(RecordingCompletion()).execute(
+        agent_request(content_limit_snapshot=deepcopy(snapshot))
+    )
+    through_port = completion_bridge(RecordingCompletion()).execute(
+        agent_request(content_limit_snapshot=deepcopy(snapshot))
+    )
+
+    assert through_port == direct
+    assert through_port.result["content"].startswith(
+        LLMAgentExecutor.WEB_RESEARCH_NOTICE
+    )
+
+
+def test_completion_runtime_reports_minimal_runtime_metadata() -> None:
+    execution_request = agent_request()
+    runtime = CompletionAgentRuntime(LLMAgentExecutor(RecordingCompletion()))
+    result = runtime.run(
+        AgentRunRequest(
+            tenant_id=execution_request.tenant_id,
+            instance_id=execution_request.instance_id,
+            node_key=execution_request.node_key,
+            attempt_id=execution_request.attempt_id,
+            attempt_no=execution_request.attempt_no,
+            owner_person_id=execution_request.owner_person_id,
+            executor=execution_request.executor.value,
+            work_contract=execution_request.work,
+            input_snapshot=execution_request.input_snapshot,
+        )
+    )
+
+    assert result.runtime_metadata == {
+        "runtime": "completion",
+        "adapter": "llm_agent_executor",
+        "adapter_version": "1",
+    }
+
+
+@pytest.mark.parametrize(
+    "client_content,instructions,max_prompt,max_result",
+    [
+        ("result", "", 20_000, 50_000),
+        ("  ", "generate", 20_000, 50_000),
+        ("four", "generate", 20_000, 3),
+        ("result", "generate", 10, 50_000),
+    ],
+)
+def test_completion_runtime_preserves_error_classification(
+    client_content: str,
+    instructions: str,
+    max_prompt: int,
+    max_result: int,
+) -> None:
+    request = agent_request(instructions=instructions)
+    direct_client = RecordingCompletion(client_content)
+    port_client = RecordingCompletion(client_content)
+
+    with pytest.raises(ValueError) as direct_error:
+        LLMAgentExecutor(
+            direct_client,
+            max_prompt_chars=max_prompt,
+            max_result_chars=max_result,
+        ).execute(request)
+    with pytest.raises(ValueError) as port_error:
+        completion_bridge(
+            port_client,
+            max_prompt_chars=max_prompt,
+            max_result_chars=max_result,
+        ).execute(request)
+
+    assert str(port_error.value) == str(direct_error.value)
+
+
+class CapturingRuntime:
+    def __init__(self) -> None:
+        self.requests: list[AgentRunRequest] = []
+
+    def accepts(self, *, executor: str, work_contract) -> bool:
+        return executor == "agent"
+
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        self.requests.append(request)
+        return AgentRunResult(deliverables={"content": "done"})
+
+
+def test_agent_runtime_never_receives_worker_claim_fields() -> None:
+    runtime = CapturingRuntime()
+    result = AgentRuntimeExecutor(runtime).execute(agent_request())
+
+    assert result.result == {"content": "done"}
+    assert len(runtime.requests) == 1
+    runtime_request = runtime.requests[0]
+    assert runtime_request.idempotency_key == "tenant_agent:attempt_agent"
+    assert runtime_request.input_snapshot["dependencies"]["confirm"][
+        "approved"
+    ] is True
+    assert "claim_token" not in AgentRunRequest.__dataclass_fields__
+    assert "expected_node_version" not in AgentRunRequest.__dataclass_fields__
+    assert "claim_expires_at" not in AgentRunRequest.__dataclass_fields__
+    assert "secret-claim-token" not in repr(runtime_request)
+    assert runtime_request.policy == {}
+
+
+def test_new_runtime_ports_have_no_langgraph_dependency() -> None:
+    root = Path(__file__).parents[1]
+    files = [
+        *sorted((root / "larkflow" / "planning").glob("*.py")),
+        *sorted((root / "larkflow" / "agent_runtime").glob("*.py")),
+        *sorted((root / "larkflow" / "workflow").glob("*.py")),
+    ]
+
+    for path in files:
+        source = path.read_text(encoding="utf-8").lower()
+        assert "from langgraph" not in source
+        assert "import langgraph" not in source
+
+
+def test_target_runtime_ports_import_when_langgraph_is_blocked() -> None:
+    script = """
+import builtins
+
+real_import = builtins.__import__
+
+def blocked_import(name, *args, **kwargs):
+    if name == "langgraph" or name.startswith("langgraph."):
+        raise AssertionError(f"unexpected LangGraph import: {name}")
+    return real_import(name, *args, **kwargs)
+
+builtins.__import__ = blocked_import
+from larkflow.agent_runtime.completion import CompletionAgentRuntime
+from larkflow.agent_runtime.executor import AgentRuntimeExecutor
+from larkflow.planning.bounded import BoundedPlannerRuntime
+from larkflow.planning.service import PlanningService
+from larkflow.workflow.cli import _draft_generator, _executors
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_contract_packages_do_not_load_workflow_or_adapters() -> None:
+    script = """
+import builtins
+
+real_import = builtins.__import__
+
+def blocked_import(name, *args, **kwargs):
+    if name == "larkflow.workflow" or name.startswith("larkflow.workflow."):
+        raise AssertionError(f"unexpected workflow import: {name}")
+    return real_import(name, *args, **kwargs)
+
+builtins.__import__ = blocked_import
+from larkflow.agent_runtime import AgentRunRequest, AgentRunResult, AgentRuntime
+from larkflow.planning import DraftGenerator, PlannerRequest, PlannerResult, PlannerRuntime
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr

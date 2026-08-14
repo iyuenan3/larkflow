@@ -9,6 +9,8 @@ import json
 import time
 from typing import Any, Protocol
 
+from larkflow.planning.contracts import DraftGenerator
+
 from .card_feedback import (
     CARD_FEEDBACK_FALLBACK,
     processing_card,
@@ -17,7 +19,6 @@ from .card_feedback import (
 )
 from .directory import CandidateDirectory, DirectoryValidationError
 from .draft_generation import (
-    DraftDefinitionGenerator,
     DraftGenerationRejected,
     MAX_WIZARD_TEXT_CHARS,
     draft_wizard_form,
@@ -787,7 +788,7 @@ class RoleBindingActionWorker:
         *,
         tenant_id: str,
         worker_id: str,
-        draft_generator: DraftDefinitionGenerator | None = None,
+        draft_generator: DraftGenerator | None = None,
         draft_only: bool = False,
         clock: Callable[[], datetime] | None = None,
         claim_limit: int = 20,
@@ -986,6 +987,9 @@ class RoleBindingActionWorker:
         except InstanceNotFoundError:
             try:
                 definition = self.draft_generator.generate(
+                    tenant_id=self.tenant_id,
+                    actor_person_id=request.initiator_person_id,
+                    request_id=claim.action.id,
                     brief=brief,
                     context=context,
                     on_repair=lambda: self.store.queue_role_binding_progress(

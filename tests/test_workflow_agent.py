@@ -9,6 +9,10 @@ from pathlib import Path
 import pytest
 import yaml
 
+from larkflow.agent_runtime.completion import CompletionAgentRuntime
+from larkflow.agent_runtime.executor import AgentRuntimeExecutor
+from larkflow.planning.bounded import BoundedPlannerRuntime
+from larkflow.planning.service import PlanningService
 from larkflow.workflow import (
     ExecutionRequest,
     ExecutorKind,
@@ -324,7 +328,11 @@ def test_runtime_assembles_agent_only_with_a_safe_lease_budget():
     registry = _executors(settings, environ=environment)
 
     assert tuple(registry) == (ExecutorKind.AGENT,)
-    assert isinstance(registry[ExecutorKind.AGENT], LLMAgentExecutor)
+    assert isinstance(registry[ExecutorKind.AGENT], AgentRuntimeExecutor)
+    assert isinstance(
+        registry[ExecutorKind.AGENT].runtime,
+        CompletionAgentRuntime,
+    )
 
     unsafe = TargetRuntimeSettings(
         dsn="postgresql:///test",
@@ -350,6 +358,30 @@ def test_runtime_refuses_to_enable_agent_without_credentials():
         _executors(settings, environ={})
 
 
+def test_target_runtime_selection_is_explicit_and_bounded_to_baselines():
+    runtime = TargetRuntimeSettings.from_environ(
+        {
+            "LARKFLOW_TARGET_DSN": "postgresql:///test",
+            "LARKFLOW_TARGET_TENANT": "tenant_agent",
+            "LARKFLOW_TARGET_WORKER_ID": "worker_agent",
+        }
+    )
+    planner = TargetDraftGenerationSettings.from_environ(
+        {
+            "LARKFLOW_TARGET_DSN": "postgresql:///test",
+            "LARKFLOW_TARGET_TENANT": "tenant_agent",
+            "LARKFLOW_TARGET_DRAFT_WORKER_ID": "draft_worker",
+        }
+    )
+
+    assert runtime.agent_runtime == "completion"
+    assert planner.planner_runtime == "bounded"
+    with pytest.raises(ValueError, match="agent_runtime must be completion"):
+        replace(runtime, agent_runtime="unknown")
+    with pytest.raises(ValueError, match="planner_runtime must be bounded"):
+        replace(planner, planner_runtime="unknown")
+
+
 def test_draft_generator_budgets_both_model_attempts():
     environment = {
         "LLM_BASE_URL": "https://llm.example.invalid/v1",
@@ -364,7 +396,9 @@ def test_draft_generator_budgets_both_model_attempts():
         claim_ttl=timedelta(seconds=51),
         claim_safety=timedelta(seconds=10),
     )
-    assert _draft_generator(safe, environ=environment) is not None
+    generator = _draft_generator(safe, environ=environment)
+    assert isinstance(generator, PlanningService)
+    assert isinstance(generator.runtime, BoundedPlannerRuntime)
 
     unsafe = TargetDraftGenerationSettings(
         dsn="postgresql:///test",

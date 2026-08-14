@@ -10,11 +10,11 @@ from threading import RLock
 from typing import Any, Protocol
 
 from psycopg.types.json import Jsonb
+from larkflow.planning.contracts import DraftGenerator
 
 from .console import ConsolePrincipal
 from .directory import DirectoryValidationError
 from .draft_generation import (
-    DraftDefinitionGenerator,
     DraftGenerationRejected,
     MAX_WIZARD_TEXT_CHARS,
 )
@@ -829,7 +829,7 @@ class ConsoleDraftWorker:
         self,
         repository: ConsoleDraftRepository,
         service: WorkflowService,
-        generator: DraftDefinitionGenerator,
+        generator: DraftGenerator,
         *,
         tenant_id: str,
         worker_id: str,
@@ -915,6 +915,9 @@ class ConsoleDraftWorker:
         definition = request.definition
         if definition is None:
             definition = self.generator.generate(
+                tenant_id=self.tenant_id,
+                actor_person_id=request.requester_person_id,
+                request_id=request.id,
                 brief=request.brief,
                 context=request.context,
                 on_repair=lambda: self.repository.mark_repairing(

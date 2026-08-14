@@ -18,6 +18,11 @@ import yaml
 
 from larkflow.config import load_dotenv, load_llm_roles
 from larkflow.llm.client import OpenAICompatLLM
+from larkflow.agent_runtime.completion import CompletionAgentRuntime
+from larkflow.agent_runtime.executor import AgentRuntimeExecutor
+from larkflow.planning import DraftGenerator
+from larkflow.planning.bounded import BoundedPlannerRuntime
+from larkflow.planning.service import PlanningService
 
 from .completion_poll import TaskCompletionPoller
 from .console_drafts import (
@@ -1090,10 +1095,17 @@ def _executors(
         )
     if settings.enable_agent_executor:
         assert client is not None
-        registry[ExecutorKind.AGENT] = LLMAgentExecutor(
-            client,
-            max_prompt_chars=settings.agent_max_prompt_chars,
-            max_result_chars=settings.agent_max_result_chars,
+        if settings.agent_runtime != "completion":
+            raise ValueError("unsupported Target Agent runtime")
+        registry[ExecutorKind.AGENT] = AgentRuntimeExecutor(
+            CompletionAgentRuntime(
+                LLMAgentExecutor(
+                    client,
+                    max_prompt_chars=settings.agent_max_prompt_chars,
+                    max_result_chars=settings.agent_max_result_chars,
+                )
+            ),
+            policy={"runtime": settings.agent_runtime},
         )
     if settings.enable_web_search_executor:
         assert client is not None
@@ -1132,7 +1144,7 @@ def _draft_generator(
     *,
     environ: Mapping[str, str],
     log: JsonLogger | None = None,
-) -> DraftDefinitionGenerator:
+) -> PlanningService:
     roles = load_llm_roles(dict(environ))
     if not roles:
         raise ValueError(
@@ -1158,13 +1170,20 @@ def _draft_generator(
         if log is not None:
             log("draft_llm_failover", fields, stream=sys.stderr)
 
-    return DraftDefinitionGenerator(
-        OpenAICompatLLM(
-            roles,
-            on_call=note_call,
-            on_failover=note_failover,
+    if settings.planner_runtime != "bounded":
+        raise ValueError("unsupported Target Planner runtime")
+    return PlanningService(
+        BoundedPlannerRuntime(
+            DraftDefinitionGenerator(
+                OpenAICompatLLM(
+                    roles,
+                    on_call=note_call,
+                    on_failover=note_failover,
+                ),
+                max_result_chars=settings.max_result_chars,
+                allow_web_search=settings.enable_web_search,
+            )
         ),
-        max_result_chars=settings.max_result_chars,
         allow_web_search=settings.enable_web_search,
     )
 
@@ -1191,7 +1210,7 @@ class _CombinedDraftWorkers:
 def _console_draft_worker(
     repository: Any,
     service: WorkflowService,
-    generator: DraftDefinitionGenerator,
+    generator: DraftGenerator,
     settings: TargetDraftGenerationSettings,
 ) -> ConsoleDraftWorker:
     """Build the Console draft worker with its exact production contract."""

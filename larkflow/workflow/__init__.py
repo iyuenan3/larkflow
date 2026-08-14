@@ -101,6 +101,7 @@ from .draft_generation import (
     MAX_WIZARD_TEXT_CHARS,
     draft_wizard_form,
 )
+from .draft_validation import GeneratedDraftValidator
 from .console_drafts import (
     ConsoleDraftClaim,
     ConsoleDraftConflictError,
@@ -376,6 +377,7 @@ __all__ = [
     "DirectoryValidationError",
     "DraftDefinitionGenerator",
     "DraftGenerationRejected",
+    "GeneratedDraftValidator",
     "DocumentProjectionRequest",
     "DEFAULT_EDGE_CAPABILITIES",
     "DeviceRevokedError",

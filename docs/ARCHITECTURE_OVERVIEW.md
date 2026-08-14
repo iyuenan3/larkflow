@@ -394,6 +394,8 @@ Edge 已经做过一个只读 Proof，代码和安全证据都保留。
 - 飞书 OAuth 员工工作台。
 - Owner 和参与者权限隔离。
 - 审计、Outbox、Inbox 和投影对账。
+- 本地 PlannerRuntime 合同、bounded 基线适配器、统一最终候选 validator 和兼容草稿服务。
+- 本地 AgentRuntime 合同、completion 基线适配器和 Worker bridge。
 
 目前仍是目标设计、尚未实现的有：
 
@@ -401,8 +403,6 @@ Edge 已经做过一个只读 Proof，代码和安全证据都保留。
 - 项目文件上传。
 - Knowledge Context Service。
 - `ContextBundle`。
-- 正式的 PlannerRuntime 接口。
-- 正式的 AgentRuntime 接口。
 - Authorized Tool Gateway。
 - Attempt 级能力信封。
 - 模型数据外发政策。
@@ -411,7 +411,7 @@ Edge 已经做过一个只读 Proof，代码和安全证据都保留。
 - Planner A/B 评估系统。
 - 生产级运行时隔离。
 
-所以现在不是推倒重做，而是在已经比较扎实的工作流内核上，补上“知识、规划和 Agent Runtime”三块。
+当前两个 Runtime 端口只关闭了 Refactor Phase 1 的替换边界，不代表知识授权、工具循环、持久运行策略或候选 Runtime 已完成。所以现在不是推倒重做，而是在已经比较扎实的工作流内核和基线端口上，继续补“知识与受控工具”两块。
 
 ## 十二、总结
 

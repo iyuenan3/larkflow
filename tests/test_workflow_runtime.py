@@ -176,7 +176,9 @@ def test_worker_commits_claim_before_calling_external_executor():
     assert report.completed == 1
     assert report.failed == 0
     assert report.recovered == 0
-    assert executor.requests[0].idempotency_key.endswith(":attempt:1")
+    assert executor.requests[0].idempotency_key == (
+        "tenant_runtime:instance_runtime:generate:attempt:1"
+    )
     assert service.get(TENANT, "instance_runtime").status == InstanceStatus.DONE
 
 
@@ -378,6 +380,7 @@ def test_crash_after_claim_is_recovered_with_same_attempt_and_new_token():
     assert report.recovered == 1
     assert report.completed == 1
     assert recovered.requests[0].attempt_id == crashed_request.attempt_id
+    assert recovered.requests[0].idempotency_key == crashed_request.idempotency_key
     assert recovered.requests[0].claim_token == "claim-recovered"
     assert recovered.requests[0].claim_token != crashed_request.claim_token
     finished = service.get(TENANT, "instance_runtime")

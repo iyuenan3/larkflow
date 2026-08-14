@@ -120,6 +120,33 @@ class Completion:
         return self.value
 
 
+class RecordingDraftGenerator:
+    def __init__(self):
+        self.calls = []
+
+    def generate(
+        self,
+        *,
+        tenant_id,
+        actor_person_id,
+        request_id,
+        brief,
+        context,
+        on_repair=None,
+    ):
+        self.calls.append(
+            {
+                "tenant_id": tenant_id,
+                "actor_person_id": actor_person_id,
+                "request_id": request_id,
+                "brief": brief,
+                "context": context,
+                "on_repair": on_repair,
+            }
+        )
+        return definition()
+
+
 class Directory:
     def __init__(self, people=(OWNER, COLLABORATOR)):
         self.people = set(people)
@@ -248,6 +275,37 @@ def test_worker_freezes_candidate_creates_only_a_draft_then_existing_confirm_sta
 
     assert result["action"] == "confirm_draft"
     assert result["instance"]["status"] == "running"
+
+
+def test_console_worker_passes_server_identity_to_planner_without_claim_state():
+    draft_repository, drafts = queued_service(directory=Directory())
+    create_request(drafts)
+    generator = RecordingDraftGenerator()
+    worker = ConsoleDraftWorker(
+        draft_repository,
+        WorkflowService(InMemoryWorkflowRepository(), clock=lambda: NOW),
+        generator,
+        tenant_id=TENANT,
+        worker_id="draft-worker",
+        clock=lambda: NOW,
+    )
+
+    assert worker.run_once().processed == 1
+    assert len(generator.calls) == 1
+    call = generator.calls[0]
+    assert call["tenant_id"] == TENANT
+    assert call["actor_person_id"] == OWNER
+    assert call["request_id"] == REQUEST_ID
+    assert call["brief"] == "Generate a release summary"
+    assert call["context"] == "Use only registered facts"
+    assert set(call) == {
+        "tenant_id",
+        "actor_person_id",
+        "request_id",
+        "brief",
+        "context",
+        "on_repair",
+    }
 
 
 def test_generated_agent_flow_reaches_one_decision_card_and_bounded_console_task():

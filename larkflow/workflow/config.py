@@ -22,6 +22,7 @@ class TargetRuntimeSettings:
     enable_development_executor: bool = False
     enable_content_check_executor: bool = False
     enable_web_search_executor: bool = False
+    agent_runtime: str = "completion"
     agent_claim_safety: timedelta = timedelta(seconds=30)
     agent_max_prompt_chars: int = 20_000
     agent_max_result_chars: int = 50_000
@@ -52,6 +53,8 @@ class TargetRuntimeSettings:
             raise ValueError("web_search_max_prompt_chars must be positive")
         if self.web_search_max_result_chars < 1:
             raise ValueError("web_search_max_result_chars must be positive")
+        if self.agent_runtime != "completion":
+            raise ValueError("Target agent_runtime must be completion")
 
     @classmethod
     def from_environ(
@@ -107,6 +110,10 @@ class TargetRuntimeSettings:
             enable_web_search_executor=_boolean(
                 values.get("LARKFLOW_TARGET_ENABLE_WEB_SEARCH_EXECUTOR", "false")
             ),
+            agent_runtime=values.get(
+                "LARKFLOW_TARGET_AGENT_RUNTIME",
+                "completion",
+            ).strip(),
             agent_claim_safety=timedelta(
                 seconds=_positive_float(
                     values,
@@ -361,6 +368,7 @@ class TargetDraftGenerationSettings:
     claim_safety: timedelta = timedelta(seconds=30)
     max_result_chars: int = 30_000
     enable_web_search: bool = False
+    planner_runtime: str = "bounded"
     loop: WorkerLoopSettings = WorkerLoopSettings()
 
     def __post_init__(self) -> None:
@@ -382,6 +390,8 @@ class TargetDraftGenerationSettings:
             raise ValueError("draft claim_safety must be positive")
         if self.max_result_chars < 1:
             raise ValueError("draft max_result_chars must be positive")
+        if self.planner_runtime != "bounded":
+            raise ValueError("Target planner_runtime must be bounded")
 
     @classmethod
     def from_environ(
@@ -434,6 +444,10 @@ class TargetDraftGenerationSettings:
             enable_web_search=_boolean(
                 values.get("LARKFLOW_TARGET_DRAFT_ENABLE_WEB_SEARCH", "false")
             ),
+            planner_runtime=values.get(
+                "LARKFLOW_TARGET_PLANNER_RUNTIME",
+                "bounded",
+            ).strip(),
             loop=WorkerLoopSettings(
                 idle_min_seconds=_positive_float(
                     values, "LARKFLOW_TARGET_DRAFT_IDLE_MIN_SECONDS", 0.25

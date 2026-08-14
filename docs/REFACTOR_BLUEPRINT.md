@@ -97,25 +97,25 @@ flowchart LR
 
 ### 6.1 规划链路
 
-当前入口位于 `larkflow/workflow/draft_generation.py`：
+基线实现仍位于 `larkflow/workflow/draft_generation.py`：
 
 - `DraftCompletionClient` 只提供 `complete(prompt, model_role)`。
 - `DraftDefinitionGenerator` 把 brief 和 context 拼入提示词，请求一个 JSON DAG。
 - 首次结果不合法时最多修复一次。
 - 最终仍调用本地 `instantiate_inline_definition` 等规则校验。
 
-这个实现适合作为 Python 基线，但它没有统一的 Planner 请求、候选图、规划证据、用量、工具调用和 Runtime 元数据合同。
+Refactor Phase 1 已在 `larkflow/planning/` 增加纯本地 `PlannerRequest / PlannerResult / PlannerRuntime`、bounded adapter 和 `PlanningService`。Target 草稿装配显式选择 `bounded`，仍调用同一 `DraftDefinitionGenerator`，所以提示词、一次修复上限和拒绝分类保持不变。原生成专用规则已提取为 larkflow 自有的 `GeneratedDraftValidator`：bounded 内部先校验以决定是否执行唯一一次修复，`PlanningService` 再对每个 Runtime 的最终候选覆盖 schema 与请求输入并强制复验。真实网页和飞书 Worker 会传入服务端 tenant、requester 或 initiator，以及耐久 console request ID 或 action ID。当前 metadata 只在本地结果合同中存在，授权知识、工具调用、完整规划证据、用量与持久 trace 仍未实现。
 
 ### 6.2 Agent 执行链路
 
-当前入口位于 `larkflow/workflow/executors.py`：
+completion 基线实现仍位于 `larkflow/workflow/executors.py`：
 
 - `AgentCompletionClient` 同样只有一次 completion。
 - `LLMAgentExecutor` 只接受 `agent.kind = llm.generate`。
 - 输入快照和输出合同被序列化为一个提示词。
 - 返回结果由 larkflow 做长度、格式和来源合同处理。
 
-这个实现应该继续作为 `completion` Runtime，但需要放到稳定的 `AgentRuntime` 端口之后，才能在不改业务执行器协议的情况下增加 Pi 或 DSH 适配器。
+Refactor Phase 1 已在 `larkflow/agent_runtime/` 增加纯本地 `AgentRunRequest / AgentRunResult / AgentRuntime`、completion adapter 和 `AutomatedExecutor` bridge。Target 装配显式选择 `completion`，仍调用同一 `LLMAgentExecutor`。桥接请求不包含 claim token、claim expiry 或 expected node version，结果仍由 Worker 使用本地 claim 与版本提交。能力信封、Tool Gateway、持久 policy、统一 trace 和候选适配器仍未实现。
 
 ### 6.3 知识与工具链路
 
@@ -203,7 +203,7 @@ Planner 不接收数据库连接、飞书凭据、对象存储主密钥或任意
 | `runtime_metadata` | runtime、adapter、provider、model 和版本 |
 | `trace_ref` | 经过脱敏和保留期控制的诊断引用，可为空 |
 
-`PlannerResult` 返回后必须经过 larkflow 当前确定性 DAG 校验。只有 larkflow 可以把通过复验的候选写成 `draft`。
+`PlannerResult` 返回后必须经过 larkflow 当前确定性 DAG 校验。Phase 1 的 `PlanningService` 已强制执行这一复验，并把 `schema_version`、brief 与 context 重新绑定为服务端 `PlannerRequest` 中的值，不能相信 Adapter 回传的同名字段。只有 larkflow 可以把通过复验的候选写成 `draft`。
 
 ### 8.3 AgentRunRequest
 
@@ -396,6 +396,8 @@ Planner 超时、失败或候选不合法时，只记录失败的规划请求，
 
 ### Refactor Phase 0：锁定现状行为
 
+状态：当前工作区已完成，尚未提交或部署。
+
 目标：在抽象接口前先证明当前基线行为是什么。
 
 计划工作：
@@ -407,7 +409,11 @@ Planner 超时、失败或候选不合法时，只记录失败的规划请求，
 
 Exit gate：现有离线测试全绿；新增 characterization tests 能在破坏关键行为时失败；不改生产配置和公共合同。
 
+完成证据：迁移前聚焦基线为 `49 passed`。新增与既有测试共同锁定首次生成、最多一次修复、最终拒绝、Agent 输入快照、结果格式、来源提示、长度与异常、Worker claim 先提交、过期恢复、陈旧结果拒绝，以及稳定 `tenant:attempt` 幂等键。
+
 ### Refactor Phase 1：增加端口与基线适配器，不改变行为
+
+状态：当前工作区已完成，尚未提交或部署。
 
 目标：建立 `PlannerRuntime` 和 `AgentRuntime`，但默认结果与当前实现一致。
 
@@ -421,6 +427,8 @@ Exit gate：现有离线测试全绿；新增 characterization tests 能在破�
 - 记录最小 runtime metadata，但不增加外部依赖。
 
 Exit gate：同一 fixture 在迁移前后得到相同业务结果和错误分类；当前 DAG schema、数据库 schema、CLI、HTTP 与飞书行为不变；全部现有测试通过。
+
+完成证据：Target 装配已显式使用 `bounded` 与 `completion`。第一轮端口聚焦套件为 `107 passed`；P2 收口的草稿、网页入口、飞书入口与端口聚焦套件为 `75 passed`。完整离线套件在清空本机代理并允许既有停机测试读取进程树后为 `1085 passed, 24 skipped`。负向测试证明空图、仅 Agent、缺少最终 Human Gate 和非法领域形状不能从替换 Runtime 越过服务边界；两条真实 Worker 路径的非空 tenant、actor 与耐久 request ID 也已锁定。源码扫描、阻断 LangGraph 导入的 Target 冒烟、阻断 workflow 导入的合同独立性冒烟、`pip check` 和 wheel 文件清单检查均通过。Runtime metadata 已进入本地结果合同，但尚未持久化。DAG schema、数据库 schema、HTTP、飞书、依赖和部署均未改变。
 
 ### Refactor Phase 2：项目上传与 ContextBundle
 
@@ -672,6 +680,6 @@ Dependency Exit Gate：
 
 ## 21. 开始实施前的授权边界
 
-本文完成后，下一步仍应由 Maxwell 单独确认具体实施批次。建议首次实施只授权 Refactor Phase 0 与 Refactor Phase 1，也就是增加 characterization tests、两个端口和两个基线适配器，明确不改 schema、不接 DSH、不接 Pi、不部署。
+Refactor Phase 0 与 Phase 1 已在当前工作区完成代码和离线验证，但尚未提交或部署。提交、推送和任何部署仍需 Maxwell 单独授权。
 
-后续项目上传、企业共享资料、Tool Gateway、sidecar、migration、依赖安装和开发部署都应分别评审和授权。
+下一批若进入 Refactor Phase 2，应先单独评审项目上传、对象存储、ContextBundle、授权、数据分类、模型外发和 migration。企业共享资料、Tool Gateway、sidecar、依赖安装和开发部署仍应分别评审和授权。
