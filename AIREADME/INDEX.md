@@ -2,9 +2,9 @@
 
 > 飞书原生的企业协作与 Agent 工作流控制平面，把项目目标变成可确认、可执行、可返工和可追溯的 DAG。生命周期：active development。
 
-当前产品处于开发试用阶段，不是生产就绪版本。Target 中央工作流、飞书责任投影和员工工作台已经形成可运行闭环；本地 `PlannerRuntime` 与 `AgentRuntime` 基线端口已经落码但尚未部署。Phase 2A 的项目级 UTF-8 txt/md 上传参与 DAG 规划切片已经提交，但尚未完成真实 PostgreSQL 与 Caddy 验证、部署或 migration 应用。企业共享知识、Agent Attempt 附件上下文、Tool Gateway、生产对象存储、PDF/DOCX/OCR 和向量检索仍未实现或后置，Personal Agent Edge 已暂停。最新实现与验收历史只记录在 [CHANGELOG.md](CHANGELOG.md)，当前推进边界见 [ROADMAP.md](ROADMAP.md)。
+当前产品处于开发试用阶段，不是生产就绪版本。Target 中央工作流、飞书责任投影和员工工作台已经形成可运行闭环；`PlannerRuntime` 与 `AgentRuntime` 基线端口已落码并随 Phase 2A wheel 部署到开发环境。项目级 UTF-8 txt/md 上传参与 DAG 规划已完成真实 PostgreSQL、Caddy、migration 和服务端部署验收，真实 Owner 浏览器上传与生成仍待手工验收。企业共享知识、Agent Attempt 附件上下文、Tool Gateway、生产对象存储、PDF/DOCX/OCR 和向量检索仍未实现或后置，Personal Agent Edge 已暂停。最新实现与验收历史只记录在 [CHANGELOG.md](CHANGELOG.md)，当前推进边界见 [ROADMAP.md](ROADMAP.md)。
 
-last-synced: e8bf3c149070823d4aa26efb20ab10b95cb6dcab · 2026-08-14
+last-synced: 07de190db49839d8195cfa26967241fad7d975f6 · 2026-08-15
 
 ## 阅读顺序
 

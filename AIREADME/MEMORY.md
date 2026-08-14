@@ -378,3 +378,9 @@
 - 现象（真实苏州流程）：最终 Human 通过 Console 决定 API 成功退回，Instance、Node、Attempt 和追加审计都进入失败终态，飞书决定卡 Projection 却仍保存旧的 `waiting_human / settled=false` 状态。
 - 根因（已确认）：当前 Projection Worker 只为新的等待决定创建卡片，卡片回调入口另有原位处理中和终态更新；Console 决定直接调用同一领域服务，但没有触发等价的旧卡片终态投影。
 - 结论：领域决定提交成功后必须用同一耐久投影事件收口全部既有入口，卡片回调可以提供快速反馈，但不能成为唯一卡片终态写入者。验收要同时回读 Instance、Attempt、审计、Projection state 和飞书卡片控件，不能只凭 Console 200 或数据库终态宣称完成。
+
+## 2026-08-15 · PostgreSQL 否定条件必须显式处理 NULL
+
+- 现象（真实 PostgreSQL 合同）：未知人员分工角色已正确进入通用拒绝终态，回复仍长期保持 pending；同一测试此前又因 `dict_row` 断言错误而没有走到回复领取。
+- 根因（已确认）：领取 SQL 使用 `NOT (progress_status = 'sending' AND progress_claim_expires_at > now)`。没有进度记录时两个字段为 NULL，括号表达式与 `NOT` 都得到 NULL，WHERE 会把本应领取的动作排除。
+- 结论：nullable 状态的“不是活跃发送”应写成 `(条件) IS NOT TRUE`，不能依赖 `NOT` 把 UNKNOWN 当 false。PostgreSQL 合同需要使用真实 dict row、走完整状态机，并验证精确 outbox 事件集合，避免前置断言和脆弱计数遮住后续饥饿缺陷。

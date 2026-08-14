@@ -8,8 +8,8 @@
 
 - Target 中央工作流已具备 Human、固定 Agent、Tool 节点编排，PostgreSQL 持久化，飞书投影和追加型审计。
 - 员工工作台支持本人流程、普通 Human 待办、草稿确认、受控流程操作和 DAG 画板。
-- 本地 `PlannerRuntime` 与 `AgentRuntime` 基线端口已经落码，但尚未部署。
-- Phase 2A 的项目级 UTF-8 txt/md 上传参与 DAG 规划切片已经提交，但尚未完成真实 PostgreSQL 与 Caddy 验证、部署或 migration 应用。
+- `PlannerRuntime` 与 `AgentRuntime` 基线端口已经落码，并随 Phase 2A wheel 部署到开发环境；默认仍是 bounded Planner 与 completion Agent。
+- Phase 2A 的项目级 UTF-8 txt/md 上传参与 DAG 规划已通过真实 PostgreSQL、Caddy 和开发部署验收。真实 Owner 浏览器上传与生成仍待手工验收，当前不是生产就绪版本。
 - 企业共享知识、Agent Attempt 附件上下文、Authorized Tool Gateway、生产对象存储、PDF/DOCX/OCR 和向量检索仍未实现或后置。
 - Personal Agent Edge 已降为暂停的历史 Proof，不进入当前产品主线或默认部署。
 - 早期 LangGraph、SQLite 与 lark-cli 原型继续保留，用于回归已经验证的适配器和事件处理机制。

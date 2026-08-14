@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.85.2-draft · 2026-08-15 · Phase 2A 真实 PostgreSQL 与开发部署
+
+- Fixed：PostgreSQL 人员分工回复领取不再用 `NOT (a AND b)` 排除 nullable 进度字段，改用 `IS NOT TRUE` 保留没有进度记录但应发送通用拒绝的合法动作。四项原失败合同同时修正缺失导入、`dict_row` 断言和陈旧 outbox 总数假设；outbox 现在验证精确事件集合、聚合、版本、payload key 与幂等维度。修复提交为 `07de190db49839d8195cfa26967241fad7d975f6`。
+- Verified：完整离线套件为 `1120 passed, 26 skipped`。一次性真实 PostgreSQL 从空库应用 24 份 migration 并重入，`tests/test_workflow_postgres.py` 为 `26 passed`；补充合同验证并发 tenant 配额、逻辑撤销后保留配额、Owner 与 tenant 隔离、manifest round-trip、promotion 幂等、物理删除保护和 migration 事务回滚。两座一次性数据库已精确删除并回读不存在。
+- Deployment：开发 wheel SHA-256 为 `44f7c870000f7b7b74d1ecefba7ce02904630072956fade9d646bb74d2743df7`，安装态文件与 wheel 一致，`pip check` 通过。开发库按用户授权无备份重建为空库，ledger 为 `24 / 0024_console_project_attachments`。Console 与 Draft Generation Worker 启用同一持久附件目录和精确 systemd 写路径。Caddy 2.11.4 的 validate/adapt 通过，普通 70000 字节 POST、附件 70000 字节 POST、附件 270000 字节 POST 分别返回 413、401、413。十个 Python 服务与 Caddy 均为 `active / NRestarts=0 / warning=0`，内外网 Console、受保护 API、能力标志和静态资源哈希均已回读。
+- Boundary：数据库重建后没有合法 Owner 登录会话，本轮没有伪造 cookie 或会话，也没有创建飞书资源。真实 Owner 浏览器上传、列表与显式生成仍待手工验收。Phase 2A 只让附件参与 DAG 规划，不让 Agent Attempt 读取附件；企业共享知识、Tool Gateway、生产对象存储、PDF/DOCX/OCR 和向量检索仍未实现，当前不是生产就绪版本。
+
 ## v0.85.1-draft · 2026-08-14 · Phase 2A 提交状态校正
 
 - Changed：Phase 2A 内容已纳入提交 `b2a13ff1eff796723774d42ca5d04556814a38c2` 并推送；本条修正下方 v0.85.0-draft 在候选阶段记录的“未提交工作树”状态，不改写当时的历史记录。
