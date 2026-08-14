@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import os
-from threading import Barrier
+from threading import Barrier, Event
 from uuid import uuid4
 
 import pytest
@@ -631,7 +631,11 @@ def test_postgres_im_command_round_trips_authenticated_mentions():
             """,
             (tenant_id, event.id),
         ).fetchone()
-    assert tuple(feedback) == ("updated", 275, now)
+    assert feedback == {
+        "feedback_status": "updated",
+        "feedback_elapsed_ms": 275,
+        "feedback_completed_at": now,
+    }
     claims = store.claim_im_verification(
         tenant_id,
         worker_id="verify_mentions",
@@ -694,7 +698,11 @@ def test_postgres_unknown_role_card_can_settle_to_a_generic_rejection():
             """,
             (tenant_id, action.id),
         ).fetchone()
-    assert tuple(feedback) == ("updated", 325, now)
+    assert feedback == {
+        "feedback_status": "updated",
+        "feedback_elapsed_ms": 325,
+        "feedback_completed_at": now,
+    }
     verification = store.claim_role_binding_verification(
         tenant_id,
         worker_id="verify_unknown",
@@ -1721,6 +1729,7 @@ def test_postgres_round_trip_audit_outbox_and_optimistic_concurrency():
     with pytest.raises(ConcurrentUpdateError):
         repository.save(second, expected_version=second.version)
 
+    node = restored.nodes["publish"]
     with connection_factory() as connection:
         audit_types = [
             row["event_type"]
@@ -1733,10 +1742,15 @@ def test_postgres_round_trip_audit_outbox_and_optimistic_concurrency():
                 (tenant_id, instance_id),
             ).fetchall()
         ]
-        outbox_count = connection.execute(
-            "SELECT count(*) AS count FROM workflow_outbox_events WHERE tenant_id = %s",
+        outbox_rows = connection.execute(
+            """
+            SELECT event_type, aggregate_type, aggregate_id,
+                   aggregate_version, payload
+            FROM workflow_outbox_events
+            WHERE tenant_id = %s
+            """,
             (tenant_id,),
-        ).fetchone()["count"]
+        ).fetchall()
     assert set(audit_types) == {
         "instance.draft_created",
         "instance.confirmed",
@@ -1744,9 +1758,53 @@ def test_postgres_round_trip_audit_outbox_and_optimistic_concurrency():
         "node.automated_completed",
         "instance.completed",
     }
-    assert outbox_count == 2
+    outbox_by_type = {row["event_type"]: row for row in outbox_rows}
+    assert set(outbox_by_type) == {
+        "node.projection_create_requested",
+        "node.projection_sync_requested",
+        "instance.projection_completed_requested",
+    }
+    assert len(
+        {
+            (
+                row["event_type"],
+                row["aggregate_type"],
+                row["aggregate_id"],
+                row["aggregate_version"],
+            )
+            for row in outbox_rows
+        }
+    ) == len(outbox_rows) == 3
 
-    node = restored.nodes["publish"]
+    create_requested = outbox_by_type["node.projection_create_requested"]
+    assert create_requested["aggregate_type"] == "node_instance"
+    assert create_requested["aggregate_id"] == node.id
+    assert create_requested["aggregate_version"] == 0
+    assert set(create_requested["payload"]) == {
+        "instance_id",
+        "node_key",
+        "attempt_no",
+    }
+
+    sync_requested = outbox_by_type["node.projection_sync_requested"]
+    assert sync_requested["aggregate_type"] == "node_instance"
+    assert sync_requested["aggregate_id"] == node.id
+    assert sync_requested["aggregate_version"] == node.version
+    assert set(sync_requested["payload"]) == {
+        "instance_id",
+        "node_key",
+        "attempt_no",
+        "status",
+    }
+
+    completion_requested = outbox_by_type[
+        "instance.projection_completed_requested"
+    ]
+    assert completion_requested["aggregate_type"] == "workflow_instance"
+    assert completion_requested["aggregate_id"] == instance_id
+    assert completion_requested["aggregate_version"] == restored.version
+    assert set(completion_requested["payload"]) == {"instance_id"}
+
     projection = ProjectionRecord(
         id=f"projection_{suffix}",
         tenant_id=tenant_id,
@@ -1815,17 +1873,22 @@ def test_postgres_round_trip_audit_outbox_and_optimistic_concurrency():
             """,
             (tenant_id, exhausted.event.id),
         ).fetchone()
-    assert tuple(exhausted_row) == (
-        "exhausted",
-        1,
-        exhausted_at,
-        "permanent external validation failure",
-    )
-    assert repository.claim_outbox(
+    assert exhausted_row == {
+        "status": "exhausted",
+        "attempt_count": 1,
+        "exhausted_at": exhausted_at,
+        "last_error": "permanent external validation failure",
+    }
+    future_claims = repository.claim_outbox(
         tenant_id,
         worker_id="outbox_worker_3",
         now=exhausted_at + timedelta(days=1),
-    ) == ()
+        limit=10,
+    )
+    assert len(future_claims) == 1
+    assert exhausted.event.id not in {
+        claim.event.id for claim in future_claims
+    }
 
     with connection_factory() as connection:
         with pytest.raises(RaiseException, match="append-only"):

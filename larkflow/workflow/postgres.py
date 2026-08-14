@@ -3416,10 +3416,10 @@ class PostgresIMCommandStore:
                         SELECT tenant_id, id
                         FROM workflow_role_binding_actions
                         WHERE tenant_id = %s AND is_canonical
-                          AND NOT (
+                          AND (
                             progress_status = 'sending'
                             AND progress_claim_expires_at > %s
-                          )
+                          ) IS NOT TRUE
                           AND (
                             (reply_status IN ('pending', 'failed')
                                 AND reply_available_at <= %s)
