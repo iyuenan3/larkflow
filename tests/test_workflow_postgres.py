@@ -241,6 +241,58 @@ def test_postgres_console_draft_request_is_idempotent_and_claimed_once():
     assert claims[0].request.attempt_count == 1
 
 
+def test_postgres_console_draft_restores_internal_failure_classification():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_console_draft_failure_{suffix}"
+    request_id = uuid4().hex
+    owner_id = f"person_owner_{suffix}"
+    now = datetime(2026, 8, 15, 9, 30, tzinfo=timezone.utc)
+    repository = PostgresConsoleDraftRepository(connection_factory)
+    repository.create(
+        ConsoleDraftRequest(
+            id=request_id,
+            tenant_id=tenant_id,
+            requester_person_id=owner_id,
+            collaborator_person_id=owner_id,
+            brief="Search public sources with citations",
+            context="",
+            status="pending",
+            attempt_count=0,
+            available_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    claim = repository.claim(
+        tenant_id,
+        worker_id="draft-failure-worker",
+        now=now,
+        limit=1,
+        claim_ttl=timedelta(minutes=10),
+    )[0]
+    repository.mark_rejected(
+        tenant_id,
+        request_id,
+        claim_token=claim.claim_token,
+        error="DraftCapabilityUnavailable: citation search is unavailable",
+        now=now,
+    )
+
+    restored = repository.get_for_owner(
+        tenant_id,
+        request_id,
+        requester_person_id=owner_id,
+    )
+
+    assert restored.status == "rejected"
+    assert restored.last_error == (
+        "DraftCapabilityUnavailable: citation search is unavailable"
+    )
+
+
 def test_postgres_console_attachment_contract_matches_owner_scoped_freeze():
     assert POSTGRES_DSN is not None
     connection_factory = postgres_connection_factory(POSTGRES_DSN)

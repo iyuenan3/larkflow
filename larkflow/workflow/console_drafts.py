@@ -65,6 +65,7 @@ class ConsoleDraftRequest:
     definition: Mapping[str, Any] | None = None
     instance_id: str | None = None
     completed_at: datetime | None = None
+    last_error: str | None = None
     generation_deferred: bool = False
     attachment_manifest: tuple[AttachmentRef, ...] = ()
 
@@ -366,6 +367,7 @@ class InMemoryConsoleDraftRepository:
             claim_token,
             status="rejected",
             now=now,
+            last_error=error,
         )
 
     def mark_failed(
@@ -388,6 +390,7 @@ class InMemoryConsoleDraftRepository:
                 available_at=retry_at,
                 updated_at=now,
                 completed_at=now if exhausted else None,
+                last_error=error,
             )
             self._items[(tenant_id, request_id)] = updated
             self._claims.pop((tenant_id, request_id), None)
@@ -413,6 +416,7 @@ class InMemoryConsoleDraftRepository:
         status: str,
         now: datetime,
         instance_id: str | None = None,
+        last_error: str | None = None,
     ) -> None:
         with self._lock:
             item = self._claimed(tenant_id, request_id, claim_token)
@@ -422,6 +426,7 @@ class InMemoryConsoleDraftRepository:
                 instance_id=instance_id or item.instance_id,
                 updated_at=now,
                 completed_at=now,
+                last_error=last_error,
             )
             self._claims.pop((tenant_id, request_id), None)
 
@@ -1079,6 +1084,13 @@ def _public_request(
         "rejected": "当前描述未能生成安全草稿，请调整后重新提交",
         "failed": "生成服务多次失败，请稍后重新提交",
     }[status]
+    if status == "rejected" and (request.last_error or "").startswith(
+        "DraftCapabilityUnavailable:"
+    ):
+        message = (
+            "当前没有支持 URL 引用的联网搜索后端。请上传完整资料并明确要求不联网，"
+            "或联系管理员配置已验证的搜索后端后重试"
+        )
     payload: dict[str, Any] = {
         "id": request.id,
         "status": status,
@@ -1126,6 +1138,7 @@ def _request_from_row(row: Mapping[str, Any] | None) -> ConsoleDraftRequest:
         definition=dict(definition) if isinstance(definition, Mapping) else None,
         instance_id=row.get("instance_id"),
         completed_at=row.get("completed_at"),
+        last_error=row.get("last_error"),
         generation_deferred=bool(row.get("generation_deferred", False)),
         attachment_manifest=tuple(
             AttachmentRef(

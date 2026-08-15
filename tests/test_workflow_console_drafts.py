@@ -12,6 +12,7 @@ from larkflow.workflow import (
     ConsoleDraftService,
     ConsoleDraftWorker,
     DirectoryPerson,
+    DraftCapabilityUnavailable,
     DraftDefinitionGenerator,
     DraftGenerationRejected,
     InMemoryConsoleDraftRepository,
@@ -145,6 +146,14 @@ class RecordingDraftGenerator:
             }
         )
         return definition()
+
+
+class SearchUnavailableDraftGenerator:
+    def generate(self, **kwargs):
+        del kwargs
+        raise DraftCapabilityUnavailable(
+            "当前没有支持 URL 引用的联网搜索后端"
+        )
 
 
 class Directory:
@@ -440,6 +449,32 @@ def test_invalid_candidate_is_terminal_and_does_not_create_an_instance():
     assert drafts.get(principal(), REQUEST_ID)["request"]["status"] == "rejected"
     with pytest.raises(InstanceNotFoundError):
         workflows.get(TENANT, f"console_draft_{REQUEST_ID}")
+
+
+def test_search_capability_rejection_returns_actionable_public_guidance():
+    draft_repository, drafts = queued_service(directory=Directory())
+    create_request(drafts)
+    workflows = InMemoryWorkflowRepository()
+    worker = ConsoleDraftWorker(
+        draft_repository,
+        WorkflowService(workflows, clock=lambda: NOW),
+        SearchUnavailableDraftGenerator(),
+        tenant_id=TENANT,
+        worker_id="worker",
+        clock=lambda: NOW,
+    )
+
+    report = worker.run_once()
+    payload = drafts.get(principal(), REQUEST_ID)["request"]
+
+    assert report.rejected == 1
+    assert payload["status"] == "rejected"
+    assert "URL 引用" in payload["message"]
+    assert "上传完整资料" in payload["message"]
+    assert "DraftCapabilityUnavailable" not in json.dumps(
+        payload,
+        ensure_ascii=False,
+    )
 
 
 def test_infrastructure_failure_retries_then_reaches_bounded_terminal_state():
