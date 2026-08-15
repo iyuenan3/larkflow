@@ -109,7 +109,7 @@ class LLMAgentExecutor:
         if uses_web_research and result_format == "plain_text":
             content = f"{self.WEB_RESEARCH_NOTICE}\n\n{content}"
         if len(content) > self.max_result_chars:
-            raise ValueError(
+            raise AgentResultIncomplete(
                 f"Agent result exceeds {self.max_result_chars} characters"
             )
         result = {

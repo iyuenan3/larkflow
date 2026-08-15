@@ -433,6 +433,40 @@ def test_no_web_trip_rejects_a_root_without_source_handoff():
     assert len(completion.calls) == 2
 
 
+def test_no_web_trip_rejects_source_handoff_bypassing_the_reviewed_agent():
+    definition = no_web_trip_definition()
+    source_root = definition["nodes"][0]
+    requirements_root = json.loads(json.dumps(source_root))
+    requirements_root["work"]["outputs"] = requirements_root["work"]["outputs"][:4]
+    source_root["id"] = "confirm_sources"
+    source_root["title"] = "Confirm source material"
+    definition["nodes"][1]["deps"] = ["confirm_requirements"]
+    definition["nodes"][1]["work"]["inputs"] = [
+        "dependencies.confirm_requirements"
+    ]
+    definition["nodes"][2]["deps"] = ["draft_summary", "confirm_sources"]
+    definition["nodes"][2]["work"]["inputs"] = [
+        "dependencies.draft_summary",
+        "dependencies.confirm_sources",
+    ]
+    definition["nodes"] = [requirements_root, source_root, *definition["nodes"][1:]]
+    candidate = json.dumps(definition, ensure_ascii=False)
+    completion = SequenceCompletion((candidate, candidate))
+    bundle = attachment_context(
+        "出发地：上海。出行日期：2026年9月10日。出行人数：2人。"
+        "预算：12000元。喀纳斯等景点资料已给出，交通路线资料均已给出。"
+    )
+
+    with pytest.raises(DraftGenerationRejected, match="生成 Agent 必须直接依赖"):
+        DraftDefinitionGenerator(completion).generate(
+            brief="根据附件生成新疆8日旅行执行手册，不要联网",
+            context="",
+            context_bundle=bundle,
+        )
+
+    assert len(completion.calls) == 2
+
+
 def test_no_web_trip_rejects_missing_or_incomplete_attachment_evidence():
     completion = Completion(json.dumps(no_web_trip_definition()))
 
@@ -451,6 +485,59 @@ def test_no_web_trip_rejects_missing_or_incomplete_attachment_evidence():
             context_bundle=incomplete,
         )
     assert completion.calls == []
+
+
+@pytest.mark.parametrize(
+    ("source_text", "missing"),
+    (
+        (
+            "出发地未知，出行日期待定，出行人数未知，预算未确认。"
+            "没有景点资料，也没有交通路线资料。",
+            ("出发地", "出行日期", "出行人数", "预算", "景点资料", "交通资料"),
+        ),
+        (
+            "出发地：上海。出行日期：2026年9月10日。出行人数：2人。"
+            "预算：12000元。喀纳斯等景点资料已给出，交通路线待定。",
+            ("交通资料",),
+        ),
+    ),
+)
+def test_no_web_trip_requires_positive_attachment_evidence(source_text, missing):
+    completion = Completion(json.dumps(no_web_trip_definition()))
+
+    with pytest.raises(DraftGenerationRejected) as exc_info:
+        DraftDefinitionGenerator(completion).generate(
+            brief="根据附件生成新疆8日旅行执行手册，不要联网",
+            context="",
+            context_bundle=attachment_context(source_text),
+        )
+
+    message = str(exc_info.value)
+    assert message.startswith("附件资料不足，缺少可用证据：")
+    assert tuple(message.split("：", 1)[1].split("、")) == missing
+    assert "ValueError" not in message
+    assert completion.calls == []
+
+
+def test_no_web_trip_accepts_parseable_positive_attachment_evidence():
+    completion = Completion(json.dumps(no_web_trip_definition(), ensure_ascii=False))
+    bundle = attachment_context(
+        "出发地：上海。出行日期：2026年9月10日。出行人数：2人。"
+        "预算：12000元。景点资料包含喀纳斯和禾木，交通路线资料包含往返航班和包车段。"
+    )
+
+    result = DraftDefinitionGenerator(completion).generate(
+        brief="根据附件生成新疆8日旅行执行手册，不要联网",
+        context="",
+        context_bundle=bundle,
+    )
+
+    assert result["nodes"] == no_web_trip_definition()["nodes"]
+    assert result["inputs"] == {
+        "brief": "根据附件生成新疆8日旅行执行手册，不要联网",
+        "context": "",
+    }
+    assert len(completion.calls) == 1
 
 
 def test_attachment_travel_intent_cannot_be_hidden_by_renaming_the_manual():

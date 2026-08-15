@@ -17,6 +17,7 @@ from larkflow.workflow import (
     InstanceSnapshot,
     InstanceStatus,
     InvalidClaimError,
+    LLMAgentExecutor,
     NodeRunner,
     NodeSpec,
     NodeStatus,
@@ -100,6 +101,11 @@ class FailingExecutor(AutomatedExecutor):
 class IncompleteAgentExecutor(AutomatedExecutor):
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         raise AgentResultIncomplete("provider stopped at output length")
+
+
+class OverlengthCompletion:
+    def complete(self, *, prompt: str, model_role: str) -> str:
+        return "four"
 
 
 class SelectiveToolExecutor(RecordingExecutor):
@@ -562,6 +568,50 @@ def test_incomplete_agent_result_has_a_distinct_failure_code_and_never_completes
     failed = service.get(TENANT, "instance_runtime")
     attempt = failed.current_attempt("generate")
     assert failed.status == InstanceStatus.FAILED
+    assert attempt.status == AttemptStatus.FAILED
+    assert attempt.error_code == "agent_result_incomplete"
+    assert attempt.result is None
+
+
+def test_overlength_llm_result_fails_through_the_real_worker_contract():
+    clock = Clock()
+    snapshot = InstanceSnapshot(
+        goal="run one bounded Agent node",
+        nodes=(
+            NodeSpec(
+                "generate",
+                "Generate",
+                "person_owner",
+                "agent",
+                work={
+                    "objective": "Produce a bounded result",
+                    "inputs": [],
+                    "outputs": [{"id": "content", "type": "text"}],
+                    "acceptance": ["The result exists"],
+                    "agent": {
+                        "kind": "llm.generate",
+                        "model_role": "default",
+                        "instructions": "Generate the result",
+                    },
+                },
+            ),
+        ),
+    )
+    service, repository = build_runtime(clock=clock, snapshot=snapshot)
+
+    report = worker(
+        service,
+        repository,
+        LLMAgentExecutor(OverlengthCompletion(), max_result_chars=3),
+        clock=clock,
+        worker_id="worker_1",
+    ).run_once()
+
+    assert report.completed == 0
+    assert report.failed == 1
+    failed = service.get(TENANT, "instance_runtime")
+    attempt = failed.current_attempt("generate")
+    assert failed.status != InstanceStatus.DONE
     assert attempt.status == AttemptStatus.FAILED
     assert attempt.error_code == "agent_result_incomplete"
     assert attempt.result is None

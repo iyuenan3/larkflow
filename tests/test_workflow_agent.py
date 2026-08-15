@@ -170,10 +170,10 @@ def test_agent_executor_rejects_work_outside_the_narrow_contract(
 
 
 def test_agent_executor_rejects_empty_and_unbounded_results():
-    with pytest.raises(ValueError, match="empty result"):
+    with pytest.raises(AgentResultIncomplete, match="empty result"):
         LLMAgentExecutor(RecordingCompletion("  ")).execute(request())
 
-    with pytest.raises(ValueError, match="exceeds 3"):
+    with pytest.raises(AgentResultIncomplete, match="exceeds 3"):
         LLMAgentExecutor(
             RecordingCompletion("four"),
             max_result_chars=3,

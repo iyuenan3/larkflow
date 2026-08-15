@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date
 import re
 from typing import Any
 
@@ -57,11 +58,6 @@ _EXTERNAL_RESEARCH_TERMS = (
     "最新公开信息",
     "web search",
 )
-_TRAVEL_SOURCE_EVIDENCE_TERMS = {
-    **_TRAVEL_REQUIREMENT_TERMS,
-    "景点资料": _TRAVEL_RESEARCH_TERMS["景点攻略"],
-    "交通资料": _TRAVEL_RESEARCH_TERMS["交通攻略"],
-}
 _SOURCE_HANDOFF_TERMS = (
     "资料",
     "材料",
@@ -69,6 +65,49 @@ _SOURCE_HANDOFF_TERMS = (
     "来源",
     "source",
     "evidence",
+)
+_NEGATIVE_SOURCE_TERMS = (
+    "未知",
+    "待定",
+    "未确认",
+    "尚未确认",
+    "没有",
+    "无资料",
+    "暂无",
+    "缺少",
+    "缺失",
+    "未提供",
+    "未给出",
+    "不详",
+    "空白",
+    "unknown",
+    "pending",
+    "unconfirmed",
+    "missing",
+    "not provided",
+)
+_SOURCE_SEGMENT_SEPARATOR = re.compile(r"[\n\r,，。；;！？!?]+")
+_ORIGIN_PATTERNS = (
+    re.compile(
+        r"(?:出发地|出发城市|起点|origin|departure)\s*[:：=]?\s*"
+        r"([^\s,，。；;]{1,40})",
+        re.IGNORECASE,
+    ),
+    re.compile(r"从\s*([^\s,，。；;]{1,40})\s*出发"),
+)
+_DATE_PATTERN = re.compile(
+    r"(?P<year>20\d{2})\s*[-年/.]\s*(?P<month>\d{1,2})"
+    r"\s*[-月/.]\s*(?P<day>\d{1,2})\s*日?"
+)
+_TRAVELER_PATTERNS = (
+    re.compile(r"(?:出行人数|人数|同行人数|travelers?|travellers?|people)\s*"
+               r"[:：=]?\s*(\d+)\s*(?:人|位)?", re.IGNORECASE),
+    re.compile(r"(?<!\d)(\d+)\s*(?:人|位)"),
+)
+_BUDGET_PATTERN = re.compile(
+    r"(?:预算|budget)\s*(?:为|总计|上限|约|[:：=])*\s*"
+    r"(\d+(?:\.\d+)?)\s*(万元|人民币|元|rmb|cny|[¥￥])",
+    re.IGNORECASE,
 )
 
 
@@ -313,6 +352,11 @@ class GeneratedDraftValidator:
             return
 
         nodes = definition.get("nodes") or []
+        node_by_id = {
+            str(node.get("id") or ""): node
+            for node in nodes
+            if isinstance(node, Mapping)
+        }
         if policy.no_web and any(node.get("executor") == "tool" for node in nodes):
             raise DraftGenerationRejected("no-web 资料流程不能包含联网研究 Tool")
         roots = [node for node in nodes if not (node.get("deps") or [])]
@@ -340,22 +384,43 @@ class GeneratedDraftValidator:
                 raise DraftGenerationRejected(
                     "no-web 旅游流程缺少已授权附件来源"
                 )
-            source_handoffs = [
-                output
+            source_root_ids = {
+                str(root.get("id") or "")
                 for root in roots
-                for output in ((root.get("work") or {}).get("outputs") or [])
-                if isinstance(output, Mapping)
-                and output.get("type") in {"text", "long_text", "document"}
-                and any(
-                    term
-                    in f"{output.get('id', '')} {output.get('label', '')}".casefold()
-                    for term in _SOURCE_HANDOFF_TERMS
+                if any(
+                    isinstance(output, Mapping)
+                    and output.get("type") in {"text", "long_text", "document"}
+                    and any(
+                        term
+                        in f"{output.get('id', '')} {output.get('label', '')}".casefold()
+                        for term in _SOURCE_HANDOFF_TERMS
+                    )
+                    for output in ((root.get("work") or {}).get("outputs") or [])
                 )
-            ]
-            if not source_handoffs:
+            }
+            if not source_root_ids:
                 raise DraftGenerationRejected(
                     "no-web 旅游流程的首个 Human 节点必须交付完整的已确认来源资料，"
                     "供下游 Agent 显式消费"
+                )
+            reviewed_agent_ids = {
+                str(decision.get("reject_target") or "")
+                for node in nodes
+                if node.get("executor") == "human"
+                for decision in [human_decision_config(node.get("work") or {})]
+                if decision is not None
+            }
+            unbound_agents = [
+                agent_id
+                for agent_id in reviewed_agent_ids
+                if not (
+                    set(node_by_id[agent_id].get("deps") or [])
+                    & source_root_ids
+                )
+            ]
+            if unbound_agents:
+                raise DraftGenerationRejected(
+                    "no-web 旅游流程的生成 Agent 必须直接依赖并消费包含完整已确认来源资料的 Human 根节点"
                 )
             return
         if not self.allow_web_search:
@@ -446,18 +511,87 @@ class GeneratedDraftValidator:
         context_bundle: ContextBundle,
     ) -> list[str]:
         source_text = cls._context_text(context_bundle).casefold()
-        missing = []
-        for label, terms in _TRAVEL_SOURCE_EVIDENCE_TERMS.items():
-            if any(term in source_text for term in terms):
+        checks = (
+            ("出发地", cls._has_positive_origin(source_text)),
+            ("出行日期", cls._has_valid_date(source_text)),
+            ("出行人数", cls._has_positive_travelers(source_text)),
+            ("预算", cls._has_positive_budget(source_text)),
+            (
+                "景点资料",
+                cls._has_positive_topic_evidence(
+                    source_text,
+                    _TRAVEL_RESEARCH_TERMS["景点攻略"],
+                ),
+            ),
+            (
+                "交通资料",
+                cls._has_positive_topic_evidence(
+                    source_text,
+                    _TRAVEL_RESEARCH_TERMS["交通攻略"],
+                ),
+            ),
+        )
+        return [label for label, present in checks if not present]
+
+    @staticmethod
+    def _is_negative_source_value(value: str) -> bool:
+        normalized = value.casefold().strip()
+        return not normalized or any(term in normalized for term in _NEGATIVE_SOURCE_TERMS)
+
+    @classmethod
+    def _has_positive_origin(cls, source_text: str) -> bool:
+        for pattern in _ORIGIN_PATTERNS:
+            for match in pattern.finditer(source_text):
+                if not cls._is_negative_source_value(match.group(1)):
+                    return True
+        return False
+
+    @staticmethod
+    def _has_valid_date(source_text: str) -> bool:
+        for match in _DATE_PATTERN.finditer(source_text):
+            try:
+                date(
+                    int(match.group("year")),
+                    int(match.group("month")),
+                    int(match.group("day")),
+                )
+            except ValueError:
                 continue
-            if label == "出行日期" and re.search(
-                r"20\d{2}\s*[-年/.]\s*\d{1,2}", source_text
-            ):
+            return True
+        return False
+
+    @staticmethod
+    def _has_positive_travelers(source_text: str) -> bool:
+        return any(
+            int(match.group(1)) > 0
+            for pattern in _TRAVELER_PATTERNS
+            for match in pattern.finditer(source_text)
+        )
+
+    @staticmethod
+    def _has_positive_budget(source_text: str) -> bool:
+        return any(
+            float(match.group(1)) > 0
+            for match in _BUDGET_PATTERN.finditer(source_text)
+        )
+
+    @classmethod
+    def _has_positive_topic_evidence(
+        cls,
+        source_text: str,
+        terms: tuple[str, ...],
+    ) -> bool:
+        for segment in _SOURCE_SEGMENT_SEPARATOR.split(source_text):
+            if not any(term in segment for term in terms):
                 continue
-            if label == "出行人数" and re.search(r"\d+\s*(?:人|位)", source_text):
+            if cls._is_negative_source_value(segment):
                 continue
-            missing.append(label)
-        return missing
+            residue = segment
+            for term in (*terms, "资料", "攻略", "路线"):
+                residue = residue.replace(term, "")
+            if len(re.sub(r"\W+", "", residue)) >= 2:
+                return True
+        return False
 
 
 __all__ = [
