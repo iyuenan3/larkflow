@@ -69,8 +69,13 @@ _SOURCE_HANDOFF_TERMS = (
 _NEGATIVE_SOURCE_TERMS = (
     "未知",
     "待定",
+    "未定",
+    "待确认",
     "未确认",
     "尚未确认",
+    "冲突",
+    "不一致",
+    "待核对",
     "没有",
     "无资料",
     "暂无",
@@ -99,14 +104,40 @@ _DATE_PATTERN = re.compile(
     r"(?P<year>20\d{2})\s*[-年/.]\s*(?P<month>\d{1,2})"
     r"\s*[-月/.]\s*(?P<day>\d{1,2})\s*日?"
 )
-_TRAVELER_PATTERNS = (
-    re.compile(r"(?:出行人数|人数|同行人数|travelers?|travellers?|people)\s*"
-               r"[:：=]?\s*(\d+)\s*(?:人|位)?", re.IGNORECASE),
-    re.compile(r"(?<!\d)(\d+)\s*(?:人|位)"),
+_FIELD_PREFIX = r"(?:^|[\n\r,，。；;！？!?])\s*(?:[-*#]+\s*)?"
+_FIELD_VALUE = r"(?P<value>[^\n\r,，。；;！？!?]{0,120})"
+_TRAVEL_DATE_FIELD_PATTERN = re.compile(
+    _FIELD_PREFIX
+    + r"(?P<label>"
+    r"(?:出行|旅行|旅游|行程)(?:开始|结束)?日期|"
+    r"出发日期|返程日期|开始日期|结束日期|"
+    r"travel_date|start_date|end_date|departure_date|return_date"
+    r")\s*[:：=]?\s*"
+    + _FIELD_VALUE,
+    re.IGNORECASE,
 )
-_BUDGET_PATTERN = re.compile(
-    r"(?:预算|budget)\s*(?:为|总计|上限|约|[:：=])*\s*"
-    r"(\d+(?:\.\d+)?)\s*(万元|人民币|元|rmb|cny|[¥￥])",
+_TRAVELER_FIELD_PATTERN = re.compile(
+    _FIELD_PREFIX
+    + r"(?P<label>"
+    r"出行人数|同行人数|旅客人数|旅行人数|旅游人数|"
+    r"travelers?|travellers?|travel_party_size"
+    r")\s*[:：=]?\s*"
+    + _FIELD_VALUE,
+    re.IGNORECASE,
+)
+_TRAVELER_VALUE_PATTERN = re.compile(r"(?<!\d)(\d+)\s*(?:人|位)?")
+_BUDGET_FIELD_PATTERN = re.compile(
+    _FIELD_PREFIX
+    + r"(?P<label>"
+    r"(?:旅行|旅游|行程|出行)总预算|请求预算|总预算|"
+    r"travel_total_budget|trip_budget|request_budget|total_budget"
+    r")\s*[:：=]?\s*"
+    + _FIELD_VALUE,
+    re.IGNORECASE,
+)
+_BUDGET_VALUE_PATTERN = re.compile(
+    r"(?:为|总计|上限|约|[:：=])*\s*(\d+(?:\.\d+)?)\s*"
+    r"(万元|人民币|元|rmb|cny|[¥￥])",
     re.IGNORECASE,
 )
 
@@ -546,34 +577,67 @@ class GeneratedDraftValidator:
                     return True
         return False
 
-    @staticmethod
-    def _has_valid_date(source_text: str) -> bool:
-        for match in _DATE_PATTERN.finditer(source_text):
-            try:
-                date(
-                    int(match.group("year")),
-                    int(match.group("month")),
-                    int(match.group("day")),
-                )
-            except ValueError:
+    @classmethod
+    def _has_valid_date(cls, source_text: str) -> bool:
+        field_values: dict[str, set[tuple[str, ...]]] = {}
+        for field_match in _TRAVEL_DATE_FIELD_PATTERN.finditer(source_text):
+            value = field_match.group("value")
+            if cls._is_negative_source_value(value):
+                return False
+            dates: list[str] = []
+            for match in _DATE_PATTERN.finditer(value):
+                try:
+                    parsed = date(
+                        int(match.group("year")),
+                        int(match.group("month")),
+                        int(match.group("day")),
+                    )
+                except ValueError:
+                    continue
+                dates.append(parsed.isoformat())
+            if not dates:
                 continue
-            return True
-        return False
-
-    @staticmethod
-    def _has_positive_travelers(source_text: str) -> bool:
-        return any(
-            int(match.group(1)) > 0
-            for pattern in _TRAVELER_PATTERNS
-            for match in pattern.finditer(source_text)
+            label = field_match.group("label").casefold()
+            if any(term in label for term in ("开始", "出发", "start", "departure")):
+                canonical_field = "start_date"
+            elif any(term in label for term in ("结束", "返程", "end", "return")):
+                canonical_field = "end_date"
+            else:
+                canonical_field = "travel_date"
+            field_values.setdefault(canonical_field, set()).add(tuple(dates))
+        return bool(field_values) and all(
+            len(values) == 1 for values in field_values.values()
         )
 
-    @staticmethod
-    def _has_positive_budget(source_text: str) -> bool:
-        return any(
-            float(match.group(1)) > 0
-            for match in _BUDGET_PATTERN.finditer(source_text)
-        )
+    @classmethod
+    def _has_positive_travelers(cls, source_text: str) -> bool:
+        values: set[int] = set()
+        for field_match in _TRAVELER_FIELD_PATTERN.finditer(source_text):
+            value = field_match.group("value")
+            if cls._is_negative_source_value(value):
+                return False
+            match = _TRAVELER_VALUE_PATTERN.fullmatch(value.strip())
+            if match is not None and int(match.group(1)) > 0:
+                values.add(int(match.group(1)))
+        return len(values) == 1
+
+    @classmethod
+    def _has_positive_budget(cls, source_text: str) -> bool:
+        values: set[float] = set()
+        for field_match in _BUDGET_FIELD_PATTERN.finditer(source_text):
+            value = field_match.group("value")
+            if cls._is_negative_source_value(value):
+                return False
+            match = _BUDGET_VALUE_PATTERN.fullmatch(value.strip())
+            if match is None:
+                continue
+            amount = float(match.group(1))
+            if amount <= 0:
+                continue
+            if match.group(2).casefold() == "万元":
+                amount *= 10_000
+            values.add(amount)
+        return len(values) == 1
 
     @classmethod
     def _has_positive_topic_evidence(

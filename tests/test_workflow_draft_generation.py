@@ -387,7 +387,7 @@ def test_complete_attachment_and_explicit_no_web_allow_a_tool_free_trip_flow():
     definition = no_web_trip_definition()
     completion = Completion(json.dumps(definition, ensure_ascii=False))
     bundle = attachment_context(
-        "2026年9月1日从上海出发，2人，预算12000元。"
+        "出发地：上海。出行日期：2026年9月1日。出行人数：2人。旅行总预算：12000元。"
         "新疆8日行程包含喀纳斯等景点游玩资料，所有交通段和路线资料均已给出。"
     )
 
@@ -419,7 +419,7 @@ def test_no_web_trip_rejects_a_root_without_source_handoff():
         )
     )
     bundle = attachment_context(
-        "2026年9月1日从上海出发，2人，预算12000元。"
+        "出发地：上海。出行日期：2026年9月1日。出行人数：2人。旅行总预算：12000元。"
         "新疆8日景点游玩资料和所有交通路线资料均已给出。"
     )
 
@@ -454,7 +454,7 @@ def test_no_web_trip_rejects_source_handoff_bypassing_the_reviewed_agent():
     completion = SequenceCompletion((candidate, candidate))
     bundle = attachment_context(
         "出发地：上海。出行日期：2026年9月10日。出行人数：2人。"
-        "预算：12000元。喀纳斯等景点资料已给出，交通路线资料均已给出。"
+        "旅行总预算：12000元。喀纳斯等景点资料已给出，交通路线资料均已给出。"
     )
 
     with pytest.raises(DraftGenerationRejected, match="生成 Agent 必须直接依赖"):
@@ -497,7 +497,7 @@ def test_no_web_trip_rejects_missing_or_incomplete_attachment_evidence():
         ),
         (
             "出发地：上海。出行日期：2026年9月10日。出行人数：2人。"
-            "预算：12000元。喀纳斯等景点资料已给出，交通路线待定。",
+            "旅行总预算：12000元。喀纳斯等景点资料已给出，交通路线待定。",
             ("交通资料",),
         ),
     ),
@@ -523,7 +523,7 @@ def test_no_web_trip_accepts_parseable_positive_attachment_evidence():
     completion = Completion(json.dumps(no_web_trip_definition(), ensure_ascii=False))
     bundle = attachment_context(
         "出发地：上海。出行日期：2026年9月10日。出行人数：2人。"
-        "预算：12000元。景点资料包含喀纳斯和禾木，交通路线资料包含往返航班和包车段。"
+        "旅行总预算：12000元。景点资料包含喀纳斯和禾木，交通路线资料包含往返航班和包车段。"
     )
 
     result = DraftDefinitionGenerator(completion).generate(
@@ -537,6 +537,118 @@ def test_no_web_trip_accepts_parseable_positive_attachment_evidence():
         "brief": "根据附件生成新疆8日旅行执行手册，不要联网",
         "context": "",
     }
+    assert len(completion.calls) == 1
+
+
+def test_no_web_trip_rejects_unrelated_numeric_evidence_before_planner():
+    completion = Completion(json.dumps(no_web_trip_definition(), ensure_ascii=False))
+    bundle = attachment_context(
+        "出发地：上海。出行日期待定，资料更新时间：2026年9月10日。"
+        "出行人数未知，酒店房型限住2人。旅行总预算未确认，酒店预算12000元。"
+        "景点资料包含喀纳斯和禾木，交通路线资料包含往返航班和包车段。"
+    )
+
+    with pytest.raises(DraftGenerationRejected) as exc_info:
+        DraftDefinitionGenerator(completion).generate(
+            brief="根据附件生成新疆8日旅行执行手册，不要联网",
+            context="",
+            context_bundle=bundle,
+        )
+
+    assert str(exc_info.value) == (
+        "附件资料不足，缺少可用证据：出行日期、出行人数、预算"
+    )
+    assert completion.calls == []
+
+
+@pytest.mark.parametrize(
+    ("source_text", "missing"),
+    (
+        (
+            "出发地：上海。出行日期待定，资料更新时间：2026年9月10日。"
+            "出行人数：2人。旅行总预算：12000元。景点资料包含喀纳斯和禾木，"
+            "交通路线资料包含往返航班和包车段。",
+            "出行日期",
+        ),
+        (
+            "出发地：上海。出行日期：2026年9月10日。"
+            "出行人数未知，酒店房型限住2人。旅行总预算：12000元。"
+            "景点资料包含喀纳斯和禾木，交通路线资料包含往返航班和包车段。",
+            "出行人数",
+        ),
+        (
+            "出发地：上海。出行日期：2026年9月10日。出行人数：2人。"
+            "旅行总预算未确认，酒店预算12000元。景点资料包含喀纳斯和禾木，"
+            "交通路线资料包含往返航班和包车段。",
+            "预算",
+        ),
+        (
+            "出发地：上海。出行日期：2026年9月10日。"
+            "旅行日期：2026年9月11日。出行人数：2人。旅行总预算：12000元。"
+            "景点资料包含喀纳斯和禾木，交通路线资料包含往返航班和包车段。",
+            "出行日期",
+        ),
+        (
+            "出发地：上海。出行日期：2026年9月10日。"
+            "出行人数：2人。同行人数：3人。旅行总预算：12000元。"
+            "景点资料包含喀纳斯和禾木，交通路线资料包含往返航班和包车段。",
+            "出行人数",
+        ),
+        (
+            "出发地：上海。出行日期：2026年9月10日。出行人数：2人。"
+            "旅行总预算：12000元。请求预算：15000元。"
+            "景点资料包含喀纳斯和禾木，交通路线资料包含往返航班和包车段。",
+            "预算",
+        ),
+    ),
+)
+def test_no_web_trip_rejects_negative_or_conflicting_bound_fields_before_planner(
+    source_text,
+    missing,
+):
+    completion = Completion(json.dumps(no_web_trip_definition(), ensure_ascii=False))
+
+    with pytest.raises(DraftGenerationRejected) as exc_info:
+        DraftDefinitionGenerator(completion).generate(
+            brief="根据附件生成新疆8日旅行执行手册，不要联网",
+            context="",
+            context_bundle=attachment_context(source_text),
+        )
+
+    assert str(exc_info.value) == f"附件资料不足，缺少可用证据：{missing}"
+    assert completion.calls == []
+
+
+@pytest.mark.parametrize(
+    "source_text",
+    (
+        (
+            "出发地：上海。旅行开始日期：2026年9月10日。"
+            "旅行结束日期：2026年9月17日。出行人数：2人。旅行总预算：12000元。"
+            "景点资料包含喀纳斯和禾木，交通路线资料包含往返航班和包车段。"
+        ),
+        (
+            "出发地：上海。出行日期：2026年9月10日。同行人数：3位。"
+            "请求预算：12000元。景点资料包含喀纳斯和禾木，"
+            "交通路线资料包含往返航班和包车段。"
+        ),
+        (
+            "出发地：上海。出行日期：2026年9月10日。出行人数：2人。"
+            "旅行总预算：1.2万元。景点资料包含喀纳斯和禾木，"
+            "交通路线资料包含往返航班和包车段。"
+        ),
+    ),
+)
+def test_no_web_trip_accepts_explicitly_bound_travel_fields(source_text):
+    completion = Completion(json.dumps(no_web_trip_definition(), ensure_ascii=False))
+
+    result = DraftDefinitionGenerator(completion).generate(
+        brief="根据附件生成新疆8日旅行执行手册，不要联网",
+        context="",
+        context_bundle=attachment_context(source_text),
+    )
+
+    assert result["nodes"] == no_web_trip_definition()["nodes"]
     assert len(completion.calls) == 1
 
 
