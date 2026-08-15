@@ -540,6 +540,34 @@ def test_no_web_trip_accepts_parseable_positive_attachment_evidence():
     assert len(completion.calls) == 1
 
 
+@pytest.mark.parametrize(
+    "date_evidence",
+    (
+        "出行日期资料更新时间：2026年9月10日",
+        "出行日期说明：资料更新时间为2026年9月10日",
+        "出行日期：资料更新时间为2026年9月10日",
+    ),
+)
+def test_no_web_trip_rejects_composite_or_explanatory_date_fields_before_planner(
+    date_evidence,
+):
+    completion = Completion(json.dumps(no_web_trip_definition(), ensure_ascii=False))
+    bundle = attachment_context(
+        f"出发地：上海。{date_evidence}。出行人数：2人。旅行总预算：12000元。"
+        "景点资料包含喀纳斯和禾木，交通路线资料包含往返航班和包车段。"
+    )
+
+    with pytest.raises(DraftGenerationRejected) as exc_info:
+        DraftDefinitionGenerator(completion).generate(
+            brief="根据附件生成新疆8日旅行执行手册，不要联网",
+            context="",
+            context_bundle=bundle,
+        )
+
+    assert str(exc_info.value) == "附件资料不足，缺少可用证据：出行日期"
+    assert completion.calls == []
+
+
 def test_no_web_trip_rejects_unrelated_numeric_evidence_before_planner():
     completion = Completion(json.dumps(no_web_trip_definition(), ensure_ascii=False))
     bundle = attachment_context(
@@ -635,6 +663,21 @@ def test_no_web_trip_rejects_negative_or_conflicting_bound_fields_before_planner
         (
             "出发地：上海。出行日期：2026年9月10日。出行人数：2人。"
             "旅行总预算：1.2万元。景点资料包含喀纳斯和禾木，"
+            "交通路线资料包含往返航班和包车段。"
+        ),
+        (
+            "出发地：上海。出行日期为2026年9月10日。出行人数：2人。"
+            "旅行总预算：12000元。景点资料包含喀纳斯和禾木，"
+            "交通路线资料包含往返航班和包车段。"
+        ),
+        (
+            "出发地：上海。出行日期2026年9月10日。出行人数：2人。"
+            "旅行总预算：12000元。景点资料包含喀纳斯和禾木，"
+            "交通路线资料包含往返航班和包车段。"
+        ),
+        (
+            "出发地：上海。travel_date: 2026-09-10 to 2026-09-17。"
+            "出行人数：2人。旅行总预算：12000元。景点资料包含喀纳斯和禾木，"
             "交通路线资料包含往返航班和包车段。"
         ),
     ),

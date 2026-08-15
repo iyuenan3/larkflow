@@ -106,14 +106,32 @@ _DATE_PATTERN = re.compile(
 )
 _FIELD_PREFIX = r"(?:^|[\n\r,，。；;！？!?])\s*(?:[-*#]+\s*)?"
 _FIELD_VALUE = r"(?P<value>[^\n\r,，。；;！？!?]{0,120})"
-_TRAVEL_DATE_FIELD_PATTERN = re.compile(
-    _FIELD_PREFIX
-    + r"(?P<label>"
+_TRAVEL_DATE_LABEL = (
     r"(?:出行|旅行|旅游|行程)(?:开始|结束)?日期|"
     r"出发日期|返程日期|开始日期|结束日期|"
     r"travel_date|start_date|end_date|departure_date|return_date"
-    r")\s*[:：=]?\s*"
+)
+_TRAVEL_DATE_FIELD_PATTERN = re.compile(
+    _FIELD_PREFIX
+    + r"(?P<label>(?:"
+    + _TRAVEL_DATE_LABEL
+    + r"))"
+    r"(?:\s*(?:[:：=]|为)\s*|\s*(?=20\d{2}\s*[-年/.]))"
     + _FIELD_VALUE,
+    re.IGNORECASE,
+)
+_TRAVEL_DATE_NEGATIVE_FIELD_PATTERN = re.compile(
+    _FIELD_PREFIX
+    + r"(?:"
+    + _TRAVEL_DATE_LABEL
+    + r")\s*(?:(?:[:：=]|为)\s*)?"
+    r"(?:未知|待定|未定|待确认|未确认|尚未确认|缺少|缺失|未提供|未给出|不详|空白|"
+    r"unknown|pending|unconfirmed|missing|not\s+provided)"
+    r"(?=$|[\s,，。；;！？!?])",
+    re.IGNORECASE,
+)
+_DATE_RANGE_SEPARATOR_PATTERN = re.compile(
+    r"^\s*(?:至|到|to|through|until|[-~～–])\s*",
     re.IGNORECASE,
 )
 _TRAVELER_FIELD_PATTERN = re.compile(
@@ -579,23 +597,15 @@ class GeneratedDraftValidator:
 
     @classmethod
     def _has_valid_date(cls, source_text: str) -> bool:
+        if _TRAVEL_DATE_NEGATIVE_FIELD_PATTERN.search(source_text):
+            return False
         field_values: dict[str, set[tuple[str, ...]]] = {}
         for field_match in _TRAVEL_DATE_FIELD_PATTERN.finditer(source_text):
             value = field_match.group("value")
             if cls._is_negative_source_value(value):
                 return False
-            dates: list[str] = []
-            for match in _DATE_PATTERN.finditer(value):
-                try:
-                    parsed = date(
-                        int(match.group("year")),
-                        int(match.group("month")),
-                        int(match.group("day")),
-                    )
-                except ValueError:
-                    continue
-                dates.append(parsed.isoformat())
-            if not dates:
+            dates = cls._parse_travel_date_value(value)
+            if dates is None:
                 continue
             label = field_match.group("label").casefold()
             if any(term in label for term in ("开始", "出发", "start", "departure")):
@@ -608,6 +618,40 @@ class GeneratedDraftValidator:
         return bool(field_values) and all(
             len(values) == 1 for values in field_values.values()
         )
+
+    @staticmethod
+    def _parse_travel_date_value(value: str) -> tuple[str, ...] | None:
+        normalized = value.strip()
+        first_match = _DATE_PATTERN.match(normalized)
+        if first_match is None:
+            return None
+
+        def parse_date(match: re.Match[str]) -> str | None:
+            try:
+                return date(
+                    int(match.group("year")),
+                    int(match.group("month")),
+                    int(match.group("day")),
+                ).isoformat()
+            except ValueError:
+                return None
+
+        first_date = parse_date(first_match)
+        if first_date is None:
+            return None
+        remainder = normalized[first_match.end() :]
+        if not remainder.strip():
+            return (first_date,)
+        separator = _DATE_RANGE_SEPARATOR_PATTERN.match(remainder)
+        if separator is None:
+            return None
+        second_match = _DATE_PATTERN.fullmatch(remainder[separator.end() :].strip())
+        if second_match is None:
+            return None
+        second_date = parse_date(second_match)
+        if second_date is None:
+            return None
+        return (first_date, second_date)
 
     @classmethod
     def _has_positive_travelers(cls, source_text: str) -> bool:
