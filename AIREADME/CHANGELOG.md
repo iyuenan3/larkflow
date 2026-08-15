@@ -1,5 +1,15 @@
 # CHANGELOG · larkflow
 
+## v0.86.1-draft · 2026-08-15 · No-web 来源绑定与证据收口
+
+- Fixed：`48325c361361d4b634dbfbbb0a58d2178444919e` 要求 no-web 旅游图中的来源 Human 根节点必须是被最终 Human 复核 Agent 的直接依赖，并通过 `work.inputs` 实际进入 Runner 的依赖快照。旁路来源根节点不再能满足最终校验，合法 `Human -> Agent -> Human` 路径保持不变。
+- Safety：旅游附件充分性改为有界、确定性、fail-closed 的正向证据检查。出发地、日期、人数和预算需要可解析有效值，景点与交通资料不能只出现标签；“未知、没有、缺失、待定、未确认”等明显否定文本会列入公开缺失证据，不会触发模型或静默联网。
+- Fixed：超过 `max_result_chars` 的 `llm.generate` 结果现在抛出 `AgentResultIncomplete`。经过真实 `WorkflowWorker` 后，Attempt 为 failed，`error_code=agent_result_incomplete`，结果为 null，Instance 不会进入 done。
+- Verified：聚焦套件为 `73 passed`，扩展回归为 `163 passed`。完整离线套件为 `1150 passed, 27 skipped, 1 failed`，唯一失败是沙箱禁止读取进程树；同一测试在允许环境单独 `1 passed`，合并证据为 `1151 passed, 27 skipped`。安装态确定性探针又验证了旁路 DAG 拒绝、六项否定证据拒绝和 Worker 超长结果分类。
+- Deployment：开发 wheel 对应上述内容提交，SHA-256 为 `b65f09071209e5d5e7c816bc8662a4d3b91ea0fbdbd2ac513ecf97942b2fee67`，两个共享 venv 的安装态哈希与源码一致，`pip check` 通过。开发库 ledger 为 `24 / 0024_console_project_attachments`，十个 Python 服务均为 `active / running / NRestarts=0`，部署窗口无新 warning。
+- Acceptance：合成 no-web 实例 `console_draft_97ffe17d745f94599126a4d88c06c983` 最终为 `done / version 7 / graph_revision 1`。Human 结构化日期、来源正文与 Agent 正文中的 `2026-09-10` 到 `2026-09-17` 一致，Agent `input_snapshot.dependencies` 实际包含完整来源交付物。飞书 Task `a6f21876-afe6-4766-b01a-51b6bd527508` 由原生接口回读为 done，完成文档 `Wc3KdrufvosVESxDjdic9TXGnbd` 为 revision 3 并包含原生标题、列表和表格，PostgreSQL 审计与投影同步闭环。旧实例的日期不一致及其全部历史未修改或删除。
+- Boundary：本轮使用服务端 Owner 作用域 HTTPS API 和原生飞书回读，不代表真实 Owner 浏览器附件交互已完成。Agent Attempt 仍不直接读取 Blob，企业共享知识、生产对象存储、PDF/DOCX/OCR、Tool Gateway、规模化模型质量和生产容量仍未关闭，当前不是生产就绪。
+
 ## v0.86.0-draft · 2026-08-15 · Agent 完成性、资料策略与搜索预检
 
 - Fixed：`6f1f1e61da57a899f225de1b79efdb2714b14a5a` 为普通 Agent 增加供应商结束原因、用量与模型元数据，并要求严格完成 envelope、完整验收证据和正文锚点；长度截断、非正常结束、缺少标记或缺失交付证据统一以 `agent_result_incomplete` 失败，不再保存为 done。`353b1f6a2a25d296ceee9b30d15446c823f38b8e` 把证据收口为每项 1 到 12 个、每个不超过 80 字符且必须在正文出现的短锚点，避免复制整段验收文本。`0c5c2903464f9ce689ba4b117315654824517f1c` 在统一交付物校验前把不可变嵌套结果规范化为 JSON 值。

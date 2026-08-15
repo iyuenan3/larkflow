@@ -40,6 +40,8 @@
 
 真实 no-web 实例 `console_draft_fbdceda9d0f19ac2c7eb94e51360bacd` 使用完整合成附件走通 `Human 来源确认 -> Agent 生成 -> Human 接受`，最终为 `done / version 13`。Agent Attempt 1 因完成证据不完整以 `agent_result_incomplete` 失败，Attempt 2 在部署切换时安全取消，Attempt 3 以 `finish_reason=stop` 和完整验收锚点完成；最终 Human 明确接受。旧 Attempt、两次节点重启审计、失败记录和各轮投影均保留。飞书 Task 已由原生接口回读为完成，最终 Docx 已由 bot 回读为 revision 3，正文可读并包含原生标题、列表和预算表格。需要联网的负向请求 `c79be5e550b70e9d6a40fe2b3cabcb17` 在 2.4 秒内拒绝，没有创建 Instance；当前 Coding Plan 路线显式为 `web_search_capability=unavailable`，不再等待约四分钟后失败。
 
+**2026-08-15 复审缺口收口：** `48325c361361d4b634dbfbbb0a58d2178444919e` 要求 no-web 旅游图中的来源 Human 根节点必须是被最终 Human 复核 Agent 的直接依赖，并通过 `work.inputs` 真实进入 Runner 的依赖快照。附件充分性已从关键词存在收紧为有效日期、正数人数与预算、正向出发地、景点和交通证据，明显否定内容 fail closed。超过 Agent 结果上限的 Worker 路径统一为 `agent_result_incomplete`。合并离线证据为 `1151 passed, 27 skipped`；开发 wheel SHA-256 为 `b65f09071209e5d5e7c816bc8662a4d3b91ea0fbdbd2ac513ecf97942b2fee67`，开发库 ledger 为 `24 / 0024`，十个 Python 服务为 `active / running / NRestarts=0`。新合成实例 `console_draft_97ffe17d745f94599126a4d88c06c983` 以一致的 `2026-09-10` 到 `2026-09-17` 起止日期完成闭环，Agent 依赖快照与 Human 来源交付物一致，Task 为 done，Docx revision 3 包含原生标题、列表和表格。真实 Owner 浏览器附件交互仍是下一道手工关卡。
+
 文件级执行边界、迁移批次、兼容方案、A/B 指标与停止开关见 [`docs/REFACTOR_BLUEPRINT.md`](../docs/REFACTOR_BLUEPRINT.md)。该文档是实施附录，不改变 AIREADME 的 Target 契约，也不代表代码、migration 或部署已经获准执行。
 
 ## Now · Phase 1 首次成功路径与可用性收口

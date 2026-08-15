@@ -408,3 +408,9 @@
 - 现象（真实联网负向请求）：服务端已经在 2.4 秒内用 `DraftCapabilityUnavailable` 正确拒绝，但 Console DTO 只显示通用“未能生成安全草稿”，用户不知道可以上传完整资料并明确 no-web，或等待管理员配置搜索后端。
 - 根因（已确认）：为避免暴露 provider、路由和原始异常，公开 DTO 丢掉了过多恢复语义。领域稳定分类和用户可操作说明没有独立映射层。
 - 结论：数据库保留稳定内部分类与详细错误供运维诊断，公开 DTO 只根据允许的分类映射固定恢复说明，不回显原始 `last_error`。回归必须同时验证说明可操作、原始错误不外泄，以及 memory 与 PostgreSQL repository 行为一致。
+
+## 2026-08-15 · 来源节点存在不等于 Agent 实际消费
+
+- 现象（对抗复现）：一个 Human 根节点与 Agent 相连，另一个完全旁路的 Human 根节点声明 `confirmed_source_material`，旧校验只在全部根节点中找到来源交付物就放行。Runner 只把 `spec.deps` 对应的结果写入 `input_snapshot`，所以 Agent 实际看不到旁路来源。
+- 根因（已确认）：确定性 validator 验证了“图中存在来源”，却没有验证“被决定节点复核的 Agent 直接依赖并消费该来源”。附件充分性又只看关键词出现，会把“预算未确认、没有交通资料”错当成证据。
+- 结论：no-web 候选图要同时校验交付物、直接依赖边和 `work.inputs` 消费关系，不能只数全局节点或字段。有限领域的充分性判断要优先采用可解析正值和明确否定词的保守规则，没有足够正向证据就 fail closed。验收需要回读 Automated Attempt 的 `input_snapshot.dependencies`，不能只看最终文档。类似地，执行器检测到超过结果上限时必须抛出语义化的 `AgentResultIncomplete`，才能让 Worker 保留稳定 `agent_result_incomplete` 分类。
