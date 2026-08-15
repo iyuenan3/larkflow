@@ -62,6 +62,14 @@ _TRAVEL_SOURCE_EVIDENCE_TERMS = {
     "景点资料": _TRAVEL_RESEARCH_TERMS["景点攻略"],
     "交通资料": _TRAVEL_RESEARCH_TERMS["交通攻略"],
 }
+_SOURCE_HANDOFF_TERMS = (
+    "资料",
+    "材料",
+    "附件",
+    "来源",
+    "source",
+    "evidence",
+)
 
 
 class DraftGenerationRejected(ValueError):
@@ -331,6 +339,23 @@ class GeneratedDraftValidator:
             if not policy.attachment_sources:
                 raise DraftGenerationRejected(
                     "no-web 旅游流程缺少已授权附件来源"
+                )
+            source_handoffs = [
+                output
+                for root in roots
+                for output in ((root.get("work") or {}).get("outputs") or [])
+                if isinstance(output, Mapping)
+                and output.get("type") in {"text", "long_text", "document"}
+                and any(
+                    term
+                    in f"{output.get('id', '')} {output.get('label', '')}".casefold()
+                    for term in _SOURCE_HANDOFF_TERMS
+                )
+            ]
+            if not source_handoffs:
+                raise DraftGenerationRejected(
+                    "no-web 旅游流程的首个 Human 节点必须交付完整的已确认来源资料，"
+                    "供下游 Agent 显式消费"
                 )
             return
         if not self.allow_web_search:

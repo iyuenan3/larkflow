@@ -140,6 +140,8 @@ class DraftDefinitionGenerator:
             else
             "当前部署没有已验证的带引用联网研究能力。若用户明确 no-web 且提供了完整附件，"
             "必须只基于附件设计 Human 确认、Agent 生成、Human 接受或退回的资料流程；"
+            "首个 Human 节点必须包含一项必填 long_text 交付物，用于提交完整的已确认来源资料，"
+            "后续 Agent 必须通过 dependencies.<human_node_id> 显式消费该交付物；"
             "否则不能生成依赖实时外部事实的流程，也不能声称已经搜索网页。"
         )
         tool_rules = (

@@ -150,6 +150,12 @@ def no_web_trip_definition():
         {"id": "start_date", "type": "date", "label": "出行日期", "required": True},
         {"id": "travelers", "type": "integer", "label": "出行人数", "required": True},
         {"id": "budget", "type": "money", "label": "预算", "required": True},
+        {
+            "id": "confirmed_source_material",
+            "type": "long_text",
+            "label": "已确认来源资料",
+            "required": True,
+        },
     ]
     return value
 
@@ -398,6 +404,33 @@ def test_complete_attachment_and_explicit_no_web_allow_a_tool_free_trip_flow():
     ]
     assert len(completion.calls) == 1
     assert "不可信来源资料" in completion.calls[0][0]
+    assert "完整的已确认来源资料" in completion.calls[0][0]
+
+
+def test_no_web_trip_rejects_a_root_without_source_handoff():
+    definition = no_web_trip_definition()
+    definition["nodes"][0]["work"]["outputs"] = definition["nodes"][0]["work"][
+        "outputs"
+    ][:4]
+    completion = SequenceCompletion(
+        (
+            json.dumps(definition, ensure_ascii=False),
+            json.dumps(definition, ensure_ascii=False),
+        )
+    )
+    bundle = attachment_context(
+        "2026年9月1日从上海出发，2人，预算12000元。"
+        "新疆8日景点游玩资料和所有交通路线资料均已给出。"
+    )
+
+    with pytest.raises(DraftGenerationRejected, match="已确认来源资料"):
+        DraftDefinitionGenerator(completion).generate(
+            brief="根据附件生成新疆8日旅行执行手册，不要联网",
+            context="",
+            context_bundle=bundle,
+        )
+
+    assert len(completion.calls) == 2
 
 
 def test_no_web_trip_rejects_missing_or_incomplete_attachment_evidence():
