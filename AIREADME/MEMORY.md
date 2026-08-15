@@ -384,3 +384,27 @@
 - 现象（真实 PostgreSQL 合同）：未知人员分工角色已正确进入通用拒绝终态，回复仍长期保持 pending；同一测试此前又因 `dict_row` 断言错误而没有走到回复领取。
 - 根因（已确认）：领取 SQL 使用 `NOT (progress_status = 'sending' AND progress_claim_expires_at > now)`。没有进度记录时两个字段为 NULL，括号表达式与 `NOT` 都得到 NULL，WHERE 会把本应领取的动作排除。
 - 结论：nullable 状态的“不是活跃发送”应写成 `(条件) IS NOT TRUE`，不能依赖 `NOT` 把 UNKNOWN 当 false。PostgreSQL 合同需要使用真实 dict row、走完整状态机，并验证精确 outbox 事件集合，避免前置断言和脆弱计数遮住后续饥饿缺陷。
+
+## 2026-08-15 · Provider 正常结束不等于业务交付完整
+
+- 现象（真实新疆规划）：模型返回的正文在预算表第一行中途结束，但旧 adapter 只检查非空、长度上限和持久化形状，仍把 Automated Attempt 标为 done，直到最终 Human 才发现预算、责任链和风险预案缺失。
+- 根因（已确认）：存储上限只能防止过长结果，不能证明供应商完整结束，也不能证明正文覆盖节点验收条件。仅检查末尾标点同样无法区分完整短文与语义截断。
+- 结论：支持 metadata 的 provider 必须先提供明确正常结束原因；普通 Agent 正文还必须带严格完成 envelope、全部验收 ID 和能在正文精确定位的短锚点。任一条件失败都以稳定 `agent_result_incomplete` 终止当前 Automated Attempt，结果不落为 done。Human Gate 继续负责业务判断，但不能是唯一完整性检查。真实验收要保存 finish reason、usage、失败分类、旧 Attempt 和返工审计，不能只读最终 Instance 状态。
+
+## 2026-08-15 · 业务意图不能替代资料与外发策略
+
+- 现象（真实附件草稿）：请求已附带完整旅游资料并明确不要联网，旧旅游硬校验仍要求景点与交通两个 `web.search` 节点；开发 Coding Plan 路线又无法返回结构化引用，搜索 Attempt 等待约四分钟后失败。
+- 根因（已确认）：旧 validator 只根据“旅游、旅行、行程规划”等意图词决定 DAG 形状，没有把附件充分性、no-web、模型外发策略和 provider 搜索能力作为同一个 evidence policy。运行开关为 true 也被误当成模型具备带引用搜索能力。
+- 结论：先判资料需求，再判附件是否满足来源契约，再判是否允许外发，最后判 provider/model 是否显式支持带引用搜索。完整附件加 no-web 可以生成 Human 来源交付、Agent、Human 决定；附件不足必须列明缺口，不能静默联网；需要外部资料而搜索能力不可用时必须在候选生成前阻断。布尔开关只代表允许运行某类 executor，不是供应商能力证明。
+
+## 2026-08-15 · 只读运行时结果也必须在领域边界规范化
+
+- 现象（真实返工）：AgentRuntime 返回的外层结果可读，但内部 metadata 使用不可变 Mapping。领域服务把它直接交给 JSON 交付物 validator 时序列化失败，导致一个内容和完成证据都合法的 Attempt 无法提交。
+- 根因（已确认）：运行时合同强调不可变快照，领域交付物合同强调 JSON 值，两者都合理，但边界没有进行规范化。让每个 Runtime adapter 自行转换会形成重复实现，并可能漏掉未来嵌套类型。
+- 结论：领域服务在统一交付物校验前对整个 Runtime result 调用同一 `to_json_value`，再执行声明输出校验和持久化。claim token、expected node version 和陈旧结果判断仍由 Worker 与领域服务持有，规范化不能扩大 Runtime 权限。
+
+## 2026-08-15 · 内部错误分类与公开恢复说明必须分层
+
+- 现象（真实联网负向请求）：服务端已经在 2.4 秒内用 `DraftCapabilityUnavailable` 正确拒绝，但 Console DTO 只显示通用“未能生成安全草稿”，用户不知道可以上传完整资料并明确 no-web，或等待管理员配置搜索后端。
+- 根因（已确认）：为避免暴露 provider、路由和原始异常，公开 DTO 丢掉了过多恢复语义。领域稳定分类和用户可操作说明没有独立映射层。
+- 结论：数据库保留稳定内部分类与详细错误供运维诊断，公开 DTO 只根据允许的分类映射固定恢复说明，不回显原始 `last_error`。回归必须同时验证说明可操作、原始错误不外泄，以及 memory 与 PostgreSQL repository 行为一致。

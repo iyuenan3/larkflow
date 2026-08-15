@@ -2,9 +2,9 @@
 
 > 飞书原生的企业协作与 Agent 工作流控制平面，把项目目标变成可确认、可执行、可返工和可追溯的 DAG。生命周期：active development。
 
-当前产品处于开发试用阶段，不是生产就绪版本。Target 中央工作流、飞书责任投影和员工工作台已经形成可运行闭环；`PlannerRuntime` 与 `AgentRuntime` 基线端口已落码并随 Phase 2A wheel 部署到开发环境。项目级 UTF-8 txt/md 上传参与 DAG 规划已完成真实 PostgreSQL、Caddy、migration 和服务端部署验收，真实 Owner 浏览器上传与生成仍待手工验收。企业共享知识、Agent Attempt 附件上下文、Tool Gateway、生产对象存储、PDF/DOCX/OCR 和向量检索仍未实现或后置，Personal Agent Edge 已暂停。最新实现与验收历史只记录在 [CHANGELOG.md](CHANGELOG.md)，当前推进边界见 [ROADMAP.md](ROADMAP.md)。
+当前产品处于开发试用阶段，不是生产就绪版本。Target 中央工作流、飞书责任投影和员工工作台已经形成可运行闭环；`PlannerRuntime` 与 `AgentRuntime` 基线端口已落码并部署到开发环境。项目级 UTF-8 txt/md 上传参与 DAG 规划已完成真实 PostgreSQL、Caddy、migration、服务端部署和 Owner 作用域 HTTPS API 验收；完整附件加明确 no-web 的新疆 8 日流程已经走完 Human、Agent、Human 决定闭环。Agent 完成性现在同时校验供应商结束原因、结构化完成标记和验收证据锚点，缺失或截断不会再把自动 Attempt 标为 done。当前 Coding Plan 路由明确声明联网搜索不可用，需要外部资料的草稿会在确认或启动前给出可操作阻断。真实浏览器附件交互仍待手工验收；企业共享知识、Agent Attempt 直接读取附件、Tool Gateway、生产对象存储、PDF/DOCX/OCR 和向量检索仍未实现或后置，Personal Agent Edge 已暂停。最新实现与验收历史只记录在 [CHANGELOG.md](CHANGELOG.md)，当前推进边界见 [ROADMAP.md](ROADMAP.md)。
 
-last-synced: 07de190db49839d8195cfa26967241fad7d975f6 · 2026-08-15
+last-synced: 0ff4272a10abe85d2afab36f65a2edd3e4d50a41 · 2026-08-15
 
 ## 阅读顺序
 

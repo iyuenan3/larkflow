@@ -1,5 +1,16 @@
 # CHANGELOG · larkflow
 
+## v0.86.0-draft · 2026-08-15 · Agent 完成性、资料策略与搜索预检
+
+- Fixed：`6f1f1e61da57a899f225de1b79efdb2714b14a5a` 为普通 Agent 增加供应商结束原因、用量与模型元数据，并要求严格完成 envelope、完整验收证据和正文锚点；长度截断、非正常结束、缺少标记或缺失交付证据统一以 `agent_result_incomplete` 失败，不再保存为 done。`353b1f6a2a25d296ceee9b30d15446c823f38b8e` 把证据收口为每项 1 到 12 个、每个不超过 80 字符且必须在正文出现的短锚点，避免复制整段验收文本。`0c5c2903464f9ce689ba4b117315654824517f1c` 在统一交付物校验前把不可变嵌套结果规范化为 JSON 值。
+- Changed：旅游生成不再只看意图词强制联网。允许联网且资料不足时仍要求独立景点和交通研究；明确 no-web 且授权附件满足来源契约时，允许 `Human 来源交付 -> Agent -> Human 决定`，但首个 Human 必须把完整已确认来源显式交给 Agent。附件不足会列出缺失证据，不会静默联网。对应提交为 `6f1f1e61da57a899f225de1b79efdb2714b14a5a` 与 `79978cb36dbd2798298fce83b21fda921ba07963`。
+- Safety：LLM 路由必须逐条显式声明 `web_search_capability=responses_citations`，备用线路改变 base URL 或 model 后不会继承能力。需要外部资料但没有可用带引用路线时，PlanningService 在模型生成前返回 `DraftCapabilityUnavailable`。`0ff4272a10abe85d2afab36f65a2edd3e4d50a41` 保留内部稳定错误分类，公开 Console DTO 只返回固定可操作说明，不暴露原始异常或路由。cited-sources 护栏保持不变。
+- Projection：普通 Markdown 通过安全子集转换为飞书 Docx 原生标题、无序列表、有序列表、管道表格和粗体，原始 XML 一律转义。真实完成文档 `W5B3dir3VoauS7xcg2qcix21nze` 已由 bot 回读 revision 3，正文完整可读，原生标题、列表和预算表格均存在。
+- Verified：最终完整离线套件为 `1145 passed, 27 skipped`；唯一因沙箱禁止读取进程树的既有测试在允许环境单独 `1 passed`，合并证据为 `1146 passed, 27 skipped`。一次性真实 PostgreSQL 公开错误探针确认 ledger `24 / 0024`、请求 rejected、公开说明可操作且原始异常不外泄；测试库已精确删除。部署版本的纯内存截断探针得到 `Attempt=failed / error_code=agent_result_incomplete / instance=failed / result_persisted=false`。
+- Deployment：开发 wheel 对应 `0ff4272a10abe85d2afab36f65a2edd3e4d50a41`，SHA-256 为 `e36f36ccf73f7366c59cc6d5c671aeec4b1f45f6001e7c161be3f9d6f3ef0e76`，`pip check` 通过；安装态 AgentRuntime 与 PlannerRuntime 哈希和源码一致。开发库 ledger 为 `24 / 0024_console_project_attachments`，十个 Python 服务均为 `active / running / NRestarts=0`，部署窗口 warning 为 0，公网与 loopback Console 为 200，未认证实例 API 为 401，附件规划能力为 true。
+- Acceptance：完整合成附件和明确 no-web 的实例 `console_draft_fbdceda9d0f19ac2c7eb94e51360bacd` 最终为 `done / version 13`。根 Human Task `b01634cf-a277-451d-aa60-a6d4725ee92f` 已由飞书原生接口回读为完成；Agent Attempt 1 因完成证据不完整失败，Attempt 2 在部署切换时安全取消，Attempt 3 以 `finish_reason=stop` 完成；最终 Human 明确接受。旧 Attempt、两次节点重启审计、失败记录、消息、决定卡、Task、完成文档和最终通知投影均保留。联网负向请求 `c79be5e550b70e9d6a40fe2b3cabcb17` 在 2.4 秒内 rejected，没有创建 Instance，也没有进入长时间搜索失败节点。
+- Boundary：当前 Coding Plan 路线显式为搜索不可用；联网流程只有接入并验证真正返回结构化 URL 引用的后端后才能恢复。项目附件仍只参与 DAG 规划，Agent Attempt 不直接读取 Blob，no-web 路径依赖首个 Human 的完整来源交付。真实 Owner 浏览器附件交互、企业共享知识、生产对象存储、PDF/DOCX/OCR、向量检索、Tool Gateway、模型质量规模化和生产容量仍未关闭，本版本不是生产就绪。
+
 ## v0.85.2-draft · 2026-08-15 · Phase 2A 真实 PostgreSQL 与开发部署
 
 - Fixed：PostgreSQL 人员分工回复领取不再用 `NOT (a AND b)` 排除 nullable 进度字段，改用 `IS NOT TRUE` 保留没有进度记录但应发送通用拒绝的合法动作。四项原失败合同同时修正缺失导入、`dict_row` 断言和陈旧 outbox 总数假设；outbox 现在验证精确事件集合、聚合、版本、payload key 与幂等维度。修复提交为 `07de190db49839d8195cfa26967241fad7d975f6`。
