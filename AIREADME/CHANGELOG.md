@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.86.3-draft · 2026-08-15 · No-web 日期赋值边界收口
+
+- Fixed：`23437d15499df9182beeb823e0a1d7780fc69f5f` 要求旅游日期标签后存在明确赋值边界，只接受冒号、等号、“为”或直接合法日期。复合字段名“出行日期资料更新时间”和“出行日期说明”不再按“出行日期”前缀命中。
+- Safety：日期值改为有界解析，只接受一个有效日期，或由明确范围分隔符连接的两个有效日期；不会再从任意说明文字中搜索一个日期后放行。中文起止日期、直接日期、英文标签和既有双日期范围保持支持；Markdown 表格继续保守拒绝，本轮没有扩展通用 Markdown 语义解析。
+- Verified：草稿生成模块为 `40 passed`。完整离线套件为 `1166 passed, 27 skipped, 1 failed`，唯一失败是沙箱禁止读取进程树；同一测试在允许环境单独 `1 passed`，合并证据为 `1167 passed, 27 skipped`。临时副本的未变异基线为 `3 passed`，恢复可选边界与任意位置找日期的缺陷态后新增回归为 `3 failed`，证明测试命中真实修复路径。
+- Deployment：开发 wheel SHA-256 为 `99075d335e64cf9d43851e447d8b4b7a6cd27e5d61ba7e08ba25d677ab73b6ce`，Target 与 legacy 安装态 `draft_validation.py` SHA-256 都为 `7394bcca832dd4fb4e3a84a504c9d5206b0d7038da97dbab2a593f61e7ef6e7d`，两个 venv 的 `pip check` 通过。开发库 ledger 保持 `24 / 0024_console_project_attachments`；十个服务均为 `active / running / NRestarts=0`，部署窗口 journald warning 及以上为 0。
+- Acceptance：部署版纯函数探针确认两个复合日期标签均为 false，中文合法日期、起止日期和英文范围均为 true。新合成反例 `DATE_BOUNDARY_COUNTEREXAMPLE_20260815_2302_23437D1` 对应请求 `880ef7341d0cd73bb6adf4dfa76bf9ea`，通过真实 Console、附件存储、PostgreSQL 和 Draft Worker 进入 rejected，定义和 Instance 都为空，错误只列出缺失的出行日期。临时 Console 会话已撤销；旧实例和飞书历史未修改或清理。
+- Boundary：本轮没有新建合法飞书 E2E，只用部署版合法探针和本地完整生成路径确认合法字段仍进入 Planner。Planner 零调用由先执行 `validate_request` 再调用 `client.complete` 的代码顺序，以及回归中的调用 spy 共同证明。真实 Owner 浏览器附件交互仍待手工验收，项目不是生产就绪。
+
 ## v0.86.2-draft · 2026-08-15 · No-web 旅行参数字段绑定
 
 - Fixed：`9a70f033d800292972a8d627fd4dddc7e45d83b2` 把 no-web 旅游附件中的日期、人数和总预算绑定到明确业务字段。出行、旅行、开始、结束、出发或返程日期才计入日期证据；出行、同行或旅客人数才计入人数证据；旅行总预算或请求预算才计入总预算证据。资料更新时间、酒店限住人数、酒店预算和其他单项数字不再充当替代值。

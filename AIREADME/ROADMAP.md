@@ -44,6 +44,8 @@
 
 **2026-08-15 字段绑定收口：** `9a70f033d800292972a8d627fd4dddc7e45d83b2` 继续把日期、人数和总预算的正向证据绑定到明确业务字段，资料更新时间、酒店限住人数和酒店单项预算不能覆盖同字段的待定、未知或未确认状态。字段绑定聚焦及关联套件为 `154 passed`，完整离线合并证据为 `1161 passed, 27 skipped`。开发 wheel SHA-256 为 `8b99b9bf5b6053c19b563f48c8694cdf802e9a750569f5ff4453d14f2648a396`，开发库保持 `24 / 0024`，十个服务为 `active / running / NRestarts=0`，部署窗口 warning 级及以上日志为 0。完整反例在模型调用前被确定性拒绝，合法合成实例 `console_draft_93099995e3a27f0722fd2db6d49a7610` 完成三节点闭环；Human 交付与 Agent 依赖对象完全相等，飞书 Task 原生回读为完成，Docx revision 4 包含原生标题、列表和表格。真实 Owner 浏览器附件交互仍未执行，项目继续保持开发试用状态。
 
+**2026-08-15 日期赋值边界收口：** `23437d15499df9182beeb823e0a1d7780fc69f5f` 要求旅游日期标签经过明确赋值边界，并把日期值限制为单日期或明确双日期范围。两个复合标签在部署版探针中均为 false，中文合法日期、起止日期和英文范围为 true。完整离线合并证据为 `1167 passed, 27 skipped`，变异测试在缺陷态得到 `3 failed`。开发 wheel SHA-256 为 `99075d335e64cf9d43851e447d8b4b7a6cd27e5d61ba7e08ba25d677ab73b6ce`，开发库保持 `24 / 0024`，十个服务为 `active / running / NRestarts=0`。反例请求 `880ef7341d0cd73bb6adf4dfa76bf9ea` 在确定性校验阶段进入 rejected，定义与 Instance 均为空。本轮没有新建合法飞书 E2E，也没有修改旧实例或外部历史；真实 Owner 浏览器附件交互仍未执行。
+
 文件级执行边界、迁移批次、兼容方案、A/B 指标与停止开关见 [`docs/REFACTOR_BLUEPRINT.md`](../docs/REFACTOR_BLUEPRINT.md)。该文档是实施附录，不改变 AIREADME 的 Target 契约，也不代表代码、migration 或部署已经获准执行。
 
 ## Now · Phase 1 首次成功路径与可用性收口
