@@ -232,16 +232,37 @@ class LLMAgentExecutor:
             )
         searchable = cls._normalized_excerpt(rendered)
         for item_id in sorted(expected_ids):
-            excerpt = evidence[item_id]
+            item = evidence[item_id]
+            if not isinstance(item, Mapping) or set(item) != {
+                "status",
+                "content_anchors",
+            }:
+                raise AgentResultIncomplete(
+                    f"Agent completion evidence is malformed: {item_id}"
+                )
+            if item.get("status") != "satisfied":
+                raise AgentResultIncomplete(
+                    f"Agent completion evidence is not satisfied: {item_id}"
+                )
+            anchors = item.get("content_anchors")
             if (
-                not isinstance(excerpt, str)
-                or len(excerpt.strip()) < 2
-                or len(excerpt) > 240
-                or cls._normalized_excerpt(excerpt) not in searchable
+                not isinstance(anchors, Sequence)
+                or isinstance(anchors, (str, bytes))
+                or not 1 <= len(anchors) <= 12
             ):
                 raise AgentResultIncomplete(
-                    f"Agent completion evidence is not present in content: {item_id}"
+                    f"Agent completion anchors are incomplete: {item_id}"
                 )
+            for anchor in anchors:
+                if (
+                    not isinstance(anchor, str)
+                    or len(anchor.strip()) < 2
+                    or len(anchor) > 80
+                    or cls._normalized_excerpt(anchor) not in searchable
+                ):
+                    raise AgentResultIncomplete(
+                        f"Agent completion anchor is not present in content: {item_id}"
+                    )
         return rendered.strip()
 
     @staticmethod
@@ -308,9 +329,13 @@ class LLMAgentExecutor:
             final_instruction = (
                 "只返回一个 JSON 对象，不要代码块或额外文字。对象必须严格包含 content 和 "
                 "completion。content 是完整 Markdown 正文；completion 必须严格等于 "
-                '{"status":"complete","acceptance_evidence":{"a1":"正文中的逐字短摘录"}} '
+                '{"status":"complete","acceptance_evidence":'
+                '{"a1":{"status":"satisfied","content_anchors":["正文中的短标题或关键字段名"]}}} '
                 "这一结构，其中 acceptance_evidence 必须覆盖下面全部验收 ID，不能缺项或增加字段。"
-                "每个值必须是 content 中逐字出现、能够定位对应验收内容且不超过 240 字的短摘录。"
+                "每个验收项的 status 必须是 satisfied；content_anchors 必须包含 1 到 12 个"
+                "在 content 中逐字出现且不超过 80 字的短标题或关键字段名。若一个验收项要求"
+                "多个章节或字段，必须为每个必需章节或字段各给一个 anchor；不要用概括验收"
+                "条件的长句代替正文锚点。"
                 "只有正文全部生成完毕后才能写 status=complete；不得在表格、列表或句子中途结束。"
                 f"验收 ID：{json.dumps(acceptance_contract, ensure_ascii=False, sort_keys=True)}"
             )

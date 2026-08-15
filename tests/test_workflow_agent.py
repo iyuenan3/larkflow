@@ -66,7 +66,7 @@ class ObservedCompletion:
 def completion_envelope(
     content: str = "结论：可以继续。",
     *,
-    evidence: dict[str, str] | None = None,
+    evidence: dict[str, object] | None = None,
 ) -> str:
     return json.dumps(
         {
@@ -74,7 +74,14 @@ def completion_envelope(
             "completion": {
                 "status": "complete",
                 "acceptance_evidence": (
-                    {"a1": "可以继续"} if evidence is None else evidence
+                    {
+                        "a1": {
+                            "status": "satisfied",
+                            "content_anchors": ["可以继续"],
+                        }
+                    }
+                    if evidence is None
+                    else evidence
                 ),
             },
         },
@@ -209,8 +216,30 @@ def test_agent_executor_rejects_provider_truncation_or_unknown_finish(
             "evidence is incomplete",
         ),
         (
-            completion_envelope(evidence={"a1": "正文中不存在"}),
-            "not present in content",
+            completion_envelope(evidence={"a1": "可以继续"}),
+            "malformed",
+        ),
+        (
+            completion_envelope(
+                evidence={
+                    "a1": {
+                        "status": "satisfied",
+                        "content_anchors": [],
+                    }
+                }
+            ),
+            "anchors are incomplete",
+        ),
+        (
+            completion_envelope(
+                evidence={
+                    "a1": {
+                        "status": "satisfied",
+                        "content_anchors": ["正文中不存在"],
+                    }
+                }
+            ),
+            "anchor is not present",
         ),
     ),
 )
@@ -237,6 +266,31 @@ def test_agent_executor_includes_rework_feedback_in_the_next_attempt_prompt():
     LLMAgentExecutor(completion).execute(execution_request)
 
     assert "补齐预算、预订责任链和风险预案" in completion.calls[0]["prompt"]
+
+
+def test_agent_executor_requires_an_anchor_for_each_acceptance_item():
+    execution_request = request()
+    execution_request = replace(
+        execution_request,
+        work={
+            **execution_request.work,
+            "acceptance": ["包含预算表", "包含风险预案"],
+        },
+    )
+    completion = ObservedCompletion(
+        completion_envelope(
+            "# 执行手册\n\n## 预算表\n完整。\n\n## 风险预案\n完整。",
+            evidence={
+                "a1": {
+                    "status": "satisfied",
+                    "content_anchors": ["预算表"],
+                },
+            },
+        )
+    )
+
+    with pytest.raises(AgentResultIncomplete, match="evidence is incomplete: a2"):
+        LLMAgentExecutor(completion).execute(execution_request)
 
 
 @pytest.mark.parametrize(
