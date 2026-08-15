@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.86.2-draft · 2026-08-15 · No-web 旅行参数字段绑定
+
+- Fixed：`9a70f033d800292972a8d627fd4dddc7e45d83b2` 把 no-web 旅游附件中的日期、人数和总预算绑定到明确业务字段。出行、旅行、开始、结束、出发或返程日期才计入日期证据；出行、同行或旅客人数才计入人数证据；旅行总预算或请求预算才计入总预算证据。资料更新时间、酒店限住人数、酒店预算和其他单项数字不再充当替代值。
+- Safety：同一字段出现待定、未知、未确认、缺失或冲突表达时保持 fail closed，附件中的无关正数不能覆盖否定状态。完整反例的开发请求 `ae384b2064761d15781e319703a21aae` 第一次领取后进入 rejected，候选定义和 Instance 都为空，错误准确列出出行日期、出行人数和预算；对应回归测试确认 Planner 调用数为 0。
+- Verified：字段绑定聚焦及关联套件为 `154 passed`。完整离线套件为 `1160 passed, 27 skipped, 1 failed`，唯一失败是沙箱禁止读取进程树；同一测试在允许环境单独 `1 passed`，合并证据为 `1161 passed, 27 skipped`。`git diff --check` 和 Python compile 均通过。
+- Deployment：开发 wheel SHA-256 为 `8b99b9bf5b6053c19b563f48c8694cdf802e9a750569f5ff4453d14f2648a396`，Target 与 legacy 安装态 `draft_validation.py` 哈希一致。开发库 ledger 保持 `24 / 0024_console_project_attachments`；十个 Python 服务均为 `active / running / NRestarts=0`，部署窗口 warning 级及以上日志为 0。
+- Acceptance：合法标记 `NO_WEB_FIELD_VALID_20260815_195116_9A70F03` 生成实例 `console_draft_93099995e3a27f0722fd2db6d49a7610`，最终为 `done / version 7 / graph_revision 1`，三个节点均为 Attempt 1。Human 交付与 Agent `input_snapshot.dependencies.confirm_source_and_requirements` 的数据库对象完全相等，两侧均为 2691 bytes。飞书 Task `393dca72-4583-4c25-9ac4-46ce93514f1a` 由 bot 原生接口回读为完成；完成文档 `OzGCdthQkoI3NLxQmu3ccaLunud` 为 revision 4，包含验收标记、原生标题、列表和表格。决定卡、完成通知、审计和投影均已收口，旧实例及其历史未清理或覆盖。
+- Boundary：本轮没有改变公开 evidence policy，只修正既有实现对字段的绑定精度。验收使用短期服务端 Console 会话和合成资料，不代表真实 Owner 浏览器附件交互已经完成；项目仍处于开发试用阶段，不是生产就绪。
+
 ## v0.86.1-draft · 2026-08-15 · No-web 来源绑定与证据收口
 
 - Fixed：`48325c361361d4b634dbfbbb0a58d2178444919e` 要求 no-web 旅游图中的来源 Human 根节点必须是被最终 Human 复核 Agent 的直接依赖，并通过 `work.inputs` 实际进入 Runner 的依赖快照。旁路来源根节点不再能满足最终校验，合法 `Human -> Agent -> Human` 路径保持不变。

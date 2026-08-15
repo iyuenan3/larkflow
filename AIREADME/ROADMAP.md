@@ -42,6 +42,8 @@
 
 **2026-08-15 复审缺口收口：** `48325c361361d4b634dbfbbb0a58d2178444919e` 要求 no-web 旅游图中的来源 Human 根节点必须是被最终 Human 复核 Agent 的直接依赖，并通过 `work.inputs` 真实进入 Runner 的依赖快照。附件充分性已从关键词存在收紧为有效日期、正数人数与预算、正向出发地、景点和交通证据，明显否定内容 fail closed。超过 Agent 结果上限的 Worker 路径统一为 `agent_result_incomplete`。合并离线证据为 `1151 passed, 27 skipped`；开发 wheel SHA-256 为 `b65f09071209e5d5e7c816bc8662a4d3b91ea0fbdbd2ac513ecf97942b2fee67`，开发库 ledger 为 `24 / 0024`，十个 Python 服务为 `active / running / NRestarts=0`。新合成实例 `console_draft_97ffe17d745f94599126a4d88c06c983` 以一致的 `2026-09-10` 到 `2026-09-17` 起止日期完成闭环，Agent 依赖快照与 Human 来源交付物一致，Task 为 done，Docx revision 3 包含原生标题、列表和表格。真实 Owner 浏览器附件交互仍是下一道手工关卡。
 
+**2026-08-15 字段绑定收口：** `9a70f033d800292972a8d627fd4dddc7e45d83b2` 继续把日期、人数和总预算的正向证据绑定到明确业务字段，资料更新时间、酒店限住人数和酒店单项预算不能覆盖同字段的待定、未知或未确认状态。字段绑定聚焦及关联套件为 `154 passed`，完整离线合并证据为 `1161 passed, 27 skipped`。开发 wheel SHA-256 为 `8b99b9bf5b6053c19b563f48c8694cdf802e9a750569f5ff4453d14f2648a396`，开发库保持 `24 / 0024`，十个服务为 `active / running / NRestarts=0`，部署窗口 warning 级及以上日志为 0。完整反例在模型调用前被确定性拒绝，合法合成实例 `console_draft_93099995e3a27f0722fd2db6d49a7610` 完成三节点闭环；Human 交付与 Agent 依赖对象完全相等，飞书 Task 原生回读为完成，Docx revision 4 包含原生标题、列表和表格。真实 Owner 浏览器附件交互仍未执行，项目继续保持开发试用状态。
+
 文件级执行边界、迁移批次、兼容方案、A/B 指标与停止开关见 [`docs/REFACTOR_BLUEPRINT.md`](../docs/REFACTOR_BLUEPRINT.md)。该文档是实施附录，不改变 AIREADME 的 Target 契约，也不代表代码、migration 或部署已经获准执行。
 
 ## Now · Phase 1 首次成功路径与可用性收口
