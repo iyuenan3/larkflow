@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from larkflow.planning.context import ContextBundle
 
 from .draft_validation import (
+    DraftCapabilityUnavailable,
     DraftGenerationRejected,
     GeneratedDraftValidator,
     MAX_GENERATED_NODES,
@@ -61,6 +62,11 @@ class DraftDefinitionGenerator:
         del tenant_id, actor_person_id, request_id
         brief = _bounded_text(brief, field="brief", required=True)
         context = _bounded_text(context, field="context", required=False)
+        self.validator.validate_request(
+            brief=brief,
+            context=context,
+            context_bundle=context_bundle,
+        )
         prompt = self._prompt(
             brief=brief,
             context=context,
@@ -79,8 +85,13 @@ class DraftDefinitionGenerator:
                 definition = _strict_json_definition(result)
                 definition["schema_version"] = "0.2"
                 definition["inputs"] = {"brief": brief, "context": context}
-                self.validator.validate(definition)
+                self.validator.validate(
+                    definition,
+                    context_bundle=context_bundle,
+                )
             except DraftGenerationRejected as exc:
+                if isinstance(exc, DraftCapabilityUnavailable):
+                    raise
                 if attempt + 1 >= MAX_GENERATION_ATTEMPTS:
                     raise
                 invalid_result = (
@@ -127,7 +138,9 @@ class DraftDefinitionGenerator:
             "Agent 同时依赖并消费这些结果。"
             if self.allow_web_search
             else
-            "当前部署未启用联网研究 Tool，不能生成依赖实时外部事实的流程，也不能声称已经搜索网页。"
+            "当前部署没有已验证的带引用联网研究能力。若用户明确 no-web 且提供了完整附件，"
+            "必须只基于附件设计 Human 确认、Agent 生成、Human 接受或退回的资料流程；"
+            "否则不能生成依赖实时外部事实的流程，也不能声称已经搜索网页。"
         )
         tool_rules = (
             "Tool 节点只能使用 "
@@ -298,6 +311,7 @@ def _bounded_text(value: Any, *, field: str, required: bool) -> str:
 
 __all__ = [
     "DraftDefinitionGenerator",
+    "DraftCapabilityUnavailable",
     "DraftGenerationRejected",
     "MAX_GENERATION_ATTEMPTS",
     "MAX_GENERATED_NODES",

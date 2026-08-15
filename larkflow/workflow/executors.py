@@ -21,6 +21,12 @@ class AgentCompletionClient(Protocol):
         ...
 
 
+class AgentResultIncomplete(ValueError):
+    """A provider response cannot satisfy the automated completion contract."""
+
+    error_code = "agent_result_incomplete"
+
+
 class WebSearchClient(Protocol):
     """Minimal hosted-search port required by the explicit Tool adapter."""
 
@@ -38,6 +44,7 @@ class LLMAgentExecutor:
         "来源提示：上游链接是搜索服务返回的引用，larkflow 未独立验证其当前可访问性或事实准确性。"
         "价格、开放时间、班次等时效信息请在执行前通过官方渠道复核。"
     )
+    ACCEPTED_FINISH_REASONS = frozenset({"stop", "completed", "end_turn"})
 
     def __init__(
         self,
@@ -82,15 +89,23 @@ class LLMAgentExecutor:
             raise ValueError(
                 f"Agent prompt exceeds {self.max_prompt_chars} characters"
             )
-        content = self.client.complete(
+        content, finish_reason, usage, provider_model, observed = self._complete(
             prompt=prompt,
             model_role=model_role.strip(),
         )
         if not isinstance(content, str) or not content.strip():
-            raise ValueError("Agent returned an empty result")
-        content = self._plain_text(content)
+            raise AgentResultIncomplete("Agent returned an empty result")
+        if observed:
+            self._validate_finish_reason(finish_reason)
+        if result_format == "plain_text" and observed:
+            content = self._completed_plain_text(
+                content,
+                acceptance=request.work.get("acceptance", ()),
+            )
+        else:
+            content = self._plain_text(content)
         if not content:
-            raise ValueError("Agent returned an empty result")
+            raise AgentResultIncomplete("Agent returned an empty result")
         if uses_web_research and result_format == "plain_text":
             content = f"{self.WEB_RESEARCH_NOTICE}\n\n{content}"
         if len(content) > self.max_result_chars:
@@ -103,6 +118,11 @@ class LLMAgentExecutor:
             "model_role": model_role.strip(),
             "request_id": request.idempotency_key,
         }
+        if observed:
+            result["finish_reason"] = finish_reason
+            result["usage"] = usage
+            if provider_model:
+                result["provider_model"] = provider_model
         if result_format == self.SOURCE_CLAIMS_FORMAT:
             claims = self._source_claims(content)
             result["content"] = render_source_claims(claims)
@@ -114,6 +134,119 @@ class LLMAgentExecutor:
             result["source_decision"] = decision
             result["result_format"] = result_format
         return ExecutionResult(result=result)
+
+    def _complete(
+        self,
+        *,
+        prompt: str,
+        model_role: str,
+    ) -> tuple[str, str | None, dict[str, int], str | None, bool]:
+        detailed = getattr(self.client, "complete_with_metadata", None)
+        if not callable(detailed):
+            return self.client.complete(
+                prompt=prompt,
+                model_role=model_role,
+            ), None, {}, None, False
+        observed = detailed(prompt=prompt, model_role=model_role)
+        if isinstance(observed, Mapping):
+            content = observed.get("content")
+            finish_reason = observed.get("finish_reason")
+            usage = observed.get("usage")
+            provider_model = observed.get("model")
+        else:
+            content = getattr(observed, "content", None)
+            finish_reason = getattr(observed, "finish_reason", None)
+            usage = getattr(observed, "usage", None)
+            provider_model = getattr(observed, "model", None)
+        if not isinstance(content, str):
+            raise AgentResultIncomplete("Agent completion metadata contains no text")
+        normalized_usage = {
+            str(key): item
+            for key, item in (usage.items() if isinstance(usage, Mapping) else ())
+            if isinstance(item, int) and not isinstance(item, bool) and item >= 0
+        }
+        return (
+            content,
+            finish_reason if isinstance(finish_reason, str) else None,
+            normalized_usage,
+            provider_model if isinstance(provider_model, str) else None,
+            True,
+        )
+
+    @classmethod
+    def _validate_finish_reason(cls, finish_reason: str | None) -> None:
+        normalized = (finish_reason or "").strip().lower()
+        if normalized in cls.ACCEPTED_FINISH_REASONS:
+            return
+        if normalized in {"length", "max_tokens", "max_output_tokens"}:
+            raise AgentResultIncomplete(
+                f"Agent provider stopped because of output length: {normalized}"
+            )
+        if not normalized:
+            raise AgentResultIncomplete("Agent provider returned no finish reason")
+        raise AgentResultIncomplete(
+            f"Agent provider did not complete normally: {normalized}"
+        )
+
+    @classmethod
+    def _completed_plain_text(
+        cls,
+        content: str,
+        *,
+        acceptance: object,
+    ) -> str:
+        """Validate a completion envelope and return its Markdown deliverable."""
+
+        try:
+            envelope = cls._strict_json_object(content, label="completion envelope")
+        except ValueError as exc:
+            raise AgentResultIncomplete("Agent completion marker is missing") from exc
+        if set(envelope) != {"content", "completion"}:
+            raise AgentResultIncomplete(
+                "Agent completion envelope must contain content and completion"
+            )
+        rendered = envelope.get("content")
+        marker = envelope.get("completion")
+        if not isinstance(rendered, str) or not rendered.strip():
+            raise AgentResultIncomplete("Agent completion envelope has empty content")
+        if not isinstance(marker, Mapping) or set(marker) != {
+            "status",
+            "acceptance_evidence",
+        }:
+            raise AgentResultIncomplete("Agent completion marker is missing")
+        if marker.get("status") != "complete":
+            raise AgentResultIncomplete("Agent completion status is not complete")
+        items = (
+            tuple(acceptance)
+            if isinstance(acceptance, Sequence)
+            and not isinstance(acceptance, (str, bytes))
+            else ()
+        )
+        expected_ids = {f"a{index}" for index in range(1, len(items) + 1)}
+        evidence = marker.get("acceptance_evidence")
+        if not isinstance(evidence, Mapping) or set(evidence) != expected_ids:
+            missing = sorted(expected_ids - set(evidence or ()))
+            detail = ",".join(missing) if missing else "unexpected fields"
+            raise AgentResultIncomplete(
+                f"Agent completion evidence is incomplete: {detail}"
+            )
+        searchable = cls._normalized_excerpt(rendered)
+        for item_id in sorted(expected_ids):
+            excerpt = evidence[item_id]
+            if (
+                not isinstance(excerpt, str)
+                or len(excerpt.strip()) < 2
+                or len(excerpt) > 240
+                or cls._normalized_excerpt(excerpt) not in searchable
+            ):
+                raise AgentResultIncomplete(
+                    f"Agent completion evidence is not present in content: {item_id}"
+                )
+        return rendered.strip()
+
+    @staticmethod
+    def _normalized_excerpt(value: str) -> str:
+        return " ".join(value.casefold().split())
 
     def accepts(self, *, executor: ExecutorKind, work: Mapping[str, object]) -> bool:
         agent = work.get("agent")
@@ -167,8 +300,19 @@ class LLMAgentExecutor:
                 "已经发生的事实。source_url 必须原样返回。"
             )
         else:
+            acceptance_items = tuple(request.work.get("acceptance", ()))
+            acceptance_contract = {
+                f"a{index}": str(item)
+                for index, item in enumerate(acceptance_items, start=1)
+            }
             final_instruction = (
-                "请直接给出可供下一人工节点审阅的正文，不要返回 JSON、代码块或字段包装。"
+                "只返回一个 JSON 对象，不要代码块或额外文字。对象必须严格包含 content 和 "
+                "completion。content 是完整 Markdown 正文；completion 必须严格等于 "
+                '{"status":"complete","acceptance_evidence":{"a1":"正文中的逐字短摘录"}} '
+                "这一结构，其中 acceptance_evidence 必须覆盖下面全部验收 ID，不能缺项或增加字段。"
+                "每个值必须是 content 中逐字出现、能够定位对应验收内容且不超过 240 字的短摘录。"
+                "只有正文全部生成完毕后才能写 status=complete；不得在表格、列表或句子中途结束。"
+                f"验收 ID：{json.dumps(acceptance_contract, ensure_ascii=False, sort_keys=True)}"
             )
         research_boundary = ""
         if LLMAgentExecutor._contains_web_research(request.input_snapshot):
@@ -355,6 +499,13 @@ class WebSearchToolExecutor:
         model_role = args.get("model_role", "default")
         if not isinstance(model_role, str) or not model_role.strip():
             raise ValueError("web.search model_role must be text")
+        supports = getattr(self.client, "supports_web_search", None)
+        if callable(supports) and not supports(model_role.strip()):
+            from larkflow.llm import LLMCapabilityUnavailable
+
+            raise LLMCapabilityUnavailable(
+                f"模型角色 {model_role.strip()} 未配置支持 URL 引用的联网搜索后端"
+            )
 
         prompt = self._prompt(request, instructions=instructions.strip())
         if len(prompt) > self.max_prompt_chars:

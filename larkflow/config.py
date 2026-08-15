@@ -21,10 +21,10 @@ LLM_ROLE_RE = re.compile(
 # 备用线路：BACKUP / BACKUP2 / BACKUP3…，按序号排队。
 LLM_BACKUP_RE = re.compile(
     r"^LLM_(?:(?P<role>[A-Z0-9_]+)_)?BACKUP(?P<idx>\d*)_"
-    r"(?P<field>BASE_URL|API_KEY|MODEL|TIMEOUT)$")
+    r"(?P<field>BASE_URL|API_KEY|MODEL|TIMEOUT|WEB_SEARCH_CAPABILITY)$")
 DEFAULT_ROLE = "default"
 _FIELDS = {"BASE_URL": "base_url", "API_KEY": "api_key", "MODEL": "model",
-           "TIMEOUT": "timeout"}
+           "TIMEOUT": "timeout", "WEB_SEARCH_CAPABILITY": "web_search_capability"}
 
 
 class RoleResolver:
@@ -135,7 +135,19 @@ def load_llm_roles(environ: dict[str, str] | None = None) -> dict[str, dict]:
         secs = _timeout(environ.get(f"{prefix}TIMEOUT"))
         if secs:
             primary["timeout"] = secs
-        chain = [dict(primary, **b) for _, b in sorted((backups.get(raw or "") or {}).items())]
+        capability = environ.get(f"{prefix}WEB_SEARCH_CAPABILITY")
+        if capability is not None:
+            primary["web_search_capability"] = _web_search_capability(capability)
+        chain = []
+        for _, override in sorted((backups.get(raw or "") or {}).items()):
+            backup = dict(primary, **override)
+            route_changed = any(
+                field in override and override[field] != primary[field]
+                for field in ("base_url", "model")
+            )
+            if route_changed and "web_search_capability" not in override:
+                backup.pop("web_search_capability", None)
+            chain.append(backup)
         roles[role] = {**primary, "fallbacks": chain} if chain else primary
     return roles
 
@@ -150,6 +162,15 @@ def _timeout(raw):
     except (TypeError, ValueError):
         return None
     return secs if secs > 0 else None
+
+
+def _web_search_capability(raw: object) -> str:
+    """Fail closed unless the route explicitly promises Responses citations."""
+
+    normalized = str(raw or "").strip().lower()
+    if normalized == "responses_citations":
+        return normalized
+    return "unavailable"
 
 
 def _load_backups(environ: dict[str, str]) -> dict[str, dict[int, dict]]:
@@ -171,6 +192,8 @@ def _load_backups(environ: dict[str, str]) -> dict[str, dict[int, dict]]:
             val = _timeout(val)      # env 全是字符串，这一个要落成数字
             if val is None:
                 continue
+        elif field == "web_search_capability":
+            val = _web_search_capability(val)
         out.setdefault(raw, {}).setdefault(idx, {})[field] = val
     return out
 

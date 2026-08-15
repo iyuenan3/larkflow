@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from larkflow.workflow import (
+    AgentResultIncomplete,
     AttemptStatus,
     AutomatedExecutor,
     ClaimExpiredError,
@@ -94,6 +95,11 @@ class CrashExecutor(AutomatedExecutor):
 class FailingExecutor(AutomatedExecutor):
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         raise RuntimeError("provider rejected the request")
+
+
+class IncompleteAgentExecutor(AutomatedExecutor):
+    def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        raise AgentResultIncomplete("provider stopped at output length")
 
 
 class SelectiveToolExecutor(RecordingExecutor):
@@ -537,6 +543,28 @@ def test_executor_error_fails_the_instance_and_clears_the_claim():
     assert failed.status == InstanceStatus.FAILED
     assert failed.current_attempt("generate").claimed_by is None
     assert failed.current_attempt("generate").claim_token is None
+
+
+def test_incomplete_agent_result_has_a_distinct_failure_code_and_never_completes():
+    clock = Clock()
+    service, repository = build_runtime(clock=clock)
+
+    report = worker(
+        service,
+        repository,
+        IncompleteAgentExecutor(),
+        clock=clock,
+        worker_id="worker_1",
+    ).run_once()
+
+    assert report.completed == 0
+    assert report.failed == 1
+    failed = service.get(TENANT, "instance_runtime")
+    attempt = failed.current_attempt("generate")
+    assert failed.status == InstanceStatus.FAILED
+    assert attempt.status == AttemptStatus.FAILED
+    assert attempt.error_code == "agent_result_incomplete"
+    assert attempt.result is None
 
 
 def test_dispatch_due_limits_automated_claims_but_dispatches_all_humans():

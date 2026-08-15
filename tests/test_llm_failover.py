@@ -84,6 +84,45 @@ def test_no_backup_means_no_fallbacks_key():
         "base_url": "https://ark", "api_key": "k1", "model": "m1"}
 
 
+def test_web_search_capability_must_be_explicit_and_is_route_specific():
+    roles = load_llm_roles(
+        {
+            **PRIMARY,
+            "LLM_WRITER_WEB_SEARCH_CAPABILITY": "responses_citations",
+            "LLM_WRITER_BACKUP_API_KEY": "k2",
+            "LLM_WRITER_BACKUP_WEB_SEARCH_CAPABILITY": "unavailable",
+        }
+    )
+
+    assert roles["writer"]["web_search_capability"] == "responses_citations"
+    assert (
+        roles["writer"]["fallbacks"][0]["web_search_capability"]
+        == "unavailable"
+    )
+
+
+def test_unknown_web_search_capability_fails_closed():
+    roles = load_llm_roles(
+        {**PRIMARY, "LLM_WRITER_WEB_SEARCH_CAPABILITY": "provider_magic"}
+    )
+
+    assert roles["writer"]["web_search_capability"] == "unavailable"
+
+
+def test_changed_backup_route_does_not_inherit_search_capability():
+    roles = load_llm_roles(
+        {
+            **PRIMARY,
+            "LLM_WRITER_WEB_SEARCH_CAPABILITY": "responses_citations",
+            "LLM_WRITER_BACKUP_BASE_URL": "https://relay",
+            "LLM_WRITER_BACKUP_API_KEY": "k2",
+            "LLM_WRITER_BACKUP_MODEL": "m2",
+        }
+    )
+
+    assert "web_search_capability" not in roles["writer"]["fallbacks"][0]
+
+
 # ---------- 运行时切换 ----------
 
 class _Boom(Exception):

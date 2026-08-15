@@ -158,7 +158,10 @@ class WorkflowWorker:
                     result = executor.execute(request)
                 except Exception as exc:
                     error = f"{type(exc).__name__}: {exc}"
-                    if self._fail(activation, "executor_error", error):
+                    error_code = getattr(exc, "error_code", "executor_error")
+                    if not isinstance(error_code, str) or not error_code.strip():
+                        error_code = "executor_error"
+                    if self._fail(activation, error_code, error):
                         failed += 1
                     else:
                         stale_results += 1

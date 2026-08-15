@@ -57,6 +57,20 @@ def test_a_slow_call_is_announced_before_and_after():
     assert seen[1]["ok"] is True and isinstance(seen[1]["seconds"], float)
 
 
+def test_completion_metadata_preserves_finish_reason_usage_and_model():
+    llm = OpenAICompatLLM(
+        ROLES,
+        client_factory=lambda cfg: _FakeOK(),
+    )
+
+    result = llm.complete_with_metadata(prompt="p", model_role="writer")
+
+    assert result.content == "ok"
+    assert result.finish_reason == "stop"
+    assert result.usage == {"prompt_tokens": 4, "completion_tokens": 2}
+    assert result.model == "provider-model"
+
+
 def test_a_failed_call_is_announced_too_with_the_reason():
     seen = []
     llm = OpenAICompatLLM(ROLES, on_call=seen.append,
@@ -88,8 +102,24 @@ class _FakeOK:
         return self
 
     def create(self, **kw):
-        return type("R", (), {"choices": [type("C", (), {
-            "message": type("M", (), {"content": "ok"})()})()]})()
+        return type(
+            "R",
+            (),
+            {
+                "choices": [
+                    type(
+                        "C",
+                        (),
+                        {
+                            "message": type("M", (), {"content": "ok"})(),
+                            "finish_reason": "stop",
+                        },
+                    )()
+                ],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+                "model": "provider-model",
+            },
+        )()
 
 
 class _FakeBoom:

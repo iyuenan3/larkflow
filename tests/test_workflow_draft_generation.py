@@ -1,15 +1,27 @@
 """Safety and contract tests for natural-language workflow generation."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 
 import pytest
 
+from larkflow.planning.context import (
+    AttachmentRef,
+    ContextBundle,
+    ContextChunk,
+    SourceRef,
+    sha256_hex,
+)
 from larkflow.workflow import (
+    DraftCapabilityUnavailable,
     DraftDefinitionGenerator,
     DraftGenerationRejected,
     draft_wizard_form,
 )
+
+
+NOW = datetime(2026, 8, 15, 4, 0, tzinfo=timezone.utc)
 
 
 def valid_definition():
@@ -95,6 +107,51 @@ class SequenceCompletion:
     def complete(self, *, prompt, model_role):
         self.calls.append((prompt, model_role))
         return next(self.values)
+
+
+def attachment_context(text: str) -> ContextBundle:
+    raw = text.encode("utf-8")
+    digest = sha256_hex(raw)
+    return ContextBundle(
+        tenant_id="tenant_planning",
+        scope_kind="console_draft_request",
+        scope_id="request_planning",
+        purpose="planning",
+        actor_person_id="person_requester",
+        sources=(
+            SourceRef(
+                source_id="attachment.trip_brief",
+                kind="attachment",
+                label="trip-brief.md",
+                content_sha256=digest,
+            ),
+        ),
+        attachments=(
+            AttachmentRef(
+                attachment_id="attachment_trip_brief",
+                source_id="attachment.trip_brief",
+                display_filename="trip-brief.md",
+                media_type="text/markdown",
+                size_bytes=len(raw),
+                content_sha256=digest,
+            ),
+        ),
+        chunks=(ContextChunk("attachment.trip_brief", 0, text),),
+        created_at=NOW,
+        expires_at=NOW + timedelta(minutes=10),
+    )
+
+
+def no_web_trip_definition():
+    value = valid_definition()
+    value["goal"] = "Generate and review an eight-day trip manual"
+    value["nodes"][0]["work"]["outputs"] = [
+        {"id": "origin", "type": "text", "label": "出发地", "required": True},
+        {"id": "start_date", "type": "date", "label": "出行日期", "required": True},
+        {"id": "travelers", "type": "integer", "label": "出行人数", "required": True},
+        {"id": "budget", "type": "money", "label": "预算", "required": True},
+    ]
+    return value
 
 
 def test_generator_accepts_only_a_valid_bounded_inline_definition():
@@ -311,11 +368,70 @@ def test_under_specified_trip_cannot_skip_requirements_and_research_deliverables
 def test_trip_generation_is_rejected_when_controlled_search_is_disabled():
     completion = Completion(json.dumps(valid_definition()))
 
-    with pytest.raises(DraftGenerationRejected, match="联网研究"):
+    with pytest.raises(DraftCapabilityUnavailable, match="URL 引用"):
         DraftDefinitionGenerator(completion).generate(
             brief="我要去苏州旅游，帮我创建一个项目来规划行程",
             context="",
         )
+
+    assert completion.calls == []
+
+
+def test_complete_attachment_and_explicit_no_web_allow_a_tool_free_trip_flow():
+    definition = no_web_trip_definition()
+    completion = Completion(json.dumps(definition, ensure_ascii=False))
+    bundle = attachment_context(
+        "2026年9月1日从上海出发，2人，预算12000元。"
+        "新疆8日行程包含喀纳斯等景点游玩资料，所有交通段和路线资料均已给出。"
+    )
+
+    result = DraftDefinitionGenerator(completion).generate(
+        brief="根据附件生成新疆8日旅行执行手册，不要联网，附件为唯一来源",
+        context="",
+        context_bundle=bundle,
+    )
+
+    assert [node["executor"] for node in result["nodes"]] == [
+        "human",
+        "agent",
+        "human",
+    ]
+    assert len(completion.calls) == 1
+    assert "不可信来源资料" in completion.calls[0][0]
+
+
+def test_no_web_trip_rejects_missing_or_incomplete_attachment_evidence():
+    completion = Completion(json.dumps(no_web_trip_definition()))
+
+    with pytest.raises(DraftGenerationRejected, match="没有提供.*附件"):
+        DraftDefinitionGenerator(completion).generate(
+            brief="生成新疆旅行手册，不要联网",
+            context="",
+        )
+    assert completion.calls == []
+
+    incomplete = attachment_context("新疆景点资料已经整理，但日期和预算尚未确认。")
+    with pytest.raises(DraftGenerationRejected, match="附件资料不足.*出发地"):
+        DraftDefinitionGenerator(completion).generate(
+            brief="生成新疆旅行手册，不要联网",
+            context="",
+            context_bundle=incomplete,
+        )
+    assert completion.calls == []
+
+
+def test_attachment_travel_intent_cannot_be_hidden_by_renaming_the_manual():
+    completion = Completion(json.dumps(no_web_trip_definition()))
+    bundle = attachment_context("新疆旅游路线和景点资料，但缺少日期、人数、预算和交通。")
+
+    with pytest.raises(DraftCapabilityUnavailable, match="URL 引用"):
+        DraftDefinitionGenerator(completion).generate(
+            brief="请创建一份执行手册",
+            context="",
+            context_bundle=bundle,
+        )
+
+    assert completion.calls == []
 
 
 def test_generator_rejects_decision_whose_rework_target_is_not_an_agent():

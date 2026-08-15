@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
+import re
 from typing import Any
+
+from larkflow.planning.context import ContextBundle
 
 from .decision import human_decision_config
 from .template_service import (
@@ -22,6 +26,7 @@ _TRAVEL_INTENT_TERMS = (
     "itinerary",
     "trip plan",
     "travel plan",
+    "行程",
 )
 _TRAVEL_REQUIREMENT_TERMS = {
     "出发地": ("出发", "起点", "origin", "departure"),
@@ -33,10 +38,48 @@ _TRAVEL_RESEARCH_TERMS = {
     "景点攻略": ("景点", "游玩", "attraction", "sightseeing"),
     "交通攻略": ("交通", "路线", "transport", "transit"),
 }
+_NO_WEB_TERMS = (
+    "不要联网",
+    "禁止联网",
+    "无需联网",
+    "不查询外部",
+    "无需外部查询",
+    "附件为唯一来源",
+    "附件中的资料为唯一来源",
+    "no web",
+    "offline only",
+)
+_EXTERNAL_RESEARCH_TERMS = (
+    "联网搜索",
+    "联网查询",
+    "搜索公开",
+    "调研公开",
+    "最新公开信息",
+    "web search",
+)
+_TRAVEL_SOURCE_EVIDENCE_TERMS = {
+    **_TRAVEL_REQUIREMENT_TERMS,
+    "景点资料": _TRAVEL_RESEARCH_TERMS["景点攻略"],
+    "交通资料": _TRAVEL_RESEARCH_TERMS["交通攻略"],
+}
 
 
 class DraftGenerationRejected(ValueError):
     """The model response is not a safe, executable inline definition."""
+
+
+class DraftCapabilityUnavailable(DraftGenerationRejected):
+    """The requested evidence path has no configured executable capability."""
+
+
+@dataclass(frozen=True)
+class DraftEvidencePolicy:
+    """Server-derived evidence decision for one untrusted planning request."""
+
+    travel_intent: bool
+    no_web: bool
+    attachment_sources: bool
+    web_search_available: bool
 
 
 class GeneratedDraftValidator:
@@ -45,7 +88,12 @@ class GeneratedDraftValidator:
     def __init__(self, *, allow_web_search: bool = False) -> None:
         self.allow_web_search = allow_web_search
 
-    def validate(self, definition: Mapping[str, Any]) -> None:
+    def validate(
+        self,
+        definition: Mapping[str, Any],
+        *,
+        context_bundle: ContextBundle | None = None,
+    ) -> None:
         nodes = definition.get("nodes")
         if not isinstance(nodes, list) or not 1 <= len(nodes) <= MAX_GENERATED_NODES:
             raise DraftGenerationRejected(
@@ -192,7 +240,10 @@ class GeneratedDraftValidator:
                     raise DraftGenerationRejected(
                         "包含 Agent 的生成流程必须以可接受或退回的 Human 决策节点结束"
                     )
-        self._validate_domain_shape(definition)
+        self._validate_domain_shape(
+            definition,
+            context_bundle=context_bundle,
+        )
         owner_bindings = {role: f"person_{role}" for role in roles}
         try:
             instantiate_inline_definition(
@@ -202,21 +253,60 @@ class GeneratedDraftValidator:
         except TemplateValidationError as exc:
             raise DraftGenerationRejected(f"生成流程未通过校验：{exc}") from exc
 
-    def _validate_domain_shape(self, definition: Mapping[str, Any]) -> None:
+    def validate_request(
+        self,
+        *,
+        brief: str,
+        context: str,
+        context_bundle: ContextBundle | None,
+    ) -> DraftEvidencePolicy:
+        """Fail before model work when the requested evidence path is impossible."""
+
+        definition = {"inputs": {"brief": brief, "context": context}}
+        policy = self._evidence_policy(definition, context_bundle=context_bundle)
+        request_text = f"{brief} {context}".casefold()
+        needs_external = policy.travel_intent or any(
+            term in request_text for term in _EXTERNAL_RESEARCH_TERMS
+        )
+        if policy.no_web:
+            if context_bundle is None:
+                raise DraftGenerationRejected(
+                    "已明确禁止联网，但没有提供可授权读取的附件资料"
+                )
+            if policy.travel_intent:
+                missing = self._missing_travel_source_evidence(context_bundle)
+                if missing:
+                    raise DraftGenerationRejected(
+                        "附件资料不足，缺少可用证据：" + "、".join(missing)
+                    )
+        elif needs_external and not self.allow_web_search:
+            raise DraftCapabilityUnavailable(
+                "当前没有支持 URL 引用的联网搜索后端。请上传完整资料并明确要求不联网，"
+                "或由管理员配置已验证的搜索后端后重试"
+            )
+        return policy
+
+    def _validate_domain_shape(
+        self,
+        definition: Mapping[str, Any],
+        *,
+        context_bundle: ContextBundle | None,
+    ) -> None:
         """Reject known high-risk shallow plans before they reach a user."""
 
         inputs = definition.get("inputs") or {}
         if not isinstance(inputs, Mapping):
             return
-        request_text = " ".join(
-            str(inputs.get(key) or "") for key in ("brief", "context")
-        ).casefold()
-        if not any(term in request_text for term in _TRAVEL_INTENT_TERMS):
+        policy = self._evidence_policy(
+            definition,
+            context_bundle=context_bundle,
+        )
+        if not policy.travel_intent:
             return
-        if not self.allow_web_search:
-            raise DraftGenerationRejected("旅游规划需要先启用受控联网研究 Tool")
 
         nodes = definition.get("nodes") or []
+        if policy.no_web and any(node.get("executor") == "tool" for node in nodes):
+            raise DraftGenerationRejected("no-web 资料流程不能包含联网研究 Tool")
         roots = [node for node in nodes if not (node.get("deps") or [])]
         root_outputs = " ".join(
             " ".join(
@@ -235,6 +325,18 @@ class GeneratedDraftValidator:
         if missing_requirements:
             raise DraftGenerationRejected(
                 "旅游规划必须先收集必填需求：" + "、".join(missing_requirements)
+            )
+
+        if policy.no_web:
+            if not policy.attachment_sources:
+                raise DraftGenerationRejected(
+                    "no-web 旅游流程缺少已授权附件来源"
+                )
+            return
+        if not self.allow_web_search:
+            raise DraftCapabilityUnavailable(
+                "当前没有支持 URL 引用的联网搜索后端。请上传完整资料并明确要求不联网，"
+                "或由管理员配置已验证的搜索后端后重试"
             )
 
         research_nodes: dict[str, set[str]] = {
@@ -284,9 +386,59 @@ class GeneratedDraftValidator:
                 "旅游规划 Agent 必须同时消费景点和交通研究交付物"
             )
 
+    def _evidence_policy(
+        self,
+        definition: Mapping[str, Any],
+        *,
+        context_bundle: ContextBundle | None,
+    ) -> DraftEvidencePolicy:
+        inputs = definition.get("inputs") or {}
+        request_text = (
+            " ".join(str(inputs.get(key) or "") for key in ("brief", "context"))
+            if isinstance(inputs, Mapping)
+            else ""
+        ).casefold()
+        source_text = self._context_text(context_bundle).casefold()
+        return DraftEvidencePolicy(
+            travel_intent=any(
+                term in request_text or term in source_text
+                for term in _TRAVEL_INTENT_TERMS
+            ),
+            no_web=any(term in request_text for term in _NO_WEB_TERMS),
+            attachment_sources=context_bundle is not None,
+            web_search_available=self.allow_web_search,
+        )
+
+    @staticmethod
+    def _context_text(context_bundle: ContextBundle | None) -> str:
+        if context_bundle is None:
+            return ""
+        return "\n".join(chunk.text for chunk in context_bundle.chunks)
+
+    @classmethod
+    def _missing_travel_source_evidence(
+        cls,
+        context_bundle: ContextBundle,
+    ) -> list[str]:
+        source_text = cls._context_text(context_bundle).casefold()
+        missing = []
+        for label, terms in _TRAVEL_SOURCE_EVIDENCE_TERMS.items():
+            if any(term in source_text for term in terms):
+                continue
+            if label == "出行日期" and re.search(
+                r"20\d{2}\s*[-年/.]\s*\d{1,2}", source_text
+            ):
+                continue
+            if label == "出行人数" and re.search(r"\d+\s*(?:人|位)", source_text):
+                continue
+            missing.append(label)
+        return missing
+
 
 __all__ = [
     "DraftGenerationRejected",
+    "DraftCapabilityUnavailable",
+    "DraftEvidencePolicy",
     "GeneratedDraftValidator",
     "MAX_GENERATED_NODES",
 ]

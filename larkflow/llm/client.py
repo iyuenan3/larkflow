@@ -11,7 +11,19 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 import time
+from typing import Any
+
+
+@dataclass(frozen=True)
+class CompletionResult:
+    """Provider-neutral completion text plus bounded upstream observations."""
+
+    content: str
+    finish_reason: str | None = None
+    usage: Mapping[str, Any] = field(default_factory=dict)
+    model: str | None = None
 
 
 class LLMClient:
@@ -37,6 +49,10 @@ class StubLLM(LLMClient):
 
 class LLMUnavailable(RuntimeError):
     """一个角色的**整条线路**（主 + 全部备用）都打不通。"""
+
+
+class LLMCapabilityUnavailable(RuntimeError):
+    """No configured route explicitly declares the requested capability."""
 
 
 # 400 / 422 = 我们自己的请求有问题（报文不合法、超长、内容被判违规）。换条线路只会
@@ -152,6 +168,24 @@ class OpenAICompatLLM(LLMClient):
         return self._clients[key]
 
     def complete(self, *, prompt: str, model_role: str) -> str:
+        return self.complete_with_metadata(
+            prompt=prompt,
+            model_role=model_role,
+        ).content
+
+    def complete_with_metadata(
+        self,
+        *,
+        prompt: str,
+        model_role: str,
+    ) -> CompletionResult:
+        """Return text together with finish reason and provider usage.
+
+        ``complete`` remains the legacy string facade. Target Agent Attempts use
+        this richer method so a provider-side length stop cannot be mistaken for
+        a completed business deliverable.
+        """
+
         chain = self._chain(model_role)
         tried: list[str] = []
         for i, cfg in enumerate(chain):
@@ -166,6 +200,7 @@ class OpenAICompatLLM(LLMClient):
                     temperature=0,
                     messages=[{"role": "user", "content": prompt}],
                 )
+                result = _completion_result(resp, configured_model=cfg["model"])
             except Exception as exc:
                 self._note_call({"event": "end", "model_role": model_role, "link": i,
                                  "ok": False, "seconds": round(time.monotonic() - started, 1),
@@ -179,11 +214,21 @@ class OpenAICompatLLM(LLMClient):
                         + "｜".join(tried)) from exc
                 continue
             self._note_call({"event": "end", "model_role": model_role, "link": i,
-                             "ok": True, "seconds": round(time.monotonic() - started, 1)})
+                             "ok": True, "seconds": round(time.monotonic() - started, 1),
+                             "finish_reason": result.finish_reason,
+                             "usage": dict(result.usage)})
             if i:
                 self._note_failover(model_role, i, len(chain), tried)
-            return resp.choices[0].message.content or ""
+            return result
         raise LLMUnavailable(f"角色 {model_role} 没有任何可用线路")   # 链为空（装配期已挡）
+
+    def supports_web_search(self, model_role: str = DEFAULT_ROLE) -> bool:
+        """Return only explicitly configured search-with-citations capability."""
+
+        return any(
+            cfg.get("web_search_capability") == "responses_citations"
+            for cfg in self._chain(model_role)
+        )
 
     def web_search(self, *, prompt: str, model_role: str) -> dict:
         """Use a provider-hosted web search and preserve its cited URLs.
@@ -193,7 +238,15 @@ class OpenAICompatLLM(LLMClient):
         while a ``web.search`` node is visible in the DAG and audit trail.
         """
 
-        chain = self._chain(model_role)
+        chain = [
+            cfg
+            for cfg in self._chain(model_role)
+            if cfg.get("web_search_capability") == "responses_citations"
+        ]
+        if not chain:
+            raise LLMCapabilityUnavailable(
+                f"角色 {model_role} 没有声明支持带引用的联网搜索线路"
+            )
         tried: list[str] = []
         for i, cfg in enumerate(chain):
             started = time.monotonic()
@@ -273,6 +326,79 @@ def _web_search_result(response: object) -> dict:
     if not sources:
         raise ValueError("web search returned no cited sources")
     return {"content": content.strip(), "sources": sources}
+
+
+def _completion_result(
+    response: object,
+    *,
+    configured_model: str,
+) -> CompletionResult:
+    """Extract one chat completion without retaining provider response objects."""
+
+    if isinstance(response, Mapping):
+        choices = response.get("choices")
+        usage = response.get("usage")
+        model = response.get("model")
+    else:
+        choices = getattr(response, "choices", None)
+        usage = getattr(response, "usage", None)
+        model = getattr(response, "model", None)
+    if not isinstance(choices, Sequence) or isinstance(choices, (str, bytes)) or not choices:
+        raise ValueError("completion response contains no choices")
+    choice = choices[0]
+    if isinstance(choice, Mapping):
+        message = choice.get("message")
+        finish_reason = choice.get("finish_reason")
+    else:
+        message = getattr(choice, "message", None)
+        finish_reason = getattr(choice, "finish_reason", None)
+    if isinstance(message, Mapping):
+        content = message.get("content")
+    else:
+        content = getattr(message, "content", None)
+    if content is None:
+        content = ""
+    if not isinstance(content, str):
+        raise ValueError("completion response content is not text")
+    normalized_finish_reason = (
+        finish_reason.strip()
+        if isinstance(finish_reason, str) and finish_reason.strip()
+        else None
+    )
+    normalized_model = (
+        model.strip()
+        if isinstance(model, str) and model.strip()
+        else configured_model
+    )
+    return CompletionResult(
+        content=content,
+        finish_reason=normalized_finish_reason,
+        usage=_bounded_usage(usage),
+        model=normalized_model,
+    )
+
+
+def _bounded_usage(value: object) -> dict[str, int]:
+    """Keep only scalar token counts, never arbitrary provider payloads."""
+
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        dump = getattr(value, "model_dump", None)
+        value = dump() if callable(dump) else getattr(value, "__dict__", {})
+    if not isinstance(value, Mapping):
+        return {}
+    result: dict[str, int] = {}
+    for key, item in value.items():
+        normalized_key = str(key)
+        if (
+            normalized_key.endswith("tokens")
+            and isinstance(item, int)
+            and not isinstance(item, bool)
+            and item >= 0
+        ):
+            result[normalized_key] = item
+    return result
 
 
 def _response_mapping(response: object) -> Mapping[str, object]:

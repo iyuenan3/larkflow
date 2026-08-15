@@ -1181,19 +1181,32 @@ def _draft_generator(
 
     if settings.planner_runtime != "bounded":
         raise ValueError("unsupported Target Planner runtime")
+    client = OpenAICompatLLM(
+        roles,
+        on_call=note_call,
+        on_failover=note_failover,
+    )
+    web_search_available = (
+        settings.enable_web_search
+        and client.supports_web_search("default")
+    )
+    if log is not None:
+        log(
+            "draft_web_search_capability",
+            {
+                "configured": settings.enable_web_search,
+                "available": web_search_available,
+            },
+        )
     return PlanningService(
         BoundedPlannerRuntime(
             DraftDefinitionGenerator(
-                OpenAICompatLLM(
-                    roles,
-                    on_call=note_call,
-                    on_failover=note_failover,
-                ),
+                client,
                 max_result_chars=settings.max_result_chars,
-                allow_web_search=settings.enable_web_search,
+                allow_web_search=web_search_available,
             )
         ),
-        allow_web_search=settings.enable_web_search,
+        allow_web_search=web_search_available,
     )
 
 

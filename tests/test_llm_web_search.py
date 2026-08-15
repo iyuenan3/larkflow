@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import pytest
 
-from larkflow.llm import LLMUnavailable, OpenAICompatLLM
+from larkflow.llm import (
+    LLMCapabilityUnavailable,
+    LLMUnavailable,
+    OpenAICompatLLM,
+)
 
 
 ROLES = {
@@ -11,8 +15,28 @@ ROLES = {
         "base_url": "https://ark.example.invalid/api/v3",
         "api_key": "test-key",
         "model": "test-model",
+        "web_search_capability": "responses_citations",
     }
 }
+
+
+def test_hosted_web_search_requires_an_explicit_citation_capability():
+    fake = FakeResponsesClient(response(annotations=[]))
+    llm = OpenAICompatLLM(
+        {
+            "default": {
+                "base_url": "https://ark.example.invalid/api/v3",
+                "api_key": "test-key",
+                "model": "test-model",
+            }
+        },
+        client_factory=lambda _cfg: fake,
+    )
+
+    assert llm.supports_web_search("default") is False
+    with pytest.raises(LLMCapabilityUnavailable, match="带引用"):
+        llm.web_search(prompt="核对苏州景点规则", model_role="default")
+    assert fake.calls == []
 
 
 class FakeResponsesClient:

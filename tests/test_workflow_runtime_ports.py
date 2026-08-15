@@ -17,6 +17,7 @@ from larkflow.planning import PlannerRequest, PlannerResult
 from larkflow.planning.bounded import BoundedPlannerRuntime
 from larkflow.planning.service import PlanningService
 from larkflow.workflow import (
+    DraftCapabilityUnavailable,
     DraftDefinitionGenerator,
     DraftGenerationRejected,
     ExecutionRequest,
@@ -303,6 +304,23 @@ def test_planning_service_rejects_invalid_candidates_from_any_runtime(
         )
 
     assert len(runtime.requests) == 1
+
+
+def test_planning_service_preflights_missing_search_capability_before_runtime():
+    runtime = StaticPlannerRuntime(valid_definition())
+    service = PlanningService(runtime, allow_web_search=False)
+
+    with pytest.raises(DraftCapabilityUnavailable, match="URL 引用"):
+        service.plan(
+            PlannerRequest(
+                tenant_id="tenant_planning",
+                actor_person_id="person_requester",
+                request_id="request_planning",
+                brief="研究新疆旅游公开资料并制定行程",
+            )
+        )
+
+    assert runtime.requests == []
 
 
 def test_planning_service_rebinds_server_owned_candidate_inputs() -> None:

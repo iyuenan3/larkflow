@@ -11,9 +11,11 @@ import yaml
 
 from larkflow.agent_runtime.completion import CompletionAgentRuntime
 from larkflow.agent_runtime.executor import AgentRuntimeExecutor
+from larkflow.llm import CompletionResult
 from larkflow.planning.bounded import BoundedPlannerRuntime
 from larkflow.planning.service import PlanningService
 from larkflow.workflow import (
+    AgentResultIncomplete,
     ExecutionRequest,
     ExecutorKind,
     InMemoryTemplateStore,
@@ -38,6 +40,46 @@ class RecordingCompletion:
     def complete(self, *, prompt: str, model_role: str) -> str:
         self.calls.append({"prompt": prompt, "model_role": model_role})
         return self.content
+
+
+class ObservedCompletion:
+    def __init__(
+        self,
+        content: str,
+        *,
+        finish_reason: str | None = "stop",
+    ) -> None:
+        self.content = content
+        self.finish_reason = finish_reason
+        self.calls = []
+
+    def complete_with_metadata(self, *, prompt: str, model_role: str):
+        self.calls.append({"prompt": prompt, "model_role": model_role})
+        return CompletionResult(
+            content=self.content,
+            finish_reason=self.finish_reason,
+            usage={"prompt_tokens": 120, "completion_tokens": 80},
+            model="provider-model",
+        )
+
+
+def completion_envelope(
+    content: str = "结论：可以继续。",
+    *,
+    evidence: dict[str, str] | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "content": content,
+            "completion": {
+                "status": "complete",
+                "acceptance_evidence": (
+                    {"a1": "可以继续"} if evidence is None else evidence
+                ),
+            },
+        },
+        ensure_ascii=False,
+    )
 
 
 def request(
@@ -129,6 +171,72 @@ def test_agent_executor_rejects_empty_and_unbounded_results():
             RecordingCompletion("four"),
             max_result_chars=3,
         ).execute(request())
+
+
+def test_agent_executor_persists_provider_completion_observations():
+    completion = ObservedCompletion(completion_envelope())
+
+    result = LLMAgentExecutor(completion).execute(request())
+
+    assert result.result["content"] == "结论：可以继续。"
+    assert result.result["finish_reason"] == "stop"
+    assert result.result["usage"] == {
+        "prompt_tokens": 120,
+        "completion_tokens": 80,
+    }
+    assert result.result["provider_model"] == "provider-model"
+
+
+@pytest.mark.parametrize("finish_reason", ("length", "max_tokens", None))
+def test_agent_executor_rejects_provider_truncation_or_unknown_finish(
+    finish_reason,
+):
+    completion = ObservedCompletion(
+        completion_envelope(),
+        finish_reason=finish_reason,
+    )
+
+    with pytest.raises(AgentResultIncomplete, match="finish reason|output length"):
+        LLMAgentExecutor(completion).execute(request())
+
+
+@pytest.mark.parametrize(
+    "content, message",
+    (
+        ("完整正文但没有完成标记", "completion marker"),
+        (
+            completion_envelope(evidence={}),
+            "evidence is incomplete",
+        ),
+        (
+            completion_envelope(evidence={"a1": "正文中不存在"}),
+            "not present in content",
+        ),
+    ),
+)
+def test_agent_executor_rejects_incomplete_delivery_contract(content, message):
+    with pytest.raises(AgentResultIncomplete, match=message):
+        LLMAgentExecutor(ObservedCompletion(content)).execute(request())
+
+
+def test_agent_executor_includes_rework_feedback_in_the_next_attempt_prompt():
+    execution_request = request()
+    execution_request = replace(
+        execution_request,
+        attempt_id="attempt_agent_2",
+        attempt_no=2,
+        input_snapshot={
+            **execution_request.input_snapshot,
+            "rework_feedback": {
+                "feedback": "补齐预算、预订责任链和风险预案",
+            },
+        },
+    )
+    completion = ObservedCompletion(completion_envelope())
+
+    LLMAgentExecutor(completion).execute(execution_request)
+
+    assert "补齐预算、预订责任链和风险预案" in completion.calls[0]["prompt"]
 
 
 @pytest.mark.parametrize(
@@ -409,6 +517,34 @@ def test_draft_generator_budgets_both_model_attempts():
     )
     with pytest.raises(ValueError, match="two complete LLM route budgets"):
         _draft_generator(unsafe, environ=environment)
+
+
+def test_draft_generator_disables_unverified_search_before_planning():
+    environment = {
+        "LLM_BASE_URL": "https://llm.example.invalid/v1",
+        "LLM_API_KEY": "test-key",
+        "LLM_MODEL": "test-model",
+        "LLM_TIMEOUT": "20",
+    }
+    settings = TargetDraftGenerationSettings(
+        dsn="postgresql:///test",
+        tenant_id="tenant_agent",
+        worker_id="draft_worker",
+        claim_ttl=timedelta(seconds=51),
+        claim_safety=timedelta(seconds=10),
+        enable_web_search=True,
+    )
+    observed = []
+
+    service = _draft_generator(
+        settings,
+        environ=environment,
+        log=lambda event, fields, **_kwargs: observed.append((event, fields)),
+    )
+
+    assert service.validator.allow_web_search is False
+    assert service.runtime.generator.allow_web_search is False
+    assert ("draft_web_search_capability", {"configured": True, "available": False}) in observed
 
 
 def test_packaged_human_agent_human_template_matches_the_target_contract():

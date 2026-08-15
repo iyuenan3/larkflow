@@ -21,6 +21,7 @@ from .decision import (
     human_decision_config,
 )
 from .deliverables import requires_structured_human_input
+from .feishu_richtext import markdown_to_feishu_xml
 from .recovery import RECOVERY_ACTION_NAME, RecoveryAction, recovery_action_name
 from .repository import OutboxStore, ProjectionStore, WorkflowRepository
 from .serde import to_json_value
@@ -1184,7 +1185,7 @@ class WorkflowProjectionWorker:
                     rendered[:MAX_DOCUMENT_RESULT_CHARS].rstrip()
                     + "\n[结果已截断，完整值保存在流程记录中]"
                 )
-            sections.append(f"<p>{html.escape(rendered).replace(chr(10), '<br/>')}</p>")
+            sections.append(markdown_to_feishu_xml(rendered))
         return DocumentProjectionRequest(
             title=instance.snapshot.goal or instance.id,
             content_xml="".join(sections),

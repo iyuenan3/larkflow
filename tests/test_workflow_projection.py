@@ -946,7 +946,17 @@ def test_automated_result_and_completed_instance_project_to_im_and_doc():
         expected_node_version=activation.expected_node_version,
         claim_token=activation.claim_token or "",
         worker_id="runtime_1",
-        result={"content": "A complete summary"},
+        result={
+            "content": (
+                "A complete summary\n\n"
+                "# Budget\n"
+                "- Confirm bookings\n"
+                "- Review **risks**\n\n"
+                "| Item | Owner |\n"
+                "| --- | --- |\n"
+                "| Hotel | Alice <script> |"
+            )
+        },
     )
 
     report = worker.run_once()
@@ -956,6 +966,12 @@ def test_automated_result_and_completed_instance_project_to_im_and_doc():
     assert any("A complete summary" in request.text for request in messages.requests)
     assert any("汇总文档" in request.text for request in messages.requests)
     assert "<title>Produce a reviewed summary</title>" in documents.requests[0].content_xml
+    assert "<h3>Budget</h3>" in documents.requests[0].content_xml
+    assert "<ul><li>Confirm bookings</li>" in documents.requests[0].content_xml
+    assert "<b>risks</b>" in documents.requests[0].content_xml
+    assert "<table><thead>" in documents.requests[0].content_xml
+    assert "Alice &lt;script&gt;" in documents.requests[0].content_xml
+    assert "Alice <script>" not in documents.requests[0].content_xml
     node = service.get(TENANT, "instance_outputs").nodes["draft"]
     records = {
         record.kind: record

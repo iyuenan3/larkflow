@@ -53,6 +53,18 @@ class StaticWebSearch:
         }
 
 
+class UnavailableWebSearch:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def supports_web_search(self, model_role: str) -> bool:
+        return False
+
+    def web_search(self, *, prompt: str, model_role: str):
+        self.calls.append({"prompt": prompt, "model_role": model_role})
+        raise AssertionError("unavailable search route must not be called")
+
+
 def request(
     *,
     kind: str = "content.check",
@@ -520,6 +532,15 @@ def test_web_search_executor_rejects_unsourced_or_provider_controlled_results():
         )
 
 
+def test_web_search_executor_preflights_provider_capability_without_remote_call():
+    client = UnavailableWebSearch()
+
+    with pytest.raises(RuntimeError, match="URL 引用"):
+        WebSearchToolExecutor(client).execute(web_search_request())
+
+    assert client.calls == []
+
+
 def test_tool_router_selects_one_explicit_adapter_and_rejects_unknown_kinds():
     router = ToolExecutorRouter(
         [
@@ -572,6 +593,7 @@ def test_runtime_can_enable_web_search_with_the_existing_llm_route():
             "LLM_API_KEY": "test-key",
             "LLM_MODEL": "test-model",
             "LLM_TIMEOUT": "20",
+            "LLM_WEB_SEARCH_CAPABILITY": "responses_citations",
         },
         worker_id="worker-search",
     )
@@ -583,6 +605,7 @@ def test_runtime_can_enable_web_search_with_the_existing_llm_route():
             "LLM_API_KEY": "test-key",
             "LLM_MODEL": "test-model",
             "LLM_TIMEOUT": "20",
+            "LLM_WEB_SEARCH_CAPABILITY": "responses_citations",
         },
     )
 

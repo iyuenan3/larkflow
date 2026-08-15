@@ -35,6 +35,11 @@ class PlanningService:
         *,
         on_repair: Callable[[], None] | None = None,
     ) -> PlannerResult:
+        self.validator.validate_request(
+            brief=request.brief,
+            context=request.context,
+            context_bundle=request.context_bundle,
+        )
         result = self.runtime.plan(request, on_repair=on_repair)
         candidate = to_mutable(result.candidate)
         if not isinstance(candidate, dict):
@@ -44,7 +49,10 @@ class PlanningService:
             "brief": request.brief,
             "context": request.context,
         }
-        self.validator.validate(candidate)
+        self.validator.validate(
+            candidate,
+            context_bundle=request.context_bundle,
+        )
         return PlannerResult(
             candidate=candidate,
             validation_report=result.validation_report,

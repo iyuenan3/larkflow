@@ -63,6 +63,7 @@ from .daemon import (
     WorkflowWorkerLoop,
 )
 from .executors import (
+    AgentResultIncomplete,
     ContentCheckToolExecutor,
     DevelopmentToolExecutor,
     LLMAgentExecutor,
@@ -95,6 +96,7 @@ from .directory import (
     validate_snapshot_owners,
 )
 from .draft_generation import (
+    DraftCapabilityUnavailable,
     DraftDefinitionGenerator,
     DraftGenerationRejected,
     MAX_GENERATED_NODES,
@@ -391,6 +393,7 @@ __all__ = [
     "DevelopmentToolExecutor",
     "DirectoryPerson",
     "DirectoryValidationError",
+    "DraftCapabilityUnavailable",
     "DraftDefinitionGenerator",
     "DraftGenerationRejected",
     "GeneratedDraftValidator",
@@ -480,6 +483,7 @@ __all__ = [
     "InvalidConsoleDraftClaimError",
     "InvalidOutboxClaimError",
     "InvalidPairingCodeError",
+    "AgentResultIncomplete",
     "LLMAgentExecutor",
     "MAX_GENERATED_NODES",
     "MAX_WIZARD_TEXT_CHARS",
