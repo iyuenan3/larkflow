@@ -567,6 +567,36 @@ def test_incomplete_agent_result_has_a_distinct_failure_code_and_never_completes
     assert attempt.result is None
 
 
+def test_nested_runtime_observations_are_normalized_before_delivery_validation():
+    clock = Clock()
+    service, repository = build_runtime(clock=clock)
+    executor = RecordingExecutor(
+        {
+            "result": {"items": [{"value": "done"}]},
+            "usage": {"completion_tokens": 80},
+            "source_refs": ("source-1",),
+        }
+    )
+
+    report = worker(
+        service,
+        repository,
+        executor,
+        clock=clock,
+        worker_id="worker_1",
+    ).run_once()
+
+    completed = service.get(TENANT, "instance_runtime")
+    assert report.completed == 1
+    assert report.failed == 0
+    assert completed.status == InstanceStatus.DONE
+    assert completed.current_attempt("generate").result == {
+        "result": {"items": ({"value": "done"},)},
+        "usage": {"completion_tokens": 80},
+        "source_refs": ("source-1",),
+    }
+
+
 def test_dispatch_due_limits_automated_claims_but_dispatches_all_humans():
     clock = Clock()
     snapshot = InstanceSnapshot(

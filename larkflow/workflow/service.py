@@ -59,6 +59,7 @@ from .restart import (
     affected_restart_node_keys,
     apply_restart,
 )
+from .serde import to_json_value
 from .runner import AuthorizationError, NodeRunner, StaleAttemptError
 from .scheduler import Scheduler
 from .transitions import TransitionError, transition_instance
@@ -906,7 +907,7 @@ class WorkflowService:
         else:
             result = validate_node_deliverable(
                 spec.work,
-                result,
+                to_json_value(result),
                 allow_undeclared=True,
             )
         self.runner.complete_automated(
