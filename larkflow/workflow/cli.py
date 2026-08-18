@@ -23,6 +23,7 @@ from larkflow.agent_runtime.executor import AgentRuntimeExecutor
 from larkflow.planning import DraftGenerator
 from larkflow.planning.bounded import BoundedPlannerRuntime
 from larkflow.planning.service import PlanningService
+from larkflow.search import DoubaoSearchProvider, SearchCapability
 
 from .completion_poll import TaskCompletionPoller
 from .console_drafts import (
@@ -1071,10 +1072,23 @@ def _executors(
 ) -> dict[ExecutorKind, AutomatedExecutor]:
     registry: dict[ExecutorKind, AutomatedExecutor] = {}
     tool_adapters: list[object] = []
+    values = os.environ if environ is None else environ
+    roles = load_llm_roles(dict(values))
     client = None
-    if settings.enable_agent_executor or settings.enable_web_search_executor:
-        values = os.environ if environ is None else environ
-        roles = load_llm_roles(dict(values))
+    dedicated_search = DoubaoSearchProvider.preflight(values)
+    if settings.enable_web_search_executor and dedicated_search.available:
+        required_search_seconds = (
+            30.0 + settings.agent_claim_safety.total_seconds()
+        )
+        if settings.claim_ttl.total_seconds() <= required_search_seconds:
+            raise ValueError(
+                "Target claim TTL must exceed the Doubao Search timeout plus "
+                f"the safety margin ({required_search_seconds:g}s required)"
+            )
+    needs_llm_client = settings.enable_agent_executor or (
+        settings.enable_web_search_executor and not dedicated_search.configured
+    )
+    if needs_llm_client:
         if not roles:
             raise ValueError(
                 "Agent or web search executor requires a complete LLM_BASE_URL, "
@@ -1118,10 +1132,22 @@ def _executors(
             policy={"runtime": settings.agent_runtime},
         )
     if settings.enable_web_search_executor:
-        assert client is not None
+        if dedicated_search.configured:
+            if not dedicated_search.available:
+                raise ValueError(
+                    "Doubao Search is configured incompletely: API key is required"
+                )
+            search_client: object = DoubaoSearchProvider.from_environ(values)
+        else:
+            if client is None or not client.supports_web_search("default"):
+                raise ValueError(
+                    "web search executor requires Doubao Search API key or an "
+                    "LLM route with responses_citations"
+                )
+            search_client = client
         tool_adapters.append(
             WebSearchToolExecutor(
-                client,
+                search_client,
                 max_prompt_chars=settings.web_search_max_prompt_chars,
                 max_result_chars=settings.web_search_max_result_chars,
             )
@@ -1187,16 +1213,30 @@ def _draft_generator(
         on_call=note_call,
         on_failover=note_failover,
     )
-    web_search_available = (
-        settings.enable_web_search
-        and client.supports_web_search("default")
-    )
+    dedicated_search = DoubaoSearchProvider.preflight(environ)
+    if dedicated_search.configured:
+        capability = dedicated_search
+    else:
+        hosted_available = client.supports_web_search("default")
+        capability = SearchCapability(
+            provider="openai_responses_web_search",
+            configured=hosted_available,
+            available=hosted_available,
+            reason="configured" if hosted_available else "route_missing",
+        )
+    web_search_available = settings.enable_web_search and capability.available
     if log is not None:
         log(
             "draft_web_search_capability",
             {
                 "configured": settings.enable_web_search,
                 "available": web_search_available,
+                "provider": capability.provider,
+                "reason": (
+                    capability.reason
+                    if settings.enable_web_search
+                    else "disabled"
+                ),
             },
         )
     return PlanningService(

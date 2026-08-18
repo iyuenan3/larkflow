@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from larkflow.search import SearchResult, SearchSource, SearchUsage
 from larkflow.workflow import (
     ContentCheckToolExecutor,
     DevelopmentToolExecutor,
@@ -63,6 +64,34 @@ class UnavailableWebSearch:
     def web_search(self, *, prompt: str, model_role: str):
         self.calls.append({"prompt": prompt, "model_role": model_role})
         raise AssertionError("unavailable search route must not be called")
+
+
+class StaticSearchProvider:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def capability(self):
+        class Capability:
+            available = True
+
+        return Capability()
+
+    def search(self, *, query: str) -> SearchResult:
+        self.calls.append(query)
+        return SearchResult(
+            provider="stub_search",
+            query=query,
+            sources=(
+                SearchSource(
+                    title="苏州博物馆参观须知",
+                    snippet="开放与预约信息。",
+                    source_url="https://www.szmuseum.com/guide",
+                    published_at=None,
+                    published_at_status="unknown",
+                ),
+            ),
+            usage=SearchUsage(result_count=1, time_cost_ms=12),
+        )
 
 
 def request(
@@ -514,10 +543,31 @@ def test_web_search_executor_preserves_research_content_and_sources():
 
     assert result.result["content"] == "景点开放信息与预约规则已核对。"
     assert result.result["sources"] == ("https://example.com/official-guide",)
+    assert result.result["provider"] == "openai_responses_web_search"
+    assert result.result["query"] == "优先核对景点官方开放时间和预约规则"
+    assert result.result["source_records"][0]["published_at_status"] == "unknown"
+    assert result.result["usage"] == {}
+    assert result.result["error"] is None
     assert result.result["tool_kind"] == "web.search"
     assert client.calls[0]["model_role"] == "default"
     assert "2026-08-20" in client.calls[0]["prompt"]
     assert "不预订、不购买" in client.calls[0]["prompt"]
+
+
+def test_web_search_executor_preserves_typed_provider_evidence_without_synthesizing():
+    provider = StaticSearchProvider()
+
+    result = WebSearchToolExecutor(provider).execute(web_search_request()).result
+
+    assert provider.calls == ["优先核对景点官方开放时间和预约规则"]
+    assert result["provider"] == "stub_search"
+    assert result["query"] == provider.calls[0]
+    assert result["sources"] == ("https://www.szmuseum.com/guide",)
+    assert result["source_records"][0]["title"] == "苏州博物馆参观须知"
+    assert result["source_records"][0]["published_at_status"] == "unknown"
+    assert result["usage"]["result_count"] == 1
+    assert result["error"] is None
+    assert "发布时间：时间不明" in result["content"]
 
 
 def test_web_search_executor_rejects_unsourced_or_provider_controlled_results():
@@ -530,6 +580,10 @@ def test_web_search_executor_rejects_unsourced_or_provider_controlled_results():
         WebSearchToolExecutor(StaticWebSearch()).execute(
             web_search_request(extra_args={"api_key": "must-not-be-accepted"})
         )
+
+    client.sources = ["https://user:password@example.com/source"]
+    with pytest.raises(ValueError, match="cited sources"):
+        WebSearchToolExecutor(client).execute(web_search_request())
 
 
 def test_web_search_executor_preflights_provider_capability_without_remote_call():
@@ -617,6 +671,61 @@ def test_runtime_can_enable_web_search_with_the_existing_llm_route():
     )
     assert settings.web_search_max_prompt_chars == 1234
     assert settings.web_search_max_result_chars == 5678
+
+
+def test_runtime_prefers_configured_doubao_search_without_an_llm_route():
+    environment = {
+        "LARKFLOW_TARGET_DSN": "postgresql:///test",
+        "LARKFLOW_TARGET_TENANT": "tenant_tools",
+        "LARKFLOW_TARGET_ENABLE_WEB_SEARCH_EXECUTOR": "true",
+        "LARKFLOW_DOUBAO_SEARCH_API_KEY": "test-search-key",
+    }
+    settings = TargetRuntimeSettings.from_environ(
+        environment,
+        worker_id="worker-search",
+    )
+
+    registry = _executors(settings, environ=environment)
+
+    router = registry[ExecutorKind.TOOL]
+    assert router.accepts(
+        executor=ExecutorKind.TOOL,
+        work=web_search_request().work,
+    )
+
+
+def test_runtime_rejects_an_incomplete_doubao_search_configuration():
+    environment = {
+        "LARKFLOW_TARGET_DSN": "postgresql:///test",
+        "LARKFLOW_TARGET_TENANT": "tenant_tools",
+        "LARKFLOW_TARGET_ENABLE_WEB_SEARCH_EXECUTOR": "true",
+        "LARKFLOW_DOUBAO_SEARCH_API_ID": "configured-without-key",
+    }
+    settings = TargetRuntimeSettings.from_environ(
+        environment,
+        worker_id="worker-search",
+    )
+
+    with pytest.raises(ValueError, match="configured incompletely"):
+        _executors(settings, environ=environment)
+
+
+def test_doubao_search_runtime_claim_covers_timeout_and_safety_margin():
+    environment = {
+        "LARKFLOW_TARGET_DSN": "postgresql:///test",
+        "LARKFLOW_TARGET_TENANT": "tenant_tools",
+        "LARKFLOW_TARGET_ENABLE_WEB_SEARCH_EXECUTOR": "true",
+        "LARKFLOW_DOUBAO_SEARCH_API_KEY": "test-search-key",
+        "LARKFLOW_TARGET_CLAIM_TTL_SECONDS": "60",
+        "LARKFLOW_TARGET_AGENT_CLAIM_SAFETY_SECONDS": "30",
+    }
+    settings = TargetRuntimeSettings.from_environ(
+        environment,
+        worker_id="worker-search",
+    )
+
+    with pytest.raises(ValueError, match="Doubao Search timeout"):
+        _executors(settings, environ=environment)
 
 
 def test_packaged_human_agent_tool_human_template_matches_the_target_contract():

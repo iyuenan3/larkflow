@@ -598,7 +598,76 @@ def test_draft_generator_disables_unverified_search_before_planning():
 
     assert service.validator.allow_web_search is False
     assert service.runtime.generator.allow_web_search is False
-    assert ("draft_web_search_capability", {"configured": True, "available": False}) in observed
+    assert (
+        "draft_web_search_capability",
+        {
+            "configured": True,
+            "available": False,
+            "provider": "openai_responses_web_search",
+            "reason": "route_missing",
+        },
+    ) in observed
+
+
+def test_draft_generator_accepts_configured_doubao_search_capability():
+    environment = {
+        "LLM_BASE_URL": "https://llm.example.invalid/v1",
+        "LLM_API_KEY": "test-key",
+        "LLM_MODEL": "test-model",
+        "LLM_TIMEOUT": "20",
+        "LARKFLOW_DOUBAO_SEARCH_API_KEY": "test-search-key",
+    }
+    settings = TargetDraftGenerationSettings(
+        dsn="postgresql:///test",
+        tenant_id="tenant_agent",
+        worker_id="draft_worker",
+        claim_ttl=timedelta(seconds=51),
+        claim_safety=timedelta(seconds=10),
+        enable_web_search=True,
+    )
+    observed = []
+
+    service = _draft_generator(
+        settings,
+        environ=environment,
+        log=lambda event, fields, **_kwargs: observed.append((event, fields)),
+    )
+
+    assert service.validator.allow_web_search is True
+    assert service.runtime.generator.allow_web_search is True
+    assert (
+        "draft_web_search_capability",
+        {
+            "configured": True,
+            "available": True,
+            "provider": "doubao_search_custom",
+            "reason": "configured",
+        },
+    ) in observed
+
+
+def test_draft_generator_fails_closed_for_partial_doubao_configuration():
+    environment = {
+        "LLM_BASE_URL": "https://llm.example.invalid/v1",
+        "LLM_API_KEY": "test-key",
+        "LLM_MODEL": "test-model",
+        "LLM_TIMEOUT": "20",
+        "LLM_WEB_SEARCH_CAPABILITY": "responses_citations",
+        "LARKFLOW_DOUBAO_SEARCH_API_ID": "resource-without-key",
+    }
+    settings = TargetDraftGenerationSettings(
+        dsn="postgresql:///test",
+        tenant_id="tenant_agent",
+        worker_id="draft_worker",
+        claim_ttl=timedelta(seconds=51),
+        claim_safety=timedelta(seconds=10),
+        enable_web_search=True,
+    )
+
+    service = _draft_generator(settings, environ=environment)
+
+    assert service.validator.allow_web_search is False
+    assert service.runtime.generator.allow_web_search is False
 
 
 def test_packaged_human_agent_human_template_matches_the_target_contract():

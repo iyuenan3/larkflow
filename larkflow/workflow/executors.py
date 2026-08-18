@@ -7,7 +7,14 @@ import json
 import re
 import time
 from typing import Protocol
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
+
+from larkflow.search import (
+    SearchResult,
+    SearchUnavailableError,
+    render_search_result,
+)
 
 from .model import ExecutorKind, QualityResult, QualityVerdict
 from .runtime import ExecutionRequest, ExecutionResult
@@ -31,6 +38,16 @@ class WebSearchClient(Protocol):
     """Minimal hosted-search port required by the explicit Tool adapter."""
 
     def web_search(self, *, prompt: str, model_role: str) -> Mapping[str, object]:
+        ...
+
+
+class PublicSearchProvider(Protocol):
+    """Typed evidence search port preferred by the Target Tool adapter."""
+
+    def capability(self) -> object:
+        ...
+
+    def search(self, *, query: str) -> SearchResult:
         ...
 
 
@@ -495,7 +512,7 @@ class WebSearchToolExecutor:
 
     def __init__(
         self,
-        client: WebSearchClient,
+        client: WebSearchClient | PublicSearchProvider,
         *,
         max_prompt_chars: int = 20_000,
         max_result_chars: int = 50_000,
@@ -524,23 +541,55 @@ class WebSearchToolExecutor:
         model_role = args.get("model_role", "default")
         if not isinstance(model_role, str) or not model_role.strip():
             raise ValueError("web.search model_role must be text")
-        supports = getattr(self.client, "supports_web_search", None)
-        if callable(supports) and not supports(model_role.strip()):
-            from larkflow.llm import LLMCapabilityUnavailable
+        capability = getattr(self.client, "capability", None)
+        if callable(capability):
+            observed = capability()
+            if not bool(getattr(observed, "available", False)):
+                raise SearchUnavailableError(
+                    "web.search has no configured source-preserving provider"
+                )
+        else:
+            supports = getattr(self.client, "supports_web_search", None)
+            if callable(supports) and not supports(model_role.strip()):
+                from larkflow.llm import LLMCapabilityUnavailable
 
-            raise LLMCapabilityUnavailable(
-                f"模型角色 {model_role.strip()} 未配置支持 URL 引用的联网搜索后端"
-            )
+                raise LLMCapabilityUnavailable(
+                    f"模型角色 {model_role.strip()} 未配置支持 URL 引用的联网搜索后端"
+                )
 
         prompt = self._prompt(request, instructions=instructions.strip())
         if len(prompt) > self.max_prompt_chars:
             raise ValueError(
                 f"web.search prompt exceeds {self.max_prompt_chars} characters"
             )
-        raw = self.client.web_search(
-            prompt=prompt,
-            model_role=model_role.strip(),
-        )
+        search = getattr(self.client, "search", None)
+        if callable(search):
+            raw_result = search(query=instructions.strip())
+            if not isinstance(raw_result, SearchResult):
+                raise ValueError("web.search provider returned an invalid result")
+            raw: Mapping[str, object] = {
+                "content": render_search_result(raw_result),
+                "sources": tuple(
+                    item.source_url for item in raw_result.sources
+                ),
+                "source_records": tuple(
+                    item.as_dict() for item in raw_result.sources
+                ),
+                "provider": raw_result.provider,
+                "query": raw_result.query,
+                "usage": raw_result.usage.as_dict(),
+                "error": raw_result.error,
+            }
+        else:
+            web_search = getattr(self.client, "web_search", None)
+            if not callable(web_search):
+                raise SearchUnavailableError(
+                    "web.search client exposes no search operation"
+                )
+            raw = web_search(
+                prompt=prompt,
+                model_role=model_role.strip(),
+            )
         if not isinstance(raw, Mapping):
             raise ValueError("web.search returned an invalid result")
         content = raw.get("content")
@@ -557,21 +606,51 @@ class WebSearchToolExecutor:
             or not sources
             or not all(
                 isinstance(item, str)
-                and item.strip().startswith(("https://", "http://"))
+                and _is_valid_source_url(item.strip())
                 for item in sources
             )
         ):
             raise ValueError("web.search returned no valid cited sources")
         normalized_sources = list(dict.fromkeys(item.strip() for item in sources))
-        return ExecutionResult(
-            result={
-                "content": content.strip(),
-                "sources": normalized_sources,
-                "tool_kind": self.KIND,
-                "model_role": model_role.strip(),
-                "request_id": request.idempotency_key,
-            }
-        )
+        source_records = raw.get("source_records")
+        if source_records is None:
+            source_records = [
+                {
+                    "title": urlsplit(url).hostname or url,
+                    "snippet": "",
+                    "source_url": url,
+                    "published_at": None,
+                    "published_at_status": "unknown",
+                }
+                for url in normalized_sources
+            ]
+        if not _valid_source_records(source_records, normalized_sources):
+            raise ValueError("web.search returned invalid source records")
+        usage = raw.get("usage", {})
+        if not isinstance(usage, Mapping):
+            raise ValueError("web.search returned invalid usage")
+        provider = raw.get("provider", "openai_responses_web_search")
+        if not isinstance(provider, str) or not provider.strip():
+            raise ValueError("web.search returned invalid provider")
+        query = raw.get("query", instructions.strip())
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("web.search returned invalid query")
+        error = raw.get("error")
+        if error is not None:
+            raise ValueError("web.search returned a provider error result")
+        result = {
+            "content": content.strip(),
+            "sources": normalized_sources,
+            "source_records": source_records,
+            "tool_kind": self.KIND,
+            "model_role": model_role.strip(),
+            "request_id": request.idempotency_key,
+            "provider": provider.strip(),
+            "query": query.strip(),
+            "usage": dict(usage),
+            "error": None,
+        }
+        return ExecutionResult(result=result)
 
     def accepts(self, *, executor: ExecutorKind, work: Mapping[str, object]) -> bool:
         tool = work.get("tool")
@@ -602,6 +681,52 @@ class WebSearchToolExecutor:
             f"已提交的输入与上游交付物：\n{context}\n\n"
             "返回一份供下游 Agent 使用的简洁研究报告。"
         )
+
+
+def _is_valid_source_url(value: str) -> bool:
+    if not value or len(value) > 4_096:
+        return False
+    parsed = urlsplit(value)
+    return bool(
+        parsed.scheme in {"http", "https"}
+        and parsed.hostname
+        and parsed.username is None
+        and parsed.password is None
+    )
+
+
+def _valid_source_records(
+    records: object,
+    sources: Sequence[str],
+) -> bool:
+    if (
+        not isinstance(records, Sequence)
+        or isinstance(records, (str, bytes))
+        or not records
+    ):
+        return False
+    record_urls: list[str] = []
+    for item in records:
+        if not isinstance(item, Mapping):
+            return False
+        url = item.get("source_url")
+        status = item.get("published_at_status")
+        published_at = item.get("published_at")
+        if (
+            not isinstance(item.get("title"), str)
+            or not isinstance(item.get("snippet"), str)
+            or not isinstance(url, str)
+            or url not in sources
+            or status not in {"known", "unknown"}
+            or (
+                status == "known"
+                and (not isinstance(published_at, str) or not published_at.strip())
+            )
+            or (status == "unknown" and published_at is not None)
+        ):
+            return False
+        record_urls.append(url)
+    return len(record_urls) == len(set(record_urls)) and set(record_urls) == set(sources)
 
 
 class ContentCheckToolExecutor:
