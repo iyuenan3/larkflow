@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.87.1-draft · 2026-08-18 · 豆包 Custom SearchProvider 基线
+
+- Added：内容提交 `807f51a71417669f8fd52852b99a1ae7eafa1ff7` 增加本地 `SearchProvider` 合同与薄 Python 豆包 Custom API adapter。适配器只发送有界查询，规范化 provider、query、title、snippet、source URL、发布时间或时间不明、结果数、耗时、请求 ID 与安全错误分类，不获得 PostgreSQL 写权、飞书凭据、claim token 或 DAG 修改权，也不引入 DSH、PTC 或 LangGraph。
+- Routing：Target `web.search` 优先选择已配置的豆包 API Key，未配置时保留既有显式 `responses_citations` 路线。Draft Worker 只把静态 capability 结果交给 Planner；资源标签存在但 API Key 缺失时 fail closed。搜索只生成来源证据，信息综合仍由显式下游 Agent 完成。
+- Safety：空查询、超过 100 字符、非法协议、带 URL 用户信息、来源集合与结构化记录不一致、provider error、传输故障和没有合法 URL 都不能完成 Attempt。成功结果统一包含 `source_records / provider / query / usage / error=null`，没有发布时间时明确保存 `published_at_status=unknown`。API Key 不进入 repr、错误正文、Attempt 结果或日志。
+- Verified：豆包 adapter、托管搜索兼容、Tool seam、Runtime 装配和 Draft capability 聚焦套件为 `70 passed`。完整离线套件为 `1185 passed, 27 skipped, 1 failed`，唯一失败是沙箱禁止执行 `ps`；同一既有进程树测试在允许环境单独 `1 passed`，合并证据为 `1186 passed, 27 skipped`。Python compile、wheel package-data、`git diff --check`、env key 与注释同序以及敏感字面量扫描通过。
+- Boundary：本轮全部 HTTP 使用 stub/mock，没有真实调用豆包 API，没有消耗 Coding Plan 次数，也没有部署、开启开发开关或创建飞书资源。当前开发环境联网能力仍为 unavailable；只有真实 synthetic 检索、无引用失败、额度与错误分类回读通过后才可改变该状态。本切片也不是 Agent Attempt 内部 Tool Gateway。
+
 ## v0.87.0-draft · 2026-08-18 · 文本交付物统一为原生飞书 Docx
 
 - Changed：新建文本交付物统一通过 `docs +create` 物化为原生飞书 Docx，重跑通过 `docs +update --command overwrite` 复用同一 document_id，下游通过 `docs +fetch --doc-format markdown` 读取正文。Target 完成文档补上同一父文件夹配置，legacy 与 Target 不再使用不同的文本交付类型和落点语义。

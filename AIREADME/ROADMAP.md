@@ -111,7 +111,7 @@ P0 结构能力已由 `6d2d9fa22b7e6926cfe5a1bcf714ccccd073b6d3` 与 `c7e7d90123
 ## Next · 受控内部试用与 Phase 2 恢复
 
 - Phase 2A 已完成离线、真实 PostgreSQL、Caddy、开发部署和 Owner 作用域 HTTPS API 验收。下一步只补真实 Owner 浏览器 collecting、txt/md 上传、列表与显式生成的可见交互，不再重复单纯计时、未认证请求或服务端脚本闭环。Phase 2B 才让 Agent Attempt 直接消费冻结附件 refs；在此之前，no-web 流程由首个 Human 节点把完整已确认来源资料交给下游 Agent。企业共享资料、生产对象存储、飞书消息附件、PDF/DOCX/OCR、向量检索和 Tool Gateway 继续后置。
-- 联网搜索路线保持显式不可用，直到获得并验证真正支持 Responses Web Search 与结构化 URL 引用的 provider/model。不得仅把运行开关改为 true，也不得移除 cited-sources 护栏。后续接入必须先跑 capability 预检、无引用失败、引用去重、来源边界和真实 E2E，再允许生成含 `web.search` 的草稿。
+- 豆包 Custom `SearchProvider`、静态 capability preflight、来源 URL fail-closed、结构化来源记录和现有 `web.search` seam 已提交。当前尚未部署，也没有执行真实 API 请求，所以开发环境继续保持显式 unavailable。下一关是在不创建业务副作用的前提下完成安装态 preflight、真实 synthetic 检索、引用去重、无引用失败、额度与错误分类回读；这些证据通过后才成对开启 Runtime 与 Draft Generation Worker 开关，并允许生成含 `web.search` 的草稿。既有托管 Responses 路线的逐线路能力声明继续保留，cited-sources 护栏不移除。
 - 自动 Agent 完成性已从 Human Gate 的单点兜底前移到 Automated Attempt 边界。后续真实业务继续观察首次结果可用率、`agent_result_incomplete` 比例、模型用量、返工次数和锚点质量；当前一次新疆样本与离线回归不能外推为模型内容质量稳定。
 - Owner 流程操作、普通 Human 任务页面、受控流程输入与受控 DAG 画板均已提交和部署。公网纯合成实例已覆盖运行中未来节点修改与新增、图编辑确认、节点返工、旧 Attempt 保留、循环依赖拒绝和 PostgreSQL 审计回读；草稿态又完成真实登录拖拽连接、两次预览确认、选边断开和恢复原图。最终实例保持 `draft / graph_revision 3 / 0 NodeInstance / 0 Attempt / 0 Projection`，草稿依赖连线可见手势门槛已经关闭。下一步回到项目自身的真实工作，继续观察首次结果可用性、退回率、人工干预和重复副作用，不再为该结构路径创建纯合成点击样本。
 - 飞书应用内员工工作台登录、PostgreSQL 耐久会话、最小管理员聚合、其他会话撤销、公网有界限流与安全响应头均已通过开发真栈。root 侧 allowlist 工具现提供活跃会话解析、十分钟预览、env 指纹栅栏、原子更新、健康回读、失败自动恢复、显式回滚和追加型运维审计；真实服务器已通过无变化确认与唯一管理员保护，但尚未在没有明确授权对象的情况下执行真实提权。包含 Console 会话表的二十一份 migration 异库恢复也已完成，并验证暴露前清空会话不会删除撤销审计或流程数据。下一步回到真实内部工作：由 Owner 独立使用待处理中心处理一项自然产生的工作，并在确有第二名管理员需求时完成一次真实添加、普通成员与管理员回读及撤销闭环。正式域名因近期不备案保持后置；公网 IP、静态开发 token、进程内限流和单机部署都不作为正式员工交付方案。
