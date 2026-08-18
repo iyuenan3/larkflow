@@ -154,12 +154,11 @@ larkflow/
 │   ├── contracts.py                # AgentRunRequest、AgentRunResult
 │   ├── completion.py               # 当前单 completion 基线
 │   └── executor.py                 # AutomatedExecutor 到 AgentRuntime 的桥接
-├── knowledge/                      # 后续企业共享资料与通用 Attempt 上下文，尚未创建
+├── knowledge/                      # 企业共享资料的运行时中立合同边界
 │   ├── __init__.py
-│   ├── contracts.py                # SourceRef、AttachmentRef、ContextBundle
-│   ├── authorization.py            # 检索前的资源与外发授权
-│   ├── attachments.py              # 项目附件元数据、读取与失效
-│   └── context.py                  # 上下文组装、裁剪、指纹和清单持久化
+│   └── contracts.py                # Publication、版本安全引用和规范化 Selection
+├── knowledge_authorization.py      # 后续检索前的资源与外发授权，尚未创建
+├── enterprise_knowledge_store.py   # 后续清单、版本、读取与失效，尚未创建
 ├── agent_tools/
 │   ├── __init__.py
 │   ├── contracts.py                # ToolSpec、ToolCall、ToolResult
@@ -463,12 +462,22 @@ Phase 2B 开发部署证据：附件支持的 Agent 输入由服务端追加，�
 
 目标：只接入管理员明确发布为当前 tenant 全员可用的资料。
 
+合同基线已落码，但持久化、管理 API、内容读取和 Runtime 接入尚未实现：
+
+- `EnterpriseKnowledgePublication` 只表示服务端目录中的发布或撤销状态，发布者身份不会进入 Runtime-safe ref。
+- `EnterpriseKnowledgeRef` 固定 tenant、`enterprise:` 来源 ID、不可变版本、显示标签、UTF-8 txt/md 类型、大小、SHA-256、发布时间、`internal` 分级和显式 allow/deny 外发决定，不携带正文、对象 key、源系统 token 或发布者。
+- `EnterpriseKnowledgeSelection` 在读取正文前拒绝跨 tenant、同一来源多版本和空选择，按来源与版本规范化排序，并把 tenant、来源、版本、内容指纹、分级和外发决定绑定到 canonical fingerprint。
+- 撤销只阻断后续 `authorized_ref` 和新 ContextBundle。旧 Attempt 继续保留当时的安全来源清单与 fingerprint，不物理改写历史。
+- 首版只接受管理员确认具有当前 tenant 全员使用权的静态内容快照；不做部门、个人 ACL，同步继承，也不把“bot 能读取”当成全员授权。
+
 计划工作：
 
-- 增加共享来源清单、发布者、来源版本、同步状态和逻辑失效。
+- 基于上述本地合同增加 tenant-first 共享来源清单、不可变版本、同步状态和逻辑失效。
 - 检索前完成 tenant、发布状态、数据分类和外发授权。
 - 在 ContextBundle 中同时表示企业来源与项目附件，并保留来源 ID。
 - 当源系统权限不明确时拒绝进入企业共享清单。
+
+首批实现测试必须覆盖：跨 tenant、非管理员发布、重复来源版本、撤销后新读取、缺失或变化的内容哈希、默认外发 deny、非法分级、源系统权限不明确、正文与对象 key 不进入快照或 Runtime 请求，以及没有企业共享资料时项目附件路径保持不变。PostgreSQL 合同还要验证 tenant-first 主键、不可变版本、追加型发布审计、并发发布幂等和禁止物理删除。任何检索测试都必须在授权后读取正文，不能以 mock 掉授权仓储的方式证明隔离。
 
 Exit gate：不存在“先跨权限召回正文，再靠模型过滤”的路径；撤销发布后新 Attempt 无法读取，旧 Attempt 仍保留当时的来源清单和指纹；无法维护明确清单时可以完全关闭企业共享资料，只保留项目上传。
 
@@ -698,4 +707,4 @@ Dependency Exit Gate：
 
 Refactor Phase 0 与 Phase 1 的代码和离线验证已纳入内容提交 `476b43491adeaf1bcde32185d9b9f036c3a9874a`。Phase 2A 主体已纳入 `b2a13ff1eff796723774d42ca5d04556814a38c2`，PostgreSQL 合同收口为 `07de190db49839d8195cfa26967241fad7d975f6`；开发环境已应用 24 份 migration、安装精确 wheel、启用附件目录和 Caddy 路由，并完成服务端回读。该状态不是生产发布。
 
-下一步补真实 Owner 浏览器 collecting、txt/md 上传、列表与显式生成的独立产品验收，再依据内部试用证据决定企业共享资料合同。Tool Gateway、sidecar 和依赖安装继续分别评审，Personal Edge 保持暂停。
+Phase 2B 已完成开发部署与技术探针；企业共享资料的本地合同和测试边界也已冻结。下一步先实现 tenant-first 发布清单与撤销仓储，不接管理 UI、检索或 Runtime 正文读取。真实 Owner 浏览器 collecting、txt/md 上传、列表与显式生成仍是独立产品验收门槛。Tool Gateway、sidecar 和依赖安装继续分别评审，Personal Edge 保持暂停。
