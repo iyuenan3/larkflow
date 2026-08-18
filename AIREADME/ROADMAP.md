@@ -1,6 +1,6 @@
 # ROADMAP · larkflow
 
-> 状态：Cloud-first Target Delivery Plan · 2026-08-15
+> 状态：Cloud-first Target Delivery Plan · 2026-08-18
 >
 > 原来的三级协作、Personal Agent Edge 产品化和完整能力治理路线已移出近期范围。当前主线是云端 Agent 控制平面；既有 Edge 代码与证据作为暂停的历史 Proof 保留。
 
@@ -23,7 +23,7 @@
 
 1. `Knowledge Context Service`：只支持管理员发布的企业共享资料与项目级上传，服务端在检索前完成 tenant、Instance、actor、数据分类和模型外发授权。
 2. `PlannerRuntime Port`：Refactor Phase 1 基线已落码。当前 bounded adapter 只返回候选图与最小运行时摘要，不写草稿、不启动流程；`PlanningService` 会覆盖候选中的服务端输入并通过统一 validator 强制最终复验。真实网页与飞书草稿入口已经传入非空 tenant、actor 与耐久 request ID。Phase 2A 让 Console 草稿可携带服务端授权的 txt/md `ContextBundle`，附件正文位于独立 BlobStore，只把安全 refs 与 fingerprint 冻结到 Instance；真实 PostgreSQL、Caddy、migration、开发部署和 Owner 作用域 HTTPS API 已通过，真实 Owner 浏览器附件交互仍待手工验收。类型化只读工具、企业共享资料和 A/B 仍未实现。
-3. `AgentRuntime Port` 与 `Authorized Tool Gateway`：completion 基线端口与 Worker bridge 已落码，一次只执行一个节点的一个 Attempt，claim 和版本继续留在 Worker。Tool Gateway、能力信封和候选 Runtime 仍未实现，所有业务写继续使用显式 Tool 节点。
+3. `AgentRuntime Port` 与 `Authorized Tool Gateway`：completion 基线端口与 Worker bridge 已落码，一次只执行一个节点的一个 Attempt，claim 和版本继续留在 Worker。Phase 2B 已提交项目附件只读能力信封和 Node/Attempt 绑定的 ContextBundle，尚未部署或真库验证；Tool Gateway 和候选 Runtime 仍未实现，所有业务写继续使用显式 Tool 节点。
 4. `NodeExecutionPolicy`：runtime、provider、model、allowed tools、knowledge scopes、data classification、egress、budget、timeout 和 retry 属于 NodeRun policy，不进入业务 DAG Contract。
 
 **采用门槛：** Pi 或 DSH 适配器必须在相同输入、上下文、工具和校验器下，对首次硬校验通过率、用户改图次数、遗漏输入、无效依赖、节点冗余、一次接受率、耗时和成本产生可测改善。要求数据库或飞书凭据、绕过确定性校验、把运行时概念写进 DAG，或没有材料改善时，停止适配器。
@@ -35,6 +35,8 @@
 **Refactor Phase 0/1 当前证据：** characterization tests 已锁定草稿的一次修复上限和拒绝分类、Agent 输入快照与结果边界、Worker claim 提交、恢复、陈旧结果和稳定幂等键。Target 默认装配已显式使用 `bounded` 与 `completion`；空图、仅 Agent、缺少最终 Human Gate 和非法领域形状即使来自替换 Runtime，也会被 `PlanningService` 最终拒绝。网页与飞书入口的完整 Planner 身份已由路径测试锁定。P2 聚焦套件为 `75 passed`，完整离线套件为 `1085 passed, 24 skipped`；新增端口和 Target import 冒烟在阻断 LangGraph 时通过。本轮内容提交未改 DAG schema、数据库 schema、HTTP、飞书行为或现有 LangGraph 依赖；环境示例只新增本地基线选择，未执行部署。进入 Refactor Phase 2 前仍需单独确认项目上传与 ContextBundle 的数据、授权和 migration 边界。
 
 **Refactor Phase 2A 开发部署证据：** 主体内容已纳入 `b2a13ff1eff796723774d42ca5d04556814a38c2`，PostgreSQL 合同收口为 `07de190db49839d8195cfa26967241fad7d975f6`。`0024_console_project_attachments` 增加 collecting、冻结 manifest 和 tenant-first 附件元数据；Owner 通过两阶段页面上传、撤销并显式开始生成。Console 只在存储已配置且模型外发为 `allow` 时公布能力，不可完成的 defer 在持久化前拒绝；撤销对象继续占用 request 和 tenant 保留配额；临时 Blob I/O 故障进入 failed/backoff。Caddy 只对精确附件上传 POST 放宽到 262144 字节。服务端固定 `internal`，正文不进入 PostgreSQL 业务快照、浏览器 DTO 或 Runtime metadata，最终候选继续由统一 validator 复验。附件模块为 `35 passed`，完整离线套件为 `1120 passed, 26 skipped`；真实 PostgreSQL 合同为 `26 passed`，补充并发、撤销保留、隔离、manifest、promotion、删除保护和回滚合同均通过。开发库 ledger 为 `24 / 0024`，Caddy validate/adapt 和公网 body limit 实测通过，十个 Python 服务与 Caddy 均健康。真实 Owner 浏览器上传与生成仍待手工验收，Phase 2A 不能外推为生产就绪。
+
+**Refactor Phase 2B 已提交实现：** 内容提交 `6e6e3895ac9bb355f40c017e4b5ffe395f4ddca4` 让附件支持的候选图获得服务端拥有的 `instance_inputs.project_attachments`，并在单个 Agent Attempt 开始前重新验证 tenant、Instance、Node、Attempt、原始 planning fingerprint、附件状态、origin、分级、外发、大小、哈希、UTF-8 和字符预算。Runtime 只获得有界正文与短时 `context.read.project_attachments` 能力信封，结果只保存安全 manifest、fingerprint 和运行证据，不持久化正文、object key、claim 或凭据。完整离线合并证据为 `1192 passed, 27 skipped`；Phase 2B 尚未部署、未跑真实 PostgreSQL 合同或开发服务器合成探针，因此仍是已提交候选，不是已验收能力。
 
 **Agent 完成性、资料策略与搜索预检证据：** `6f1f1e61da57a899f225de1b79efdb2714b14a5a` 到 `0ff4272a10abe85d2afab36f65a2edd3e4d50a41` 已加入供应商结束原因、结构化完成 envelope、验收证据短锚点、旅游 evidence policy、搜索能力声明、Runtime 结果 JSON 规范化、公开可操作错误和飞书原生标题、列表、表格投影。完整离线证据为 `1145 passed, 27 skipped`，唯一因沙箱禁止读取进程树的既有测试在允许环境单独 `1 passed`，合并为 `1146 passed, 27 skipped`。真实 PostgreSQL 公开错误探针确认 ledger `24 / 0024`、状态 rejected、原始异常不外泄。开发环境 wheel SHA-256 为 `e36f36ccf73f7366c59cc6d5c671aeec4b1f45f6001e7c161be3f9d6f3ef0e76`，十个 Python 服务为 `active / running / NRestarts=0`，部署窗口 warning 为 0。
 
@@ -110,7 +112,7 @@ P0 结构能力已由 `6d2d9fa22b7e6926cfe5a1bcf714ccccd073b6d3` 与 `c7e7d90123
 
 ## Next · 受控内部试用与 Phase 2 恢复
 
-- Phase 2A 已完成离线、真实 PostgreSQL、Caddy、开发部署和 Owner 作用域 HTTPS API 验收。下一步只补真实 Owner 浏览器 collecting、txt/md 上传、列表与显式生成的可见交互，不再重复单纯计时、未认证请求或服务端脚本闭环。Phase 2B 才让 Agent Attempt 直接消费冻结附件 refs；在此之前，no-web 流程由首个 Human 节点把完整已确认来源资料交给下游 Agent。企业共享资料、生产对象存储、飞书消息附件、PDF/DOCX/OCR、向量检索和 Tool Gateway 继续后置。
+- Phase 2A 已完成离线、真实 PostgreSQL、Caddy、开发部署和 Owner 作用域 HTTPS API 验收。真实 Owner 浏览器 collecting、txt/md 上传、列表与显式生成的可见交互仍待手工验收。Phase 2B 的 Agent Attempt 附件引用和可审计能力信封已提交，下一步是开发部署、真实 PostgreSQL 合同与 synthetic/public 技术探针；企业共享资料、生产对象存储、飞书消息附件、PDF/DOCX/OCR、向量检索和 Tool Gateway继续后置。
 - 豆包 Custom `SearchProvider`、静态 capability preflight、来源 URL fail-closed、结构化来源记录和现有 `web.search` seam 已提交。当前尚未部署，也没有执行真实 API 请求，所以开发环境继续保持显式 unavailable。下一关是在不创建业务副作用的前提下完成安装态 preflight、真实 synthetic 检索、引用去重、无引用失败、额度与错误分类回读；这些证据通过后才成对开启 Runtime 与 Draft Generation Worker 开关，并允许生成含 `web.search` 的草稿。既有托管 Responses 路线的逐线路能力声明继续保留，cited-sources 护栏不移除。
 - 自动 Agent 完成性已从 Human Gate 的单点兜底前移到 Automated Attempt 边界。后续真实业务继续观察首次结果可用率、`agent_result_incomplete` 比例、模型用量、返工次数和锚点质量；当前一次新疆样本与离线回归不能外推为模型内容质量稳定。
 - Owner 流程操作、普通 Human 任务页面、受控流程输入与受控 DAG 画板均已提交和部署。公网纯合成实例已覆盖运行中未来节点修改与新增、图编辑确认、节点返工、旧 Attempt 保留、循环依赖拒绝和 PostgreSQL 审计回读；草稿态又完成真实登录拖拽连接、两次预览确认、选边断开和恢复原图。最终实例保持 `draft / graph_revision 3 / 0 NodeInstance / 0 Attempt / 0 Projection`，草稿依赖连线可见手势门槛已经关闭。下一步回到项目自身的真实工作，继续观察首次结果可用性、退回率、人工干预和重复副作用，不再为该结构路径创建纯合成点击样本。

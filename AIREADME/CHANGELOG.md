@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.88.0-draft · 2026-08-18 · Agent Attempt 项目附件上下文
+
+- Added：内容提交 `6e6e3895ac9bb355f40c017e4b5ffe395f4ddca4` 增加 Node/Attempt 绑定的 `agent_execution` ContextBundle、短时 `CapabilityEnvelope` 与 claim-free `AgentContextRequest`。附件支持的候选图由服务端为 Agent 节点写入 `instance_inputs.project_attachments`，只有显式声明该输入的节点才会读取 Blob。
+- Safety：Agent 开始前重新验证 tenant、Instance、Node、Attempt、Owner、原始 planning fingerprint、附件 ready 与未撤销状态、origin request、分级、外发、大小、SHA-256、UTF-8 和字符预算。Runtime 只获得有界正文与 `context.read.project_attachments`，不获得 object key、路径、uploader、数据库句柄、飞书凭据、claim token 或版本。Attempt 的 `_runtime_evidence` 只保存安全 manifest、能力 fingerprint 和 Runtime 摘要。
+- Compatibility：没有附件的既有 Agent 请求保持原结果形状；没有声明附件输入的节点不读取 Blob。已声明附件但 resolver 未装配时使用 `agent_context_unavailable`，确定性绑定或完整性失败使用 `agent_context_rejected`，临时存储故障继续进入 Worker 的既有失败与退避路径。附件正文只进入独立的不可信资料提示区块，不能修改 DAG、Owner、Human Gate、工具或系统规则。
+- Verified：Phase 2B 关联聚焦套件为 `184 passed, 27 skipped`；最终完整离线套件为 `1191 passed, 27 skipped, 1 failed`，唯一失败是沙箱禁止执行 `ps`；同一既有进程树测试在允许环境单独 `1 passed`，合并证据为 `1192 passed, 27 skipped`。Python compile、wheel package-data、`git diff --check` 和敏感字面量扫描通过。
+- Boundary：代码与普通文档已经提交并推送，但尚未部署到开发环境，也未执行真实 PostgreSQL 合同或 synthetic Runtime 探针。Phase 2B 不包含企业共享知识、Tool Gateway、生产对象存储、PDF/DOCX/OCR、向量检索或 Personal Edge，不能描述为生产就绪。
+
 ## v0.87.1-draft · 2026-08-18 · 豆包 Custom SearchProvider 基线
 
 - Added：内容提交 `807f51a71417669f8fd52852b99a1ae7eafa1ff7` 增加本地 `SearchProvider` 合同与薄 Python 豆包 Custom API adapter。适配器只发送有界查询，规范化 provider、query、title、snippet、source URL、发布时间或时间不明、结果数、耗时、请求 ID 与安全错误分类，不获得 PostgreSQL 写权、飞书凭据、claim token 或 DAG 修改权，也不引入 DSH、PTC 或 LangGraph。
