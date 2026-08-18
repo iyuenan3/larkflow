@@ -1046,3 +1046,15 @@
 - Decision：所有新文本交付物默认通过 `docs +create` 物化为原生飞书 Docx，正文以 Markdown 作为安全交换格式；重跑使用 `docs +update --command overwrite`，读取使用 `docs +fetch --doc-format markdown`。Target 完成文档和 legacy 交付物统一读取 `LARKFLOW_DELIVERABLE_FOLDER_TOKEN`，并将其映射为 `--parent-token`。旧 `LARKFLOW_DRIVE_FOLDER` 暂时保留为兼容别名，二者非空且不一致时 fail closed。新幂等记录显式增加 `docx:` 类型前缀，旧无前缀记录和旧 Markdown handle 继续走历史命令，不自动迁移或重建。
 - Alternatives(否决)：继续用 Markdown 文件并只改注释；删除父文件夹配置；立即删除旧变量与旧 handle 支持；把文档正文复制进 PostgreSQL。第一项保留产品语义分叉，第二项会让交付物散落在 bot 根目录，第三项破坏已有 Attempt 与崩溃恢复，第四项制造文档与业务状态双真相。
 - Tradeoff：迁移期需要同时维护 Docx 与历史 Markdown 两条读写路径，旧变量也需经过一个弃用窗口；Docx 全文 overwrite 适合当前独立 whole-document 交付物，但不适合未来多人共同精修的共享章节，后者仍需单独设计 section 级更新、评论和冲突策略。本轮只完成离线合同，部署后还必须验证父文件夹归属、bot 权限、原生版本历史和旧 handle 回读。
+
+- Status addendum · 2026-08-19：内容已部署到开发环境。bot 真栈创建原生 Docx、同一 document_id 覆盖、revision 5、标题、列表、表格和版本历史回读均通过；未配置文件夹 token 时 Target 与 legacy 使用同一 bot 个人空间根。该证据不改变历史 Markdown 兼容和非生产边界。
+
+## ADR-117 · 2026-08-19 · 企业共享资料先冻结全员发布清单合同
+
+- **Status：Accepted，provider-neutral contract implemented；repository、API、content access and Runtime integration not implemented。**
+- Problem：Phase 2A 与 Phase 2B 已让项目上传件分别参与规划和 Agent Attempt，但“企业共享资料”仍只有目标描述。若直接接飞书 Drive、Wiki 或向量检索，容易把 bot 可读误当成全员可用，把源系统 locator、发布者或正文放进 Runtime，并在没有撤销与版本合同前制造第二套权限真相。
+- Constraint：首版只允许管理员明确发布为当前 tenant 全员可用于 larkflow 的静态内容快照；不支持部门、个人 ACL 或自动继承源系统权限。PostgreSQL 继续是发布目录和审计真相，源系统与 BlobStore 只提供内容。分级固定为 `internal`，模型外发默认 deny；Runtime 不获得发布者、对象 key、源 token、数据库写权或飞书凭据。撤销只阻断新上下文，不能改写旧 Attempt 证据。
+- Decision：新增不可变 `EnterpriseKnowledgePublication`、Runtime-safe `EnterpriseKnowledgeRef` 和 canonical `EnterpriseKnowledgeSelection`。安全 ref 固定 tenant、`enterprise:` source ID、version ID、显示标签、UTF-8 txt/md、大小、内容 SHA-256、发布时间、分级与显式外发决定。Selection 在读取正文前拒绝跨 tenant、同源多版本和空清单，按来源与版本规范化顺序，并把 tenant、版本、内容指纹、分级和外发决定纳入 fingerprint。发布者只留在目录侧，revoked Publication 无法再返回授权 ref。
+- Alternatives(否决)：直接把飞书 bot 可见文件当企业知识；先做向量召回再按模型输出过滤权限；把项目附件表泛化为个人知识库；把 live Docx URL 作为不可变版本；在首版同步部门或个人 ACL；让 Runtime 直接拿 BlobStore 或源系统 token。
+- Tradeoff：当前只有本地合同，用户还不能发布或选择企业资料。首个持久化切片仍需 tenant-first 主键、不可变版本、管理员授权、逻辑撤销、追加审计和并发幂等；首个正文切片还需在授权后验证哈希、大小、UTF-8、外发和字符预算。若企业无法维护清晰的全员发布清单，该能力保持关闭，产品继续只使用项目上传件。
+- Evidence：内容提交 `ccf04c820b92cd74968ccb25ec7126990ba6fe17`。聚焦测试 `17 passed`；完整离线合并证据 `1209 passed, 27 skipped`；wheel 收包、零 LangGraph 导入冒烟、Python compile 和 `git diff --check` 通过。没有 migration、部署、真实内容或外部副作用。

@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.89.0-draft · 2026-08-19 · 企业共享资料合同基线
+
+- Added：内容提交 `ccf04c820b92cd74968ccb25ec7126990ba6fe17` 新增 provider-neutral 的 `EnterpriseKnowledgePublication / EnterpriseKnowledgeRef / EnterpriseKnowledgeSelection`。合同固定 tenant、`enterprise:` 来源 ID、不可变版本、UTF-8 txt/md、大小、SHA-256、发布时间、`internal` 分级和显式 allow/deny 外发决定。
+- Safety：发布者只存在于目录侧 Publication，Runtime-safe ref 与快照不含发布者、正文、object key 或源系统凭据。撤销版本不能再生成授权 ref；Selection 在读取正文前拒绝空选择、跨 tenant 和同一来源多版本，并把 tenant、版本、内容指纹、分级和外发决定绑定到 canonical fingerprint。默认外发为 deny。
+- Verified：新合同聚焦测试为 `17 passed`，阻断 LangGraph 的导入冒烟与 Python compile 通过，wheel 清单包含两个 knowledge 模块。完整离线套件为 `1208 passed, 27 skipped, 1 failed`，唯一失败是沙箱禁止 macOS `ps`；同一既有进程树测试在允许环境单独 `1 passed`，合并证据为 `1209 passed, 27 skipped`。
+- Boundary：本轮没有 migration、PostgreSQL repository、管理员鉴权、HTTP、正文 Blob、ContextBundle 合并、检索、Runtime 接入、部署或飞书副作用。它只冻结下一步的安全合同和负向测试边界，不能描述为企业知识库已经可用。
+
 ## v0.88.1-draft · 2026-08-19 · Phase 2B 开发部署验证
 
 - Deployment：内容提交 `6e6e3895ac9bb355f40c017e4b5ffe395f4ddca4` 和 PostgreSQL fixture 修正 `3a93fd2af9cfecdc00cada822ab8705232018205` 已部署到开发环境。wheel SHA-256 为 `dda518748ff93be4e70e8e040ebff5edfd80bddddb9129c9be14b21c9c135edd`；Target 与 legacy 安装态 `agent_context.py`、搜索适配器和交付物 adapter 哈希与本地一致，两个 venv 的 `pip check` 通过。十个 Python 服务均为 `active / running / NRestarts=0`，部署窗口 warning 为 0，Caddy live 配置未改变。
