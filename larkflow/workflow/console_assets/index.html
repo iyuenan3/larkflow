@@ -162,6 +162,15 @@
                   </div>
                 </details>
 
+                <div id="draft-knowledge-input" class="draft-attachment-input" hidden>
+                  <div class="draft-knowledge-heading">
+                    <span>企业共享资料</span>
+                    <small>选填，只显示安全元数据，不预览正文</small>
+                  </div>
+                  <div id="draft-knowledge-list" class="draft-knowledge-list"></div>
+                  <p id="draft-knowledge-selection">默认不使用企业资料。</p>
+                </div>
+
                 <div id="draft-attachment-input" class="draft-attachment-input" hidden>
                   <label for="draft-attachments">
                     <span>项目资料</span>
@@ -191,6 +200,8 @@
                       <span>确认后清单会冻结</span>
                     </div>
                     <div id="draft-attachment-list" class="draft-attachment-list"></div>
+                    <div id="draft-frozen-knowledge" class="draft-frozen-knowledge"></div>
+                    <button id="draft-knowledge-save" class="quiet-button" type="button" hidden>保存企业资料选择</button>
                     <p id="draft-attachment-error" class="human-task-error" role="alert"></p>
                     <button id="draft-generate" class="draft-generate" type="button">确认资料并开始生成</button>
                   </div>

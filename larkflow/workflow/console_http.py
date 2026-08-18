@@ -48,6 +48,12 @@ from .console_drafts import (
     ConsoleDraftNotFoundError,
     ConsoleDraftService,
 )
+from .console_knowledge import (
+    ConsoleKnowledgeSelectionConflictError,
+    ConsoleKnowledgeSelectionNotFoundError,
+    ConsoleKnowledgeSelectionService,
+    MAX_KNOWLEDGE_SELECTION_BODY_BYTES,
+)
 from .console_attachments import (
     ConsoleAttachmentConflictError,
     ConsoleAttachmentNotFoundError,
@@ -113,6 +119,9 @@ _DRAFT_ATTACHMENT_REVOKE_ROUTE = re.compile(
 _DRAFT_GENERATE_ROUTE = re.compile(
     r"^/console/api/v1/drafts/([0-9a-f]{32})/generate$"
 )
+_DRAFT_KNOWLEDGE_SELECTION_ROUTE = re.compile(
+    r"^/console/api/v1/drafts/([0-9a-f]{32})/knowledge-selection$"
+)
 _ADMIN_SESSION_PREVIEW_ROUTE = re.compile(
     r"^/console/api/v1/admin/sessions/([0-9a-f]{32})/revoke-preview$"
 )
@@ -133,6 +142,7 @@ _ADMIN_ACTION_HEADER = "x-larkflow-console-action"
 _ADMIN_ACTION_VALUE = "session-governance-v1"
 _KNOWLEDGE_ACTION_VALUE = "knowledge-governance-v1"
 _WORKFLOW_ACTION_VALUE = "workflow-action-v1"
+_KNOWLEDGE_SELECTION_ACTION_VALUE = "knowledge-selection-v1"
 _MAX_TASK_BODY_BYTES = 65_536
 _MAX_KNOWLEDGE_PUBLICATION_BODY_BYTES = 262_144
 _CONSOLE_RESOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -202,6 +212,7 @@ class ConsoleHttpApplication:
         task_service: ConsoleTaskService | None = None,
         draft_service: ConsoleDraftService | None = None,
         attachment_service: ConsoleAttachmentService | None = None,
+        knowledge_selection_service: ConsoleKnowledgeSelectionService | None = None,
     ) -> None:
         self.service = service
         self.authenticator = authenticator
@@ -213,6 +224,7 @@ class ConsoleHttpApplication:
         self.task_service = task_service
         self.draft_service = draft_service
         self.attachment_service = attachment_service
+        self.knowledge_selection_service = knowledge_selection_service
         if authenticator.mode not in {"static", "feishu"}:
             raise ValueError("console authenticator mode is unsupported")
         if (authenticator.mode == "feishu") != (oauth is not None):
@@ -271,6 +283,9 @@ class ConsoleHttpApplication:
                     "logout_available": self.authenticator.mode == "feishu",
                     "capabilities": {
                         "attachment_planning": self._attachment_planning_enabled(),
+                        "enterprise_knowledge_selection": bool(
+                            self.knowledge_selection_service is not None
+                        ),
                         "enterprise_knowledge_catalog": bool(
                             admin
                             and self.admin_knowledge_service is not None
@@ -565,6 +580,35 @@ class ConsoleHttpApplication:
                     self.draft_service.list(principal, limit=limit),
                 )
 
+            if parsed.path == "/console/api/v1/knowledge":
+                if parsed.query:
+                    raise ValueError("knowledge query is not accepted")
+                if self.knowledge_selection_service is None:
+                    return self._json(
+                        200,
+                        {"sources": [], "total": 0, "selection_limit": 16},
+                    )
+                return self._json(
+                    200,
+                    self.knowledge_selection_service.catalog(principal),
+                )
+
+            knowledge_selection = _DRAFT_KNOWLEDGE_SELECTION_ROUTE.fullmatch(
+                parsed.path
+            )
+            if knowledge_selection is not None and not parsed.query:
+                if self.knowledge_selection_service is None:
+                    raise ConsoleKnowledgeSelectionNotFoundError(
+                        "knowledge selection"
+                    )
+                return self._json(
+                    200,
+                    self.knowledge_selection_service.get(
+                        principal,
+                        knowledge_selection.group(1),
+                    ),
+                )
+
             attachments_match = _DRAFT_ATTACHMENTS_ROUTE.fullmatch(parsed.path)
             if attachments_match is not None and not parsed.query:
                 if self.attachment_service is None:
@@ -621,12 +665,14 @@ class ConsoleHttpApplication:
             ConsoleTaskNotFoundError,
             ConsoleDraftNotFoundError,
             ConsoleAttachmentNotFoundError,
+            ConsoleKnowledgeSelectionNotFoundError,
         ):
             return self._error(404, "not_found", "resource does not exist")
         except (
             ConsoleTaskConflictError,
             ConsoleDraftConflictError,
             ConsoleAttachmentConflictError,
+            ConsoleKnowledgeSelectionConflictError,
         ) as exc:
             return self._error(409, exc.code, str(exc))
         except (TypeError, ValueError) as exc:
@@ -790,7 +836,10 @@ class ConsoleHttpApplication:
             defer_generation = document.get("defer_generation", False)
             if not isinstance(defer_generation, bool):
                 raise ValueError("defer_generation must be a boolean")
-            if defer_generation and not self._attachment_planning_enabled():
+            if defer_generation and not (
+                self._attachment_planning_enabled()
+                or self.knowledge_selection_service is not None
+            ):
                 raise ConsoleDraftConflictError(
                     "attachment_planning_unavailable",
                     "当前部署未启用项目资料规划。",
@@ -848,12 +897,13 @@ class ConsoleHttpApplication:
     ) -> ConsoleHttpResponse:
         try:
             principal = self.authenticator.authenticate_context(headers).principal
-            if self.attachment_service is None:
-                raise ConsoleAttachmentNotFoundError("attachments")
             upload = _DRAFT_ATTACHMENTS_ROUTE.fullmatch(path)
             revoke = _DRAFT_ATTACHMENT_REVOKE_ROUTE.fullmatch(path)
             generate = _DRAFT_GENERATE_ROUTE.fullmatch(path)
+            knowledge_selection = _DRAFT_KNOWLEDGE_SELECTION_ROUTE.fullmatch(path)
             if upload is not None:
+                if self.attachment_service is None:
+                    raise ConsoleAttachmentNotFoundError("attachments")
                 self._validate_attachment_upload_request(query, headers, body)
                 document = _json_object_body(body)
                 if set(document) != {"display_filename", "media_type", "content"}:
@@ -868,8 +918,35 @@ class ConsoleHttpApplication:
                         content=document["content"],
                     ),
                 )
+            if knowledge_selection is not None:
+                if self.knowledge_selection_service is None:
+                    raise ConsoleKnowledgeSelectionNotFoundError(
+                        "knowledge selection"
+                    )
+                self._validate_workflow_write_request(
+                    query,
+                    headers,
+                    body,
+                    allow_body=True,
+                    action_value=_KNOWLEDGE_SELECTION_ACTION_VALUE,
+                    max_body_bytes=MAX_KNOWLEDGE_SELECTION_BODY_BYTES,
+                )
+                document = _json_object_body(body)
+                if set(document) != {"source_ids", "expected_version"}:
+                    raise ValueError("knowledge selection fields are invalid")
+                return self._json(
+                    200,
+                    self.knowledge_selection_service.update(
+                        principal,
+                        knowledge_selection.group(1),
+                        source_ids=document["source_ids"],
+                        expected_version=document["expected_version"],
+                    ),
+                )
             self._validate_workflow_write_request(query, headers, body)
             if revoke is not None:
+                if self.attachment_service is None:
+                    raise ConsoleAttachmentNotFoundError("attachments")
                 return self._json(
                     200,
                     self.attachment_service.revoke(
@@ -879,6 +956,16 @@ class ConsoleHttpApplication:
                     ),
                 )
             if generate is not None:
+                if self.knowledge_selection_service is not None:
+                    return self._json(
+                        202,
+                        self.knowledge_selection_service.generate(
+                            principal,
+                            generate.group(1),
+                        ),
+                    )
+                if self.attachment_service is None:
+                    raise ConsoleAttachmentNotFoundError("attachments")
                 return self._json(
                     202,
                     self.attachment_service.generate(principal, generate.group(1)),
@@ -896,7 +983,11 @@ class ConsoleHttpApplication:
                 "console credential is invalid",
                 headers=challenge,
             )
-        except (ConsoleAttachmentNotFoundError, ConsoleDraftNotFoundError):
+        except (
+            ConsoleAttachmentNotFoundError,
+            ConsoleDraftNotFoundError,
+            ConsoleKnowledgeSelectionNotFoundError,
+        ):
             return self._error(404, "not_found", "resource does not exist")
         except _WorkflowWriteRequestError:
             return self._error(
@@ -904,7 +995,10 @@ class ConsoleHttpApplication:
                 "request_rejected",
                 "workflow action request was rejected",
             )
-        except ConsoleAttachmentConflictError as exc:
+        except (
+            ConsoleAttachmentConflictError,
+            ConsoleKnowledgeSelectionConflictError,
+        ) as exc:
             return self._error(409, exc.code, str(exc))
         except (TypeError, ValueError) as exc:
             return self._error(400, "invalid_request", str(exc))
@@ -1283,6 +1377,8 @@ class ConsoleHttpApplication:
         body: bytes,
         *,
         allow_body: bool = False,
+        action_value: str = _WORKFLOW_ACTION_VALUE,
+        max_body_bytes: int = _MAX_TASK_BODY_BYTES,
     ) -> None:
         if query:
             raise ValueError("workflow action query is not accepted")
@@ -1298,7 +1394,7 @@ class ConsoleHttpApplication:
                 raise ValueError("workflow action content length is invalid") from exc
             if (
                 parsed_length < 1
-                or parsed_length > _MAX_TASK_BODY_BYTES
+                or parsed_length > max_body_bytes
                 or parsed_length != len(body)
             ):
                 raise ValueError("workflow action body size is invalid")
@@ -1314,7 +1410,7 @@ class ConsoleHttpApplication:
             raise ValueError("workflow action body is not accepted")
         if not secrets.compare_digest(
             _header(headers, _ADMIN_ACTION_HEADER) or "",
-            _WORKFLOW_ACTION_VALUE,
+            action_value,
         ):
             raise _WorkflowWriteRequestError(
                 "workflow action request header is invalid"

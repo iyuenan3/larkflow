@@ -128,6 +128,13 @@ from .console_attachments import (
     PlanningContextService,
     PostgresConsoleAttachmentRepository,
 )
+from .console_knowledge import (
+    ConsoleKnowledgeSelectionConflictError,
+    ConsoleKnowledgeSelectionNotFoundError,
+    ConsoleKnowledgeSelectionService,
+    InMemoryConsoleKnowledgeSelectionRepository,
+    PostgresConsoleKnowledgeSelectionRepository,
+)
 from .knowledge_context import (
     CombinedAgentContextService,
     EnterpriseAgentContextService,
@@ -390,6 +397,9 @@ __all__ = [
     "ConsoleAttachmentConflictError",
     "ConsoleAttachmentNotFoundError",
     "ConsoleAttachmentService",
+    "ConsoleKnowledgeSelectionConflictError",
+    "ConsoleKnowledgeSelectionNotFoundError",
+    "ConsoleKnowledgeSelectionService",
     "ContentCheckToolExecutor",
     "SourceClaimsCheckToolExecutor",
     "SourceDecisionCheckToolExecutor",
@@ -464,6 +474,7 @@ __all__ = [
     "InMemoryConsoleDraftRepository",
     "InMemoryAttachmentBlobStore",
     "InMemoryConsoleAttachmentRepository",
+    "InMemoryConsoleKnowledgeSelectionRepository",
     "InvalidRoleBindingClaimError",
     "RECOVERY_ACTION_NAME",
     "RecoveryAction",
@@ -523,6 +534,7 @@ __all__ = [
     "ProjectionStore",
     "PostgresConsoleDraftRepository",
     "PostgresConsoleAttachmentRepository",
+    "PostgresConsoleKnowledgeSelectionRepository",
     "PlanningContextService",
     "PlanningKnowledgeContextService",
     "EnterpriseKnowledgeContextService",

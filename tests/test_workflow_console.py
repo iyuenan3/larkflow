@@ -693,6 +693,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
         "logout_available": False,
         "capabilities": {
             "attachment_planning": False,
+            "enterprise_knowledge_selection": False,
             "enterprise_knowledge_catalog": False,
             "enterprise_knowledge_content_publication": False,
         },

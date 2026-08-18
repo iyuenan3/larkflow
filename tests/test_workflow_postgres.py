@@ -69,6 +69,11 @@ from larkflow.workflow.console_admin_sessions import (
     PostgresConsoleAdminSessionRepository,
 )
 from larkflow.workflow.console_drafts import PostgresConsoleDraftRepository
+from larkflow.workflow.console_knowledge import (
+    ConsoleKnowledgeSelectionConflictError,
+    ConsoleKnowledgeSelectionService,
+    PostgresConsoleKnowledgeSelectionRepository,
+)
 from larkflow.workflow.console_attachments import (
     AttachmentContextRejected,
     ConsoleAttachmentConflictError,
@@ -212,7 +217,7 @@ def test_postgres_admin_overview_reads_all_tenant_scoped_operational_lanes():
     }
     assert all(lane.total == 0 for lane in snapshot.queue_lanes)
     assert snapshot.applied_migrations[-1] == (
-        "0026_enterprise_knowledge_content_authorization"
+        "0027_console_enterprise_knowledge_selection"
     )
 
 
@@ -2719,6 +2724,7 @@ def test_postgres_context_authorization_serializes_with_revoke(monkeypatch):
             tenant_id=tenant_id,
             request_id=f"request_{suffix}",
             actor_person_id="person-context-race",
+            references=(publication.ref,),
         )
         if not read_entered.wait(timeout=5):
             context_future.result(timeout=1)
@@ -2851,3 +2857,134 @@ def test_postgres_enterprise_knowledge_tenant_quota_serializes_competing_sources
     assert PostgresEnterpriseKnowledgeRepository(connection_factory).retained_usage(
         tenant_id
     ) == (1, 64)
+
+
+def test_postgres_console_knowledge_selection_is_versioned_and_freezes_exact_ref():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_selection_{suffix}"
+    owner = f"person_owner_{suffix}"
+    request_id = uuid4().hex
+    now = datetime(2026, 8, 19, 8, 0, tzinfo=timezone.utc)
+    knowledge = PostgresEnterpriseKnowledgeRepository(connection_factory)
+
+    def publish(index: int) -> EnterpriseKnowledgePublication:
+        source_id = f"enterprise:selection_{index}_{suffix}"
+        content_hash = sha256(f"selection-{index}".encode()).hexdigest()
+        proof = EnterpriseKnowledgeAuthorizationProof(
+            tenant_id=tenant_id,
+            source_id=source_id,
+            version_id="v1",
+            content_sha256=content_hash,
+            authorized_by_person_id=f"admin_{suffix}",
+            authorized_at=now,
+        )
+        return knowledge.publish(
+            EnterpriseKnowledgePublication(
+                ref=EnterpriseKnowledgeRef(
+                    tenant_id=tenant_id,
+                    source_id=source_id,
+                    version_id="v1",
+                    display_label=f"Synthetic selection {index}",
+                    media_type="text/plain",
+                    size_bytes=64,
+                    content_sha256=content_hash,
+                    published_at=now,
+                    egress_decision="allow",
+                    authorization_proof_id=proof.proof_id,
+                    authorization_fingerprint=proof.fingerprint,
+                ),
+                published_by_person_id=f"admin_{suffix}",
+                authorization_proof=proof,
+            )
+        )
+
+    first, second = publish(1), publish(2)
+    PostgresConsoleDraftRepository(connection_factory).create(
+        ConsoleDraftRequest(
+            id=request_id,
+            tenant_id=tenant_id,
+            requester_person_id=owner,
+            collaborator_person_id=owner,
+            brief="Use one explicitly selected enterprise source",
+            context="Synthetic PostgreSQL selection contract",
+            status="collecting",
+            attempt_count=0,
+            available_at=now,
+            created_at=now,
+            updated_at=now,
+            generation_deferred=True,
+        )
+    )
+
+    def update(source_id: str):
+        service = ConsoleKnowledgeSelectionService(
+            PostgresConsoleKnowledgeSelectionRepository(connection_factory),
+            model_egress_policy="allow",
+            clock=lambda: now,
+        )
+        try:
+            return service.update(
+                ConsolePrincipal(tenant_id, owner),
+                request_id,
+                source_ids=[source_id],
+                expected_version=0,
+            )["source_ids"]
+        except ConsoleKnowledgeSelectionConflictError as exc:
+            return exc.code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = tuple(pool.map(update, (first.ref.source_id, second.ref.source_id)))
+    assert sum(item == "selection_version_conflict" for item in results) == 1
+    selected_ids = next(item for item in results if isinstance(item, list))
+
+    service = ConsoleKnowledgeSelectionService(
+        PostgresConsoleKnowledgeSelectionRepository(connection_factory),
+        model_egress_policy="allow",
+        clock=lambda: now,
+    )
+    queued = service.generate(ConsolePrincipal(tenant_id, owner), request_id)
+    repeated = service.generate(ConsolePrincipal(tenant_id, owner), request_id)
+    assert queued == repeated
+    frozen = PostgresConsoleDraftRepository(connection_factory).get_for_owner(
+        tenant_id,
+        request_id,
+        requester_person_id=owner,
+    )
+    assert [item.source_id for item in frozen.enterprise_knowledge_manifest] == selected_ids
+    assert frozen.enterprise_selection_version == 1
+    assert len(frozen.enterprise_selection_fingerprint or "") == 64
+    with pytest.raises(ConsoleKnowledgeSelectionConflictError):
+        service.update(
+            ConsolePrincipal(tenant_id, owner),
+            request_id,
+            source_ids=[],
+            expected_version=1,
+        )
+    with connection_factory() as connection:
+        row = connection.execute(
+            """
+            SELECT jsonb_array_length(enterprise_knowledge_manifest) AS source_count,
+                   enterprise_selection_version, status
+            FROM workflow_console_draft_requests
+            WHERE tenant_id = %s AND id = %s
+            """,
+            (tenant_id, request_id),
+        ).fetchone()
+        assert row == {
+            "source_count": 1,
+            "enterprise_selection_version": 1,
+            "status": "pending",
+        }
+        with pytest.raises(RaiseException, match="only mutable while collecting"):
+            connection.execute(
+                """
+                UPDATE workflow_console_draft_requests
+                SET enterprise_source_selection = '[]'::jsonb,
+                    enterprise_selection_version = 2
+                WHERE tenant_id = %s AND id = %s
+                """,
+                (tenant_id, request_id),
+            )

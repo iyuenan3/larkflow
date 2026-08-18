@@ -352,6 +352,7 @@ def test_http_oauth_login_session_data_and_logout_are_same_origin():
         "logout_available": True,
         "capabilities": {
             "attachment_planning": False,
+            "enterprise_knowledge_selection": False,
             "enterprise_knowledge_catalog": False,
             "enterprise_knowledge_content_publication": False,
         },

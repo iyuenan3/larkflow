@@ -76,12 +76,8 @@ class EnterpriseKnowledgeContextService:
         tenant_id: str,
         request_id: str,
         actor_person_id: str,
+        references: tuple[EnterpriseKnowledgeRef, ...],
     ) -> ContextBundle | None:
-        references = tuple(
-            item
-            for item in self.repository.list_published(tenant_id)
-            if item.content_authorized
-        )
         if not references:
             return None
         now = _utc(self.clock())
@@ -287,7 +283,7 @@ class EnterpriseKnowledgeContextService:
 
 
 class PlanningKnowledgeContextService:
-    """Merge project attachments and tenant-wide knowledge deterministically."""
+    """Merge project attachments and an explicitly frozen knowledge selection."""
 
     def __init__(
         self,
@@ -312,13 +308,19 @@ class PlanningKnowledgeContextService:
             if self.project_service is not None
             else None
         )
+        if request.enterprise_knowledge_manifest and self.enterprise_service is None:
+            raise EnterpriseKnowledgeContextRejected(
+                "企业共享资料上下文服务未配置"
+            )
         enterprise = (
             self.enterprise_service.build_for_planning(
                 tenant_id=request.tenant_id,
                 request_id=request.id,
                 actor_person_id=request.requester_person_id,
+                references=request.enterprise_knowledge_manifest,
             )
             if self.enterprise_service is not None
+            and request.enterprise_knowledge_manifest
             else None
         )
         return merge_context_bundles(
@@ -334,13 +336,8 @@ class PlanningKnowledgeContextService:
         request_id: str,
         actor_person_id: str,
     ) -> ContextBundle | None:
-        if self.enterprise_service is None:
-            return None
-        return self.enterprise_service.build_for_planning(
-            tenant_id=tenant_id,
-            request_id=request_id,
-            actor_person_id=actor_person_id,
-        )
+        del tenant_id, request_id, actor_person_id
+        return None
 
     def promote(self, request: Any, *, instance_id: str) -> None:
         if request.attachment_manifest:

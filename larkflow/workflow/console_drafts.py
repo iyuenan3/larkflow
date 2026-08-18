@@ -10,6 +10,7 @@ from threading import RLock
 from typing import Any, Protocol
 
 from psycopg.types.json import Jsonb
+from larkflow.knowledge.contracts import EnterpriseKnowledgeRef
 from larkflow.planning.contracts import DraftGenerator
 from larkflow.planning.context import AttachmentRef, ContextBundle
 
@@ -68,6 +69,10 @@ class ConsoleDraftRequest:
     last_error: str | None = None
     generation_deferred: bool = False
     attachment_manifest: tuple[AttachmentRef, ...] = ()
+    enterprise_source_selection: tuple[str, ...] = ()
+    enterprise_selection_version: int = 0
+    enterprise_knowledge_manifest: tuple[EnterpriseKnowledgeRef, ...] = ()
+    enterprise_selection_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -233,6 +238,27 @@ class InMemoryConsoleDraftRepository:
         manifest: tuple[AttachmentRef, ...],
         now: datetime,
     ) -> ConsoleDraftRequest:
+        return self.queue_collecting_context(
+            tenant_id,
+            request_id,
+            requester_person_id=requester_person_id,
+            attachment_manifest=manifest,
+            enterprise_manifest=(),
+            enterprise_fingerprint=None,
+            now=now,
+        )
+
+    def queue_collecting_context(
+        self,
+        tenant_id: str,
+        request_id: str,
+        *,
+        requester_person_id: str,
+        attachment_manifest: tuple[AttachmentRef, ...],
+        enterprise_manifest: tuple[EnterpriseKnowledgeRef, ...],
+        enterprise_fingerprint: str | None,
+        now: datetime,
+    ) -> ConsoleDraftRequest:
         with self._lock:
             item = self._items.get((tenant_id, request_id))
             if item is None or not secrets.compare_digest(
@@ -248,7 +274,9 @@ class InMemoryConsoleDraftRepository:
             updated = replace(
                 item,
                 status="pending",
-                attachment_manifest=tuple(manifest),
+                attachment_manifest=tuple(attachment_manifest),
+                enterprise_knowledge_manifest=tuple(enterprise_manifest),
+                enterprise_selection_fingerprint=enterprise_fingerprint,
                 available_at=now,
                 updated_at=now,
             )
@@ -970,11 +998,11 @@ class ConsoleDraftWorker:
         context_bundle: ContextBundle | None = None
         if self.context_service is not None:
             context_bundle = self.context_service.build_for_planning(request)
-        elif request.attachment_manifest:
+        elif request.attachment_manifest or request.enterprise_knowledge_manifest:
             raise DraftGenerationRejected("附件上下文服务未配置")
-        if request.attachment_manifest:
+        if request.attachment_manifest or request.enterprise_knowledge_manifest:
             if context_bundle is None:
-                raise DraftGenerationRejected("附件上下文未能构建")
+                raise DraftGenerationRejected("授权上下文未能构建")
         definition = request.definition
         if definition is None:
             generation: dict[str, Any] = {
@@ -1121,6 +1149,8 @@ def _public_request(
             else None
         ),
         "attachment_count": len(request.attachment_manifest),
+        "enterprise_knowledge_count": len(request.enterprise_knowledge_manifest),
+        "enterprise_selection_version": request.enterprise_selection_version,
     }
     if include_brief:
         payload["brief"] = request.brief
@@ -1132,6 +1162,7 @@ def _request_from_row(row: Mapping[str, Any] | None) -> ConsoleDraftRequest:
         raise ConsoleDraftNotFoundError("draft request")
     definition = row.get("definition")
     raw_manifest = row.get("attachment_manifest") or []
+    raw_enterprise_manifest = row.get("enterprise_knowledge_manifest") or []
     return ConsoleDraftRequest(
         id=str(row["id"]),
         tenant_id=str(row["tenant_id"]),
@@ -1161,6 +1192,36 @@ def _request_from_row(row: Mapping[str, Any] | None) -> ConsoleDraftRequest:
                 egress_decision=str(item["egress_decision"]),
             )
             for item in raw_manifest
+        ),
+        enterprise_source_selection=tuple(
+            str(item) for item in (row.get("enterprise_source_selection") or [])
+        ),
+        enterprise_selection_version=int(
+            row.get("enterprise_selection_version") or 0
+        ),
+        enterprise_knowledge_manifest=tuple(
+            EnterpriseKnowledgeRef(
+                tenant_id=str(row["tenant_id"]),
+                source_id=str(item["source_id"]),
+                version_id=str(item["version_id"]),
+                display_label=str(item["display_label"]),
+                media_type=str(item["media_type"]),
+                size_bytes=int(item["size_bytes"]),
+                content_sha256=str(item["content_sha256"]),
+                published_at=datetime.fromisoformat(str(item["published_at"])),
+                data_classification=str(item["data_classification"]),
+                egress_decision=str(item["egress_decision"]),
+                authorization_proof_id=str(item["authorization_proof_id"]),
+                authorization_fingerprint=str(
+                    item["authorization_fingerprint"]
+                ),
+            )
+            for item in raw_enterprise_manifest
+        ),
+        enterprise_selection_fingerprint=(
+            str(row["enterprise_selection_fingerprint"])
+            if row.get("enterprise_selection_fingerprint") is not None
+            else None
         ),
     )
 

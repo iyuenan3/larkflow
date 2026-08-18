@@ -72,6 +72,10 @@ const state = {
   detail: null,
   isAdmin: false,
   attachmentPlanningEnabled: false,
+  enterpriseKnowledgeSelectionEnabled: false,
+  knowledgeCandidates: [],
+  selectedKnowledgeSourceIds: new Set(),
+  knowledgeSelectionVersion: 0,
   view: "owner",
   adminOverview: null,
   adminSessions: null,
@@ -263,7 +267,9 @@ async function request(path, options = {}) {
     headers.Authorization = `Bearer ${state.token}`;
   }
   if (method !== "GET" && method !== "HEAD") {
-    headers["X-Larkflow-Console-Action"] = path.startsWith("/console/api/v1/admin/")
+    headers["X-Larkflow-Console-Action"] = path.endsWith("/knowledge-selection")
+      ? "knowledge-selection-v1"
+      : path.startsWith("/console/api/v1/admin/")
       ? "session-governance-v1"
       : "workflow-action-v1";
   }
@@ -546,7 +552,107 @@ function renderDraftAttachments() {
     item.append(copy, revoke);
     list.append(item);
   });
+  const knowledge = el("draft-frozen-knowledge");
+  knowledge.replaceChildren();
+  const selected = state.knowledgeCandidates.filter((item) => (
+    state.selectedKnowledgeSourceIds.has(item.source_id)
+  ));
+  if (selected.length) {
+    knowledge.append(node("p", "", "本次生成还将使用以下企业共享资料："));
+    selected.forEach((item) => {
+      knowledge.append(node("p", "", `• ${item.display_label} · ${item.version_id}`));
+    });
+  }
+  const saveKnowledge = el("draft-knowledge-save");
+  saveKnowledge.hidden = !state.enterpriseKnowledgeSelectionEnabled;
+  saveKnowledge.disabled = false;
+  saveKnowledge.textContent = "保存企业资料选择";
   el("draft-generate").disabled = false;
+}
+
+function renderKnowledgeCandidates() {
+  const list = el("draft-knowledge-list");
+  list.replaceChildren();
+  if (!state.knowledgeCandidates.length) {
+    list.append(node("p", "draft-recent-empty", "当前没有可选择的企业共享资料。"));
+  }
+  state.knowledgeCandidates.forEach((item) => {
+    const label = node("label", "draft-knowledge-option");
+    label.dataset.unavailable = item.selectable ? "false" : "true";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = item.source_id;
+    input.disabled = !item.selectable;
+    input.checked = state.selectedKnowledgeSourceIds.has(item.source_id);
+    input.addEventListener("change", () => {
+      if (input.checked) state.selectedKnowledgeSourceIds.add(item.source_id);
+      else state.selectedKnowledgeSourceIds.delete(item.source_id);
+      el("draft-knowledge-selection").textContent = state.selectedKnowledgeSourceIds.size
+        ? `已选择 ${state.selectedKnowledgeSourceIds.size} 份资料，创建草稿后会再次确认。`
+        : "默认不使用企业资料。";
+    });
+    const copy = document.createElement("div");
+    copy.append(
+      node("strong", "", item.display_label),
+      node(
+        "small",
+        "",
+        item.selectable
+          ? `${item.media_type} · ${readableBytes(item.size_bytes)} · 发布于 ${formatDate(item.published_at)}`
+          : item.unavailable_reason || "当前不可用于规划",
+      ),
+    );
+    label.append(input, copy);
+    list.append(label);
+  });
+}
+
+async function loadKnowledgeCatalog() {
+  const payload = await request("/console/api/v1/knowledge");
+  state.knowledgeCandidates = payload.sources || [];
+  renderKnowledgeCandidates();
+}
+
+async function loadDraftKnowledgeSelection(requestId) {
+  if (!state.enterpriseKnowledgeSelectionEnabled) return;
+  const payload = await request(
+    `/console/api/v1/drafts/${encodeURIComponent(requestId)}/knowledge-selection`,
+  );
+  state.selectedKnowledgeSourceIds = new Set(payload.source_ids || []);
+  state.knowledgeSelectionVersion = payload.selection_version || 0;
+  renderKnowledgeCandidates();
+  renderDraftAttachments();
+}
+
+async function saveCurrentKnowledgeSelection() {
+  if (!state.currentDraft?.id || state.currentDraft.status !== "collecting") return;
+  const button = el("draft-knowledge-save");
+  const errorNode = el("draft-attachment-error");
+  button.disabled = true;
+  button.textContent = "正在保存选择";
+  errorNode.textContent = "";
+  try {
+    const payload = await request(
+      `/console/api/v1/drafts/${encodeURIComponent(state.currentDraft.id)}/knowledge-selection`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source_ids: Array.from(state.selectedKnowledgeSourceIds),
+          expected_version: state.knowledgeSelectionVersion,
+        }),
+      },
+    );
+    state.knowledgeSelectionVersion = payload.selection_version;
+    state.selectedKnowledgeSourceIds = new Set(payload.source_ids || []);
+    renderKnowledgeCandidates();
+    renderDraftAttachments();
+    showToast("企业资料选择已保存");
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "保存企业资料选择";
+    errorNode.textContent = error.message || "企业资料选择没有保存，请重试。";
+  }
 }
 
 async function loadDraftAttachments(requestId) {
@@ -615,7 +721,14 @@ async function pollDraftRequest(requestId) {
       return;
     }
     if (requestItem.status === "collecting") {
-      await loadDraftAttachments(requestItem.id);
+      await Promise.all([
+        state.attachmentPlanningEnabled
+          ? loadDraftAttachments(requestItem.id)
+          : Promise.resolve(),
+        state.enterpriseKnowledgeSelectionEnabled
+          ? loadDraftKnowledgeSelection(requestItem.id)
+          : Promise.resolve(),
+      ]);
       return;
     }
     if (requestItem.status === "ready" && state.autoOpenDraftId === requestItem.id) {
@@ -634,6 +747,7 @@ async function submitDraftRequest(event) {
   const context = el("draft-context").value.trim();
   const collaborator = el("draft-collaborator").value || null;
   const selectedFiles = Array.from(el("draft-attachments").files || []);
+  const selectedKnowledge = Array.from(state.selectedKnowledgeSourceIds);
   const button = el("draft-submit");
   const errorNode = el("draft-form-error");
   errorNode.textContent = "";
@@ -682,12 +796,13 @@ async function submitDraftRequest(event) {
   const requestId = newDraftRequestId();
   button.disabled = true;
   button.dataset.state = "working";
-  button.textContent = selectedFiles.length ? "正在创建资料工作区" : "正在进入生成队列";
+  const deferred = selectedFiles.length > 0 || selectedKnowledge.length > 0;
+  button.textContent = deferred ? "正在创建资料工作区" : "正在进入生成队列";
   state.autoOpenDraftId = requestId;
   const optimistic = {
     id: requestId,
-    status: selectedFiles.length ? "collecting" : "queued",
-    message: selectedFiles.length ? "正在上传授权的项目资料" : "正在把请求写入中央耐久队列",
+    status: deferred ? "collecting" : "queued",
+    message: deferred ? "正在保存本次授权资料选择" : "正在把请求写入中央耐久队列",
     brief,
     instance_id: null,
     created_at: new Date().toISOString(),
@@ -704,7 +819,7 @@ async function submitDraftRequest(event) {
         brief,
         context,
         collaborator_person_id: collaborator,
-        defer_generation: selectedFiles.length > 0,
+        defer_generation: deferred,
       }),
     });
     state.currentDraft = payload.request;
@@ -712,6 +827,20 @@ async function submitDraftRequest(event) {
     state.draftAttachments = [];
     renderCurrentDraft(payload.request);
     renderDraftRequests();
+    if (selectedKnowledge.length) {
+      const selection = await request(
+        `/console/api/v1/drafts/${encodeURIComponent(requestId)}/knowledge-selection`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            source_ids: selectedKnowledge,
+            expected_version: 0,
+          }),
+        },
+      );
+      state.knowledgeSelectionVersion = selection.selection_version;
+    }
     if (selectedFiles.length) {
       for (const prepared of preparedFiles) {
         const file = prepared.file;
@@ -736,6 +865,10 @@ async function submitDraftRequest(event) {
       el("draft-attachments").value = "";
       el("draft-attachment-selection").textContent = "资料已上传并绑定到当前草稿请求。";
       showToast("资料已上传，确认清单后开始生成");
+    } else if (selectedKnowledge.length) {
+      renderDraftAttachments();
+      button.textContent = "资料已选择，请在右侧确认";
+      showToast("企业资料已选择，确认清单后开始生成");
     } else {
       pollDraftRequest(requestId);
     }
@@ -2829,8 +2962,13 @@ async function loadAuthConfiguration() {
     throw new Error("服务能力配置无效");
   }
   state.attachmentPlanningEnabled = payload.capabilities.attachment_planning;
+  state.enterpriseKnowledgeSelectionEnabled = (
+    payload.capabilities.enterprise_knowledge_selection === true
+  );
   el("draft-attachment-input").hidden = !state.attachmentPlanningEnabled;
   el("draft-attachments").disabled = !state.attachmentPlanningEnabled;
+  el("draft-knowledge-input").hidden = !state.enterpriseKnowledgeSelectionEnabled;
+  if (state.enterpriseKnowledgeSelectionEnabled) await loadKnowledgeCatalog();
   adminViewButton.hidden = !state.isAdmin;
   el("view-switch").hidden = !state.isAdmin;
   return payload;
@@ -2908,6 +3046,7 @@ workflowNav.addEventListener("click", () => {
 el("detail-back").addEventListener("click", () => showOwnerSection(state.returnSection));
 el("draft-form").addEventListener("submit", submitDraftRequest);
 el("draft-generate").addEventListener("click", generateCurrentDraft);
+el("draft-knowledge-save").addEventListener("click", saveCurrentKnowledgeSelection);
 el("draft-attachments").addEventListener("change", (event) => {
   const files = Array.from(event.target.files || []);
   el("draft-attachment-selection").textContent = files.length

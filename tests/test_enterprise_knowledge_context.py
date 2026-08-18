@@ -43,6 +43,10 @@ from larkflow.workflow.console_drafts import (
     ConsoleDraftWorker,
     InMemoryConsoleDraftRepository,
 )
+from larkflow.workflow.console_knowledge import (
+    ConsoleKnowledgeSelectionService,
+    InMemoryConsoleKnowledgeSelectionRepository,
+)
 from larkflow.workflow.draft_generation import DraftDefinitionGenerator
 from larkflow.workflow.model import ExecutorKind
 from larkflow.workflow.repository import InMemoryWorkflowRepository
@@ -223,6 +227,7 @@ def test_planning_context_reads_authorized_body_without_leaking_storage() -> Non
         tenant_id="tenant-a",
         request_id="request-a",
         actor_person_id="person-requester",
+        references=(publication.ref,),
     )
 
     assert bundle is not None
@@ -251,6 +256,7 @@ def test_revoke_preserves_frozen_history_but_blocks_new_attempt_context() -> Non
         tenant_id="tenant-a",
         request_id="request-a",
         actor_person_id="person-requester",
+        references=(publication.ref,),
     )
     assert planning is not None
     frozen = planning.snapshot_manifest()
@@ -262,11 +268,13 @@ def test_revoke_preserves_frozen_history_but_blocks_new_attempt_context() -> Non
         now=NOW + timedelta(minutes=1),
     )
 
-    assert service.build_for_planning(
-        tenant_id="tenant-a",
-        request_id="request-b",
-        actor_person_id="person-requester",
-    ) is None
+    with pytest.raises(EnterpriseKnowledgeContextRejected, match="已撤销"):
+        service.build_for_planning(
+            tenant_id="tenant-a",
+            request_id="request-b",
+            actor_person_id="person-requester",
+            references=(publication.ref,),
+        )
     with pytest.raises(EnterpriseKnowledgeContextRejected, match="已撤销"):
         service.build_for_agent(
             _agent_request(publication.ref),
@@ -308,6 +316,7 @@ def test_revoke_during_blob_read_blocks_bundle_issuance(purpose: str) -> None:
                 tenant_id="tenant-a",
                 request_id="request-race",
                 actor_person_id="person-requester",
+                references=(publication.ref,),
             )
         else:
             service.build_for_agent(
@@ -323,7 +332,7 @@ def test_revoke_during_blob_read_blocks_bundle_issuance(purpose: str) -> None:
 
 
 def test_runtime_egress_change_during_blob_read_blocks_bundle_issuance() -> None:
-    repository, blobs, _ = _publish()
+    repository, blobs, publication = _publish()
     service = None
 
     class PolicyChangingBlobStore:
@@ -345,6 +354,7 @@ def test_runtime_egress_change_during_blob_read_blocks_bundle_issuance() -> None
             tenant_id="tenant-a",
             request_id="request-egress-race",
             actor_person_id="person-requester",
+            references=(publication.ref,),
         )
 
 
@@ -356,7 +366,7 @@ def test_runtime_egress_change_during_blob_read_blocks_bundle_issuance() -> None
     ],
 )
 def test_egress_policy_fails_closed(service_policy, source_policy, message) -> None:
-    repository, blobs, _ = _publish(egress_decision=source_policy)
+    repository, blobs, publication = _publish(egress_decision=source_policy)
     service = EnterpriseKnowledgeContextService(
         repository,
         blobs,
@@ -369,6 +379,7 @@ def test_egress_policy_fails_closed(service_policy, source_policy, message) -> N
             tenant_id="tenant-a",
             request_id="request-a",
             actor_person_id="person-requester",
+            references=(publication.ref,),
         )
 
 
@@ -385,6 +396,7 @@ def test_missing_wrong_hash_cross_tenant_and_budget_are_rejected() -> None:
             tenant_id="tenant-a",
             request_id="request-a",
             actor_person_id="person-requester",
+            references=(publication.ref,),
         )
 
     repository, blobs, publication = _publish(content="12345")
@@ -400,6 +412,7 @@ def test_missing_wrong_hash_cross_tenant_and_budget_are_rejected() -> None:
             tenant_id="tenant-a",
             request_id="request-a",
             actor_person_id="person-requester",
+            references=(publication.ref,),
         )
 
     with pytest.raises(EnterpriseKnowledgeContextRejected, match="跨越 tenant"):
@@ -426,6 +439,7 @@ def test_agent_context_and_capability_bind_exact_enterprise_scope() -> None:
         tenant_id="tenant-a",
         request_id="request-a",
         actor_person_id="person-requester",
+        references=(publication.ref,),
     )
     assert planning is not None
     manifest = {
@@ -533,6 +547,7 @@ def test_merge_is_deterministic_and_rejects_duplicate_or_over_budget_sources() -
         tenant_id="tenant-a",
         request_id="request-a",
         actor_person_id="person-requester",
+        references=(publication.ref,),
     )
     assert enterprise is not None
     attachment = AttachmentRef(
@@ -630,7 +645,20 @@ def test_console_draft_freezes_enterprise_refs_and_binds_every_agent() -> None:
         brief="Create an internal policy summary",
         context="Use authorized shared material",
         collaborator_person_id=None,
+        defer_generation=True,
     )
+    selection = ConsoleKnowledgeSelectionService(
+        InMemoryConsoleKnowledgeSelectionRepository(drafts, repository),
+        model_egress_policy="allow",
+        clock=lambda: NOW,
+    )
+    selection.update(
+        principal,
+        "a123456789abcdef0123456789abcdef",
+        source_ids=[publication.ref.source_id],
+        expected_version=0,
+    )
+    selection.generate(principal, "a123456789abcdef0123456789abcdef")
     workflows = InMemoryWorkflowRepository()
     completion = _Completion()
     worker = ConsoleDraftWorker(

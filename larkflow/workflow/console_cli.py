@@ -33,6 +33,10 @@ from .console_attachments import (
     PostgresConsoleAttachmentRepository,
 )
 from .console_drafts import ConsoleDraftService, PostgresConsoleDraftRepository
+from .console_knowledge import (
+    ConsoleKnowledgeSelectionService,
+    PostgresConsoleKnowledgeSelectionRepository,
+)
 from .console_http import ConsoleHttpApplication, build_console_http_server
 from .console_rate_limit import ConsoleRequestRateLimiter
 from .console_tasks import ConsoleTaskService
@@ -101,6 +105,12 @@ def _run(namespace: argparse.Namespace) -> int:
         PostgresConsoleDraftRepository(connection_factory),
     )
     attachment_service = _build_attachment_service(connection_factory)
+    knowledge_selection_service = _build_knowledge_selection_service(
+        connection_factory,
+        attachment_planning_enabled=(
+            attachment_service is not None and attachment_service.planning_enabled
+        ),
+    )
     admin_people = _person_id_list(
         os.environ.get("LARKFLOW_CONSOLE_ADMIN_PERSON_IDS", ""),
         label="LARKFLOW_CONSOLE_ADMIN_PERSON_IDS",
@@ -150,6 +160,7 @@ def _run(namespace: argparse.Namespace) -> int:
             task_service=task_service,
             draft_service=draft_service,
             attachment_service=attachment_service,
+            knowledge_selection_service=knowledge_selection_service,
         )
         access = "enter LARKFLOW_CONSOLE_ACCESS_TOKEN in the browser"
     else:
@@ -215,6 +226,7 @@ def _run(namespace: argparse.Namespace) -> int:
             task_service=task_service,
             draft_service=draft_service,
             attachment_service=attachment_service,
+            knowledge_selection_service=knowledge_selection_service,
         )
         rate_limiter = _build_rate_limiter()
         access = "Feishu OAuth with an opaque HttpOnly session"
@@ -286,6 +298,28 @@ def _build_attachment_service(connection_factory: Any) -> ConsoleAttachmentServi
         PostgresConsoleAttachmentRepository(connection_factory),
         FilesystemAttachmentBlobStore(root),
         model_egress_policy=policy,
+    )
+
+
+def _build_knowledge_selection_service(
+    connection_factory: Any,
+    *,
+    attachment_planning_enabled: bool,
+) -> ConsoleKnowledgeSelectionService | None:
+    root = os.environ.get(
+        "LARKFLOW_TARGET_ENTERPRISE_KNOWLEDGE_ROOT",
+        "",
+    ).strip()
+    if not root:
+        return None
+    policy = os.environ.get(
+        "LARKFLOW_TARGET_ENTERPRISE_KNOWLEDGE_MODEL_EGRESS",
+        "deny",
+    ).strip()
+    return ConsoleKnowledgeSelectionService(
+        PostgresConsoleKnowledgeSelectionRepository(connection_factory),
+        model_egress_policy=policy,
+        attachment_planning_enabled=attachment_planning_enabled,
     )
 
 

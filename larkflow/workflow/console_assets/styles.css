@@ -854,6 +854,26 @@ button { color: inherit; }
   font-size: var(--font-caption);
   line-height: 1.5;
 }
+.draft-knowledge-heading { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.draft-knowledge-heading span { color: var(--text-strong); font-weight: 700; }
+.draft-knowledge-heading small { color: var(--muted-2); }
+.draft-knowledge-list { display: grid; gap: 8px; }
+.draft-knowledge-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.draft-knowledge-option input { width: auto; margin-top: 3px; }
+.draft-knowledge-option strong { display: block; color: var(--text-soft); font-size: var(--font-caption); }
+.draft-knowledge-option small { display: block; margin-top: 3px; color: var(--muted-2); line-height: 1.45; }
+.draft-knowledge-option[data-unavailable="true"] { opacity: .66; }
+.draft-frozen-knowledge { display: grid; gap: 7px; margin: 12px 0; }
+.draft-frozen-knowledge p { margin: 0; color: var(--muted-2); font-size: var(--font-caption); }
 .draft-submit {
   width: 100%;
   min-height: 50px;

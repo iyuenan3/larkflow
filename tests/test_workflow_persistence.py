@@ -109,6 +109,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0024_console_project_attachments",
         "0025_enterprise_knowledge_catalog",
         "0026_enterprise_knowledge_content_authorization",
+        "0027_console_enterprise_knowledge_selection",
     ]
     sql = migrations[0][1]
     for table in (
@@ -125,13 +126,19 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "workflow_template_versions_immutable" in sql
     assert "workflow_audit_events_append_only" in sql
     assert "ADD COLUMN claimed_by" in migrations[1][1]
-    knowledge_sql = migrations[-2][1]
+    knowledge_sql = dict(migrations)["0025_enterprise_knowledge_catalog"]
     assert "CREATE TABLE workflow_enterprise_knowledge_versions" in knowledge_sql
     assert "workflow_enterprise_knowledge_versions_immutable" in knowledge_sql
     assert "workflow_enterprise_knowledge_audit_append_only" in knowledge_sql
-    authorization_sql = migrations[-1][1]
+    authorization_sql = dict(migrations)[
+        "0026_enterprise_knowledge_content_authorization"
+    ]
     assert "CREATE TABLE workflow_enterprise_knowledge_authorizations" in authorization_sql
     assert "workflow_enterprise_knowledge_authorizations_append_only" in authorization_sql
+    selection_sql = dict(migrations)["0027_console_enterprise_knowledge_selection"]
+    assert "enterprise_source_selection jsonb" in selection_sql
+    assert "enterprise_knowledge_manifest jsonb" in selection_sql
+    assert "workflow_console_draft_enterprise_selection_guard" in selection_sql
     assert "CREATE TABLE workflow_inbox_events" in migrations[2][1]
     assert "CREATE TABLE workflow_console_draft_requests" in migrations[22][1]
     assert "workflow_console_draft_worker_wakeup" in migrations[22][1]
