@@ -178,14 +178,14 @@ larkflow unblock / start / status / …  ← 另一个进程，写同一个 SQLi
 | 可选收「任务完成」事件 | `event consume task.task.update_user_access_v2 --as bot` | `task:task:read` + **控制台事件** `task.task.update_user_access_v2` | ⚠️ 当前事件为 user 身份，bot profile 未收到 |
 | 收 Target 文本命令 | `event consume im.message.receive_v1 --as bot` | 控制台事件 `im.message.receive_v1` 与接收消息所需 IM scope | ✅ 测试组织已发布并收到真实命令 |
 | 发命令回执、节点结果与最终通知 | `im +messages-send --user-id … --msg-type text --as bot` | `im:message:send_as_bot` | ✅ Target 真栈 |
-| 创建完成文档 | `docs +create --title … --content … --as bot` | `docx:document` + `docx:document:create` | ✅ Target 真栈 |
-| 回读完成文档做验收 | `docs +fetch --document-id … --as bot` | 文档读取能力 | ✅ 仅验收使用，不是 Runtime 必需动作 |
+| 创建完成文档 | `docs +create --content … [--parent-token …] --as bot` | `docx:document` + `docx:document:create` | ✅ Target 真栈；父文件夹接线待部署复验 |
+| 回读完成文档做验收 | `docs +fetch --doc … --as bot` | 文档读取能力 | ✅ 仅验收使用，不是 Runtime 必需动作 |
 | 发门禁卡片 | `im +messages-send --user-id\|--chat-id --msg-type interactive` | 发消息权限（`im:message` 一族） | ⚠️ 推断 |
 | 发通知（打回回执 / 卡死告警） | `im +messages-send … --msg-type text` | 同上 | ⚠️ 推断 |
 | 收卡片按钮点击 | `event consume card.action.trigger --as bot` | `im:message:readonly` + **控制台回调** `card.action.trigger` | ✅ 事件 schema |
-| 建交付物 | `markdown +create --name --content -` | Drive 文件写入（`drive:drive` / `drive:file:upload` 一族） | ⚠️ 推断 |
-| 覆盖交付物 | `markdown +overwrite --file-token --content -` | 同上 | ⚠️ 推断 |
-| 读交付物正文 | `markdown +fetch --file-token` | Drive 文件读取 | ⚠️ 推断 |
+| 建文本交付物 | `docs +create --doc-format markdown --title … --content - [--parent-token …]` | `docx:document` + `docx:document:create` | ✅ 当前 CLI skill 与离线参数合同；待真栈复验 |
+| 覆盖文本交付物 | `docs +update --doc … --command overwrite --doc-format markdown --content -` | Docx 文档写入 | ✅ 当前 CLI skill 与离线参数合同；待真栈复验 |
+| 读文本交付物正文 | `docs +fetch --doc … --doc-format markdown` | Docx 文档读取 | ✅ 当前 CLI skill 与离线参数合同；待真栈复验 |
 
 **已在真栈实测通过（测试组织）**：2026-07-26 的交互消息与卡片回调；2026-08-02 的 Target Human Task 创建、完成和详情读取；2026-08-03 的 `im.message.receive_v1` 十个窄命令、当前企业活跃成员验证、Owner 专属状态查询、文本回执、Agent / Tool 结果消息、节点与完整实例重启、运行中未来区域编辑、完成 Docx 与最终通知。编辑正向实例 `im_7590aae6bf8d067e74d44909` 从 revision 1 变为 2，重复确认 no-op，更新标题的最终 Task、revision 3 Docx 与最终通知均已从飞书服务端回读，Instance 最终为 `done / version 8`。负向实例 `im_93e7e95aadba9ded17190542` 真实拒绝冻结线修改、成环依赖和状态漂移后的陈旧预览；陈旧预览保持未消费，Instance 最终为 `done / version 7 / graph_revision 1`，没有图编辑审计。开发应用发布所需通讯录数据范围后，中央应用从根部门读取到五名活跃成员，并能解析选定测试成员；无部门参数的独立成员查询仍只返回当前用户，符合该接口语义。随后以该测试成员为 Owner 创建合成实例并生成真实 Human Task 投影，当前登录用户从飞书会话发送 `/larkflow edit` 后得到合并拒绝回复。命令记录为 `processed / rejected:command / sent`，实例保持 `running / graph_revision 1`，GraphEditPreview 与 `instance.graph_edited` 审计均为 0，目标节点标题不变；测试成员无需完成该 Task。文档权限在新增 `docx:document + docx:document:create` 并发布后生效。五个 Target 服务与 legacy 事件消费者均为 active 且 `NRestarts=0`，本轮验收窗口没有 warning 级日志。Task 完成轮询已完成真实闭环，Task 事件路径本轮仍为零事件，不能标记为通过。权限台账记录已知运行所需能力，不等于当前控制台完整权限清单；上线前仍需从已发布版本重新导出并做最小权限回归。
 
@@ -255,7 +255,7 @@ daemon 常驻握着 DB，而运维的一次性命令（尤其 `unblock`，那是
 
 ## 环境变量（只列 key 名，真值走 `.env` / keychain，绝不入库；完整注释见仓库 `.env.example`）
 - 飞书应用：`LARK_PROFILE`（lark-cli profile，认哪个应用）、`LARKFLOW_IDENTITY`（bot | user，卡片回调只有 bot 收得到）。**凭证不在这里**：app_id / secret / token 由 lark-cli 自己保管，引擎只透传 `--profile`。
-- 引擎：`LARKFLOW_DB`（SQLite 路径，**本地盘**）、`LARKFLOW_TEMPLATE`（默认模板名）、`LARKFLOW_DRIVE_FOLDER`（交付物落哪个云空间文件夹）。
+- 引擎：`LARKFLOW_DB`（SQLite 路径，**本地盘**）、`LARKFLOW_TEMPLATE`（默认模板名）、`LARKFLOW_DELIVERABLE_FOLDER_TOKEN`（原生 Docx 交付物的父文件夹 token，Target Projection 与 legacy 共用）。已弃用的 `LARKFLOW_DRIVE_FOLDER` 暂时只作兼容别名；新旧变量同时存在且值不一致时拒绝启动，避免文档落入错误协作边界。
 - 角色映射：`LARKFLOW_ROLES`（JSON，`assignee_role → open_id`；中文角色名当环境变量名 export 不进去，故以 JSON 为主）、`LARKFLOW_ROLE_<ASCII 别名>`（辅，会合并）。真栈 strict：模板里出现的角色没配全会在**装配期直接抛**，绝不伪造 `ou_<角色名>` 发给飞书。
 - LLM（ADR-017，按角色一组三元组）：`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`（默认角色兜底），以及 `LLM_<ROLE>_BASE_URL` / `_API_KEY` / `_MODEL`（如 writer / legal / editor / triage）。三元组缺项的角色会被跳过。
 

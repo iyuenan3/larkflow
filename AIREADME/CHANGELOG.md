@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.87.0-draft · 2026-08-18 · 文本交付物统一为原生飞书 Docx
+
+- Changed：新建文本交付物统一通过 `docs +create` 物化为原生飞书 Docx，重跑通过 `docs +update --command overwrite` 复用同一 document_id，下游通过 `docs +fetch --doc-format markdown` 读取正文。Target 完成文档补上同一父文件夹配置，legacy 与 Target 不再使用不同的文本交付类型和落点语义。
+- Configuration：规范变量改为 `LARKFLOW_DELIVERABLE_FOLDER_TOKEN`，同时接入 Target Projection 和 legacy 交付物后端。旧 `LARKFLOW_DRIVE_FOLDER` 暂时作为兼容别名；新旧值不一致时确定性拒绝，避免文档落入错误协作边界。`.env` 与 `.env.example` 保持 43 个 key 同序，example 的值全部为空。
+- Compatibility：新幂等记录以 `docx:` 前缀保存类型。升级前不带类型的幂等值和 `type=markdown` 历史 handle 继续使用原 Markdown 读取与覆盖命令，不自动迁移、不新建副本，也不破坏稳定 handle 的返工语义。
+- Verified：Docx、配置、doctor、飞书 adapter 与部署资产聚焦套件为 `88 passed`。完整离线套件为 `1172 passed, 27 skipped, 1 failed`，唯一失败是沙箱禁止执行 `ps`；同一既有进程树测试在允许环境单独 `1 passed`，合并证据为 `1173 passed, 27 skipped`。Python compile、`git diff --check`、env key 同序和 example 空值检查均通过。
+- Boundary：实现已以 `ca7f79a0a01211abcf0daf96a8f538124accf48e` 提交并推送。本轮没有创建真实飞书文档或部署开发环境；父文件夹归属、bot 权限、原生版本历史、旧 Markdown handle 回读和两个运行入口的安装态行为仍需在开发测试组织复验，不能从离线参数合同推断为已上线。
+
 ## v0.86.3-draft · 2026-08-15 · No-web 日期赋值边界收口
 
 - Fixed：`23437d15499df9182beeb823e0a1d7780fc69f5f` 要求旅游日期标签后存在明确赋值边界，只接受冒号、等号、“为”或直接合法日期。复合字段名“出行日期资料更新时间”和“出行日期说明”不再按“出行日期”前缀命中。

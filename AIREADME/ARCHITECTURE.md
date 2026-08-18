@@ -45,7 +45,7 @@ flowchart LR
 - Authorized Tool Gateway：校验 tenant、Instance、Node、Attempt、actor、允许工具、知识范围、过期时间与数据外发政策。Attempt 内部首版工具只读，业务写入保持为显式 Tool 节点。
 - Edge Control：历史 Proof，管理本人设备配对、撤销和窄 capability。当前暂停，不进入云端主线或默认部署。
 - Console：把一个服务端认证主体映射到 tenant 与 person。Instance Owner 可以读取本人流程并执行服务端允许的确认、暂停、继续、取消、重启和未来区域图编辑；当前 Human 负责人只能读取有界任务上下文，普通任务可以提交或转交，决定任务可以接受或退回，但不能因此读取完整实例。管理员可额外读取当前 tenant 聚合，并通过耐久预览、显式确认和追加型审计撤销其他浏览器会话；当前会话只能注销。所有写入都调用既有领域服务并重新校验状态、责任人、Attempt 和版本，待处理项从同一 PostgreSQL 聚合即时派生，不形成第二套状态。
-- Projection Service：创建和对账飞书任务、卡片、消息及文档。
+- Projection Service：创建和对账飞书任务、卡片、消息及文档。面向人的文本交付物默认物化为原生 Docx；父文件夹 token 只控制云空间位置，二进制附件才使用普通 Drive 文件。
 - Audit Service：追加 actor、来源、状态、revision 和相关对象。
 - Outbox Worker：在数据库事务提交后可靠执行飞书副作用。
 

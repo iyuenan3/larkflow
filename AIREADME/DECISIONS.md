@@ -1037,3 +1037,12 @@
 - Adapter：不预建新的 LangGraph 适配器。只有真实单节点复杂 Attempt 证明需要内部图分支、checkpoint 或恢复，并且 completion、有界工具 loop、Pi 或 DSH 不能以更小复杂度满足时，才单独评估 `LangGraphAgentRuntimeAdapter` 与 `larkflow[langgraph]`。即使采用，checkpoint 也只属于当前 Attempt 的临时运行状态。
 - Alternatives(否决)：现在直接删除 LangGraph；让 Target 新端口继续复用 legacy StateGraph；为保持技术选项永久放在默认依赖；在没有真实需求前预建 Adapter。第一项破坏现有入口与测试，第二项延续双真相风险，后两项增加默认安装面和维护成本，却没有产品证据。
 - Tradeoff：迁移期默认 wheel 仍携带一组 Target 不需要的依赖，代码库也继续并存 Target 与 legacy。退出后需要维护 base 与 legacy 两套安装测试；若未来真的采用 LangGraph Adapter，还会增加第三个可选安装矩阵。但每一步都有独立门槛和回滚点，且不会为了缩减依赖而提前扩大当前重构范围。
+
+## ADR-116 · 2026-08-18 · 文本交付物统一为原生飞书 Docx
+
+- **Status：Accepted，实现已以 `ca7f79a0a01211abcf0daf96a8f538124accf48e` 提交并推送，尚未部署或真栈复验。**
+- Problem：Target 完成报告已经创建原生 Docx，但 legacy `DeliverableIO` 仍创建飞书 Markdown 文件，配置名 `LARKFLOW_DRIVE_FOLDER` 又把存放位置误写成了交付物类型。用户看到 Drive 配置时无法判断结果究竟是可协作的云文档还是普通文件，Target 完成投影也不能指定统一项目文件夹。
+- Constraint：PostgreSQL 或 legacy state 继续只登记 handle 与审计；父文件夹是位置策略，不是内容类型；升级不能破坏已有 `type=markdown` handle、无类型幂等记录或稳定 handle 的重跑语义；文档目标冲突不能静默选择，以免把交付物投影到错误协作范围。
+- Decision：所有新文本交付物默认通过 `docs +create` 物化为原生飞书 Docx，正文以 Markdown 作为安全交换格式；重跑使用 `docs +update --command overwrite`，读取使用 `docs +fetch --doc-format markdown`。Target 完成文档和 legacy 交付物统一读取 `LARKFLOW_DELIVERABLE_FOLDER_TOKEN`，并将其映射为 `--parent-token`。旧 `LARKFLOW_DRIVE_FOLDER` 暂时保留为兼容别名，二者非空且不一致时 fail closed。新幂等记录显式增加 `docx:` 类型前缀，旧无前缀记录和旧 Markdown handle 继续走历史命令，不自动迁移或重建。
+- Alternatives(否决)：继续用 Markdown 文件并只改注释；删除父文件夹配置；立即删除旧变量与旧 handle 支持；把文档正文复制进 PostgreSQL。第一项保留产品语义分叉，第二项会让交付物散落在 bot 根目录，第三项破坏已有 Attempt 与崩溃恢复，第四项制造文档与业务状态双真相。
+- Tradeoff：迁移期需要同时维护 Docx 与历史 Markdown 两条读写路径，旧变量也需经过一个弃用窗口；Docx 全文 overwrite 适合当前独立 whole-document 交付物，但不适合未来多人共同精修的共享章节，后者仍需单独设计 section 级更新、评论和冲突策略。本轮只完成离线合同，部署后还必须验证父文件夹归属、bot 权限、原生版本历史和旧 handle 回读。

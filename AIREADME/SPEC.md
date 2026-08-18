@@ -64,11 +64,11 @@
 - **as-built vs v1 字段名（step 1 已迁完）**：`node.py` / `template.py` / `defect.yaml` / `gates.py` 已在本节 v1 schema 上：`type` → `executor`；seg-1 的 `role`（业务指派串，如 负责人/QA/开发）→ `assignee_role`，`role` ∈ {produce, gate} 是正交维（消解撞名）；门禁判据从 `gate` 字符串 + 静态 `on_fail` 单目标 → `role=="gate"` + `approval_policy` + 运行时 `reopen`。旧字段（`type`/`on_fail`/`gate`）留在模板里会被 `validate_template` 显式拒绝（防静默失效）。缺陷流三个人工确认节点随之归为 `gate`（`single`），tool/llm/human-produce 节点各声明 `deliverable`。
 
 ## 交付物产出 / 消费协议（ADR-016，产出闭环已实测）
-- 交付物 = 飞书 handle（doc token / 云盘 file token），模型 `(容器, region)`。
+- 交付物 = 飞书 handle（Docx document_id / 云盘 file token），模型 `(容器, region)`。面向人的文本交付物默认使用原生飞书 Docx；Markdown 仅作为写入与读取正文的交换格式，以及历史 handle 的兼容类型。
 - **handle 权威登记（ADR-020）**：produce 末步把物化得到的 handle（+ region + type）写进 `state.outputs[node_id]`，它是交付物 handle 的**唯一权威登记表**；节点 schema 的 `deliverable.container` 是活图 dag 里的声明位 / create 后回填指针，非第二份权威。下游经 `outputs[dep]` 取 handle 再 fetch 正文；reopen 不清 outputs，故未重算旁支跨 overwrite 复用旧 handle。
-- **produce**：`markdown +create`（首跑）/ `+overwrite`（重跑，handle 不变、飞书自动留版本）；docx 用 `docs +create/+update`；二进制走 `drive +upload`。
-- **consume**（下游 llm 读上游正文）：`markdown +fetch` / `docs +fetch`。
-- **审计 / 版本**：`markdown +diff`、`drive +version-history`、`docs +history-*`（引擎不自建版本）。
+- **produce**：文本首跑使用 `docs +create --doc-format markdown` 创建原生 Docx，重跑使用 `docs +update --command overwrite` 复用同一 document_id；二进制才走 `drive +upload`。
+- **consume**（下游 llm 读上游正文）：Docx 使用 `docs +fetch --doc-format markdown`；升级前登记的 `type=markdown` handle 继续走历史 `markdown +fetch/+overwrite`，不迁移或覆盖旧对象。
+- **审计 / 版本**：Docx 使用 `docs +history-*`，二进制使用 `drive +version-history`（引擎不自建版本）。
 - 闭环已在测试组织实测通过（handle 跨 overwrite 稳定 = 选择性重算「旁支复用」的实证基础，详见 MEMORY 2026-07-24）。
 
 ## 引擎运行时契约（seg-1 本地 e2e 跑通）
