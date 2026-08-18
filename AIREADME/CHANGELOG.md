@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.90.0-draft · 2026-08-19 · 企业共享资料正文与运行时授权
+
+- Added：ADR-118 提交 `15f193f2be875e4d38783fcbec1de7f506aa1518` 冻结不可变正文快照与服务端授权证明；内容提交 `88fd70ea5a29bdf7c9f84573fd45a951f73da88c` 增加独立 create-once 企业 BlobStore、tenant 保留配额、内容绑定授权证明、`0026_enterprise_knowledge_content_authorization`，以及带正文和固定全员授权声明的管理员发布 API。内容提交 `d76a65faca027a558bfadc9b395e5807247705e3` 增加 planning 与 Agent Attempt 企业资料 Context Service、项目附件合并、显式 Agent 输入和只读 capability envelope。
+- Safety：正文只接受 UTF-8 `text/plain` 或 `text/markdown`，服务端复验 Content-Length、正文大小、SHA-256、管理员身份、固定声明与策略版本，并产生 object key、proof ID、分级和时间。Planner 与 Runtime 不接触 BlobStore、PostgreSQL repository 或管理员 API，只接收重新授权后的有界 ContextBundle。企业资料与项目附件按确定性顺序共享预算和 canonical fingerprint；撤销阻断新规划和新 Attempt，但不改写旧 Attempt 的安全 manifest、fingerprint 与审计。数据库、DTO、审计、结果和能力信封都不含正文、object key、存储路径、管理员身份或原始授权声明。
+- Compatibility：现有无企业资料和仅项目附件路径保持兼容；metadata-only 历史版本继续可列出，但没有服务器授权证明时不会进入 ContextBundle。首版没有语义检索或显式 selection UI，按稳定顺序使用当前 tenant 全部有效 published 版本，统一预算超限时 fail closed。
+- Verified：企业资料运行时聚焦套件为 `78 passed`；当前完整离线套件为 `1247 passed, 30 skipped, 1 failed`，唯一失败是沙箱禁止读取进程树，同一既有测试在允许环境单独 `1 passed`，合并证据为 `1248 passed, 30 skipped`。Python compile、`git diff --check`、Target 新模块无 LangGraph 导入和中文破折号扫描通过。
+- Boundary：代码与普通文档已经提交并推送，但尚未执行真实 PostgreSQL、0026 migration、Caddy validate/adapt、开发 wheel 部署、服务回读或 synthetic Runtime 探针。当前开发环境仍运行 metadata-only 企业资料版本，不能描述为企业知识库已经可用或生产就绪。部门 ACL、个人知识库、PDF/DOCX/OCR、语义检索、向量检索、飞书知识库同步、生产对象存储和 Personal Edge 继续后置。
+
 ## v0.89.2-draft · 2026-08-19 · 企业资料服务器管理员目录 API
 
 - Added：内容提交 `fc2fc2e73ff0e4001d952f6cba7e4a20e6b04005` 复用现有 Console 服务器管理员 allowlist，增加当前 tenant 下的企业资料版本列表、发布、版本审计和幂等撤销 API。浏览器只提交安全元数据，tenant、publisher、时间、分级与状态全部由服务端产生。
