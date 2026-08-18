@@ -121,7 +121,7 @@ Refactor Phase 1 已在 `larkflow/agent_runtime/` 增加纯本地 `AgentRunReque
 
 Phase 2A 已提交 Console txt/md 项目上传参与 DAG 规划的代码路径：附件先绑定 collecting 草稿请求，Owner 显式确认后冻结 manifest，规划 Worker 通过 `PlanningContextService` 构建类型化 `ContextBundle`，安全 refs 与 fingerprint 随 draft Instance 冻结。只有存储已配置且模型外发为 `allow` 时，Console 才公布能力并接受 defer；撤销对象继续占用保留配额，临时 Blob I/O 故障走 failed/backoff。默认 `deny` 不会留下新的 collecting 请求。该路径已完成真实 PostgreSQL、Caddy、migration 和开发部署验证；真实 Owner 浏览器上传与生成仍待手工验收。
 
-Phase 2B 已形成并部署开发实现：生成结果落库前由 larkflow 为附件支持的 Agent 节点追加显式项目附件输入；`AgentContextService` 从提升到当前 Instance 的冻结 refs 重新完成 tenant、Instance、状态、指纹、大小、UTF-8、外发和字符预算校验。`AgentRuntimeExecutor` 只把 Node 与 Attempt 绑定的 `ContextBundle` 和 `CapabilityEnvelope` 下发给 Runtime，并把不含正文和 object key 的证据写入 Attempt 结果。未声明该输入的节点不会触发 Blob 读取，Worker 未配置 resolver 时显式请求会 fail closed。一次性真实 PostgreSQL 合同与安装态 synthetic Agent Attempt 回归已经通过。企业共享资料的本地合同与版本目录仓储已实现，但管理员授权、管理 API、正文读取、ContextBundle 合并、Attempt 内只读 Tool Gateway 和生产对象存储仍未实现。现有 `web.search` 与确定性检查器属于显式业务 Tool 节点，不等于 Attempt 内部的只读 Tool Gateway。
+Phase 2B 已形成并部署开发实现：生成结果落库前由 larkflow 为附件支持的 Agent 节点追加显式项目附件输入；`AgentContextService` 从提升到当前 Instance 的冻结 refs 重新完成 tenant、Instance、状态、指纹、大小、UTF-8、外发和字符预算校验。`AgentRuntimeExecutor` 只把 Node 与 Attempt 绑定的 `ContextBundle` 和 `CapabilityEnvelope` 下发给 Runtime，并把不含正文和 object key 的证据写入 Attempt 结果。未声明该输入的节点不会触发 Blob 读取，Worker 未配置 resolver 时显式请求会 fail closed。一次性真实 PostgreSQL 合同与安装态 synthetic Agent Attempt 回归已经通过。企业共享资料的本地合同、版本目录仓储和 metadata-only 管理 API 已实现，但正文读取、来源权限证明、ContextBundle 合并、Attempt 内只读 Tool Gateway 和生产对象存储仍未实现。现有 `web.search` 与确定性检查器属于显式业务 Tool 节点，不等于 Attempt 内部的只读 Tool Gateway。
 
 显式 `web.search` 已增加独立的本地 `SearchProvider` 合同与薄 Python 豆包搜索适配器，并部署到开发环境。真实 synthetic/public 检索回读了 10 条带 URL 的规范化来源、usage 和 provider request ID；适配器只接收查询并返回规范化来源证据，不获得 PostgreSQL 写权、飞书凭据或 DAG 修改权；Planner 只接收 capability 布尔结果，不接收搜索 Runtime。该切片不等于 Attempt 内部 Tool Gateway，也不引入 DSH、PTC 或 LangGraph。
 
@@ -463,7 +463,7 @@ Phase 2B 开发部署证据：附件支持的 Agent 输入由服务端追加，�
 
 目标：只接入管理员明确发布为当前 tenant 全员可用的资料。
 
-合同与 tenant-first 目录仓储已落码并部署，但管理员授权、管理 API、内容读取和 Runtime 接入尚未实现：
+合同、tenant-first 目录仓储和服务器管理员 metadata-only 管理 API 已落码并部署，但内容读取、来源权限证明和 Runtime 接入尚未实现：
 
 - `EnterpriseKnowledgePublication` 只表示服务端目录中的发布或撤销状态，发布者身份不会进入 Runtime-safe ref。
 - `EnterpriseKnowledgeRef` 固定 tenant、`enterprise:` 来源 ID、不可变版本、显示标签、UTF-8 txt/md 类型、大小、SHA-256、发布时间、`internal` 分级和显式 allow/deny 外发决定，不携带正文、对象 key、源系统 token 或发布者。
@@ -471,9 +471,9 @@ Phase 2B 开发部署证据：附件支持的 Agent 输入由服务端追加，�
 - 撤销只阻断后续 `authorized_ref` 和新 ContextBundle。旧 Attempt 继续保留当时的安全来源清单与 fingerprint，不物理改写历史。
 - 首版只接受管理员确认具有当前 tenant 全员使用权的静态内容快照；不做部门、个人 ACL，同步继承，也不把“bot 能读取”当成全员授权。
 
-计划工作：
+下一阶段计划：
 
-- 在目录仓储前增加服务器管理员授权，浏览器不能声明管理员或 publisher。
+- 设计正文 Blob、不可变内容绑定和来源权限证明，浏览器仍不能提交 tenant、publisher、发布时间或存储位置。
 - 检索前完成 tenant、发布状态、数据分类和外发授权。
 - 在 ContextBundle 中同时表示企业来源与项目附件，并保留来源 ID。
 - 当源系统权限不明确时拒绝进入企业共享清单。
@@ -481,6 +481,8 @@ Phase 2B 开发部署证据：附件支持的 Agent 输入由服务端追加，�
 首批实现测试必须覆盖：跨 tenant、非管理员发布、重复来源版本、撤销后新读取、缺失或变化的内容哈希、默认外发 deny、非法分级、源系统权限不明确、正文与对象 key 不进入快照或 Runtime 请求，以及没有企业共享资料时项目附件路径保持不变。PostgreSQL 合同还要验证 tenant-first 主键、不可变版本、追加型发布审计、并发发布幂等和禁止物理删除。任何检索测试都必须在授权后读取正文，不能以 mock 掉授权仓储的方式证明隔离。
 
 目录仓储开发证据：内容提交 `a7f827f0f1bd4509d6c0f6cb69a8d3d404e3b33e` 增加 `0025_enterprise_knowledge_catalog`、每来源单一 published 版本约束、不可变版本 trigger、逻辑撤销、禁止物理删除和追加审计。完整离线合并证据为 `1214 passed, 28 skipped`；一次性 PostgreSQL 从空库运行 25 份 migration 并重入，真实合同 `28 passed`。开发库已增量应用 0025，synthetic 目录回读 2 个版本、1 个 published 和 3 条审计，安装态哈希一致，十个服务为 `active / running / NRestarts=0`。仓储参数中的 publisher 仍由未来管理员服务端授权，本切片没有把调用者字段当成已授权身份。
+
+目录管理 API 开发证据：内容提交 `fc2fc2e73ff0e4001d952f6cba7e4a20e6b04005` 复用既有 Console 服务端管理员 allowlist，增加 tenant-scoped 列表、发布、版本审计和幂等撤销。浏览器只可提交安全版本元数据，tenant、publisher、发布时间、状态与审计 actor 均由服务端产生；非管理员和跨 tenant 保持 404。聚焦套件 `153 passed`，完整离线合并证据 `1224 passed, 28 skipped`，一次性 PostgreSQL 合同 `28 passed`。开发 wheel 与两个安装态 venv 源码哈希一致，长期库保持 `25 / 0025`，十个服务为 `active / running / NRestarts=0`。synthetic API 回读 1 个 revoked 版本、2 条审计、重复撤销 200 和非管理员 404，DTO 不含 tenant、人员、正文或 object key。该 API 仍不代表正文已发布或企业知识库已经可用。
 
 Exit gate：不存在“先跨权限召回正文，再靠模型过滤”的路径；撤销发布后新 Attempt 无法读取，旧 Attempt 仍保留当时的来源清单和指纹；无法维护明确清单时可以完全关闭企业共享资料，只保留项目上传。
 
@@ -710,4 +712,4 @@ Dependency Exit Gate：
 
 Refactor Phase 0 与 Phase 1 的代码和离线验证已纳入内容提交 `476b43491adeaf1bcde32185d9b9f036c3a9874a`。Phase 2A 主体已纳入 `b2a13ff1eff796723774d42ca5d04556814a38c2`，PostgreSQL 合同收口为 `07de190db49839d8195cfa26967241fad7d975f6`；开发环境已应用 24 份 migration、安装精确 wheel、启用附件目录和 Caddy 路由，并完成服务端回读。该状态不是生产发布。
 
-Phase 2B 已完成开发部署与技术探针；企业共享资料的本地合同、tenant-first 发布目录、不可变版本、撤销和追加审计仓储也已完成开发部署。下一步先实现服务器管理员授权与不含正文的目录管理 API，再单独评审正文 Blob 和 ContextBundle 合并，不同时引入检索或 Runtime 正文读取。真实 Owner 浏览器 collecting、txt/md 上传、列表与显式生成仍是独立产品验收门槛。Tool Gateway、sidecar 和依赖安装继续分别评审，Personal Edge 保持暂停。
+Phase 2B 已完成开发部署与技术探针；企业共享资料的本地合同、tenant-first 发布目录、不可变版本、撤销、追加审计仓储和服务器管理员 metadata-only API 也已完成开发部署。下一步先单独评审正文 Blob、不可变内容绑定和来源权限证明，再决定 ContextBundle 合并；不同时引入检索或 Runtime 正文读取。真实 Owner 浏览器 collecting、txt/md 上传、列表与显式生成仍是独立产品验收门槛。Tool Gateway、sidecar 和依赖安装继续分别评审，Personal Edge 保持暂停。

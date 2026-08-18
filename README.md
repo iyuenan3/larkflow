@@ -12,7 +12,7 @@
 - Phase 2A 的项目级 UTF-8 txt/md 上传参与 DAG 规划已通过真实 PostgreSQL、Caddy 和开发部署验收。真实 Owner 浏览器上传与生成仍待手工验收，当前不是生产就绪版本。
 - Phase 2B 的 Agent Attempt 附件上下文与能力信封已部署到开发环境。节点必须显式声明附件输入，Runtime 只接收受限正文和安全引用；真实 PostgreSQL 合同与 synthetic Runtime 探针已通过。
 - 薄 Python 豆包 `SearchProvider` 已部署并完成一次公开信息检索回读；新建文本交付物已通过真实创建、同一 document_id 覆盖和原生 Docx 结构回读。两项证据仍只代表开发测试环境。
-- 企业共享知识、Authorized Tool Gateway、生产对象存储、PDF/DOCX/OCR 和向量检索仍未实现或后置。
+- 企业共享资料已有服务器管理员授权的安全元数据目录 API、不可变版本和追加审计，并已部署到开发环境。正文存储、来源权限证明、ContextBundle 合并、Authorized Tool Gateway、PDF/DOCX/OCR 和向量检索仍未实现或后置。
 - Personal Agent Edge 已降为暂停的历史 Proof，不进入当前产品主线或默认部署。
 - 早期 LangGraph、SQLite 与 lark-cli 原型继续保留，用于回归已经验证的适配器和事件处理机制。
 
@@ -28,7 +28,7 @@
 - 飞书协作：Human Task、决定卡、Agent 或 Tool 结果、原生飞书云文档和通知通过飞书投影，并可从中央状态对账重建。
 - 显式联网研究：`web.search` 通过受控搜索后端保存可验证来源，再由下游 Agent 综合；未启用或无来源时不会假装联网成功。
 - 历史保护：Attempt、结果、质量判断、责任转交和图变更保留追加型历史，不用覆盖旧记录换取“重来”。
-- 员工工作台：Owner 查看本人流程和审计，参与者处理分配给自己的任务，管理员只获得显式允许的聚合和会话治理能力。
+- 员工工作台：Owner 查看本人流程和审计，参与者处理分配给自己的任务，管理员只获得显式允许的聚合、会话治理和企业资料安全元数据目录能力。
 - 可替换运行时：Pi、DeepSeek Harness、LangGraph 或其他框架只能位于单次 Planner 或 Agent Attempt 内部，不能成为业务 DAG、权限或项目状态的真相源。
 
 ## 工作方式
