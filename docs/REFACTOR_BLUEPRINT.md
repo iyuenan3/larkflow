@@ -1,6 +1,6 @@
 # larkflow 云端 Agent 控制平面重构蓝图
 
-> 状态：Target 迁移附录。Refactor Phase 0、Phase 1、Phase 2A 与 Phase 2B 已部署到开发环境。企业共享资料的不可变正文、管理员全员授权证明、规划与 Agent Attempt ContextBundle 合并代码已经提交，但尚未完成真实 PostgreSQL、开发部署和 synthetic Runtime 验证；真实 Owner 浏览器上传与生成仍待手工验收。
+> 状态：Target 迁移附录。Refactor Phase 0、Phase 1、Phase 2A 与 Phase 2B 已部署到开发环境。企业共享资料的不可变正文、管理员全员授权证明、规划与 Agent Attempt ContextBundle 合并也已完成真实 PostgreSQL、migration、Caddy、开发部署和 synthetic Runtime 验证；真实 Owner 浏览器上传与生成，以及管理员企业资料管理体验仍待手工验收。
 >
 > 本文只把既有目标架构翻译成文件级边界、迁移批次和验收门槛，不构成代码、数据库 migration、依赖安装、部署、提交或发布授权。
 >
@@ -123,7 +123,7 @@ Phase 2A 已提交 Console txt/md 项目上传参与 DAG 规划的代码路径�
 
 Phase 2B 已形成并部署开发实现：生成结果落库前由 larkflow 为附件支持的 Agent 节点追加显式项目附件输入；`AgentContextService` 从提升到当前 Instance 的冻结 refs 重新完成 tenant、Instance、状态、指纹、大小、UTF-8、外发和字符预算校验。`AgentRuntimeExecutor` 只把 Node 与 Attempt 绑定的 `ContextBundle` 和 `CapabilityEnvelope` 下发给 Runtime，并把不含正文和 object key 的证据写入 Attempt 结果。未声明该输入的节点不会触发 Blob 读取，Worker 未配置 resolver 时显式请求会 fail closed。一次性真实 PostgreSQL 合同与安装态 synthetic Agent Attempt 回归已经通过。
 
-企业共享资料的正文切片已提交：管理员发布必须带服务端固定的全员授权声明和追加型证明，不可变正文由独立 BlobStore 保存并与具体版本 SHA-256 绑定。`PlanningKnowledgeContextService` 与 `CombinedAgentContextService` 会在每次规划或 Agent Attempt 前重新检查 tenant、actor、版本、published 状态、撤销、大小、哈希、UTF-8、分级、外发、预算与 TTL，再把项目附件和企业资料按确定性顺序合并。Runtime 只获得受限正文与安全引用；旧 Attempt 的 manifest 和 fingerprint 在撤销后保持可审计，新 bundle 无法读取已撤销版本。该切片尚未完成真实 PostgreSQL、开发部署和 synthetic Runtime 验证。Attempt 内只读 Tool Gateway、生产对象存储和语义检索仍未实现。现有 `web.search` 与确定性检查器属于显式业务 Tool 节点，不等于 Attempt 内部的只读 Tool Gateway。
+企业共享资料的正文切片已完成开发部署：管理员发布必须带服务端固定的全员授权声明和追加型证明，不可变正文由独立 BlobStore 保存并与具体版本 SHA-256 绑定。`PlanningKnowledgeContextService` 与 `CombinedAgentContextService` 会在每次规划或 Agent Attempt 前重新检查 tenant、actor、版本、published 状态、撤销、大小、哈希、UTF-8、分级、外发、预算与 TTL，再把项目附件和企业资料按确定性顺序合并。Runtime 只获得受限正文与安全引用；旧 Attempt 的 manifest 和 fingerprint 在撤销后保持可审计，新 bundle 无法读取已撤销版本。真实 PostgreSQL 30 项合同、0026 事务回滚与重入、Caddy body limit、安装态哈希和 synthetic Runtime 撤销门禁均已回读。Attempt 内只读 Tool Gateway、生产对象存储和语义检索仍未实现。现有 `web.search` 与确定性检查器属于显式业务 Tool 节点，不等于 Attempt 内部的只读 Tool Gateway。
 
 显式 `web.search` 已增加独立的本地 `SearchProvider` 合同与薄 Python 豆包搜索适配器，并部署到开发环境。真实 synthetic/public 检索回读了 10 条带 URL 的规范化来源、usage 和 provider request ID；适配器只接收查询并返回规范化来源证据，不获得 PostgreSQL 写权、飞书凭据或 DAG 修改权；Planner 只接收 capability 布尔结果，不接收搜索 Runtime。该切片不等于 Attempt 内部 Tool Gateway，也不引入 DSH、PTC 或 LangGraph。
 
@@ -714,4 +714,4 @@ Dependency Exit Gate：
 
 Refactor Phase 0 与 Phase 1 的代码和离线验证已纳入内容提交 `476b43491adeaf1bcde32185d9b9f036c3a9874a`。Phase 2A 主体已纳入 `b2a13ff1eff796723774d42ca5d04556814a38c2`，PostgreSQL 合同收口为 `07de190db49839d8195cfa26967241fad7d975f6`；开发环境已应用 24 份 migration、安装精确 wheel、启用附件目录和 Caddy 路由，并完成服务端回读。该状态不是生产发布。
 
-Phase 2B 已完成开发部署与技术探针；企业共享资料的本地合同、tenant-first 发布目录、不可变版本、撤销、追加审计仓储和服务器管理员 metadata-only API 也已完成开发部署。正文 Blob、不可变内容绑定、管理员全员授权证明，以及 Planner 与 Agent Attempt 的 ContextBundle 合并已经提交，下一步是真实 PostgreSQL、开发部署和 synthetic Runtime 验证。首版不引入语义检索或部门 ACL。真实 Owner 浏览器 collecting、txt/md 上传、列表与显式生成仍是独立产品验收门槛。Tool Gateway、sidecar 和依赖安装继续分别评审，Personal Edge 保持暂停。
+Phase 2B 已完成开发部署与技术探针；企业共享资料的本地合同、tenant-first 发布目录、不可变版本、撤销、追加审计仓储、管理员正文发布、全员授权证明，以及 Planner 与 Agent Attempt 的 ContextBundle 合并也已完成开发技术验证。下一步是管理员浏览器管理体验与真实内部资料的受控验收，不扩展语义检索或部门 ACL。真实 Owner 浏览器 collecting、txt/md 上传、列表与显式生成仍是独立产品验收门槛。Tool Gateway、sidecar 和依赖安装继续分别评审，Personal Edge 保持暂停。

@@ -88,9 +88,9 @@ Phase 2A 覆盖第二类资料的规划切片：Console 仅在存储和模型外
 
 Phase 2B 已提交并部署到单机开发环境：larkflow 在候选落库前为附件支持的 Agent 节点追加显式 `instance_inputs.project_attachments` 输入。Node Worker 只在看到该声明时，才按 tenant、Instance、Node、Attempt、冻结 manifest、附件状态、内容指纹和模型外发策略重新授权正文。Runtime 得到的是有界 `ContextBundle` 与短时 `CapabilityEnvelope`，不会获得 object key、BlobStore、PostgreSQL 连接、claim token 或飞书凭据。每次成功 Attempt 会在结果中保存不含正文的上下文 manifest、能力信封和 runtime metadata，便于复核实际使用范围。一次性真实 PostgreSQL 合同与安装态 synthetic Runtime 探针已通过；真实 Owner 浏览器附件交互仍是独立产品验收门槛。
 
-企业共享资料正文切片也已提交，但尚未完成真实 PostgreSQL、开发部署和 synthetic Runtime 验证。首版只选择当前 tenant 中仍为 published、带服务器管理员全员授权证明且允许当前模型外发的 UTF-8 txt/md 版本。正文由独立 BlobStore 保存，PostgreSQL 只保留不可变版本、哈希、大小、安全引用和授权证明。Planner 与 Agent Runtime 都不能访问仓储或 BlobStore，只能获得 Knowledge Context Service 重新授权并裁剪后的 `ContextBundle`。项目附件排在企业资料之前，两类来源共用字符预算和 canonical fingerprint；撤销只阻断新 bundle，不改写旧 Attempt 的安全 manifest 与审计。
+企业共享资料正文切片已完成真实 PostgreSQL、migration、Caddy、开发部署和 synthetic Runtime 验证。首版只选择当前 tenant 中仍为 published、带服务器管理员全员授权证明且允许当前模型外发的 UTF-8 txt/md 版本。正文由独立 BlobStore 保存，PostgreSQL 只保留不可变版本、哈希、大小、安全引用和授权证明。Planner 与 Agent Runtime 都不能访问仓储或 BlobStore，只能获得 Knowledge Context Service 重新授权并裁剪后的 `ContextBundle`。项目附件排在企业资料之前，两类来源共用字符预算和 canonical fingerprint；撤销只阻断新 bundle，不改写旧 Attempt 的安全 manifest 与审计。
 
-当前没有语义检索或显式资料选择器，因此首版会按稳定来源顺序使用当前 tenant 的全部有效发布版本，并在统一预算超限时 fail closed。这是受控开发边界，不等于完整企业知识库，也不代表已经部署可用。
+当前没有语义检索或显式资料选择器，因此首版会按稳定来源顺序使用当前 tenant 的全部有效发布版本，并在统一预算超限时 fail closed。这是受控开发环境能力，不等于完整企业知识库或生产就绪版本；管理员浏览器管理体验仍待人工验收。
 
 这里最重要的不是检索能力，而是授权顺序：
 
