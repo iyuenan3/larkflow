@@ -80,6 +80,14 @@ from larkflow.workflow.console_attachments import (
     PostgresConsoleAttachmentRepository,
 )
 from larkflow.workflow.directory import DirectoryPerson
+from larkflow.knowledge import (
+    EnterpriseKnowledgePublication,
+    EnterpriseKnowledgeRef,
+)
+from larkflow.knowledge.repository import (
+    EnterpriseKnowledgeConflictError,
+    PostgresEnterpriseKnowledgeRepository,
+)
 
 
 POSTGRES_DSN = os.environ.get("LARKFLOW_TEST_POSTGRES_DSN")
@@ -194,7 +202,7 @@ def test_postgres_admin_overview_reads_all_tenant_scoped_operational_lanes():
         "role_progress",
     }
     assert all(lane.total == 0 for lane in snapshot.queue_lanes)
-    assert snapshot.applied_migrations[-1] == "0024_console_project_attachments"
+    assert snapshot.applied_migrations[-1] == "0025_enterprise_knowledge_catalog"
 
 
 def test_postgres_console_draft_request_is_idempotent_and_claimed_once():
@@ -2431,3 +2439,131 @@ def test_postgres_edge_pairing_is_one_time_and_revocation_is_audited():
         "edge.device_paired",
         "edge.device_revoked",
     ]
+
+
+def test_postgres_enterprise_knowledge_catalog_is_versioned_and_append_only():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_knowledge_{suffix}"
+    source_id = f"enterprise:policy_{suffix}"
+    now = datetime(2026, 8, 19, 1, 0, tzinfo=timezone.utc)
+    repository = PostgresEnterpriseKnowledgeRepository(connection_factory)
+
+    def publication(version_id: str, marker: str) -> EnterpriseKnowledgePublication:
+        return EnterpriseKnowledgePublication(
+            ref=EnterpriseKnowledgeRef(
+                tenant_id=tenant_id,
+                source_id=source_id,
+                version_id=version_id,
+                display_label="Synthetic policy",
+                media_type="text/markdown",
+                size_bytes=128,
+                content_sha256=marker * 64,
+                published_at=now,
+            ),
+            published_by_person_id="admin-a",
+        )
+
+    first = publication("v1", "a")
+    assert repository.publish(first) == first
+    assert repository.publish(first) == first
+    with pytest.raises(EnterpriseKnowledgeConflictError, match="published version"):
+        repository.publish(publication("v2", "b"))
+
+    revoked = repository.revoke(
+        tenant_id,
+        source_id,
+        "v1",
+        actor_person_id="admin-b",
+        now=now + timedelta(minutes=1),
+    )
+    assert repository.revoke(
+        tenant_id,
+        source_id,
+        "v1",
+        actor_person_id="admin-b",
+        now=now + timedelta(minutes=2),
+    ) == revoked
+    second = repository.publish(publication("v2", "b"))
+    assert repository.list_published(tenant_id) == (second.ref,)
+    assert repository.list_published(f"other_{tenant_id}") == ()
+    assert [
+        event.event_type
+        for event in repository.list_audit(tenant_id, source_id, "v1")
+    ] == ["enterprise_knowledge.published", "enterprise_knowledge.revoked"]
+
+    competing_source = f"enterprise:concurrent_{suffix}"
+    barrier = Barrier(2)
+
+    def competing_publish(version_id: str, marker: str) -> str:
+        candidate = EnterpriseKnowledgePublication(
+            ref=EnterpriseKnowledgeRef(
+                tenant_id=tenant_id,
+                source_id=competing_source,
+                version_id=version_id,
+                display_label="Concurrent synthetic policy",
+                media_type="text/plain",
+                size_bytes=64,
+                content_sha256=marker * 64,
+                published_at=now,
+            ),
+            published_by_person_id="admin-a",
+        )
+        barrier.wait()
+        try:
+            return PostgresEnterpriseKnowledgeRepository(
+                connection_factory
+            ).publish(candidate).ref.version_id
+        except EnterpriseKnowledgeConflictError:
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(
+                lambda item: competing_publish(*item),
+                (("v1", "c"), ("v2", "d")),
+            )
+        )
+    assert results.count("conflict") == 1
+
+    with connection_factory() as connection:
+        counts = connection.execute(
+            """
+            SELECT
+                count(*) AS versions,
+                count(*) FILTER (WHERE status = 'published') AS published
+            FROM workflow_enterprise_knowledge_versions
+            WHERE tenant_id = %s
+            """,
+            (tenant_id,),
+        ).fetchone()
+        assert int(counts["versions"]) == 3
+        assert int(counts["published"]) == 2
+        with pytest.raises(RaiseException, match="immutable"):
+            connection.execute(
+                """
+                UPDATE workflow_enterprise_knowledge_versions
+                SET display_label = 'mutated'
+                WHERE tenant_id = %s AND source_id = %s AND version_id = 'v2'
+                """,
+                (tenant_id, source_id),
+            )
+        with pytest.raises(RaiseException, match="append-preserved"):
+            connection.execute(
+                """
+                DELETE FROM workflow_enterprise_knowledge_versions
+                WHERE tenant_id = %s AND source_id = %s AND version_id = 'v2'
+                """,
+                (tenant_id, source_id),
+            )
+        with pytest.raises(RaiseException, match="append-preserved"):
+            connection.execute(
+                """
+                UPDATE workflow_enterprise_knowledge_audit
+                SET actor_person_id = 'mutated'
+                WHERE tenant_id = %s AND source_id = %s AND version_id = 'v1'
+                """,
+                (tenant_id, source_id),
+            )
