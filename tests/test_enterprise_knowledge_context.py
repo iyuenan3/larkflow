@@ -279,6 +279,75 @@ def test_revoke_preserves_frozen_history_but_blocks_new_attempt_context() -> Non
     )
 
 
+@pytest.mark.parametrize("purpose", ["planning", "agent"])
+def test_revoke_during_blob_read_blocks_bundle_issuance(purpose: str) -> None:
+    repository, blobs, publication = _publish()
+
+    class RevokingBlobStore:
+        def get(self, object_key: str) -> bytes:
+            content = blobs.get(object_key)
+            repository.revoke(
+                "tenant-a",
+                publication.ref.source_id,
+                publication.ref.version_id,
+                actor_person_id="admin-private",
+                now=NOW + timedelta(seconds=1),
+            )
+            return content
+
+    service = EnterpriseKnowledgeContextService(
+        repository,
+        RevokingBlobStore(),
+        model_egress_policy="allow",
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(EnterpriseKnowledgeContextRejected, match="最终授权已失效"):
+        if purpose == "planning":
+            service.build_for_planning(
+                tenant_id="tenant-a",
+                request_id="request-race",
+                actor_person_id="person-requester",
+            )
+        else:
+            service.build_for_agent(
+                _agent_request(publication.ref),
+                (publication.ref,),
+                max_chars=1_000,
+            )
+    assert repository.get_version(
+        "tenant-a",
+        publication.ref.source_id,
+        publication.ref.version_id,
+    ).status == "revoked"
+
+
+def test_runtime_egress_change_during_blob_read_blocks_bundle_issuance() -> None:
+    repository, blobs, _ = _publish()
+    service = None
+
+    class PolicyChangingBlobStore:
+        def get(self, object_key: str) -> bytes:
+            assert service is not None
+            content = blobs.get(object_key)
+            service.model_egress_policy = "deny"
+            return content
+
+    service = EnterpriseKnowledgeContextService(
+        repository,
+        PolicyChangingBlobStore(),
+        model_egress_policy="allow",
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(EnterpriseKnowledgeContextRejected, match="Worker 未允许"):
+        service.build_for_planning(
+            tenant_id="tenant-a",
+            request_id="request-egress-race",
+            actor_person_id="person-requester",
+        )
+
+
 @pytest.mark.parametrize(
     ("service_policy", "source_policy", "message"),
     [

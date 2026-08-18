@@ -86,6 +86,14 @@ class EnterpriseKnowledgeRepository(Protocol):
     ) -> EnterpriseKnowledgePublication:
         ...
 
+    def authorize_for_context(
+        self,
+        tenant_id: str,
+        references: tuple[EnterpriseKnowledgeRef, ...],
+    ) -> tuple[EnterpriseKnowledgePublication, ...]:
+        """Atomically establish the final authorization point for one bundle."""
+        ...
+
     def retained_usage(self, tenant_id: str) -> tuple[int, int]:
         ...
 
@@ -247,6 +255,23 @@ class InMemoryEnterpriseKnowledgeRepository:
             if item is None:
                 raise EnterpriseKnowledgeNotFoundError(source_id)
             return item
+
+    def authorize_for_context(
+        self,
+        tenant_id: str,
+        references: tuple[EnterpriseKnowledgeRef, ...],
+    ) -> tuple[EnterpriseKnowledgePublication, ...]:
+        with self._lock:
+            publications = []
+            for expected in references:
+                current = self._items.get(
+                    (tenant_id, expected.source_id, expected.version_id)
+                )
+                if current is None:
+                    raise EnterpriseKnowledgeNotFoundError(expected.source_id)
+                _validate_context_authorization(tenant_id, expected, current)
+                publications.append(current)
+            return tuple(publications)
 
     def retained_usage(self, tenant_id: str) -> tuple[int, int]:
         with self._lock:
@@ -565,6 +590,43 @@ class PostgresEnterpriseKnowledgeRepository:
             raise EnterpriseKnowledgeNotFoundError(source_id)
         return _publication_from_row(row)
 
+    def authorize_for_context(
+        self,
+        tenant_id: str,
+        references: tuple[EnterpriseKnowledgeRef, ...],
+    ) -> tuple[EnterpriseKnowledgePublication, ...]:
+        """Serialize final authorization against revoke for the exact selection."""
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                source_ids = tuple(sorted({item.source_id for item in references}))
+                for source_id in source_ids:
+                    _lock_source(connection, tenant_id, source_id)
+                publications = []
+                for expected in references:
+                    row = connection.execute(
+                        """
+                        SELECT v.*, a.proof_id, a.authorization_scope,
+                               a.policy_version, a.statement_sha256,
+                               a.authorized_by_person_id, a.authorized_at,
+                               a.proof_fingerprint
+                        FROM workflow_enterprise_knowledge_versions AS v
+                        LEFT JOIN workflow_enterprise_knowledge_authorizations AS a
+                          ON a.tenant_id = v.tenant_id
+                         AND a.source_id = v.source_id
+                         AND a.version_id = v.version_id
+                        WHERE v.tenant_id = %s AND v.source_id = %s
+                          AND v.version_id = %s
+                        FOR SHARE OF v
+                        """,
+                        (tenant_id, expected.source_id, expected.version_id),
+                    ).fetchone()
+                    if row is None:
+                        raise EnterpriseKnowledgeNotFoundError(expected.source_id)
+                    current = _publication_from_row(row)
+                    _validate_context_authorization(tenant_id, expected, current)
+                    publications.append(current)
+                return tuple(publications)
+
     def retained_usage(self, tenant_id: str) -> tuple[int, int]:
         with self.connection_factory() as connection:
             row = connection.execute(
@@ -599,6 +661,29 @@ def _validate_quotas(max_retained_versions: int, max_retained_bytes: int) -> Non
         or max_retained_bytes < 1
     ):
         raise ValueError("enterprise knowledge retained quota is invalid")
+
+
+def _validate_context_authorization(
+    tenant_id: str,
+    expected: EnterpriseKnowledgeRef,
+    current: EnterpriseKnowledgePublication,
+) -> None:
+    if expected.tenant_id != tenant_id or current.ref.tenant_id != tenant_id:
+        raise EnterpriseKnowledgeConflictError(
+            "enterprise knowledge context crosses tenants"
+        )
+    if current.status != "published":
+        raise EnterpriseKnowledgeConflictError(
+            "enterprise knowledge context version is revoked"
+        )
+    if current.authorization_proof is None:
+        raise EnterpriseKnowledgeConflictError(
+            "enterprise knowledge context lacks authorization proof"
+        )
+    if current.ref != expected:
+        raise EnterpriseKnowledgeConflictError(
+            "enterprise knowledge context reference drifted"
+        )
 
 
 def _lock_tenant(connection: Any, tenant_id: str) -> None:

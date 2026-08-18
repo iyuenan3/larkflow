@@ -89,6 +89,14 @@ from larkflow.knowledge.repository import (
     EnterpriseKnowledgeConflictError,
     PostgresEnterpriseKnowledgeRepository,
 )
+from larkflow.knowledge.blob import (
+    InMemoryEnterpriseKnowledgeBlobStore,
+    enterprise_knowledge_object_key,
+)
+from larkflow.workflow.knowledge_context import (
+    EnterpriseKnowledgeContextRejected,
+    EnterpriseKnowledgeContextService,
+)
 
 
 POSTGRES_DSN = os.environ.get("LARKFLOW_TEST_POSTGRES_DSN")
@@ -2642,6 +2650,164 @@ def test_postgres_enterprise_knowledge_authorization_is_content_bound_and_append
                 """,
                 (tenant_id, source_id),
             )
+
+
+def test_postgres_context_authorization_serializes_with_revoke(monkeypatch):
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_knowledge_context_race_{suffix}"
+    source_id = f"enterprise:context_race_{suffix}"
+    now = datetime(2026, 8, 19, 2, 30, tzinfo=timezone.utc)
+    content = b"Synthetic PostgreSQL context race material."
+    digest = sha256(content).hexdigest()
+    proof = EnterpriseKnowledgeAuthorizationProof(
+        tenant_id=tenant_id,
+        source_id=source_id,
+        version_id="v1",
+        content_sha256=digest,
+        authorized_by_person_id="admin-context-race",
+        authorized_at=now,
+    )
+    publication = EnterpriseKnowledgePublication(
+        ref=EnterpriseKnowledgeRef(
+            tenant_id=tenant_id,
+            source_id=source_id,
+            version_id="v1",
+            display_label="Synthetic context race policy",
+            media_type="text/plain",
+            size_bytes=len(content),
+            content_sha256=digest,
+            published_at=now,
+            egress_decision="allow",
+            authorization_proof_id=proof.proof_id,
+            authorization_fingerprint=proof.fingerprint,
+        ),
+        published_by_person_id="admin-context-race",
+        authorization_proof=proof,
+    )
+    repository = PostgresEnterpriseKnowledgeRepository(connection_factory)
+    repository.publish(publication)
+    blobs = InMemoryEnterpriseKnowledgeBlobStore()
+    object_key = enterprise_knowledge_object_key(
+        tenant_id=tenant_id,
+        source_id=source_id,
+        version_id="v1",
+        content_sha256=digest,
+    )
+    blobs.put_if_absent(object_key, content)
+    read_entered = Event()
+    release_read = Event()
+
+    class BlockingBlobStore:
+        def get(self, requested_key: str) -> bytes:
+            body = blobs.get(requested_key)
+            read_entered.set()
+            assert release_read.wait(timeout=5)
+            return body
+
+    service = EnterpriseKnowledgeContextService(
+        repository,
+        BlockingBlobStore(),
+        model_egress_policy="allow",
+        clock=lambda: now,
+    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        context_future = pool.submit(
+            service.build_for_planning,
+            tenant_id=tenant_id,
+            request_id=f"request_{suffix}",
+            actor_person_id="person-context-race",
+        )
+        if not read_entered.wait(timeout=5):
+            context_future.result(timeout=1)
+            pytest.fail("context read did not reach the Blob barrier")
+        revoke_future = pool.submit(
+            repository.revoke,
+            tenant_id,
+            source_id,
+            "v1",
+            actor_person_id="admin-context-race",
+            now=now + timedelta(seconds=1),
+        )
+        assert revoke_future.result(timeout=5).status == "revoked"
+        release_read.set()
+        with pytest.raises(
+            EnterpriseKnowledgeContextRejected,
+            match="最终授权已失效",
+        ):
+            context_future.result(timeout=5)
+
+    second_source = f"enterprise:context_point_{suffix}"
+    second_proof = EnterpriseKnowledgeAuthorizationProof(
+        tenant_id=tenant_id,
+        source_id=second_source,
+        version_id="v1",
+        content_sha256="f" * 64,
+        authorized_by_person_id="admin-context-race",
+        authorized_at=now,
+    )
+    second = repository.publish(
+        EnterpriseKnowledgePublication(
+            ref=EnterpriseKnowledgeRef(
+                tenant_id=tenant_id,
+                source_id=second_source,
+                version_id="v1",
+                display_label="Synthetic final authorization point",
+                media_type="text/plain",
+                size_bytes=64,
+                content_sha256="f" * 64,
+                published_at=now,
+                egress_decision="allow",
+                authorization_proof_id=second_proof.proof_id,
+                authorization_fingerprint=second_proof.fingerprint,
+            ),
+            published_by_person_id="admin-context-race",
+            authorization_proof=second_proof,
+        )
+    )
+    import larkflow.knowledge.repository as repository_module
+
+    original_validate = repository_module._validate_context_authorization
+    authorization_checked = Event()
+    release_authorization = Event()
+
+    def blocking_validate(tenant, expected, current):
+        original_validate(tenant, expected, current)
+        authorization_checked.set()
+        assert release_authorization.wait(timeout=5)
+
+    monkeypatch.setattr(
+        repository_module,
+        "_validate_context_authorization",
+        blocking_validate,
+    )
+    revoke_completed = Event()
+
+    def revoke_after_final_check():
+        result = repository.revoke(
+            tenant_id,
+            second_source,
+            "v1",
+            actor_person_id="admin-context-race",
+            now=now + timedelta(seconds=2),
+        )
+        revoke_completed.set()
+        return result
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        authorization_future = pool.submit(
+            repository.authorize_for_context,
+            tenant_id,
+            (second.ref,),
+        )
+        assert authorization_checked.wait(timeout=5)
+        revoke_future = pool.submit(revoke_after_final_check)
+        assert not revoke_completed.wait(timeout=0.2)
+        release_authorization.set()
+        assert authorization_future.result(timeout=5) == (second,)
+        assert revoke_future.result(timeout=5).status == "revoked"
 
 
 def test_postgres_enterprise_knowledge_tenant_quota_serializes_competing_sources():

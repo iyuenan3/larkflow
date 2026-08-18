@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -193,6 +194,48 @@ def test_authorization_proof_survives_read_revoke_and_safe_audit() -> None:
     assert "authorized_by_person_id" not in encoded
     assert "admin-a" not in encoded
     assert "authorization_statement" not in encoded
+
+
+def test_context_authorization_is_atomic_and_rejects_revoked_version() -> None:
+    repository = InMemoryEnterpriseKnowledgeRepository()
+    publication = repository.publish(_publication(authorized=True))
+
+    assert repository.authorize_for_context(
+        "tenant-a",
+        (publication.ref,),
+    ) == (publication,)
+    repository.revoke(
+        "tenant-a",
+        publication.ref.source_id,
+        publication.ref.version_id,
+        actor_person_id="admin-b",
+        now=NOW + timedelta(minutes=1),
+    )
+
+    with pytest.raises(EnterpriseKnowledgeConflictError, match="revoked"):
+        repository.authorize_for_context("tenant-a", (publication.ref,))
+
+
+@pytest.mark.parametrize(
+    "changed_ref",
+    [
+        replace(_publication(authorized=True).ref, content_sha256="c" * 64),
+        replace(_publication(authorized=True).ref, egress_decision="allow"),
+        replace(
+            _publication(authorized=True).ref,
+            authorization_fingerprint="f" * 64,
+        ),
+    ],
+    ids=["content-version", "egress", "proof"],
+)
+def test_context_authorization_rejects_exact_reference_drift(
+    changed_ref: EnterpriseKnowledgeRef,
+) -> None:
+    repository = InMemoryEnterpriseKnowledgeRepository()
+    repository.publish(_publication(authorized=True))
+
+    with pytest.raises(EnterpriseKnowledgeConflictError, match="drifted"):
+        repository.authorize_for_context("tenant-a", (changed_ref,))
 
 
 def test_revoked_versions_still_consume_retained_quota() -> None:

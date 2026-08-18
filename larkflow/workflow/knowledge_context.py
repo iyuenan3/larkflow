@@ -19,6 +19,7 @@ from larkflow.knowledge.contracts import (
     EnterpriseKnowledgeRef,
 )
 from larkflow.knowledge.repository import (
+    EnterpriseKnowledgeConflictError,
     EnterpriseKnowledgeNotFoundError,
     EnterpriseKnowledgeRepository,
 )
@@ -173,6 +174,7 @@ class EnterpriseKnowledgeContextService:
                     text=text,
                 )
             )
+        self._authorize_final(tenant_id, references)
         return ContextBundle(
             tenant_id=tenant_id,
             scope_kind=scope_kind,
@@ -222,6 +224,42 @@ class EnterpriseKnowledgeContextService:
                 "企业共享资料模型外发未获授权"
             )
         return current
+
+    def _authorize_final(
+        self,
+        tenant_id: str,
+        references: tuple[EnterpriseKnowledgeRef, ...],
+    ) -> None:
+        """Establish the bundle issuance point after all Blob validation."""
+        if self.model_egress_policy != "allow":
+            raise EnterpriseKnowledgeContextRejected(
+                "当前 Worker 未允许企业共享资料模型外发"
+            )
+        try:
+            authorized = self.repository.authorize_for_context(
+                tenant_id,
+                references,
+            )
+            if (
+                tuple(item.ref for item in authorized) != references
+                or any(item.status != "published" for item in authorized)
+                or any(item.authorization_proof is None for item in authorized)
+            ):
+                raise EnterpriseKnowledgeConflictError(
+                    "enterprise knowledge final authorization is inconsistent"
+                )
+        except EnterpriseKnowledgeNotFoundError as exc:
+            raise EnterpriseKnowledgeContextRejected(
+                "企业共享资料最终授权版本不存在"
+            ) from exc
+        except (EnterpriseKnowledgeConflictError, ValueError) as exc:
+            raise EnterpriseKnowledgeContextRejected(
+                "企业共享资料最终授权已失效"
+            ) from exc
+        if self.model_egress_policy != "allow":
+            raise EnterpriseKnowledgeContextRejected(
+                "当前 Worker 未允许企业共享资料模型外发"
+            )
 
     def _read_content(self, publication: EnterpriseKnowledgePublication) -> bytes:
         ref = publication.ref
