@@ -1090,3 +1090,15 @@
 - Alternatives(否决)：自动使用全部 published 资料；让模型自行挑选；让浏览器提交 version 或 proof；保存 live 查询而不冻结；因撤销静默跳过某份资料；在飞书向导没有 UI 时继续默认全选；把企业选择混入项目附件 ID 清单。
 - Tradeoff：发起人需要多一步选择，且首版只支持 source 级选择，不提供正文预览、检索、推荐或语义排序。服务端需要一次 migration 和跨草稿、附件、企业目录的事务协调，但选择可解释、重试稳定，权限与成本边界不再依赖 tenant 资料总量。
 - Evidence：内容提交新增 `0027_console_enterprise_knowledge_selection`、Owner-only 选择服务、成员安全目录、版本绑定 HTTP、Console 最小 UI、生成冻结事务和显式 planning refs。聚焦测试 `95 passed`；完整离线套件为 `1261 passed, 32 skipped, 1 failed`，唯一失败是沙箱禁止读取进程树，同一既有测试在允许环境单独 `1 passed`，合并证据为 `1262 passed, 32 skipped`。真实 PostgreSQL、migration 重入、开发部署和 synthetic 安装态探针尚未执行。
+
+## ADR-120 · 2026-08-19 · 搜索来源健康与 claim 支持采用分层证据合同
+
+- **Status：Accepted，implementation pending。**
+- Problem：当前 `web.search` 只证明供应商返回了结构合法的公开 URL、摘要和可选发布时间。URL 可访问不等于内容正确，域名类别不等于事实权威，摘要出现某段文字也不等于下游结论获得支持；若把这些状态折叠成一个“可靠”布尔值，Human 无法判断证据边界，模型也可能引用本次 Attempt 未返回的 URL 或自行扩写 excerpt。直接访问任意供应商 URL 还会把 SSRF、DNS 漂移和重定向风险带进 Tool。
+- Decision：保留 `web.search` 作为显式只读 Tool，并新增 provider-neutral 的来源质量状态。每条来源分别记录 URL 结构、`health=reachable|unreachable|unknown`、发布时间 known/unknown、在节点明确 freshness policy 下的 `current|stale|unknown`、可解释来源类别或 unknown，以及 `support=supported|unsupported|unknown`。这些字段只描述观测，不宣称事实正确。
+- Fetch boundary：真实 URL 可访问性只能通过独立 `SafeOutboundFetcher` Port。生产默认 adapter 为 unavailable，不发网络请求；只有未来 adapter 能同时拒绝 localhost、私网、链路本地、凭据 URL、非 HTTP(S)、DNS 与重定向越界、超大响应和登录态时才可启用。普通 `httpx` 不得直接访问供应商或模型返回的任意 URL。
+- Support boundary：claim 支持不能由模型自报。确定性检查器只接受当前 Tool Attempt 已提交依赖中的 `source_records`，要求每条必需 claim 引用规范化后仍属于该 Attempt 的 source URL，并提供可在对应 provider snippet 中精确定位的有界原文片段。URL 替换、规范化后越权引用、重复 URL、任意扩写和超长字段一律失败。通过只表示“这段 claim 有当前检索片段支持”，语义真实性与页面事实仍未独立验证。
+- Error model：额度耗尽、429、超时、传输失败、协议错误、无合法 URL、全部来源不可用分别进入稳定且不泄漏原始响应的错误或状态。Tool 内重试保持有界并受 Attempt TTL 约束，不产生业务写副作用。来源质量结果进入正常 Tool Attempt、质量结果与审计，下游只能消费已提交直接依赖，不能绕过 Human Gate。
+- Compatibility：既有 Doubao SearchProvider 与 Responses citation 路线继续可用。旧结果缺少新增质量字段时只解释为 unknown，不回填“健康”或“支持”；本切片不改业务 DAG、PostgreSQL 真相、Planner/Agent 权限或现有冻结工作流。
+- Alternatives(否决)：有 URL 即可靠；根据域名自动认定事实权威；由模型声明 claim 已支持；在 `web.search` 内直接抓取任意 URL；把搜索服务变成 Planner、业务 DAG 或权限真相；无健康 adapter 时伪造 reachable。
+- Tradeoff：生产环境首版会显示 health unknown，不能自动关闭事实质量风险，但不会为了表面完整度引入 SSRF。Human 得到的是可解释的证据状态，后续 Provider、Planner A/B 和受控 fetcher 可以复用同一指标而不改写历史语义。
