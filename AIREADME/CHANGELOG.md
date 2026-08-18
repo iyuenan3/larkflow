@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.92.0-draft · 2026-08-19 · 搜索来源质量候选
+
+- Added：ADR-120 合同提交 `05ad92ba26e85d649478a98f15cb70b2b26cb9c8` 与内容提交 `fba57583af164d5a39077d7979b751e604cc3382` 为搜索来源增加 URL 结构、health、发布时间、freshness、可解释 authority 与 support 分层状态；`web.search` 结果持久化质量摘要和明确证据边界，不再让“有 URL”暗示事实正确。
+- Evidence：新增 `source_evidence.check`，只接受当前直接依赖中的 `web.search` 结果，把每个 claim 绑定到该 Attempt 的规范化 URL 和 provider 原文片段。URL 替换、重复、任意扩写 excerpt、超长输入和结果预算均 fail closed；通过仍明确标记语义真实性未独立验证。
+- Errors：豆包 provider 将额度耗尽、429、超时、传输失败、协议错误、无合法 URL 与全部不可达映射为稳定安全分类。URL 正规化去除 fragment、统一 scheme、host 和默认端口，避免同一来源因表面差异重复进入结果。
+- SSRF boundary：只提供独立 `SafeOutboundFetcher` Port 和默认禁用实现，禁用模块不含网络客户端。生产不会直接抓取供应商或模型返回的任意 URL，health 明确为 unknown；私网、DNS 与重定向边界未完成前不启用真实 adapter。
+- Verified：聚焦测试 `109 passed`；完整离线套件排除唯一沙箱 `ps` 用例为 `1279 passed, 32 skipped, 1 deselected`，该用例在允许环境单独 `1 passed`，合并证据为 `1280 passed, 32 skipped`。Python compile 和 `git diff --check` 通过。
+- Boundary：代码已提交并推送，尚未部署或完成安装态 synthetic 探针。该切片不证明供应商摘要真实、URL 可访问或业务事实正确，也不改变 Human Gate、业务 DAG 或 PostgreSQL 真相。
+
 ## v0.91.0-draft · 2026-08-19 · Console 显式企业资料选择候选
 
 - Added：ADR-119 合同提交 `191cc19eb11d5d701da7f994dff25ed0d05f5bbe` 与内容提交 `e663edfa2c54230b3b58bfc9e26ad046f95a3b51` 把企业资料从 tenant 自动全选改为 Console collecting 草稿发起人显式选择。成员目录只返回安全 published 元数据，选择状态绑定 requester、source ID、单调版本与 16 项上限；客户端不能提交 tenant、精确版本、hash、proof fingerprint、egress、正文或 object key。

@@ -190,6 +190,8 @@ Target 自动节点按工作契约 kind 路由。Agent 当前只接受 `work.age
 
 `source_evidence.check` 是只读确定性 Tool，只接受 `claims` 与 `source_records` 两个直接依赖路径。每条 claim 必须有有界 `claim_id / text / source_url / supporting_excerpt`，source URL 规范化后仍须属于本次已提交 `web.search` Attempt，excerpt 必须是对应 provider snippet 的非空有界原文片段；所有必需 claim 都满足才标记 `support=supported`。替换 URL、重复 claim ID、伪造或扩写 excerpt、空来源、超长字段和结果预算超限均 fail closed。该结果只证明当前检索片段支持该表述，不证明页面可访问、官方域名事实正确、供应商摘要真实或结论在现实世界成立，最终判断仍留给 Human Gate。
 
+上述来源质量合同已由 `fba57583af164d5a39077d7979b751e604cc3382` 落码。默认出站 adapter 没有网络实现，开发部署前后都必须把 health unavailable/unknown 与搜索 provider 可用性分开回读；不得把尚未实现的安全 URL 抓取写成已验证。
+
 完成文档投影对普通 Markdown 使用服务端的安全子集转换，只接受标题、无序列表、有序列表、管道表格和粗体，并先转义原始 XML。支持的结构会写成飞书 Docx 原生块；未支持的 Markdown 继续作为普通段落文本，不执行模型提供的任意 XML。
 
 Human 责任卡中的结构化 Instance 输入和结构化依赖结果使用带围栏的 JSON 代码块展示。这样既保留可读结构，也避免 URL 后面的 JSON 引号被 Card Markdown 自动链接解析器吞入目标地址。字符串正文仍按普通 Markdown 展示，所有上下文继续受既有长度上限约束。

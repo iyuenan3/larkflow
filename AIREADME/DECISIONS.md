@@ -1065,7 +1065,7 @@
 
 ## ADR-118 · 2026-08-19 · 企业共享正文采用不可变快照与服务端授权证明
 
-- **Status：Accepted，implemented in `e663edfa2c54230b3b58bfc9e26ad046f95a3b51`，PostgreSQL verification and deployment pending。**
+- **Status：Accepted，implemented and deployed through `17aba5ae35261bc915d2dd6d6f4c272273d2da89`。**
 - Problem：metadata-only 目录只能证明某个版本标识被管理员登记，不能证明正文已保存、哈希与版本一致，也不能证明当前 tenant 全员有权将正文交给 larkflow 和模型。若直接让 Planner 或 Agent 根据目录读取 Blob，会把客户端布尔值、bot 可读性或对象路径误当成授权，并在撤销、重试和历史 Attempt 之间产生权限漂移。
 - Constraint：首版只支持当前 tenant 全员共享的 UTF-8 `text/plain` 与 `text/markdown` 不可变快照。PostgreSQL 保存版本、授权证明与追加审计，独立 Enterprise BlobStore 保存正文。数据库、浏览器 DTO、审计快照、Instance、Attempt、能力信封和 Runtime 结果都不保存正文、object key、临时路径、凭据或管理员原始声明。部门 ACL、个人知识库、Personal Edge、PDF、DOCX、OCR、索引、向量检索和飞书知识库同步全部后置。
 - Authorization：发布请求必须提交服务端固定版本的完整授权声明，明确管理员确认该不可变正文可供当前 tenant 全员在 larkflow 中使用。服务端把 tenant、管理员、source、version、内容哈希、授权范围、声明版本和时间规范化为不可变证明并计算 proof fingerprint；客户端不能提交 tenant、actor、时间、classification、状态、proof ID 或 proof fingerprint。只提交布尔值、缺少完整声明或声明版本不匹配一律拒绝。Runtime-safe ref 只携带证明 ID 与 proof fingerprint，不携带声明原文或管理员身份。
@@ -1080,7 +1080,7 @@
 
 ## ADR-119 · 2026-08-19 · 企业资料由 Console 发起人显式选择并在生成边界冻结版本
 
-- **Status：Accepted，implementation pending。**
+- **Status：Accepted，implemented in `e663edfa2c54230b3b58bfc9e26ad046f95a3b51`，PostgreSQL verification and deployment pending。**
 - Problem：规划服务当前会自动加载 tenant 内全部有效 published 企业资料。资料数量增长后，无关正文会进入规划上下文，成本和字符预算不可预测，发起人也无法解释某份资料为何参与候选图。飞书向导等入口又没有资料选择界面，继续自动全选会把“可访问”误当成“本次明确使用”。
 - Constraint：首版只在 Console collecting 草稿入口提供显式选择；普通成员只能看到当前 tenant 的安全 published 元数据，不能看到正文、object key、管理员身份、授权声明、数据库字段或跨 tenant 信息。浏览器只能提交有界、去重的 `source_id` 和服务端选择版本，不能声明 tenant、version、hash、proof、egress、正文或存储位置。PostgreSQL 继续是选择与冻结版本真相；PlannerRuntime 和 AgentRuntime 仍只能获得 Knowledge Context Service 生成的有界 ContextBundle。
 - Decision：collecting `DraftRequest` 保存 Owner-only 的 source 选择和单调选择版本，默认空清单。成员目录端点返回 `source_id / version_id / display_label / media_type / size_bytes / published_at / classification / egress_decision / authorization_proof_id`；proof 只返回安全 ID，不返回 fingerprint、声明或管理员。更新选择要求 `expected_version`，同值重放幂等，不同值并发写入返回稳定冲突；不存在、非 Owner 和跨 tenant 统一 404。开始生成时，服务端在单个事务中锁定草稿与按 source 排序的企业资料，重新解析每个 source 当时唯一 published、正文已授权的精确版本，复验 proof 与外发决定，并与项目附件清单一起原子冻结到草稿后转为 pending。任一来源撤销、缺失、外发 deny、重复、超限或版本竞态均整体 fail closed，不静默丢弃。
@@ -1093,7 +1093,7 @@
 
 ## ADR-120 · 2026-08-19 · 搜索来源健康与 claim 支持采用分层证据合同
 
-- **Status：Accepted，implementation pending。**
+- **Status：Accepted，implemented in `fba57583af164d5a39077d7979b751e604cc3382`，deployment pending。**
 - Problem：当前 `web.search` 只证明供应商返回了结构合法的公开 URL、摘要和可选发布时间。URL 可访问不等于内容正确，域名类别不等于事实权威，摘要出现某段文字也不等于下游结论获得支持；若把这些状态折叠成一个“可靠”布尔值，Human 无法判断证据边界，模型也可能引用本次 Attempt 未返回的 URL 或自行扩写 excerpt。直接访问任意供应商 URL 还会把 SSRF、DNS 漂移和重定向风险带进 Tool。
 - Decision：保留 `web.search` 作为显式只读 Tool，并新增 provider-neutral 的来源质量状态。每条来源分别记录 URL 结构、`health=reachable|unreachable|unknown`、发布时间 known/unknown、在节点明确 freshness policy 下的 `current|stale|unknown`、可解释来源类别或 unknown，以及 `support=supported|unsupported|unknown`。这些字段只描述观测，不宣称事实正确。
 - Fetch boundary：真实 URL 可访问性只能通过独立 `SafeOutboundFetcher` Port。生产默认 adapter 为 unavailable，不发网络请求；只有未来 adapter 能同时拒绝 localhost、私网、链路本地、凭据 URL、非 HTTP(S)、DNS 与重定向越界、超大响应和登录态时才可启用。普通 `httpx` 不得直接访问供应商或模型返回的任意 URL。
@@ -1102,3 +1102,4 @@
 - Compatibility：既有 Doubao SearchProvider 与 Responses citation 路线继续可用。旧结果缺少新增质量字段时只解释为 unknown，不回填“健康”或“支持”；本切片不改业务 DAG、PostgreSQL 真相、Planner/Agent 权限或现有冻结工作流。
 - Alternatives(否决)：有 URL 即可靠；根据域名自动认定事实权威；由模型声明 claim 已支持；在 `web.search` 内直接抓取任意 URL；把搜索服务变成 Planner、业务 DAG 或权限真相；无健康 adapter 时伪造 reachable。
 - Tradeoff：生产环境首版会显示 health unknown，不能自动关闭事实质量风险，但不会为了表面完整度引入 SSRF。Human 得到的是可解释的证据状态，后续 Provider、Planner A/B 和受控 fetcher 可以复用同一指标而不改写历史语义。
+- Evidence：内容提交新增 provider-neutral 质量字段、默认禁用且不含网络客户端的 `SafeOutboundFetcher` Port、ISO 日期时效分类、规范 URL 去重、`source_evidence.check` 片段绑定，以及额度、429、超时、无来源和全部不可达的稳定分类。聚焦测试 `109 passed`；完整离线套件排除唯一沙箱 `ps` 用例为 `1279 passed, 32 skipped, 1 deselected`，该用例在允许环境单独 `1 passed`，合并证据为 `1280 passed, 32 skipped`。生产 URL 健康 adapter 未启用，开发部署和安装态 synthetic 探针尚未执行。
