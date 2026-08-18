@@ -1062,3 +1062,16 @@
 - Status addendum · 2026-08-19：`a7f827f0f1bd4509d6c0f6cb69a8d3d404e3b33e` 已实现 tenant-first PostgreSQL 版本目录、每来源单一 published 版本、逻辑撤销、不可变 trigger、禁止物理删除和追加审计，并部署到开发环境。一次性 PostgreSQL 合同 `28 passed`，长期库 ledger 为 `25 / 0025`。管理员授权、管理 API、正文与 Runtime 边界保持未实现。
 
 - Status addendum · 2026-08-19：`fc2fc2e73ff0e4001d952f6cba7e4a20e6b04005` 已复用 Console 服务器管理员 allowlist 实现并部署 metadata-only 列表、发布、版本审计和幂等撤销 API。tenant、publisher、时间、分级与状态由服务端产生；非管理员和跨 tenant 统一 404，响应不含正文、object key、源系统 locator 或身份标识。聚焦测试 `153 passed`，完整离线合并证据 `1224 passed, 28 skipped`，一次性 PostgreSQL 合同 `28 passed`，长期库保持 `25 / 0025`。正文 Blob、不可变内容绑定、来源权限证明、ContextBundle 合并、检索与 Runtime 接入仍未实现。
+
+## ADR-118 · 2026-08-19 · 企业共享正文采用不可变快照与服务端授权证明
+
+- **Status：Accepted，implementation pending。**
+- Problem：metadata-only 目录只能证明某个版本标识被管理员登记，不能证明正文已保存、哈希与版本一致，也不能证明当前 tenant 全员有权将正文交给 larkflow 和模型。若直接让 Planner 或 Agent 根据目录读取 Blob，会把客户端布尔值、bot 可读性或对象路径误当成授权，并在撤销、重试和历史 Attempt 之间产生权限漂移。
+- Constraint：首版只支持当前 tenant 全员共享的 UTF-8 `text/plain` 与 `text/markdown` 不可变快照。PostgreSQL 保存版本、授权证明与追加审计，独立 Enterprise BlobStore 保存正文。数据库、浏览器 DTO、审计快照、Instance、Attempt、能力信封和 Runtime 结果都不保存正文、object key、临时路径、凭据或管理员原始声明。部门 ACL、个人知识库、Personal Edge、PDF、DOCX、OCR、索引、向量检索和飞书知识库同步全部后置。
+- Authorization：发布请求必须提交服务端固定版本的完整授权声明，明确管理员确认该不可变正文可供当前 tenant 全员在 larkflow 中使用。服务端把 tenant、管理员、source、version、内容哈希、授权范围、声明版本和时间规范化为不可变证明并计算 proof fingerprint；客户端不能提交 tenant、actor、时间、classification、状态、proof ID 或 proof fingerprint。只提交布尔值、缺少完整声明或声明版本不匹配一律拒绝。Runtime-safe ref 只携带证明 ID 与 proof fingerprint，不携带声明原文或管理员身份。
+- Storage：企业正文使用独立 Blob port 和 `enterprise` namespace，object key 由 tenant、source、version 与内容哈希经服务端确定性派生，不能由浏览器提供，也不写入 PostgreSQL。服务先执行大小、UTF-8、媒体类型和客户端声明哈希复验，再以 create-once 语义写 Blob；随后在单个 PostgreSQL 事务中锁定 tenant 与 source，检查保留配额，写入授权证明、发布版本和审计。数据库失败只可能留下不可检索的 orphan Blob，不能留下可读取的半发布版本；重复相同请求幂等，竞争版本最多一个 published。
+- Context：Knowledge Context Service 每次为规划请求或当前 Agent Attempt 重新解析已冻结 selection，复验 tenant、actor、scope、版本、published 状态、授权证明、分级、外发、媒体类型、长度、哈希、字符预算和 TTL，再读取 Blob。撤销后新的 ContextBundle 必须拒绝该版本；已冻结到历史 Instance 或 Attempt 的安全 manifest、fingerprint 与审计继续保留，但不再授予正文读取，已经发生的模型外发不可撤销。PlannerRuntime 与 AgentRuntime 只能接收服务生成的有界 ContextBundle，不能获得 BlobStore、repository 或管理员 API。
+- Merge：企业资料与项目附件按 `kind + source_id + immutable version` 确定性排序，使用独立来源标识和统一字符预算。canonical fingerprint 同时覆盖 scope、purpose、两类安全 manifest、内容哈希、分级、外发、chunk 顺序、Node 和 Attempt 绑定。跨 tenant、重复 source、版本漂移或利用项目附件引用绕过企业撤销门禁均 fail closed。
+- Verification：实现门槛包括固定声明正向与布尔值、缺声明反例，Blob 缺失、非普通文件、哈希和长度错，跨 tenant、非管理员、撤销、版本漂移、外发 deny、统一预算、重复来源、并发发布、事务回滚、重入、DTO 与 repr 泄漏，以及旧历史仍可审计但新上下文不可读取。真实 PostgreSQL 必须验证 tenant/source 锁和 proof/version/audit 原子性；部署技术探针只用 synthetic/public 正文，不替代人工浏览器验收。
+- Alternatives(否决)：把 metadata-only 版本直接视为可读；让管理员只勾选一个布尔值；把 object key 存进版本表或快照；让 Runtime 直接读取 Blob；复用项目附件 namespace 与撤销生命周期；撤销时删除历史 manifest 或 Attempt；先做飞书 ACL 同步、向量库或通用知识平台。
+- Tradeoff：固定声明和全员共享范围牺牲灵活 ACL，独立 Blob port 与 proof 表增加一次 migration 和 orphan 清理责任；换来的是可确定复验、可审计授权、不可变版本和不依赖模型或源系统猜测的权限边界。若企业无法作出全员授权声明，该来源保持不可发布，产品继续只使用项目上传件。
