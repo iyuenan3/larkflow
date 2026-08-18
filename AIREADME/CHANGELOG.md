@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.88.1-draft · 2026-08-19 · Phase 2B 开发部署验证
+
+- Deployment：内容提交 `6e6e3895ac9bb355f40c017e4b5ffe395f4ddca4` 和 PostgreSQL fixture 修正 `3a93fd2af9cfecdc00cada822ab8705232018205` 已部署到开发环境。wheel SHA-256 为 `dda518748ff93be4e70e8e040ebff5edfd80bddddb9129c9be14b21c9c135edd`；Target 与 legacy 安装态 `agent_context.py`、搜索适配器和交付物 adapter 哈希与本地一致，两个 venv 的 `pip check` 通过。十个 Python 服务均为 `active / running / NRestarts=0`，部署窗口 warning 为 0，Caddy live 配置未改变。
+- Verified：完整离线合并证据为 `1192 passed, 27 skipped`。一次性 PostgreSQL 从空库运行 24 份 migration 并重入，`tests/test_workflow_postgres.py` 为 `27 passed`；真实外键要求被 fixture 正确满足，没有放松 production schema。安装态 synthetic Runtime 探针确认 `context.read.project_attachments` 与 Node/Attempt 绑定，持久结果不含正文、object key 或 claim；测试数据库和临时 Blob 已精确删除并回读不存在。
+- Search：豆包 `SearchProvider` 使用 synthetic/public 查询真实返回 10 条带 URL 的规范化来源、usage 和 provider request ID，错误为空。该结果只证明开发配置、来源 URL 护栏和规范化链路可用，不把来源数量外推为事实权威性。
+- Docx：新建文本交付物通过 bot 创建原生文档 `SxmedQ4R9oIcUdxAejEc23m8npr`，重复创建与覆盖更新复用同一 document_id。原生回读 revision 5、标题、列表、表格和 2 条版本历史。Target completion 与 legacy deliverable 当前使用同一 bot 个人空间根，历史 Markdown handle 继续走兼容路径。
+- Boundary：本条修正下方 v0.88.0、v0.87.1 与 v0.87.0 在提交时的未部署状态，不改写当时的历史。真实 Owner 浏览器附件交互仍未执行；企业共享知识、Authorized Tool Gateway、生产对象存储、PDF/DOCX/OCR、向量检索、多机容量和生产发布仍未关闭，当前不是生产就绪版本。
+
 ## v0.88.0-draft · 2026-08-18 · Agent Attempt 项目附件上下文
 
 - Added：内容提交 `6e6e3895ac9bb355f40c017e4b5ffe395f4ddca4` 增加 Node/Attempt 绑定的 `agent_execution` ContextBundle、短时 `CapabilityEnvelope` 与 claim-free `AgentContextRequest`。附件支持的候选图由服务端为 Agent 节点写入 `instance_inputs.project_attachments`，只有显式声明该输入的节点才会读取 Blob。
