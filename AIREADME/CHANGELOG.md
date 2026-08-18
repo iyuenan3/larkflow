@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.90.1-draft · 2026-08-19 · 企业共享正文开发部署验证
+
+- Deployment：企业共享正文与 ContextBundle wheel 已安装到 Target 与 legacy 开发环境，SHA-256 为 `16e1833fe05579661bfec72ccbd2fcfeee6fa8b86f7fe48eeb80fa3e60be00c4`；两个 venv 的 `pip check` 和关键安装态源码哈希回读通过。十个 larkflow Python 服务与 Caddy 均为 `active / running / NRestarts=0`，部署窗口 warning 为 0。
+- PostgreSQL：一次性空库完整应用 26 份 migration 并重入，真实合同为 `30 passed`；独立事务回滚探针确认强制失败不留下 0026 ledger 或表，随后正常应用与重入通过。长期开发库从 `25 / 0025` 增量到 `26 / 0026_enterprise_knowledge_content_authorization` 并重入。两个一次性数据库均已精确删除并回读不存在。
+- Caddy：validate 与 adapt 通过，企业资料发布和项目附件精确路由为 262144 字节，通用路由为 65536 字节，顺序、loopback admin、客户端 IP 头与无 access log 边界保持。公网 synthetic 请求分别得到通用 70 KB 为 413、企业资料发布 70 KB 为 401、企业资料发布 270 KB 为 413。
+- Probe：synthetic/public 正文在 planning 与 Agent Attempt 中各生成一个安全来源和 `context.read.enterprise_knowledge` 能力；撤销后新 planning 排除该版本，新 Agent ContextBundle fail closed，历史版本、正文绑定授权证明和两条追加审计继续保留。数据库与运行证据不含正文、object key 或路径。本轮没有飞书写入。
+- Correction：本条把下方 v0.90.0 的候选状态更新为已完成开发部署技术验证。真实管理员浏览器发布、真实内部资料受控验收、生产对象存储、部门 ACL、个人知识库、PDF/DOCX/OCR、语义检索、向量检索、飞书知识库同步与 Personal Edge 仍未完成，不能描述为生产就绪。
+
 ## v0.90.0-draft · 2026-08-19 · 企业共享资料正文与运行时授权
 
 - Added：ADR-118 提交 `15f193f2be875e4d38783fcbec1de7f506aa1518` 冻结不可变正文快照与服务端授权证明；内容提交 `88fd70ea5a29bdf7c9f84573fd45a951f73da88c` 增加独立 create-once 企业 BlobStore、tenant 保留配额、内容绑定授权证明、`0026_enterprise_knowledge_content_authorization`，以及带正文和固定全员授权声明的管理员发布 API。内容提交 `d76a65faca027a558bfadc9b395e5807247705e3` 增加 planning 与 Agent Attempt 企业资料 Context Service、项目附件合并、显式 Agent 输入和只读 capability envelope。
