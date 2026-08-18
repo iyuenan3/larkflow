@@ -94,7 +94,7 @@ class Correlations:
 class IdemStore:
     """幂等键 → 外部对象 id 的小 KV。
 
-    `markdown +create` 没有 --idempotency-key（task / im 有），崩溃恢复重跑 super-step
+    `docs +create` 没有 --idempotency-key（task / im 有），崩溃恢复重跑 super-step
     会多建一份文档。写入前先查这里，重放直接返回旧 handle。
     """
 

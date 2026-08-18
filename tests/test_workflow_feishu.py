@@ -354,6 +354,7 @@ def test_cli_document_projection_extracts_nested_document_response():
     calls = []
     adapter = CliFeishuDocumentProjection(
         profile="dev",
+        parent_token="fldcn_project",
         runner=lambda argv: calls.append(argv) or {
             "data": {
                 "document": {
@@ -375,3 +376,4 @@ def test_cli_document_projection_extracts_nested_document_response():
     assert document.url == "https://example.invalid/docx/document_1"
     assert calls[0][-3:] == ["--as", "bot", "--json"]
     assert calls[0][calls[0].index("--content") + 1].startswith("<title>")
+    assert calls[0][calls[0].index("--parent-token") + 1] == "fldcn_project"

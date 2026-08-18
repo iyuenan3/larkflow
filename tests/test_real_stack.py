@@ -89,42 +89,93 @@ def test_send_card_to_group_uses_chat_id():
     assert r.flag("--chat-id") == "oc_group" and "--user-id" not in r.argv()
 
 
-# ---------- 交付物（markdown） ----------
+# ---------- 交付物（原生 Docx） ----------
 
-def test_create_deliverable_argv_uses_stdin_and_md_suffix():
-    r = FakeRunner({"file_token": "boxcn1", "url": "https://f/boxcn1"})
+def test_create_deliverable_argv_uses_stdin_and_parent_folder():
+    r = FakeRunner({
+        "document": {
+            "document_id": "docxcn1",
+            "url": "https://f/docx/docxcn1",
+        }
+    })
     io = CliDeliverableIO(runner=r, folder_token="fldcn_x")
     h = io.create(title="商务条款起草", content="# 正文", idem_key="wf-1:biz:create")
 
-    assert h == Deliverable(type="markdown", token="boxcn1", url="https://f/boxcn1", region="whole")
-    assert r.argv()[:3] == ["lark-cli", "markdown", "+create"]
-    assert r.flag("--name") == "商务条款起草.md"        # 必须显式带 .md
+    assert h == Deliverable(
+        type="docx", token="docxcn1", url="https://f/docx/docxcn1", region="whole"
+    )
+    assert r.argv()[:3] == ["lark-cli", "docs", "+create"]
+    assert r.flag("--title") == "商务条款起草"
+    assert r.flag("--doc-format") == "markdown"
     assert r.flag("--content") == "-" and r.calls[-1]["stdin"] == "# 正文"   # 正文走 stdin
-    assert r.flag("--folder-token") == "fldcn_x"
+    assert r.flag("--parent-token") == "fldcn_x"
 
 
 def test_create_is_idempotent_through_local_store():
-    """markdown +create 没有 --idempotency-key：崩溃重跑不能多建一份文档。"""
+    """docs +create 没有 --idempotency-key：崩溃重跑不能多建一份文档。"""
     conn = sqlite3.connect(":memory:")
-    r = FakeRunner({"file_token": "boxcn1"}, {"file_token": "boxcn2"})
+    r = FakeRunner(
+        {"document": {"document_id": "docxcn1"}},
+        {"document": {"document_id": "docxcn2"}},
+    )
     io = CliDeliverableIO(runner=r, idem_store=IdemStore(conn))
 
     first = io.create(title="t", content="a", idem_key="same")
     second = io.create(title="t", content="a", idem_key="same")
 
-    assert first.token == second.token == "boxcn1"
+    assert first.token == second.token == "docxcn1"
+    assert first.type == second.type == "docx"
+    assert IdemStore(conn).get("same") == "docx:docxcn1"
     assert len(r.calls) == 1                            # 第二次根本没出网
 
 
+def test_legacy_untyped_idempotency_value_remains_a_markdown_handle():
+    conn = sqlite3.connect(":memory:")
+    idem = IdemStore(conn)
+    idem.put("same", "boxcn_legacy")
+    r = FakeRunner()
+
+    handle = CliDeliverableIO(runner=r, idem_store=idem).create(
+        title="t", content="a", idem_key="same"
+    )
+
+    assert handle.type == "markdown"
+    assert handle.token == "boxcn_legacy"
+    assert not r.calls
+
+
 def test_overwrite_keeps_handle_and_fetch_reads_content():
-    r = FakeRunner({"version": 2}, {"content": "远端正文"})
+    r = FakeRunner(
+        {"document": {"revision_id": 2}},
+        {"document": {"content": "远端正文"}},
+    )
     io = CliDeliverableIO(runner=r)
-    h = Deliverable(type="markdown", token="boxcn1", url="u", region="whole")
+    h = Deliverable(type="docx", token="docxcn1", url="u", region="whole")
 
     assert io.overwrite(h, content="新正文") == h       # handle 不变，版本靠飞书原生
-    assert r.flag("--file-token") == "boxcn1" and r.calls[-1]["stdin"] == "新正文"
+    assert r.argv()[:3] == ["lark-cli", "docs", "+update"]
+    assert r.flag("--doc") == "docxcn1"
+    assert r.flag("--command") == "overwrite"
+    assert r.flag("--doc-format") == "markdown"
+    assert r.calls[-1]["stdin"] == "新正文"
     assert io.fetch(h) == "远端正文"
+    assert r.argv()[:3] == ["lark-cli", "docs", "+fetch"]
+    assert r.flag("--doc") == "docxcn1"
+    assert r.flag("--doc-format") == "markdown"
+
+
+def test_historical_markdown_handle_uses_the_legacy_read_write_commands():
+    r = FakeRunner({"version": 2}, {"content": "旧正文"})
+    io = CliDeliverableIO(runner=r)
+    handle = Deliverable(type="markdown", token="boxcn1", url="u", region="whole")
+
+    assert io.overwrite(handle, content="更新") == handle
+    assert r.argv()[:3] == ["lark-cli", "markdown", "+overwrite"]
+    assert r.flag("--file-token") == "boxcn1"
+    assert r.calls[-1]["stdin"] == "更新"
+    assert io.fetch(handle) == "旧正文"
     assert r.argv()[:3] == ["lark-cli", "markdown", "+fetch"]
+    assert r.flag("--file-token") == "boxcn1"
 
 
 def test_md_name_is_sanitized():

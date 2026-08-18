@@ -9,7 +9,9 @@ JSON 解析当场炸。`.env` 长得像 shell 赋值，但它不是 shell 脚本
 """
 from __future__ import annotations
 
-from larkflow.config import load_dotenv
+import pytest
+
+from larkflow.config import deliverable_folder_token, load_dotenv
 
 
 def write(tmp_path, text: str) -> str:
@@ -104,3 +106,20 @@ def test_the_cli_loads_dotenv_before_reading_defaults(tmp_path, monkeypatch):
     except SystemExit:
         pass
     assert seen["db"] == "/tmp/from-dotenv.sqlite"
+
+
+def test_deliverable_folder_prefers_the_canonical_variable():
+    assert deliverable_folder_token({
+        "LARKFLOW_DELIVERABLE_FOLDER_TOKEN": " fld_new ",
+    }) == "fld_new"
+    assert deliverable_folder_token({
+        "LARKFLOW_DRIVE_FOLDER": "fld_legacy",
+    }) == "fld_legacy"
+
+
+def test_conflicting_deliverable_folder_variables_are_rejected():
+    with pytest.raises(ValueError, match="指向不同位置"):
+        deliverable_folder_token({
+            "LARKFLOW_DELIVERABLE_FOLDER_TOKEN": "fld_new",
+            "LARKFLOW_DRIVE_FOLDER": "fld_legacy",
+        })

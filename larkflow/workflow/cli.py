@@ -16,7 +16,7 @@ from typing import Any
 
 import yaml
 
-from larkflow.config import load_dotenv, load_llm_roles
+from larkflow.config import deliverable_folder_token, load_dotenv, load_llm_roles
 from larkflow.llm.client import OpenAICompatLLM
 from larkflow.agent_runtime.completion import CompletionAgentRuntime
 from larkflow.agent_runtime.executor import AgentRuntimeExecutor
@@ -849,6 +849,7 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             CliFeishuDocumentProjection(
                 profile=lark_profile,
                 identity=namespace.lark_identity,
+                parent_token=deliverable_folder_token(os.environ),
             )
             if enable_doc_projection
             else None

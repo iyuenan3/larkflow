@@ -437,6 +437,7 @@ class CliFeishuDocumentProjection:
         *,
         profile: str,
         identity: str = "bot",
+        parent_token: str | None = None,
         executable: str = "lark-cli",
         runner: Callable[..., dict[str, Any]] = run_cli,
     ) -> None:
@@ -446,6 +447,7 @@ class CliFeishuDocumentProjection:
             raise ValueError("Target document projection requires bot identity")
         self.profile = profile
         self.identity = identity
+        self.parent_token = (parent_token or "").strip() or None
         self.executable = executable
         self.runner = runner
 
@@ -455,20 +457,19 @@ class CliFeishuDocumentProjection:
     ) -> ExternalDocument:
         if not request.content_xml.strip():
             raise ValueError("Feishu document content is required")
-        data = self.runner(
-            [
-                self.executable,
-                "--profile",
-                self.profile,
-                "docs",
-                "+create",
-                "--content",
-                request.content_xml,
-                "--as",
-                self.identity,
-                "--json",
-            ]
-        )
+        argv = [
+            self.executable,
+            "--profile",
+            self.profile,
+            "docs",
+            "+create",
+            "--content",
+            request.content_xml,
+        ]
+        if self.parent_token:
+            argv += ["--parent-token", self.parent_token]
+        argv += ["--as", self.identity, "--json"]
+        data = self.runner(argv)
         document = data.get("document")
         if not isinstance(document, dict):
             nested = data.get("data")

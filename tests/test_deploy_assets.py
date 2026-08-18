@@ -80,6 +80,8 @@ def test_development_interactive_worker_idle_caps_are_one_second():
     assert "LARKFLOW_TARGET_ENABLE_IM_COMMANDS" not in projection
     assert float(projection["LARKFLOW_TARGET_PROJECTION_IDLE_MIN_SECONDS"]) > 0
     assert float(projection["LARKFLOW_TARGET_PROJECTION_IDLE_MAX_SECONDS"]) == 1
+    assert "LARKFLOW_DELIVERABLE_FOLDER_TOKEN" in projection
+    assert "LARKFLOW_DRIVE_FOLDER" not in projection
     assert int(interactive["LARKFLOW_TARGET_INTERACTIVE_CLAIM_LIMIT"]) == 1
     assert float(interactive["LARKFLOW_TARGET_INTERACTIVE_IDLE_MIN_SECONDS"]) > 0
     assert float(interactive["LARKFLOW_TARGET_INTERACTIVE_IDLE_MAX_SECONDS"]) == 1

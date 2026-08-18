@@ -30,7 +30,7 @@ GOOD_ENV = {
     "LLM_BASE_URL": "https://ark.example.com/api/v3",
     "LLM_API_KEY": "sk-this-must-never-be-printed",
     "LLM_MODEL": "doubao-pro",
-    "LARKFLOW_DRIVE_FOLDER": "fld_x",
+    "LARKFLOW_DELIVERABLE_FOLDER_TOKEN": "fld_x",
     "LARKFLOW_APP_ID": APP,
 }
 
@@ -209,10 +209,30 @@ def test_an_unknown_template_fails_and_skips_the_checks_that_need_it(tmp_path):
     assert not levels(checks, "角色映射"), "模板都没有，角色覆盖无从谈起，不该报第二条噪声"
 
 
-def test_a_missing_drive_folder_is_a_warning_because_it_still_runs(tmp_path):
-    env = {k: v for k, v in GOOD_ENV.items() if k != "LARKFLOW_DRIVE_FOLDER"}
+def test_a_missing_deliverable_folder_is_a_warning_because_it_still_runs(tmp_path):
+    env = {
+        k: v for k, v in GOOD_ENV.items()
+        if k != "LARKFLOW_DELIVERABLE_FOLDER_TOKEN"
+    }
     checks = run(env, db=tmp_path / "d.sqlite")
     assert levels(checks, "交付物落点") == [WARN]
+
+
+def test_the_legacy_drive_folder_is_accepted_with_a_deprecation_warning(tmp_path):
+    env = {
+        k: v for k, v in GOOD_ENV.items()
+        if k != "LARKFLOW_DELIVERABLE_FOLDER_TOKEN"
+    }
+    env["LARKFLOW_DRIVE_FOLDER"] = "fld_legacy"
+    checks = run(env, db=tmp_path / "d.sqlite")
+    assert levels(checks, "交付物落点") == [WARN]
+    assert "已弃用" in detail(checks, "交付物落点")
+
+
+def test_conflicting_deliverable_folder_variables_fail_closed(tmp_path):
+    env = dict(GOOD_ENV, LARKFLOW_DRIVE_FOLDER="fld_other")
+    checks = run(env, db=tmp_path / "d.sqlite")
+    assert levels(checks, "交付物落点") == [FAIL]
 
 
 # ---------- DB ----------

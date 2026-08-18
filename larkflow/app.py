@@ -14,7 +14,7 @@ import sys
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from .config import RoleResolver, env, load_llm_roles
+from .config import RoleResolver, deliverable_folder_token, load_llm_roles
 from .engine import Executors, build_graph
 from .engine.support import assert_v1_supported
 from .io import Correlations, FakeDeliverableStore, MockLarkIO
@@ -94,13 +94,14 @@ def build_real_service(template: str = "contract", *, db_path: str | None = None
     `larkflow serve` / CLI 用；**跑之前需要 dev 飞书自建应用 + 事件回调配置 + LLM 角色
     env**（见 DEPLOYMENT / .env.example）。本地测试绝不构造它（会真发消息、真建文档）。
 
-    交付物 IO 与 checkpointer 共用同一个 SQLite 连接，好让 markdown +create 的本地幂等表
+    交付物 IO 与 checkpointer 共用同一个 SQLite 连接，好让 docs +create 的本地幂等表
     与实例运行态一起持久（该命令没有 --idempotency-key）。
 
     这里比 `build_service` 多两件**只在多进程下才需要**的事（见 `store.py`）：
       · `open_db` 开 WAL + busy_timeout（daemon 与一次性命令同时开着这个文件）。
       · `InstanceLocks` 当 lock_factory，把「同一实例串行」从进程内扩到跨进程。
     """
+    configured_folder_token = deliverable_folder_token()
     # 绝对化：默认库相对 cwd 的话，systemd 起的 daemon 与手敲的救场命令会静默落到两个库
     path = resolve_db_path(db_path)
     conn = open_db(path)
@@ -110,7 +111,7 @@ def build_real_service(template: str = "contract", *, db_path: str | None = None
     io = CliLarkIO(identity=identity, profile=profile)
     deliverables = CliDeliverableIO(
         identity=identity, profile=profile,
-        folder_token=folder_token or env("LARKFLOW_DRIVE_FOLDER"),
+        folder_token=folder_token or configured_folder_token,
         idem_store=corr.idem_store(),
     )
     # 切到备用线路必须看得见：静默切走的话，主线路可以死一个月都没人知道，

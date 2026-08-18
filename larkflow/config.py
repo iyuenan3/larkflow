@@ -263,6 +263,24 @@ def env(key: str, default: str | None = None) -> str | None:
     return os.environ.get(key, default)
 
 
+def deliverable_folder_token(environ: dict[str, str] | None = None) -> str | None:
+    """Resolve the canonical Feishu deliverable parent folder token.
+
+    ``LARKFLOW_DRIVE_FOLDER`` remains a temporary compatibility alias.  A
+    conflict is fatal because silently choosing one destination can project a
+    document into the wrong collaboration boundary.
+    """
+    environ = os.environ if environ is None else environ
+    canonical = (environ.get("LARKFLOW_DELIVERABLE_FOLDER_TOKEN") or "").strip()
+    legacy = (environ.get("LARKFLOW_DRIVE_FOLDER") or "").strip()
+    if canonical and legacy and canonical != legacy:
+        raise ValueError(
+            "LARKFLOW_DELIVERABLE_FOLDER_TOKEN 与已弃用的 "
+            "LARKFLOW_DRIVE_FOLDER 指向不同位置"
+        )
+    return canonical or legacy or None
+
+
 def require_env(key: str) -> str:
     val = os.environ.get(key)
     if not val:

@@ -27,7 +27,7 @@ import subprocess
 from typing import NamedTuple
 from urllib.parse import urlparse
 
-from .config import RoleError, RoleResolver, load_llm_roles
+from .config import RoleError, RoleResolver, deliverable_folder_token, load_llm_roles
 from .engine.support import UnsupportedInV1, assert_v1_supported
 from .engine.tools import TOOL_KINDS
 from .model import load_template
@@ -234,10 +234,23 @@ def check_llm(dag: list[dict], environ: dict) -> list[Check]:
 
 
 def check_deliverable_target(environ: dict) -> list[Check]:
-    if environ.get("LARKFLOW_DRIVE_FOLDER"):
-        return [Check("交付物落点", OK, "已指定云空间文件夹")]
-    return [Check("交付物落点", WARN, "没配 LARKFLOW_DRIVE_FOLDER，交付物会落在 bot 的个人空间根目录",
-                  "真项目里人会找不到文件；建一个文件夹并把 token 配上")]
+    try:
+        folder_token = deliverable_folder_token(environ)
+    except ValueError as exc:
+        return [Check("交付物落点", FAIL, str(exc), "删除旧变量，统一使用新变量")]
+    if (environ.get("LARKFLOW_DELIVERABLE_FOLDER_TOKEN") or "").strip():
+        return [Check("交付物落点", OK, "已指定飞书云文档父文件夹")]
+    if folder_token:
+        return [Check(
+            "交付物落点", WARN,
+            "仍在使用已弃用的 LARKFLOW_DRIVE_FOLDER",
+            "迁移为 LARKFLOW_DELIVERABLE_FOLDER_TOKEN",
+        )]
+    return [Check(
+        "交付物落点", WARN,
+        "没配 LARKFLOW_DELIVERABLE_FOLDER_TOKEN，交付物会落在 bot 的个人空间根目录",
+        "真项目里人会找不到文档；建一个文件夹并把 folder token 配上",
+    )]
 
 
 # ---------- 编排 ----------

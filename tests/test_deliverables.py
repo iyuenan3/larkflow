@@ -21,7 +21,7 @@ def state_with(outputs: dict | None = None) -> dict:
 
 def test_deliverable_roundtrip_dict():
     """handle 要进 state（SQLite checkpointer 序列化），故以纯 dict 存。"""
-    d = Deliverable(type="markdown", token="doccn123", url="https://x/doccn123", region="whole")
+    d = Deliverable(type="docx", token="doccn123", url="https://x/doccn123", region="whole")
     assert Deliverable.from_dict(d.to_dict()) == d
     assert isinstance(d.to_dict(), dict)
 
@@ -31,7 +31,7 @@ def test_deliverable_roundtrip_dict():
 def test_create_then_fetch():
     io = FakeDeliverableStore()
     h = io.create(title="商务条款初稿", content="第一版", idem_key="wf-1:draft:create")
-    assert h.token and h.url and h.type == "markdown" and h.region == "whole"
+    assert h.token and h.url and h.type == "docx" and h.region == "whole"
     assert io.fetch(h) == "第一版"
 
 
@@ -56,7 +56,7 @@ def test_overwrite_keeps_handle_stable_and_versions():
 def test_fetch_unknown_handle_raises():
     io = FakeDeliverableStore()
     with pytest.raises(KeyError):
-        io.fetch(Deliverable(type="markdown", token="nope", url="", region="whole"))
+        io.fetch(Deliverable(type="docx", token="nope", url="", region="whole"))
 
 
 def test_section_region_not_implemented_in_v1():
