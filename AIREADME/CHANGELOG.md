@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.90.3-draft · 2026-08-19 · 企业知识撤销竞态开发部署验证
+
+- Deployment：内容提交 `17aba5ae35261bc915d2dd6d6f4c272273d2da89` 已安装到 Target 与 legacy 开发环境，wheel SHA-256 为 `b2aa7941e393111d011c2b5351b7df1bd052f85aef5d6cb71b682fd18b911d95`。两个 venv 的 `pip check` 与 `knowledge_context.py`、`knowledge/repository.py` 安装态源码 SHA-256 回读通过。
+- Runtime：安装态 synthetic/public 探针在 Blob 读取期间执行撤销，planning 与 Agent 两条路径都得到 `rejected=true / bundle_returned=false / status=revoked`，没有 ContextBundle 进入下游。本轮未创建业务 Instance，也未访问、创建或修改飞书资源。
+- Operations：migration 重入没有新增版本，长期库保持 `26 / 0026_enterprise_knowledge_content_authorization`。十个 larkflow Python 服务均为 `active / running / NRestarts=0`，部署窗口 warning 为 0，Caddy 配置 SHA 未变化。上一版完整企业正文 wheel 和 release 已保留为应用回滚点。
+- Correction：本条把下方 v0.90.2 的候选状态更新为已完成开发部署技术验证。真实管理员浏览器发布、真实内部资料验收和生产边界仍未关闭，不能描述为生产就绪。
+
 ## v0.90.2-draft · 2026-08-19 · 企业知识撤销与 ContextBundle 发行竞态修复候选
 
 - Fixed：内容提交 `17aba5ae35261bc915d2dd6d6f4c272273d2da89` 在 Blob 读取、长度、SHA-256、UTF-8 与预算校验后增加仓储原子最终授权复验。PostgreSQL 使用与撤销相同的 source advisory transaction lock 形成发行线性化点；撤销先完成时 planning 与 Agent bundle 均拒绝，最终授权先完成时 bundle 视为已发行且撤销只阻断后续 bundle。版本、完整 ref、proof 与外发决定漂移同样 fail closed。
