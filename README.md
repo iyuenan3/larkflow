@@ -12,7 +12,7 @@
 - Phase 2A 的项目级 UTF-8 txt/md 上传参与 DAG 规划已通过真实 PostgreSQL、Caddy 和开发部署验收。真实 Owner 浏览器上传与生成仍待手工验收，当前不是生产就绪版本。
 - Phase 2B 的 Agent Attempt 附件上下文与能力信封已部署到开发环境。节点必须显式声明附件输入，Runtime 只接收受限正文和安全引用；真实 PostgreSQL 合同与 synthetic Runtime 探针已通过。
 - 薄 Python 豆包 `SearchProvider` 已部署并完成一次公开信息检索回读；新建文本交付物已通过真实创建、同一 document_id 覆盖和原生 Docx 结构回读。两项证据仍只代表开发测试环境。
-- 企业共享资料已有服务器管理员授权的安全元数据目录 API、不可变版本和追加审计，并已部署到开发环境。正文存储、来源权限证明、ContextBundle 合并、Authorized Tool Gateway、PDF/DOCX/OCR 和向量检索仍未实现或后置。
+- 企业共享资料已有服务器管理员显式全员授权、不可变 UTF-8 正文快照、发布版本绑定、撤销门禁，以及规划与 Agent Attempt 的有界 ContextBundle。正文切片已提交但尚未完成真实 PostgreSQL、开发部署和 synthetic Runtime 验证；Authorized Tool Gateway、PDF/DOCX/OCR、语义检索和向量检索仍未实现或后置。
 - Personal Agent Edge 已降为暂停的历史 Proof，不进入当前产品主线或默认部署。
 - 早期 LangGraph、SQLite 与 lark-cli 原型继续保留，用于回归已经验证的适配器和事件处理机制。
 
@@ -21,7 +21,7 @@
 ## 核心能力
 
 - 草稿先行：模板、结构化定义或自然语言请求都先生成草稿，只有人类明确确认后才启动。
-- 云端规划与执行上下文：项目 txt/md 先参与规划并冻结安全 refs，附件支持的 Agent 节点再按 Node 与 Attempt 重新授权读取；目标形态会在授权范围内进一步组合企业共享资料。
+- 云端规划与执行上下文：项目附件与当前有效的企业共享 txt/md 先经服务端授权并按确定性顺序合并，规划只冻结安全 refs 与 fingerprint；显式声明资料输入的 Agent 节点再按 Node 与 Attempt 重新授权读取。
 - 唯一责任人：每个 Human 节点绑定唯一 Owner，Agent 只能执行，不能成为组织责任主体。
 - 依赖调度：中央 Scheduler 按 DAG 依赖解锁 Human、Agent 和 Tool 节点。
 - 安全变化：节点返工、完整实例重启和未来区域编辑都先生成影响预览，再由服务端重新校验并确认。
