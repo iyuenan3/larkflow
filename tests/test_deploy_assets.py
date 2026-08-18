@@ -131,6 +131,10 @@ def test_console_service_is_loopback_only_and_owner_scoped():
     assert "ProtectSystem=strict" in unit
     assert "IPAddressAllow=" not in unit
     assert "IPAddressDeny=" not in unit
+    assert (
+        "ReadWritePaths=/var/lib/larkflow/target/attachments "
+        "/var/lib/larkflow/target/enterprise-knowledge"
+    ) in unit
     assert "EnvironmentFile=" not in unit
     assert environment["LARKFLOW_TARGET_DSN"] == (
         "postgresql:///larkflow_target_dev"

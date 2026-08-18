@@ -484,6 +484,10 @@ def test_target_settings_use_peer_dsn_and_derive_worker_identity(monkeypatch):
             "LARKFLOW_TARGET_IDLE_MIN_SECONDS": "0.5",
             "LARKFLOW_TARGET_IDLE_MAX_SECONDS": "2",
             "LARKFLOW_TARGET_ENABLE_DEVELOPMENT_EXECUTOR": "true",
+            "LARKFLOW_TARGET_ENTERPRISE_KNOWLEDGE_ROOT": (
+                "/tmp/larkflow-enterprise-knowledge"
+            ),
+            "LARKFLOW_TARGET_ENTERPRISE_KNOWLEDGE_MODEL_EGRESS": "allow",
         }
     )
 
@@ -491,6 +495,10 @@ def test_target_settings_use_peer_dsn_and_derive_worker_identity(monkeypatch):
     assert settings.claim_ttl == timedelta(seconds=30)
     assert settings.loop == WorkerLoopSettings(0.5, 2.0)
     assert settings.enable_development_executor is True
+    assert settings.enterprise_knowledge_blob_root == (
+        "/tmp/larkflow-enterprise-knowledge"
+    )
+    assert settings.enterprise_knowledge_model_egress_policy == "allow"
 
 
 def test_projection_settings_have_independent_claim_and_retry_controls(monkeypatch):
@@ -605,6 +613,10 @@ def test_draft_generation_settings_are_single_claim_and_independent(monkeypatch)
             "LARKFLOW_TARGET_DRAFT_IDLE_MAX_SECONDS": "2",
             "LARKFLOW_TARGET_ATTACHMENT_ROOT": "/tmp/larkflow-attachments",
             "LARKFLOW_TARGET_ATTACHMENT_MODEL_EGRESS": "allow",
+            "LARKFLOW_TARGET_ENTERPRISE_KNOWLEDGE_ROOT": (
+                "/tmp/larkflow-enterprise-knowledge"
+            ),
+            "LARKFLOW_TARGET_ENTERPRISE_KNOWLEDGE_MODEL_EGRESS": "allow",
         }
     )
 
@@ -616,6 +628,10 @@ def test_draft_generation_settings_are_single_claim_and_independent(monkeypatch)
     assert settings.loop == WorkerLoopSettings(0.5, 2.0)
     assert settings.attachment_blob_root == "/tmp/larkflow-attachments"
     assert settings.attachment_model_egress_policy == "allow"
+    assert settings.enterprise_knowledge_blob_root == (
+        "/tmp/larkflow-enterprise-knowledge"
+    )
+    assert settings.enterprise_knowledge_model_egress_policy == "allow"
 
     with pytest.raises(ValueError, match="claim_limit must be 1"):
         TargetDraftGenerationSettings.from_environ(
@@ -631,6 +647,14 @@ def test_draft_generation_settings_are_single_claim_and_independent(monkeypatch)
                 "LARKFLOW_TARGET_DSN": "postgresql:///larkflow_target_dev",
                 "LARKFLOW_TARGET_TENANT": "dev",
                 "LARKFLOW_TARGET_ATTACHMENT_ROOT": "relative/path",
+            }
+        )
+    with pytest.raises(ValueError, match="enterprise knowledge blob root"):
+        TargetDraftGenerationSettings.from_environ(
+            {
+                "LARKFLOW_TARGET_DSN": "postgresql:///larkflow_target_dev",
+                "LARKFLOW_TARGET_TENANT": "dev",
+                "LARKFLOW_TARGET_ENTERPRISE_KNOWLEDGE_ROOT": "relative/path",
             }
         )
 

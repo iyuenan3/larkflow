@@ -29,6 +29,8 @@ class TargetRuntimeSettings:
     agent_context_max_chars: int = 12_000
     attachment_blob_root: str | None = None
     attachment_model_egress_policy: str = "deny"
+    enterprise_knowledge_blob_root: str | None = None
+    enterprise_knowledge_model_egress_policy: str = "deny"
     content_check_max_chars: int = 50_000
     web_search_max_prompt_chars: int = 20_000
     web_search_max_result_chars: int = 50_000
@@ -60,6 +62,16 @@ class TargetRuntimeSettings:
                 raise ValueError("Target attachment blob root must be absolute")
         if self.attachment_model_egress_policy not in {"allow", "deny"}:
             raise ValueError("Target attachment model egress policy is invalid")
+        if self.enterprise_knowledge_blob_root is not None:
+            root = self.enterprise_knowledge_blob_root.strip()
+            if not root or not os.path.isabs(root):
+                raise ValueError(
+                    "Target enterprise knowledge blob root must be absolute"
+                )
+        if self.enterprise_knowledge_model_egress_policy not in {"allow", "deny"}:
+            raise ValueError(
+                "Target enterprise knowledge model egress policy is invalid"
+            )
         if self.content_check_max_chars < 1:
             raise ValueError("content_check_max_chars must be positive")
         if self.web_search_max_prompt_chars < 1:
@@ -155,6 +167,17 @@ class TargetRuntimeSettings:
             ),
             attachment_model_egress_policy=values.get(
                 "LARKFLOW_TARGET_ATTACHMENT_MODEL_EGRESS",
+                "deny",
+            ).strip(),
+            enterprise_knowledge_blob_root=(
+                values.get(
+                    "LARKFLOW_TARGET_ENTERPRISE_KNOWLEDGE_ROOT",
+                    "",
+                ).strip()
+                or None
+            ),
+            enterprise_knowledge_model_egress_policy=values.get(
+                "LARKFLOW_TARGET_ENTERPRISE_KNOWLEDGE_MODEL_EGRESS",
                 "deny",
             ).strip(),
             content_check_max_chars=_positive_int(
@@ -397,6 +420,8 @@ class TargetDraftGenerationSettings:
     planner_runtime: str = "bounded"
     attachment_blob_root: str | None = None
     attachment_model_egress_policy: str = "deny"
+    enterprise_knowledge_blob_root: str | None = None
+    enterprise_knowledge_model_egress_policy: str = "deny"
     loop: WorkerLoopSettings = WorkerLoopSettings()
 
     def __post_init__(self) -> None:
@@ -426,6 +451,16 @@ class TargetDraftGenerationSettings:
                 raise ValueError("Target attachment blob root must be absolute")
         if self.attachment_model_egress_policy not in {"allow", "deny"}:
             raise ValueError("Target attachment model egress policy is invalid")
+        if self.enterprise_knowledge_blob_root is not None:
+            root = self.enterprise_knowledge_blob_root.strip()
+            if not root or not os.path.isabs(root):
+                raise ValueError(
+                    "Target enterprise knowledge blob root must be absolute"
+                )
+        if self.enterprise_knowledge_model_egress_policy not in {"allow", "deny"}:
+            raise ValueError(
+                "Target enterprise knowledge model egress policy is invalid"
+            )
 
     @classmethod
     def from_environ(
@@ -488,6 +523,17 @@ class TargetDraftGenerationSettings:
             ),
             attachment_model_egress_policy=values.get(
                 "LARKFLOW_TARGET_ATTACHMENT_MODEL_EGRESS",
+                "deny",
+            ).strip(),
+            enterprise_knowledge_blob_root=(
+                values.get(
+                    "LARKFLOW_TARGET_ENTERPRISE_KNOWLEDGE_ROOT",
+                    "",
+                ).strip()
+                or None
+            ),
+            enterprise_knowledge_model_egress_policy=values.get(
+                "LARKFLOW_TARGET_ENTERPRISE_KNOWLEDGE_MODEL_EGRESS",
                 "deny",
             ).strip(),
             loop=WorkerLoopSettings(

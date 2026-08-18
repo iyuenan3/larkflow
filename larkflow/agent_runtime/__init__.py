@@ -7,6 +7,7 @@ from .contracts import (
     AgentRunResult,
     AgentRuntime,
     CapabilityEnvelope,
+    ENTERPRISE_KNOWLEDGE_INPUT,
     PROJECT_ATTACHMENTS_INPUT,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "AgentRunResult",
     "AgentRuntime",
     "CapabilityEnvelope",
+    "ENTERPRISE_KNOWLEDGE_INPUT",
     "PROJECT_ATTACHMENTS_INPUT",
 ]

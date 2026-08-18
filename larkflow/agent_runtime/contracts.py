@@ -13,6 +13,7 @@ from larkflow.planning.context import ContextBundle
 
 
 PROJECT_ATTACHMENTS_INPUT = "instance_inputs.project_attachments"
+ENTERPRISE_KNOWLEDGE_INPUT = "instance_inputs.enterprise_knowledge"
 
 
 def _freeze(value: Any) -> Any:
@@ -216,16 +217,28 @@ class AgentRunRequest:
                 or envelope.attempt_no != self.attempt_no
             ):
                 raise ValueError("Agent capability envelope binding is invalid")
-            context_capability = "context.read.project_attachments"
+            context_capabilities: set[str] = set()
+            if self.context_bundle is not None and self.context_bundle.attachments:
+                context_capabilities.add("context.read.project_attachments")
+            if (
+                self.context_bundle is not None
+                and self.context_bundle.enterprise_knowledge
+            ):
+                context_capabilities.add("context.read.enterprise_knowledge")
+            envelope_context = {
+                item
+                for item in envelope.allowed_capabilities
+                if item.startswith("context.read.")
+            }
             if self.context_bundle is not None:
-                if context_capability not in envelope.allowed_capabilities:
+                if context_capabilities != envelope_context:
                     raise ValueError("Agent context capability is missing")
                 context_chars = sum(
                     len(chunk.text) for chunk in self.context_bundle.chunks
                 )
                 if context_chars > envelope.max_context_chars:
                     raise ValueError("Agent context exceeds capability budget")
-            elif context_capability in envelope.allowed_capabilities:
+            elif envelope_context:
                 raise ValueError("Agent context capability has no authorized bundle")
         object.__setattr__(self, "policy", _freeze(self.policy))
 
@@ -289,5 +302,6 @@ __all__ = [
     "AgentRunResult",
     "AgentRuntime",
     "CapabilityEnvelope",
+    "ENTERPRISE_KNOWLEDGE_INPUT",
     "PROJECT_ATTACHMENTS_INPUT",
 ]

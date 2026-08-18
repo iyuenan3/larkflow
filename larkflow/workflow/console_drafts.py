@@ -968,10 +968,11 @@ class ConsoleDraftWorker:
     def _apply(self, claim: ConsoleDraftClaim) -> None:
         request = claim.request
         context_bundle: ContextBundle | None = None
-        if request.attachment_manifest:
-            if self.context_service is None:
-                raise DraftGenerationRejected("附件上下文服务未配置")
+        if self.context_service is not None:
             context_bundle = self.context_service.build_for_planning(request)
+        elif request.attachment_manifest:
+            raise DraftGenerationRejected("附件上下文服务未配置")
+        if request.attachment_manifest:
             if context_bundle is None:
                 raise DraftGenerationRejected("附件上下文未能构建")
         definition = request.definition
@@ -1013,12 +1014,20 @@ class ConsoleDraftWorker:
         if context_bundle is not None:
             inputs = dict(snapshot.inputs)
             manifest = context_bundle.snapshot_manifest()
-            inputs["project_attachments"] = manifest["attachments"]
+            if manifest["attachments"]:
+                inputs["project_attachments"] = manifest["attachments"]
+            if manifest["enterprise_knowledge"]:
+                inputs["enterprise_knowledge"] = manifest[
+                    "enterprise_knowledge"
+                ]
             inputs["context_manifest"] = {
                 key: value
                 for key, value in manifest.items()
-                if key != "attachments"
+                if key not in {"attachments", "enterprise_knowledge"}
             }
+            inputs["context_manifest"]["source_kinds"] = ",".join(
+                dict.fromkeys(item.kind for item in context_bundle.sources)
+            )
             snapshot = replace(snapshot, inputs=inputs)
         instance_id = f"console_draft_{request.id}"
         try:

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -789,6 +789,7 @@ class RoleBindingActionWorker:
         tenant_id: str,
         worker_id: str,
         draft_generator: DraftGenerator | None = None,
+        planning_context_service: Any = None,
         draft_only: bool = False,
         clock: Callable[[], datetime] | None = None,
         claim_limit: int = 20,
@@ -803,6 +804,7 @@ class RoleBindingActionWorker:
         self.tenant_id = tenant_id
         self.worker_id = worker_id
         self.draft_generator = draft_generator
+        self.planning_context_service = planning_context_service
         self.draft_only = draft_only
         if draft_only and draft_generator is None:
             raise ValueError("draft-only worker requires a draft generator")
@@ -986,19 +988,33 @@ class RoleBindingActionWorker:
             instance = self.service.get(self.tenant_id, instance_id)
         except InstanceNotFoundError:
             try:
-                definition = self.draft_generator.generate(
-                    tenant_id=self.tenant_id,
-                    actor_person_id=request.initiator_person_id,
-                    request_id=claim.action.id,
-                    brief=brief,
-                    context=context,
-                    on_repair=lambda: self.store.queue_role_binding_progress(
+                context_bundle = (
+                    self.planning_context_service.build_for_identity(
+                        tenant_id=self.tenant_id,
+                        request_id=claim.action.id,
+                        actor_person_id=request.initiator_person_id,
+                    )
+                    if self.planning_context_service is not None
+                    else None
+                )
+                generation = {
+                    "tenant_id": self.tenant_id,
+                    "actor_person_id": request.initiator_person_id,
+                    "request_id": claim.action.id,
+                    "brief": brief,
+                    "context": context,
+                    "on_repair": lambda: self.store.queue_role_binding_progress(
                         self.tenant_id,
                         claim.action.id,
                         claim_token=claim.claim_token,
                         stage="repairing",
                         now=self.clock(),
                     ),
+                }
+                if context_bundle is not None:
+                    generation["context_bundle"] = context_bundle
+                definition = self.draft_generator.generate(
+                    **generation,
                 )
                 roles = set(inline_owner_roles(definition))
                 available_bindings = {
@@ -1011,6 +1027,24 @@ class RoleBindingActionWorker:
                         role: available_bindings[role] for role in roles
                     },
                 )
+                if context_bundle is not None:
+                    inputs = dict(snapshot.inputs)
+                    manifest = context_bundle.snapshot_manifest()
+                    if manifest["enterprise_knowledge"]:
+                        inputs["enterprise_knowledge"] = manifest[
+                            "enterprise_knowledge"
+                        ]
+                    inputs["context_manifest"] = {
+                        key: value
+                        for key, value in manifest.items()
+                        if key not in {"attachments", "enterprise_knowledge"}
+                    }
+                    inputs["context_manifest"]["source_kinds"] = ",".join(
+                        dict.fromkeys(
+                            item.kind for item in context_bundle.sources
+                        )
+                    )
+                    snapshot = replace(snapshot, inputs=inputs)
             except (DraftGenerationRejected, TemplateValidationError) as exc:
                 raise RoleBindingRejected(str(exc)) from exc
             try:

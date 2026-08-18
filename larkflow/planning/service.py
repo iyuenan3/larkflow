@@ -6,6 +6,7 @@ from typing import Any
 
 from larkflow.workflow.draft_validation import (
     GeneratedDraftValidator,
+    bind_enterprise_knowledge_inputs,
     bind_project_attachment_inputs,
 )
 
@@ -53,11 +54,18 @@ class PlanningService:
             "context": request.context,
         }
         if request.context_bundle is not None:
-            candidate["inputs"]["project_attachments"] = [
-                item.snapshot_value()
-                for item in request.context_bundle.attachments
-            ]
-            bind_project_attachment_inputs(candidate)
+            if request.context_bundle.attachments:
+                candidate["inputs"]["project_attachments"] = [
+                    item.snapshot_value()
+                    for item in request.context_bundle.attachments
+                ]
+                bind_project_attachment_inputs(candidate)
+            if request.context_bundle.enterprise_knowledge:
+                candidate["inputs"]["enterprise_knowledge"] = [
+                    item.snapshot_value()
+                    for item in request.context_bundle.enterprise_knowledge
+                ]
+                bind_enterprise_knowledge_inputs(candidate)
         self.validator.validate(
             candidate,
             context_bundle=request.context_bundle,

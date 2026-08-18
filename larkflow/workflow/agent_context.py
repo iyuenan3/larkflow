@@ -141,7 +141,11 @@ class AgentContextService:
             created_at=now,
             expires_at=now + AGENT_CONTEXT_TTL,
         )
-        if planning_bundle.fingerprint != manifest["fingerprint"]:
+        source_kinds = manifest.get("source_kinds", "attachment")
+        if (
+            source_kinds == "attachment"
+            and planning_bundle.fingerprint != manifest["fingerprint"]
+        ):
             raise AgentContextRejected("项目附件原始规划清单指纹不一致")
 
         return ContextBundle(
@@ -198,10 +202,11 @@ def _context_manifest(value: object) -> dict[str, str]:
         "egress_decision",
         "fingerprint",
     }
-    if not isinstance(value, Mapping) or set(value) != required:
+    allowed = required | {"source_kinds"}
+    if not isinstance(value, Mapping) or not required <= set(value) or set(value) - allowed:
         raise AgentContextRejected("项目附件上下文清单无效")
     normalized = {key: item for key, item in value.items() if isinstance(item, str)}
-    if set(normalized) != required:
+    if not required <= set(normalized) or set(normalized) - allowed:
         raise AgentContextRejected("项目附件上下文清单无效")
     if (
         normalized["scope_kind"] != "console_draft_request"
@@ -210,6 +215,12 @@ def _context_manifest(value: object) -> dict[str, str]:
         or normalized["egress_decision"] != "allow"
     ):
         raise AgentContextRejected("项目附件上下文策略无效")
+    source_kinds = normalized.get("source_kinds", "attachment")
+    if source_kinds not in {
+        "attachment",
+        "attachment,enterprise_knowledge",
+    }:
+        raise AgentContextRejected("项目附件上下文来源类型无效")
     return normalized
 
 

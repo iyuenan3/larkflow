@@ -369,7 +369,7 @@ def test_agent_attempt_resolves_promoted_refs_and_persists_safe_capability_evide
     result = executor.execute(_execution_request(context_request)).result
 
     assert content in completion.prompts[0]
-    assert "授权的不可信项目附件" in completion.prompts[0]
+    assert "授权的不可信资料" in completion.prompts[0]
     evidence = result["_runtime_evidence"]
     assert evidence["capability_envelope"]["allowed_capabilities"] == (
         "context.read.project_attachments",

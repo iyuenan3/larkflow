@@ -128,6 +128,15 @@ from .console_attachments import (
     PlanningContextService,
     PostgresConsoleAttachmentRepository,
 )
+from .knowledge_context import (
+    CombinedAgentContextService,
+    EnterpriseAgentContextService,
+    EnterpriseKnowledgeContextRejected,
+    EnterpriseKnowledgeContextService,
+    EnterpriseKnowledgeContextUnavailable,
+    PlanningKnowledgeContextService,
+    merge_context_bundles,
+)
 from .edge import (
     DEFAULT_EDGE_CAPABILITIES,
     PERSONAL_READONLY_CAPABILITY,
@@ -515,6 +524,13 @@ __all__ = [
     "PostgresConsoleDraftRepository",
     "PostgresConsoleAttachmentRepository",
     "PlanningContextService",
+    "PlanningKnowledgeContextService",
+    "EnterpriseKnowledgeContextService",
+    "EnterpriseKnowledgeContextRejected",
+    "EnterpriseKnowledgeContextUnavailable",
+    "EnterpriseAgentContextService",
+    "CombinedAgentContextService",
+    "merge_context_bundles",
     "FilesystemAttachmentBlobStore",
     "AttachmentContextRejected",
     "ProjectionWorkerLoop",

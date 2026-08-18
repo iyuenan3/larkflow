@@ -15,6 +15,7 @@ from .contracts import (
     AgentRunRequest,
     AgentRuntime,
     CapabilityEnvelope,
+    ENTERPRISE_KNOWLEDGE_INPUT,
     PROJECT_ATTACHMENTS_INPUT,
 )
 
@@ -74,9 +75,9 @@ class AgentRuntimeExecutor:
         context_bundle = None
         if self.context_resolver is not None:
             context_bundle = self.context_resolver.resolve(context_request)
-        elif _declares_project_attachments(request.work):
+        elif _declares_context(request.work):
             raise AgentContextUnavailable(
-                "Agent node requested project attachments, but context is unavailable"
+                "Agent node requested authorized context, but context is unavailable"
             )
         if self.context_resolver is None:
             runtime_request = AgentRunRequest(
@@ -95,11 +96,14 @@ class AgentRuntimeExecutor:
             return ExecutionResult(result=result.deliverables)
 
         now = self.clock()
-        capabilities = (
-            ("context.read.project_attachments",)
-            if context_bundle is not None
-            else ()
-        )
+        capabilities = []
+        knowledge_scopes = []
+        if context_bundle is not None and context_bundle.attachments:
+            capabilities.append("context.read.project_attachments")
+            knowledge_scopes.append("project_attachments")
+        if context_bundle is not None and context_bundle.enterprise_knowledge:
+            capabilities.append("context.read.enterprise_knowledge")
+            knowledge_scopes.append("enterprise_knowledge")
         envelope = CapabilityEnvelope(
             tenant_id=request.tenant_id,
             actor_person_id=request.owner_person_id,
@@ -107,8 +111,8 @@ class AgentRuntimeExecutor:
             node_key=request.node_key,
             attempt_id=request.attempt_id,
             attempt_no=request.attempt_no,
-            allowed_capabilities=capabilities,
-            knowledge_scopes=("project_attachments",) if capabilities else (),
+            allowed_capabilities=tuple(capabilities),
+            knowledge_scopes=tuple(knowledge_scopes),
             data_classification=(
                 context_bundle.data_classification
                 if context_bundle is not None
@@ -149,13 +153,13 @@ class AgentRuntimeExecutor:
         return ExecutionResult(result=deliverables)
 
 
-def _declares_project_attachments(work: Mapping[str, Any]) -> bool:
+def _declares_context(work: Mapping[str, Any]) -> bool:
     inputs = work.get("inputs") or ()
     if isinstance(inputs, (str, bytes)):
         return False
     for value in inputs:
         reference = value.get("ref") if isinstance(value, Mapping) else value
-        if reference == PROJECT_ATTACHMENTS_INPUT:
+        if reference in {PROJECT_ATTACHMENTS_INPUT, ENTERPRISE_KNOWLEDGE_INPUT}:
             return True
     return False
 
@@ -163,5 +167,6 @@ def _declares_project_attachments(work: Mapping[str, Any]) -> bool:
 __all__ = [
     "AgentContextUnavailable",
     "AgentRuntimeExecutor",
+    "ENTERPRISE_KNOWLEDGE_INPUT",
     "PROJECT_ATTACHMENTS_INPUT",
 ]

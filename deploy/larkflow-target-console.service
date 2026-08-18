@@ -35,6 +35,7 @@ RestrictNamespaces=yes
 LockPersonality=yes
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/larkflow/target/attachments /var/lib/larkflow/target/enterprise-knowledge
 # Feishu OAuth requires outbound HTTPS. The process still binds only to loopback,
 # enforced by both ExecStart and the application server.
 

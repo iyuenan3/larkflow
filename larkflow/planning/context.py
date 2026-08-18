@@ -8,6 +8,8 @@ import json
 import re
 from typing import Any
 
+from larkflow.knowledge.contracts import EnterpriseKnowledgeRef
+
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SOURCE_ID = re.compile(r"^[a-z][a-z0-9_.:-]{0,127}$")
@@ -29,7 +31,7 @@ class SourceRef:
     def __post_init__(self) -> None:
         if _SOURCE_ID.fullmatch(self.source_id) is None:
             raise ValueError("context source_id is invalid")
-        if self.kind != "attachment":
+        if self.kind not in {"attachment", "enterprise_knowledge"}:
             raise ValueError("context source kind is unsupported")
         if not self.label.strip():
             raise ValueError("context source label is required")
@@ -113,8 +115,9 @@ class ContextBundle:
     purpose: str
     actor_person_id: str
     sources: tuple[SourceRef, ...]
-    attachments: tuple[AttachmentRef, ...]
     chunks: tuple[ContextChunk, ...] = field(repr=False)
+    attachments: tuple[AttachmentRef, ...] = ()
+    enterprise_knowledge: tuple[EnterpriseKnowledgeRef, ...] = ()
     node_key: str | None = None
     attempt_id: str | None = None
     data_classification: str = "internal"
@@ -138,7 +141,11 @@ class ContextBundle:
                 raise ValueError("planning context cannot bind a node or Attempt")
         elif not self.node_key or not self.attempt_id:
             raise ValueError("Agent context must bind a node and Attempt")
-        if not self.sources or not self.attachments or not self.chunks:
+        if (
+            not self.sources
+            or not self.chunks
+            or not (self.attachments or self.enterprise_knowledge)
+        ):
             raise ValueError("context bundle must contain authorized material")
         if self.data_classification != "internal":
             raise ValueError("context bundle classification must be internal")
@@ -151,8 +158,15 @@ class ContextBundle:
         object.__setattr__(self, "created_at", created_at)
         object.__setattr__(self, "expires_at", expires_at)
         expected_sources = tuple(item.source_id for item in self.sources)
-        if expected_sources != tuple(item.source_id for item in self.attachments):
+        material_sources = tuple(item.source_id for item in self.attachments) + tuple(
+            item.source_id for item in self.enterprise_knowledge
+        )
+        if expected_sources != material_sources:
             raise ValueError("context bundle source manifest is inconsistent")
+        if len(set(expected_sources)) != len(expected_sources):
+            raise ValueError("context bundle repeats a source")
+        if any(not item.content_authorized for item in self.enterprise_knowledge):
+            raise ValueError("enterprise knowledge source lacks authorization proof")
         if tuple(chunk.order for chunk in self.chunks) != tuple(range(len(self.chunks))):
             raise ValueError("context bundle chunks must have canonical order")
         if any(chunk.source_id not in expected_sources for chunk in self.chunks):
@@ -171,6 +185,9 @@ class ContextBundle:
             "egress_decision": self.egress_decision,
             "fingerprint": self.fingerprint,
             "attachments": [item.snapshot_value() for item in self.attachments],
+            "enterprise_knowledge": [
+                item.snapshot_value() for item in self.enterprise_knowledge
+            ],
         }
         if self.node_key is not None:
             value["node_key"] = self.node_key
@@ -214,6 +231,18 @@ def context_bundle_fingerprint(bundle: ContextBundle) -> str:
                 "egress_decision": item.egress_decision,
             }
             for item in bundle.attachments
+        ],
+        "enterprise_knowledge": [
+            {
+                "source_id": item.source_id,
+                "version_id": item.version_id,
+                "content_sha256": item.content_sha256,
+                "data_classification": item.data_classification,
+                "egress_decision": item.egress_decision,
+                "authorization_proof_id": item.authorization_proof_id,
+                "authorization_fingerprint": item.authorization_fingerprint,
+            }
+            for item in bundle.enterprise_knowledge
         ],
         "chunks": [
             {

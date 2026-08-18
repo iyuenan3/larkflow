@@ -272,10 +272,19 @@ class GeneratedDraftValidator:
                     raise DraftGenerationRejected("生成流程的 Agent 必须使用 default 模型角色")
                 if (
                     context_bundle is not None
+                    and context_bundle.attachments
                     and "instance_inputs.project_attachments" not in inputs
                 ):
                     raise DraftGenerationRejected(
                         "附件支持的 Agent 节点必须显式消费项目附件"
+                    )
+                if (
+                    context_bundle is not None
+                    and context_bundle.enterprise_knowledge
+                    and "instance_inputs.enterprise_knowledge" not in inputs
+                ):
+                    raise DraftGenerationRejected(
+                        "企业资料支持的 Agent 节点必须显式消费企业共享资料"
                     )
             if executor == "tool":
                 if not deps:
@@ -727,11 +736,31 @@ def bind_project_attachment_inputs(definition: Mapping[str, Any]) -> None:
             inputs.append("instance_inputs.project_attachments")
 
 
+def bind_enterprise_knowledge_inputs(definition: Mapping[str, Any]) -> None:
+    """Add the server-owned enterprise context input to every generated Agent."""
+
+    nodes = definition.get("nodes")
+    if not isinstance(nodes, list):
+        return
+    for node in nodes:
+        if not isinstance(node, dict) or node.get("executor") != "agent":
+            continue
+        work = node.get("work")
+        if not isinstance(work, dict):
+            continue
+        inputs = work.get("inputs")
+        if not isinstance(inputs, list):
+            continue
+        if "instance_inputs.enterprise_knowledge" not in inputs:
+            inputs.append("instance_inputs.enterprise_knowledge")
+
+
 __all__ = [
     "DraftGenerationRejected",
     "DraftCapabilityUnavailable",
     "DraftEvidencePolicy",
     "GeneratedDraftValidator",
+    "bind_enterprise_knowledge_inputs",
     "bind_project_attachment_inputs",
     "MAX_GENERATED_NODES",
 ]

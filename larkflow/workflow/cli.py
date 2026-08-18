@@ -18,6 +18,8 @@ import yaml
 
 from larkflow.config import deliverable_folder_token, load_dotenv, load_llm_roles
 from larkflow.llm.client import OpenAICompatLLM
+from larkflow.knowledge.blob import FilesystemEnterpriseKnowledgeBlobStore
+from larkflow.knowledge.repository import PostgresEnterpriseKnowledgeRepository
 from larkflow.agent_runtime.completion import CompletionAgentRuntime
 from larkflow.agent_runtime.executor import AgentRuntimeExecutor
 from larkflow.planning import DraftGenerator
@@ -71,6 +73,12 @@ from .im_commands import (
 from .inbound import TaskVerificationWorker, WorkflowInboundWorker
 from .inbound_daemon import InboundWorkerLoop, VerificationWorkerLoop
 from .interactive_daemon import InteractiveWorker, InteractiveWorkerLoop
+from .knowledge_context import (
+    CombinedAgentContextService,
+    EnterpriseAgentContextService,
+    EnterpriseKnowledgeContextService,
+    PlanningKnowledgeContextService,
+)
 from .migrate import apply_migrations, postgres_connection_factory, verify_migrations
 from .model import ExecutorKind, QualityResult, QualityVerdict
 from .postgres import (
@@ -382,6 +390,10 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
             tenant_id=settings.tenant_id,
             worker_id=settings.worker_id,
             draft_generator=generator,
+            planning_context_service=_planning_context_service(
+                connection_factory,
+                settings,
+            ),
             draft_only=True,
             claim_limit=settings.claim_limit,
             claim_ttl=settings.claim_ttl,
@@ -1075,7 +1087,7 @@ def _executors(
     *,
     environ: Mapping[str, str] | None = None,
     log: JsonLogger | None = None,
-    context_resolver: AgentContextService | None = None,
+    context_resolver: Any = None,
 ) -> dict[ExecutorKind, AutomatedExecutor]:
     registry: dict[ExecutorKind, AutomatedExecutor] = {}
     tool_adapters: list[object] = []
@@ -1286,7 +1298,7 @@ def _console_draft_worker(
     generator: DraftGenerator,
     settings: TargetDraftGenerationSettings,
     *,
-    context_service: PlanningContextService | None = None,
+    context_service: Any = None,
 ) -> ConsoleDraftWorker:
     """Build the Console draft worker with its exact production contract."""
     return ConsoleDraftWorker(
@@ -1307,26 +1319,65 @@ def _console_draft_worker(
 def _planning_context_service(
     connection_factory: Any,
     settings: TargetDraftGenerationSettings,
-) -> PlanningContextService | None:
-    if settings.attachment_blob_root is None:
+) -> PlanningKnowledgeContextService | None:
+    project_service = None
+    if settings.attachment_blob_root is not None:
+        project_service = PlanningContextService(
+            PostgresConsoleAttachmentRepository(connection_factory),
+            FilesystemAttachmentBlobStore(settings.attachment_blob_root),
+            model_egress_policy=settings.attachment_model_egress_policy,
+        )
+    enterprise_service = None
+    if settings.enterprise_knowledge_blob_root is not None:
+        enterprise_service = EnterpriseKnowledgeContextService(
+            PostgresEnterpriseKnowledgeRepository(connection_factory),
+            FilesystemEnterpriseKnowledgeBlobStore(
+                settings.enterprise_knowledge_blob_root
+            ),
+            model_egress_policy=(
+                settings.enterprise_knowledge_model_egress_policy
+            ),
+        )
+    if project_service is None and enterprise_service is None:
         return None
-    return PlanningContextService(
-        PostgresConsoleAttachmentRepository(connection_factory),
-        FilesystemAttachmentBlobStore(settings.attachment_blob_root),
-        model_egress_policy=settings.attachment_model_egress_policy,
+    return PlanningKnowledgeContextService(
+        project_service=project_service,
+        enterprise_service=enterprise_service,
     )
 
 
 def _agent_context_service(
     connection_factory: Any,
     settings: TargetRuntimeSettings,
-) -> AgentContextService | None:
-    if settings.attachment_blob_root is None:
+) -> CombinedAgentContextService | None:
+    project_service = None
+    if settings.attachment_blob_root is not None:
+        project_service = AgentContextService(
+            PostgresConsoleAttachmentRepository(connection_factory),
+            FilesystemAttachmentBlobStore(settings.attachment_blob_root),
+            model_egress_policy=settings.attachment_model_egress_policy,
+            max_context_chars=settings.agent_context_max_chars,
+        )
+    enterprise_service = None
+    if settings.enterprise_knowledge_blob_root is not None:
+        context_service = EnterpriseKnowledgeContextService(
+            PostgresEnterpriseKnowledgeRepository(connection_factory),
+            FilesystemEnterpriseKnowledgeBlobStore(
+                settings.enterprise_knowledge_blob_root
+            ),
+            model_egress_policy=(
+                settings.enterprise_knowledge_model_egress_policy
+            ),
+        )
+        enterprise_service = EnterpriseAgentContextService(
+            context_service,
+            max_context_chars=settings.agent_context_max_chars,
+        )
+    if project_service is None and enterprise_service is None:
         return None
-    return AgentContextService(
-        PostgresConsoleAttachmentRepository(connection_factory),
-        FilesystemAttachmentBlobStore(settings.attachment_blob_root),
-        model_egress_policy=settings.attachment_model_egress_policy,
+    return CombinedAgentContextService(
+        project_service=project_service,
+        enterprise_service=enterprise_service,
         max_context_chars=settings.agent_context_max_chars,
     )
 
