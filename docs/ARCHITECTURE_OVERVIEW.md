@@ -408,17 +408,17 @@ Edge 已经做过一个只读 Proof，代码和安全证据都保留。
 - 规划专用 `ContextBundle`、安全来源引用、内容指纹和默认 deny 的模型外发策略。
 - Planner 使用附件后，Instance 只冻结安全 refs 与 fingerprint，不保存正文。
 - Agent Attempt 按冻结 refs 重新校验正文，并记录不含正文的 ContextBundle manifest 与 CapabilityEnvelope。
+- 企业共享资料的 provider-neutral 合同、tenant-first 不可变版本目录、逻辑撤销和追加审计仓储。
 
-上述 PlannerRuntime、AgentRuntime 与 Phase 2A 代码均已提交，并随同一 wheel 部署到开发环境。Phase 2A 已完成真实 PostgreSQL、Caddy、migration 和服务端能力验证，但尚未完成真实 Owner 浏览器上传与生成，也不能视为生产就绪。
+上述 PlannerRuntime、AgentRuntime、Phase 2A、Phase 2B 与企业共享资料目录仓储均已提交并部署到开发环境。开发库已应用 25 份 migration；企业目录的 synthetic 发布、撤销、新版本和审计回读通过。真实 Owner 浏览器上传与生成仍未完成，企业资料也没有管理 API 或正文接入，不能视为生产就绪。
 
 目前仍是目标设计、尚未实现的有：
 
-- 企业共享知识清单。
-- 企业共享资料与通用 Knowledge Context Service。
-- Phase 2B 已完成真实 PostgreSQL、开发部署与 synthetic Agent Attempt 回归，下一步补真实 Owner 浏览器附件交互与受控内部试用。
+- 企业共享资料的管理员授权、管理 API、正文 Blob、ContextBundle 合并与检索。
+- 通用 Knowledge Context Service。
+- Phase 2B 的真实 Owner 浏览器附件交互与受控内部试用。
 - PDF、DOCX、图片 OCR、飞书消息附件和生产对象存储。
 - Authorized Tool Gateway。
-- Attempt 级能力信封。
 - 持久化的 Attempt 级模型数据外发政策。
 - Pi Adapter。
 - DSH Adapter。
