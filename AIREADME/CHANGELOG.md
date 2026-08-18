@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.91.0-draft · 2026-08-19 · Console 显式企业资料选择候选
+
+- Added：ADR-119 合同提交 `191cc19eb11d5d701da7f994dff25ed0d05f5bbe` 与内容提交 `e663edfa2c54230b3b58bfc9e26ad046f95a3b51` 把企业资料从 tenant 自动全选改为 Console collecting 草稿发起人显式选择。成员目录只返回安全 published 元数据，选择状态绑定 requester、source ID、单调版本与 16 项上限；客户端不能提交 tenant、精确版本、hash、proof fingerprint、egress、正文或 object key。
+- Freeze：`0027_console_enterprise_knowledge_selection` 保存默认空选择、冻结精确企业 refs 和 selection fingerprint。开始生成时服务端在单个事务中锁定草稿、附件和按 source 排序的企业版本，复验 published、proof 与 egress 后原子转为 pending。生成重试复用冻结 refs，后来发布的新版本不会漂移进请求；飞书向导和其他没有选择 UI 的入口默认不使用企业资料。
+- UI and safety：Console 展示候选标签、媒体类型、大小、发布时间、分级和不可用原因，不预览正文；collecting 阶段可以保存选择，生成前明确列出本次资料。项目附件仍保持冻结 manifest 顺序，企业资料内部按 source/version 排序后追加，canonical v1 fingerprint 语义不变。
+- Verified：聚焦测试 `95 passed`；完整离线套件为 `1261 passed, 32 skipped, 1 failed`，唯一失败是沙箱禁止读取进程树，同一既有测试在允许环境单独 `1 passed`，合并证据为 `1262 passed, 32 skipped`。Python compile、Node 语法和 `git diff --check` 通过。
+- Boundary：本条只表示代码已提交并推送。`0027` 尚未在真实 PostgreSQL 应用或重入，开发 wheel 尚未部署，安装态 synthetic 选择、撤销与 Planner/Agent Context 探针尚未完成；真实浏览器人工验收继续后置。
+
 ## v0.90.3-draft · 2026-08-19 · 企业知识撤销竞态开发部署验证
 
 - Deployment：内容提交 `17aba5ae35261bc915d2dd6d6f4c272273d2da89` 已安装到 Target 与 legacy 开发环境，wheel SHA-256 为 `b2aa7941e393111d011c2b5351b7df1bd052f85aef5d6cb71b682fd18b911d95`。两个 venv 的 `pip check` 与 `knowledge_context.py`、`knowledge/repository.py` 安装态源码 SHA-256 回读通过。

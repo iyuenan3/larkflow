@@ -21,8 +21,8 @@
 
 在继续扩展执行器之前，先关闭云端 Agent 控制平面的四个合同：
 
-1. `Knowledge Context Service`：只支持管理员发布的企业共享资料与项目级上传，服务端在检索前完成 tenant、Instance、actor、数据分类和模型外发授权。企业资料的 tenant-first 目录、不可变正文 Blob、管理员全员授权证明、撤销门禁、规划和 Agent Attempt 重授权，以及两类来源的确定性 ContextBundle 合并已经部署，并通过真实 PostgreSQL、0026 migration、Caddy 和 synthetic Runtime 技术探针；真实管理员浏览器验收、生产对象存储、语义检索、部门 ACL 与个人知识库后置。
-2. `PlannerRuntime Port`：Refactor Phase 1 基线已落码。当前 bounded adapter 只返回候选图与最小运行时摘要，不写草稿、不启动流程；`PlanningService` 会覆盖候选中的服务端输入并通过统一 validator 强制最终复验。Phase 2A 项目附件规划与企业资料 ContextBundle 已部署；规划前会选择当前 tenant 全部有效发布版本，重新授权正文并与项目附件共享预算和 fingerprint。类型化只读工具、显式企业资料 selection、A/B 与真实管理员浏览器验收仍未完成。
+1. `Knowledge Context Service`：只支持管理员发布的企业共享资料与项目级上传，服务端在检索前完成 tenant、Instance、actor、数据分类和模型外发授权。企业资料的 tenant-first 目录、不可变正文 Blob、管理员全员授权证明、撤销门禁、规划和 Agent Attempt 重授权，以及两类来源的确定性 ContextBundle 合并已经部署。显式企业资料选择已经提交：Console collecting 草稿默认空选择，发起人保存 source 清单，生成边界冻结精确版本并由重试复用；飞书向导不再静默全选。`0027` 的真实 PostgreSQL、部署和安装态探针仍待完成，真实管理员浏览器验收、生产对象存储、语义检索、部门 ACL 与个人知识库后置。
+2. `PlannerRuntime Port`：Refactor Phase 1 基线已落码。当前 bounded adapter 只返回候选图与最小运行时摘要，不写草稿、不启动流程；`PlanningService` 会覆盖候选中的服务端输入并通过统一 validator 强制最终复验。Phase 2A 项目附件规划与企业资料 ContextBundle 已部署；显式选择切片只让 Planner 获得生成边界冻结的企业版本，并与项目附件共享预算和 fingerprint。类型化只读工具、A/B 与真实管理员浏览器验收仍未完成。
 3. `AgentRuntime Port` 与 `Authorized Tool Gateway`：completion 基线端口与 Worker bridge 已落码，一次只执行一个节点的一个 Attempt，claim 和版本继续留在 Worker。Phase 2B 项目附件能力信封与企业资料切片均已部署；显式 `instance_inputs.enterprise_knowledge`、Node/Attempt 重新授权和 `context.read.enterprise_knowledge` 已通过 synthetic Runtime 探针。Tool Gateway 和候选 Runtime 仍未实现，所有业务写继续使用显式 Tool 节点。
 4. `NodeExecutionPolicy`：runtime、provider、model、allowed tools、knowledge scopes、data classification、egress、budget、timeout 和 retry 属于 NodeRun policy，不进入业务 DAG Contract。
 

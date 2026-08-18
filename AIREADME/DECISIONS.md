@@ -1065,7 +1065,7 @@
 
 ## ADR-118 · 2026-08-19 · 企业共享正文采用不可变快照与服务端授权证明
 
-- **Status：Accepted，implementation pending。**
+- **Status：Accepted，implemented in `e663edfa2c54230b3b58bfc9e26ad046f95a3b51`，PostgreSQL verification and deployment pending。**
 - Problem：metadata-only 目录只能证明某个版本标识被管理员登记，不能证明正文已保存、哈希与版本一致，也不能证明当前 tenant 全员有权将正文交给 larkflow 和模型。若直接让 Planner 或 Agent 根据目录读取 Blob，会把客户端布尔值、bot 可读性或对象路径误当成授权，并在撤销、重试和历史 Attempt 之间产生权限漂移。
 - Constraint：首版只支持当前 tenant 全员共享的 UTF-8 `text/plain` 与 `text/markdown` 不可变快照。PostgreSQL 保存版本、授权证明与追加审计，独立 Enterprise BlobStore 保存正文。数据库、浏览器 DTO、审计快照、Instance、Attempt、能力信封和 Runtime 结果都不保存正文、object key、临时路径、凭据或管理员原始声明。部门 ACL、个人知识库、Personal Edge、PDF、DOCX、OCR、索引、向量检索和飞书知识库同步全部后置。
 - Authorization：发布请求必须提交服务端固定版本的完整授权声明，明确管理员确认该不可变正文可供当前 tenant 全员在 larkflow 中使用。服务端把 tenant、管理员、source、version、内容哈希、授权范围、声明版本和时间规范化为不可变证明并计算 proof fingerprint；客户端不能提交 tenant、actor、时间、classification、状态、proof ID 或 proof fingerprint。只提交布尔值、缺少完整声明或声明版本不匹配一律拒绝。Runtime-safe ref 只携带证明 ID 与 proof fingerprint，不携带声明原文或管理员身份。
@@ -1089,3 +1089,4 @@
 - Compatibility：新增字段以空选择和空 manifest 作为既有请求默认值，不重写已冻结 Instance、历史 Attempt 或既有 Context fingerprint。旧入口不因 tenant 中存在企业资料而改变输出。未来若增加其他入口，必须先提供等价的显式选择与服务端冻结合同，不能复用自动全选。
 - Alternatives(否决)：自动使用全部 published 资料；让模型自行挑选；让浏览器提交 version 或 proof；保存 live 查询而不冻结；因撤销静默跳过某份资料；在飞书向导没有 UI 时继续默认全选；把企业选择混入项目附件 ID 清单。
 - Tradeoff：发起人需要多一步选择，且首版只支持 source 级选择，不提供正文预览、检索、推荐或语义排序。服务端需要一次 migration 和跨草稿、附件、企业目录的事务协调，但选择可解释、重试稳定，权限与成本边界不再依赖 tenant 资料总量。
+- Evidence：内容提交新增 `0027_console_enterprise_knowledge_selection`、Owner-only 选择服务、成员安全目录、版本绑定 HTTP、Console 最小 UI、生成冻结事务和显式 planning refs。聚焦测试 `95 passed`；完整离线套件为 `1261 passed, 32 skipped, 1 failed`，唯一失败是沙箱禁止读取进程树，同一既有测试在允许环境单独 `1 passed`，合并证据为 `1262 passed, 32 skipped`。真实 PostgreSQL、migration 重入、开发部署和 synthetic 安装态探针尚未执行。
