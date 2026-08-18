@@ -1,4 +1,4 @@
-"""Typed, immutable context authorized for one planning request."""
+"""Typed, immutable context authorized for one planning or Agent request."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -105,7 +105,7 @@ class ContextChunk:
 
 @dataclass(frozen=True)
 class ContextBundle:
-    """Canonical planning context after authorization and egress checks."""
+    """Canonical context after authorization and egress checks."""
 
     tenant_id: str
     scope_kind: str
@@ -115,6 +115,8 @@ class ContextBundle:
     sources: tuple[SourceRef, ...]
     attachments: tuple[AttachmentRef, ...]
     chunks: tuple[ContextChunk, ...] = field(repr=False)
+    node_key: str | None = None
+    attempt_id: str | None = None
     data_classification: str = "internal"
     egress_decision: str = "allow"
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -125,10 +127,17 @@ class ContextBundle:
         for name in ("tenant_id", "scope_id", "actor_person_id"):
             if not getattr(self, name).strip():
                 raise ValueError(f"context bundle {name} is required")
-        if self.scope_kind != "console_draft_request":
-            raise ValueError("context bundle scope kind is unsupported")
-        if self.purpose != "planning":
-            raise ValueError("context bundle purpose must be planning")
+        binding = (self.scope_kind, self.purpose)
+        if binding not in {
+            ("console_draft_request", "planning"),
+            ("workflow_instance", "agent_execution"),
+        }:
+            raise ValueError("context bundle scope and purpose are unsupported")
+        if self.purpose == "planning":
+            if self.node_key is not None or self.attempt_id is not None:
+                raise ValueError("planning context cannot bind a node or Attempt")
+        elif not self.node_key or not self.attempt_id:
+            raise ValueError("Agent context must bind a node and Attempt")
         if not self.sources or not self.attachments or not self.chunks:
             raise ValueError("context bundle must contain authorized material")
         if self.data_classification != "internal":
@@ -154,7 +163,7 @@ class ContextBundle:
         object.__setattr__(self, "fingerprint", actual)
 
     def snapshot_manifest(self) -> dict[str, Any]:
-        return {
+        value = {
             "scope_kind": self.scope_kind,
             "scope_id": self.scope_id,
             "purpose": self.purpose,
@@ -163,6 +172,11 @@ class ContextBundle:
             "fingerprint": self.fingerprint,
             "attachments": [item.snapshot_value() for item in self.attachments],
         }
+        if self.node_key is not None:
+            value["node_key"] = self.node_key
+        if self.attempt_id is not None:
+            value["attempt_id"] = self.attempt_id
+        return value
 
     def prompt_sources(self) -> tuple[dict[str, str], ...]:
         labels = {item.source_id: item.label for item in self.sources}
@@ -210,6 +224,10 @@ def context_bundle_fingerprint(bundle: ContextBundle) -> str:
             for item in bundle.chunks
         ],
     }
+    if bundle.node_key is not None:
+        manifest["node_key"] = bundle.node_key
+    if bundle.attempt_id is not None:
+        manifest["attempt_id"] = bundle.attempt_id
     canonical = json.dumps(
         manifest,
         ensure_ascii=False,

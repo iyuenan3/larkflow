@@ -7,6 +7,7 @@ from typing import Any
 
 from larkflow.workflow.executors import LLMAgentExecutor
 from larkflow.workflow.model import ExecutorKind
+from larkflow.planning.context import ContextBundle
 
 from .contracts import AgentRunRequest, AgentRunResult
 
@@ -24,6 +25,7 @@ class _CompletionExecutionRequest:
     executor: ExecutorKind
     work: Mapping[str, Any]
     input_snapshot: Mapping[str, Any]
+    context_bundle: ContextBundle | None = None
 
     @property
     def idempotency_key(self) -> str:
@@ -62,6 +64,7 @@ class CompletionAgentRuntime:
                 executor=ExecutorKind(request.executor),
                 work=request.work_contract,
                 input_snapshot=request.input_snapshot,
+                context_bundle=request.context_bundle,
             )
         )
         return AgentRunResult(

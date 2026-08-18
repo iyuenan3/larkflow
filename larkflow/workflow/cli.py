@@ -25,6 +25,7 @@ from larkflow.planning.bounded import BoundedPlannerRuntime
 from larkflow.planning.service import PlanningService
 from larkflow.search import DoubaoSearchProvider, SearchCapability
 
+from .agent_context import AgentContextService
 from .completion_poll import TaskCompletionPoller
 from .console_drafts import (
     ConsoleDraftWorker,
@@ -960,7 +961,12 @@ def _run(namespace: argparse.Namespace, log: JsonLogger) -> int:
         repository,
         runner=NodeRunner(claim_ttl=settings.claim_ttl),
     )
-    executor_registry = _executors(settings, environ=os.environ, log=log)
+    executor_registry = _executors(
+        settings,
+        environ=os.environ,
+        log=log,
+        context_resolver=_agent_context_service(connection_factory, settings),
+    )
     worker = WorkflowWorker(
         service,
         repository,
@@ -1069,6 +1075,7 @@ def _executors(
     *,
     environ: Mapping[str, str] | None = None,
     log: JsonLogger | None = None,
+    context_resolver: AgentContextService | None = None,
 ) -> dict[ExecutorKind, AutomatedExecutor]:
     registry: dict[ExecutorKind, AutomatedExecutor] = {}
     tool_adapters: list[object] = []
@@ -1130,6 +1137,9 @@ def _executors(
                 )
             ),
             policy={"runtime": settings.agent_runtime},
+            context_resolver=context_resolver,
+            capability_ttl=settings.claim_ttl,
+            max_context_chars=settings.agent_context_max_chars,
         )
     if settings.enable_web_search_executor:
         if dedicated_search.configured:
@@ -1304,6 +1314,20 @@ def _planning_context_service(
         PostgresConsoleAttachmentRepository(connection_factory),
         FilesystemAttachmentBlobStore(settings.attachment_blob_root),
         model_egress_policy=settings.attachment_model_egress_policy,
+    )
+
+
+def _agent_context_service(
+    connection_factory: Any,
+    settings: TargetRuntimeSettings,
+) -> AgentContextService | None:
+    if settings.attachment_blob_root is None:
+        return None
+    return AgentContextService(
+        PostgresConsoleAttachmentRepository(connection_factory),
+        FilesystemAttachmentBlobStore(settings.attachment_blob_root),
+        model_egress_policy=settings.attachment_model_egress_policy,
+        max_context_chars=settings.agent_context_max_chars,
     )
 
 

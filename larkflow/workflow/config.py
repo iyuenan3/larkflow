@@ -26,6 +26,9 @@ class TargetRuntimeSettings:
     agent_claim_safety: timedelta = timedelta(seconds=30)
     agent_max_prompt_chars: int = 20_000
     agent_max_result_chars: int = 50_000
+    agent_context_max_chars: int = 12_000
+    attachment_blob_root: str | None = None
+    attachment_model_egress_policy: str = "deny"
     content_check_max_chars: int = 50_000
     web_search_max_prompt_chars: int = 20_000
     web_search_max_result_chars: int = 50_000
@@ -47,6 +50,16 @@ class TargetRuntimeSettings:
             raise ValueError("agent_max_prompt_chars must be positive")
         if self.agent_max_result_chars < 1:
             raise ValueError("agent_max_result_chars must be positive")
+        if self.agent_context_max_chars < 1:
+            raise ValueError("agent_context_max_chars must be positive")
+        if self.agent_context_max_chars >= self.agent_max_prompt_chars:
+            raise ValueError("Agent context budget must be smaller than prompt budget")
+        if self.attachment_blob_root is not None:
+            root = self.attachment_blob_root.strip()
+            if not root or not os.path.isabs(root):
+                raise ValueError("Target attachment blob root must be absolute")
+        if self.attachment_model_egress_policy not in {"allow", "deny"}:
+            raise ValueError("Target attachment model egress policy is invalid")
         if self.content_check_max_chars < 1:
             raise ValueError("content_check_max_chars must be positive")
         if self.web_search_max_prompt_chars < 1:
@@ -131,6 +144,19 @@ class TargetRuntimeSettings:
                 "LARKFLOW_TARGET_AGENT_MAX_RESULT_CHARS",
                 50_000,
             ),
+            agent_context_max_chars=_positive_int(
+                values,
+                "LARKFLOW_TARGET_AGENT_CONTEXT_MAX_CHARS",
+                12_000,
+            ),
+            attachment_blob_root=(
+                values.get("LARKFLOW_TARGET_ATTACHMENT_ROOT", "").strip()
+                or None
+            ),
+            attachment_model_egress_policy=values.get(
+                "LARKFLOW_TARGET_ATTACHMENT_MODEL_EGRESS",
+                "deny",
+            ).strip(),
             content_check_max_chars=_positive_int(
                 values,
                 "LARKFLOW_TARGET_CONTENT_CHECK_MAX_CHARS",

@@ -344,6 +344,14 @@ class ConsoleAttachmentRepository(Protocol):
     ) -> tuple[ConsoleAttachment, ...]:
         ...
 
+    def resolve_for_agent(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        manifest: tuple[AttachmentRef, ...],
+    ) -> tuple[ConsoleAttachment, ...]:
+        ...
+
     def promote(
         self,
         request: ConsoleDraftRequest,
@@ -501,6 +509,29 @@ class InMemoryConsoleAttachmentRepository:
                 request.attachment_manifest,
                 by_id,
                 expected_instance_id=f"console_draft_{request.id}",
+            )
+
+    def resolve_for_agent(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        manifest: tuple[AttachmentRef, ...],
+    ) -> tuple[ConsoleAttachment, ...]:
+        with self._lock:
+            by_id = {
+                item.attachment_id: item
+                for item in self._items.values()
+                if item.tenant_id == tenant_id
+                and item.instance_id == instance_id
+                and item.attachment_id in {
+                    reference.attachment_id for reference in manifest
+                }
+            }
+            return _ordered_manifest_records(
+                manifest,
+                by_id,
+                expected_instance_id=instance_id,
+                require_promoted=True,
             )
 
     def promote(
@@ -836,6 +867,33 @@ class PostgresConsoleAttachmentRepository:
             expected_instance_id=f"console_draft_{request.id}",
         )
 
+    def resolve_for_agent(
+        self,
+        tenant_id: str,
+        instance_id: str,
+        manifest: tuple[AttachmentRef, ...],
+    ) -> tuple[ConsoleAttachment, ...]:
+        ids = [item.attachment_id for item in manifest]
+        with self.connection_factory() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM workflow_project_attachments
+                WHERE tenant_id = %s AND instance_id = %s
+                  AND attachment_id = ANY(%s)
+                """,
+                (tenant_id, instance_id, ids),
+            ).fetchall()
+        by_id = {
+            item.attachment_id: item
+            for item in (_attachment_from_row(row) for row in rows)
+        }
+        return _ordered_manifest_records(
+            manifest,
+            by_id,
+            expected_instance_id=instance_id,
+            require_promoted=True,
+        )
+
     def promote(
         self,
         request: ConsoleDraftRequest,
@@ -1167,13 +1225,16 @@ def _ordered_manifest_records(
     by_id: Mapping[str, ConsoleAttachment],
     *,
     expected_instance_id: str,
+    require_promoted: bool = False,
 ) -> tuple[ConsoleAttachment, ...]:
     ordered = []
     for expected in manifest:
         item = by_id.get(expected.attachment_id)
         if item is None or item.status != "ready" or item.revoked_at is not None:
             raise AttachmentContextRejected("冻结清单中的附件不可用")
-        if item.instance_id not in {None, expected_instance_id}:
+        if require_promoted and item.instance_id != expected_instance_id:
+            raise AttachmentContextRejected("附件未绑定到当前流程")
+        if not require_promoted and item.instance_id not in {None, expected_instance_id}:
             raise AttachmentContextRejected("附件已绑定到其他流程")
         if item.reference() != expected:
             raise AttachmentContextRejected("冻结清单中的附件元数据不一致")

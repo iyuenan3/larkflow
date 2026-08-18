@@ -70,6 +70,7 @@ from larkflow.workflow.console_admin_sessions import (
 )
 from larkflow.workflow.console_drafts import PostgresConsoleDraftRepository
 from larkflow.workflow.console_attachments import (
+    AttachmentContextRejected,
     ConsoleAttachmentConflictError,
     ConsoleAttachmentNotFoundError,
     ConsoleAttachmentService,
@@ -349,6 +350,21 @@ def test_postgres_console_attachment_contract_matches_owner_scoped_freeze():
     assert [item.attachment_id for item in frozen.attachment_manifest] == [
         uploaded["id"]
     ]
+    instance_id = f"console_draft_{request_id}"
+    metadata.promote(frozen, instance_id=instance_id, now=now)
+    resolved = metadata.resolve_for_agent(
+        tenant_id,
+        instance_id,
+        frozen.attachment_manifest,
+    )
+    assert [item.attachment_id for item in resolved] == [uploaded["id"]]
+    assert all(item.instance_id == instance_id for item in resolved)
+    with pytest.raises(AttachmentContextRejected):
+        metadata.resolve_for_agent(
+            f"other_{tenant_id}",
+            instance_id,
+            frozen.attachment_manifest,
+        )
 
 
 def test_postgres_console_attachment_retained_quota_counts_revoked_objects():

@@ -532,10 +532,17 @@ def test_no_web_trip_accepts_parseable_positive_attachment_evidence():
         context_bundle=bundle,
     )
 
-    assert result["nodes"] == no_web_trip_definition()["nodes"]
+    expected = no_web_trip_definition()["nodes"]
+    expected[1]["work"]["inputs"].append(
+        "instance_inputs.project_attachments"
+    )
+    assert result["nodes"] == expected
     assert result["inputs"] == {
         "brief": "根据附件生成新疆8日旅行执行手册，不要联网",
         "context": "",
+        "project_attachments": [
+            item.snapshot_value() for item in bundle.attachments
+        ],
     }
     assert len(completion.calls) == 1
 
@@ -691,7 +698,11 @@ def test_no_web_trip_accepts_explicitly_bound_travel_fields(source_text):
         context_bundle=attachment_context(source_text),
     )
 
-    assert result["nodes"] == no_web_trip_definition()["nodes"]
+    expected = no_web_trip_definition()["nodes"]
+    expected[1]["work"]["inputs"].append(
+        "instance_inputs.project_attachments"
+    )
+    assert result["nodes"] == expected
     assert len(completion.calls) == 1
 
 

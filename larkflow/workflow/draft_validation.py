@@ -270,6 +270,13 @@ class GeneratedDraftValidator:
                 agent = work.get("agent")
                 if not isinstance(agent, Mapping) or agent.get("model_role") != "default":
                     raise DraftGenerationRejected("生成流程的 Agent 必须使用 default 模型角色")
+                if (
+                    context_bundle is not None
+                    and "instance_inputs.project_attachments" not in inputs
+                ):
+                    raise DraftGenerationRejected(
+                        "附件支持的 Agent 节点必须显式消费项目附件"
+                    )
             if executor == "tool":
                 if not deps:
                     raise DraftGenerationRejected("联网研究 Tool 必须消费已确认的上游输入")
@@ -664,7 +671,6 @@ class GeneratedDraftValidator:
             if match is not None and int(match.group(1)) > 0:
                 values.add(int(match.group(1)))
         return len(values) == 1
-
     @classmethod
     def _has_positive_budget(cls, source_text: str) -> bool:
         values: set[float] = set()
@@ -702,10 +708,30 @@ class GeneratedDraftValidator:
         return False
 
 
+def bind_project_attachment_inputs(definition: Mapping[str, Any]) -> None:
+    """Add the server-owned project context input to every generated Agent."""
+
+    nodes = definition.get("nodes")
+    if not isinstance(nodes, list):
+        return
+    for node in nodes:
+        if not isinstance(node, dict) or node.get("executor") != "agent":
+            continue
+        work = node.get("work")
+        if not isinstance(work, dict):
+            continue
+        inputs = work.get("inputs")
+        if not isinstance(inputs, list):
+            continue
+        if "instance_inputs.project_attachments" not in inputs:
+            inputs.append("instance_inputs.project_attachments")
+
+
 __all__ = [
     "DraftGenerationRejected",
     "DraftCapabilityUnavailable",
     "DraftEvidencePolicy",
     "GeneratedDraftValidator",
+    "bind_project_attachment_inputs",
     "MAX_GENERATED_NODES",
 ]

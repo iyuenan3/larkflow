@@ -4,7 +4,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from larkflow.workflow.draft_validation import GeneratedDraftValidator
+from larkflow.workflow.draft_validation import (
+    GeneratedDraftValidator,
+    bind_project_attachment_inputs,
+)
 
 from .contracts import (
     PlannerRequest,
@@ -49,6 +52,12 @@ class PlanningService:
             "brief": request.brief,
             "context": request.context,
         }
+        if request.context_bundle is not None:
+            candidate["inputs"]["project_attachments"] = [
+                item.snapshot_value()
+                for item in request.context_bundle.attachments
+            ]
+            bind_project_attachment_inputs(candidate)
         self.validator.validate(
             candidate,
             context_bundle=request.context_bundle,

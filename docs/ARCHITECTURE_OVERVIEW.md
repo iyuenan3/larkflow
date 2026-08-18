@@ -84,7 +84,9 @@ larkflow 不会把整个企业飞书云盘都交给模型。
 - 企业共享资料：由管理员明确发布为企业全员可以使用的资料。
 - 项目资料：由项目发起人直接上传，只属于当前项目。
 
-Phase 2A 只覆盖第二类资料的第一个切片：Console 仅在存储和模型外发都已启用时展示 UTF-8 txt/md 入口，资料先绑定未生成的草稿请求，确认清单后才进入 Planner。能力未启用时，服务端在落库前拒绝附件模式，原有无附件流程继续可用。该切片已完成真实 PostgreSQL、Caddy 和开发环境部署验收；真实 Owner 浏览器上传与生成仍待手工验收。企业共享资料仍是目标设计；Agent 节点也还不会在运行时读取附件。
+Phase 2A 覆盖第二类资料的规划切片：Console 仅在存储和模型外发都已启用时展示 UTF-8 txt/md 入口，资料先绑定未生成的草稿请求，确认清单后才进入 Planner。能力未启用时，服务端在落库前拒绝附件模式，原有无附件流程继续可用。该切片已完成真实 PostgreSQL、Caddy 和开发环境部署验收；真实 Owner 浏览器上传与生成仍待手工验收。
+
+Phase 2B 已实现但尚未部署：larkflow 在候选落库前为附件支持的 Agent 节点追加显式 `instance_inputs.project_attachments` 输入。Node Worker 只在看到该声明时，才按 tenant、Instance、Node、Attempt、冻结 manifest、附件状态、内容指纹和模型外发策略重新授权正文。Runtime 得到的是有界 `ContextBundle` 与短时 `CapabilityEnvelope`，不会获得 object key、BlobStore、PostgreSQL 连接、claim token 或飞书凭据。每次成功 Attempt 会在结果中保存不含正文的上下文 manifest、能力信封和 runtime metadata，便于复核实际使用范围。
 
 这里最重要的不是检索能力，而是授权顺序：
 
@@ -94,7 +96,7 @@ Phase 2A 只覆盖第二类资料的第一个切片：Console 仅在存储和模
 
 不能先从整个企业知识库检索，然后让模型自己“不要泄露无权限内容”。模型提示词不是权限系统，向量数据库也不是权限系统。
 
-系统最终会给 Planner 或 Agent 一份有界的 `ContextBundle`。当前 Phase 2A 只给 Planner，里面包含：
+系统会给 Planner 或显式声明附件输入的 Agent 一份有界的 `ContextBundle`，里面包含：
 
 - 允许使用的资料片段。
 - 来源 ID。
@@ -405,6 +407,7 @@ Edge 已经做过一个只读 Proof，代码和安全证据都保留。
 - 已提交的 Console txt/md 项目附件切片、collecting 状态、逻辑撤销、保留配额与显式开始生成。
 - 规划专用 `ContextBundle`、安全来源引用、内容指纹和默认 deny 的模型外发策略。
 - Planner 使用附件后，Instance 只冻结安全 refs 与 fingerprint，不保存正文。
+- Agent Attempt 按冻结 refs 重新校验正文，并记录不含正文的 ContextBundle manifest 与 CapabilityEnvelope。
 
 上述 PlannerRuntime、AgentRuntime 与 Phase 2A 代码均已提交，并随同一 wheel 部署到开发环境。Phase 2A 已完成真实 PostgreSQL、Caddy、migration 和服务端能力验证，但尚未完成真实 Owner 浏览器上传与生成，也不能视为生产就绪。
 
@@ -412,7 +415,7 @@ Edge 已经做过一个只读 Proof，代码和安全证据都保留。
 
 - 企业共享知识清单。
 - 企业共享资料与通用 Knowledge Context Service。
-- Agent Attempt 读取项目附件。
+- Phase 2B 的真实 PostgreSQL、开发部署与 synthetic Agent Attempt 回归。
 - PDF、DOCX、图片 OCR、飞书消息附件和生产对象存储。
 - Authorized Tool Gateway。
 - Attempt 级能力信封。

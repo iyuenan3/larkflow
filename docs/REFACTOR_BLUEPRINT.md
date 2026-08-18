@@ -119,7 +119,9 @@ Refactor Phase 1 已在 `larkflow/agent_runtime/` 增加纯本地 `AgentRunReque
 
 ### 6.3 知识与工具链路
 
-Phase 2A 已提交 Console txt/md 项目上传参与 DAG 规划的代码路径：附件先绑定 collecting 草稿请求，Owner 显式确认后冻结 manifest，规划 Worker 通过 `PlanningContextService` 构建类型化 `ContextBundle`，安全 refs 与 fingerprint 随 draft Instance 冻结。只有存储已配置且模型外发为 `allow` 时，Console 才公布能力并接受 defer；撤销对象继续占用保留配额，临时 Blob I/O 故障走 failed/backoff。默认 `deny` 不会留下新的 collecting 请求。该路径已完成真实 PostgreSQL、Caddy、migration 和开发部署验证；真实 Owner 浏览器上传与生成仍待手工验收。企业共享资料清单、检索、Agent Attempt 附件上下文、Attempt 级能力信封和只读 Tool Gateway 仍未实现。现有 `web.search` 与确定性检查器属于显式业务 Tool 节点，不等于 Attempt 内部的只读 Tool Gateway。
+Phase 2A 已提交 Console txt/md 项目上传参与 DAG 规划的代码路径：附件先绑定 collecting 草稿请求，Owner 显式确认后冻结 manifest，规划 Worker 通过 `PlanningContextService` 构建类型化 `ContextBundle`，安全 refs 与 fingerprint 随 draft Instance 冻结。只有存储已配置且模型外发为 `allow` 时，Console 才公布能力并接受 defer；撤销对象继续占用保留配额，临时 Blob I/O 故障走 failed/backoff。默认 `deny` 不会留下新的 collecting 请求。该路径已完成真实 PostgreSQL、Caddy、migration 和开发部署验证；真实 Owner 浏览器上传与生成仍待手工验收。
+
+Phase 2B 已形成未部署实现：生成结果落库前由 larkflow 为附件支持的 Agent 节点追加显式项目附件输入；`AgentContextService` 从提升到当前 Instance 的冻结 refs 重新完成 tenant、Instance、状态、指纹、大小、UTF-8、外发和字符预算校验。`AgentRuntimeExecutor` 只把 Node 与 Attempt 绑定的 `ContextBundle` 和 `CapabilityEnvelope` 下发给 Runtime，并把不含正文和 object key 的证据写入 Attempt 结果。未声明该输入的节点不会触发 Blob 读取，Worker 未配置 resolver 时显式请求会 fail closed。该切片尚未完成真实 PostgreSQL、开发部署或 synthetic Agent Attempt 回归。企业共享资料清单、Attempt 内只读 Tool Gateway 和生产对象存储仍未实现。现有 `web.search` 与确定性检查器属于显式业务 Tool 节点，不等于 Attempt 内部的只读 Tool Gateway。
 
 显式 `web.search` 已增加独立的本地 `SearchProvider` 合同与薄 Python 豆包搜索适配器。适配器只接收查询并返回规范化来源证据，不获得 PostgreSQL 写权、飞书凭据或 DAG 修改权；Planner 只接收 capability 布尔结果，不接收搜索 Runtime。该切片不等于 Attempt 内部 Tool Gateway，也不引入 DSH、PTC 或 LangGraph。
 
@@ -137,13 +139,14 @@ larkflow/
 ├── workflow/                       # 保留领域内核、Worker、仓储与投影
 │   ├── draft_generation.py         # 第一阶段保留，作为现有基线实现
 │   ├── console_attachments.py      # Phase 2A 附件 Port、仓储、授权与规划上下文服务
+│   ├── agent_context.py            # Phase 2B Agent Attempt 附件授权与完整性复验
 │   ├── executors.py                # 第一阶段保留，作为兼容门面
 │   ├── runtime.py                  # 继续拥有 claim 与执行结果提交
 │   └── ...
 ├── planning/
 │   ├── __init__.py
 │   ├── contracts.py                # PlannerRequest、PlannerResult 等纯数据合同
-│   ├── context.py                  # Phase 2A 类型化规划 ContextBundle 与 fingerprint
+│   ├── context.py                  # Planning 与 Agent Attempt ContextBundle、fingerprint
 │   ├── bounded.py                  # 现有 DraftDefinitionGenerator 的适配器
 │   └── service.py                  # 调用、复验、指标和草稿写入编排
 ├── agent_runtime/
@@ -452,7 +455,9 @@ Exit gate：跨 tenant、跨 Instance、非参与者、失效附件、禁止外�
 
 Phase 2A 已提交实现证据：新增 `0024_console_project_attachments`、独立 BlobStore Port、内存与 PostgreSQL 元数据仓储、collecting 状态机、Owner-only HTTP、两阶段控制台、类型化 ContextBundle、规范化 fingerprint、Prompt Injection 隔离、Instance 安全 refs 与幂等 promotion。复审收口又增加持久化前能力门、浏览器能力协商、request 与 tenant retained 配额、Blob 终态与可重试错误分类，以及精确附件路径的 Caddy body limit。负向测试覆盖跨 tenant、真实 collaborator、状态冲突、逻辑撤销、重复上传撤销、真实 128 KB 上限、缺失或损坏 blob、临时 I/O、文件与上下文预算、默认外发拒绝、路径与 object key 伪造、崩溃窗口恢复和无附件兼容。附件模块为 `35 passed`，完整离线套件为 `1120 passed, 26 skipped`。阿里云一次性 PostgreSQL 从空库应用 24 份 migration 并重入，`tests/test_workflow_postgres.py` 为 `26 passed`；补充合同验证并发 tenant 配额、逻辑撤销保留、Owner 隔离、manifest、promotion 幂等、删除保护和事务回滚。Caddy 2.11.4 的 validate/adapt 与公网请求体实测均通过。真实 Owner 浏览器上传与生成仍是唯一 Phase 2A 产品验收缺口。
 
-Phase 2A 残余边界：只接受 UTF-8 txt/md；filesystem adapter 只适合显式共享绝对根目录的单机开发环境；不支持企业共享资料、飞书消息附件、PDF/DOCX/OCR、向量检索、生产对象存储或 Agent Attempt 读取附件。
+Phase 2A 残余边界：只接受 UTF-8 txt/md；filesystem adapter 只适合显式共享绝对根目录的单机开发环境；不支持企业共享资料、飞书消息附件、PDF/DOCX/OCR、向量检索或生产对象存储。
+
+Phase 2B 未部署实现证据：附件支持的 Agent 输入由服务端追加，不依赖模型声明能力；Runtime 只拿有界正文、安全 refs 和不可变能力信封。跨 tenant、跨 Instance、撤销、manifest 篡改、默认 deny、字符预算、无 resolver 及未声明输入均 fail closed；成功 Attempt 只保存安全 manifest、信封和 runtime metadata。该切片复用 0024，不增加数据库 schema。真实 PostgreSQL repository、开发部署与 synthetic Attempt 仍是提交后的验证门槛。
 
 ### Refactor Phase 3：企业共享资料清单
 
@@ -693,4 +698,4 @@ Dependency Exit Gate：
 
 Refactor Phase 0 与 Phase 1 的代码和离线验证已纳入内容提交 `476b43491adeaf1bcde32185d9b9f036c3a9874a`。Phase 2A 主体已纳入 `b2a13ff1eff796723774d42ca5d04556814a38c2`，PostgreSQL 合同收口为 `07de190db49839d8195cfa26967241fad7d975f6`；开发环境已应用 24 份 migration、安装精确 wheel、启用附件目录和 Caddy 路由，并完成服务端回读。该状态不是生产发布。
 
-下一步先由真实 Owner 在浏览器完成 collecting、txt/md 上传、列表与显式生成验收，再决定是否关闭 Phase 2A。Phase 2B 的 Agent Attempt 附件读取、企业共享资料、Tool Gateway、sidecar 和依赖安装仍应分别评审和授权。
+下一步先提交并部署 Phase 2B，完成真实 PostgreSQL resolve 与 synthetic Agent Attempt 回归。真实 Owner 浏览器 collecting、txt/md 上传、列表与显式生成仍是独立产品验收门槛。企业共享资料、Tool Gateway、sidecar 和依赖安装继续分别评审。

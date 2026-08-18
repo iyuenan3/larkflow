@@ -10,7 +10,8 @@
 - 员工工作台支持本人流程、普通 Human 待办、草稿确认、受控流程操作和 DAG 画板。
 - `PlannerRuntime` 与 `AgentRuntime` 基线端口已经落码，并随 Phase 2A wheel 部署到开发环境；默认仍是 bounded Planner 与 completion Agent。
 - Phase 2A 的项目级 UTF-8 txt/md 上传参与 DAG 规划已通过真实 PostgreSQL、Caddy 和开发部署验收。真实 Owner 浏览器上传与生成仍待手工验收，当前不是生产就绪版本。
-- 企业共享知识、Agent Attempt 附件上下文、Authorized Tool Gateway、生产对象存储、PDF/DOCX/OCR 和向量检索仍未实现或后置。
+- Phase 2B 的 Agent Attempt 附件上下文与能力信封已实现，节点必须显式声明附件输入，Runtime 只接收受限正文和安全引用。该切片尚未部署或完成真实 PostgreSQL 回归。
+- 企业共享知识、Authorized Tool Gateway、生产对象存储、PDF/DOCX/OCR 和向量检索仍未实现或后置。
 - Personal Agent Edge 已降为暂停的历史 Proof，不进入当前产品主线或默认部署。
 - 早期 LangGraph、SQLite 与 lark-cli 原型继续保留，用于回归已经验证的适配器和事件处理机制。
 
@@ -19,7 +20,7 @@
 ## 核心能力
 
 - 草稿先行：模板、结构化定义或自然语言请求都先生成草稿，只有人类明确确认后才启动。
-- 云端规划：当前已提交项目 txt/md 上传参与规划的受限切片；目标形态会在授权范围内进一步组合企业共享资料，生成候选 DAG，再由确定性校验与人类确认收口。
+- 云端规划与执行上下文：项目 txt/md 先参与规划并冻结安全 refs，附件支持的 Agent 节点再按 Node 与 Attempt 重新授权读取；目标形态会在授权范围内进一步组合企业共享资料。
 - 唯一责任人：每个 Human 节点绑定唯一 Owner，Agent 只能执行，不能成为组织责任主体。
 - 依赖调度：中央 Scheduler 按 DAG 依赖解锁 Human、Agent 和 Tool 节点。
 - 安全变化：节点返工、完整实例重启和未来区域编辑都先生成影响预览，再由服务端重新校验并确认。
