@@ -1060,3 +1060,5 @@
 - Evidence：内容提交 `ccf04c820b92cd74968ccb25ec7126990ba6fe17`。聚焦测试 `17 passed`；完整离线合并证据 `1209 passed, 27 skipped`；wheel 收包、零 LangGraph 导入冒烟、Python compile 和 `git diff --check` 通过。没有 migration、部署、真实内容或外部副作用。
 
 - Status addendum · 2026-08-19：`a7f827f0f1bd4509d6c0f6cb69a8d3d404e3b33e` 已实现 tenant-first PostgreSQL 版本目录、每来源单一 published 版本、逻辑撤销、不可变 trigger、禁止物理删除和追加审计，并部署到开发环境。一次性 PostgreSQL 合同 `28 passed`，长期库 ledger 为 `25 / 0025`。管理员授权、管理 API、正文与 Runtime 边界保持未实现。
+
+- Status addendum · 2026-08-19：`fc2fc2e73ff0e4001d952f6cba7e4a20e6b04005` 已复用 Console 服务器管理员 allowlist 实现并部署 metadata-only 列表、发布、版本审计和幂等撤销 API。tenant、publisher、时间、分级与状态由服务端产生；非管理员和跨 tenant 统一 404，响应不含正文、object key、源系统 locator 或身份标识。聚焦测试 `153 passed`，完整离线合并证据 `1224 passed, 28 skipped`，一次性 PostgreSQL 合同 `28 passed`，长期库保持 `25 / 0025`。正文 Blob、不可变内容绑定、来源权限证明、ContextBundle 合并、检索与 Runtime 接入仍未实现。

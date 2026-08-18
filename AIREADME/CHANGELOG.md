@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.89.2-draft · 2026-08-19 · 企业资料服务器管理员目录 API
+
+- Added：内容提交 `fc2fc2e73ff0e4001d952f6cba7e4a20e6b04005` 复用现有 Console 服务器管理员 allowlist，增加当前 tenant 下的企业资料版本列表、发布、版本审计和幂等撤销 API。浏览器只提交安全元数据，tenant、publisher、时间、分级与状态全部由服务端产生。
+- Safety：非管理员和跨 tenant 统一 404；写操作要求专用动作头，飞书模式要求精确同源，发布请求使用严格 JSON 与 65536 字节上限。响应不含 tenant、person ID、正文、object key、源系统 locator 或凭据。该 API 不授予 Runtime 正文读取权，也不把目录存在等同于来源权限证明。
+- Verified：Console 与 knowledge 聚焦套件为 `153 passed`；完整离线合并证据为 `1224 passed, 28 skipped`。一次性真实 PostgreSQL 从空库完成 25 份 migration 与重入，全部 PostgreSQL 合同为 `28 passed`，回读 3 个版本和 4 条审计后精确删除测试库。
+- Deployment：wheel SHA-256 为 `c608eef5e6bd5ae85a95797ea61b2ca0d0dce5f87a31b10b1130f0d9f1e1c0e9`。Target 与 legacy 的三个安装态文件哈希与本地一致，两个 venv 的 `pip check` 通过；长期库保持 `25 / 0025`，十个服务为 `active / running / NRestarts=0`，部署窗口 warning 为 0，Caddy 与 PostgreSQL 配置未改变。
+- Probe：synthetic tenant `synthetic_knowledge_api_20260819_005038` 完成发布、列表、审计、撤销和重复撤销回读，最终为 1 个 revoked 版本与 2 条审计；非管理员得到 404，DTO 通过敏感字段检查。本轮没有飞书写入。
+- Boundary：本轮只有 metadata-only 管理 API，没有正文 Blob、不可变正文绑定、来源权限证明、ContextBundle 合并、检索、Runtime 接入或管理员管理 UI。没有执行真实 Owner 浏览器验收，也不能描述为企业知识库已经可用或生产就绪。
+
 ## v0.89.1-draft · 2026-08-19 · 企业共享资料版本目录
 
 - Added：内容提交 `a7f827f0f1bd4509d6c0f6cb69a8d3d404e3b33e` 增加内存与 PostgreSQL 企业资料目录仓储，以及 `0025_enterprise_knowledge_catalog`。版本主键以 tenant 为第一维度，同一 source 同时最多一个 published 版本；每来源 advisory transaction lock 保证竞争版本只有一路成功。
