@@ -33,6 +33,20 @@ http://PUBLIC_IP {
 https://PUBLIC_IP {
 	tls /etc/caddy/certs/larkflow-console/current/fullchain.pem /etc/caddy/certs/larkflow-console/current/privkey.pem
 
+	@knowledge_publication {
+		method POST
+		path /console/api/v1/admin/knowledge/publications
+	}
+	handle @knowledge_publication {
+		request_body {
+			max_size 262144
+		}
+		reverse_proxy 127.0.0.1:8780 {
+			# Overwrite any client-supplied value before the admin write reaches Console.
+			header_up X-Larkflow-Client-IP {http.request.remote.host}
+		}
+	}
+
 	@attachment_upload {
 		method POST
 		path_regexp ^/console/api/v1/drafts/[0-9a-f]{32}/attachments$

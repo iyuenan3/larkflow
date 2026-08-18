@@ -11,6 +11,7 @@ from threading import Event, Thread
 from typing import Any
 
 from larkflow.config import load_dotenv
+from larkflow.knowledge.blob import FilesystemEnterpriseKnowledgeBlobStore
 from larkflow.knowledge.repository import PostgresEnterpriseKnowledgeRepository
 
 from .console import ConsolePrincipal, ConsoleReadService, StaticConsoleAuthenticator
@@ -122,10 +123,7 @@ def _run(namespace: argparse.Namespace) -> int:
         else None
     )
     admin_knowledge_service = (
-        ConsoleAdminKnowledgeService(
-            PostgresEnterpriseKnowledgeRepository(connection_factory),
-            admin_service,
-        )
+        _build_knowledge_service(connection_factory, admin_service)
         if admin_service is not None
         else None
     )
@@ -288,6 +286,22 @@ def _build_attachment_service(connection_factory: Any) -> ConsoleAttachmentServi
         PostgresConsoleAttachmentRepository(connection_factory),
         FilesystemAttachmentBlobStore(root),
         model_egress_policy=policy,
+    )
+
+
+def _build_knowledge_service(
+    connection_factory: Any,
+    admin_service: ConsoleAdminReadService,
+) -> ConsoleAdminKnowledgeService:
+    root = os.environ.get(
+        "LARKFLOW_TARGET_ENTERPRISE_KNOWLEDGE_ROOT",
+        "",
+    ).strip()
+    blob_store = FilesystemEnterpriseKnowledgeBlobStore(root) if root else None
+    return ConsoleAdminKnowledgeService(
+        PostgresEnterpriseKnowledgeRepository(connection_factory),
+        admin_service,
+        blob_store,
     )
 
 

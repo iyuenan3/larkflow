@@ -6,6 +6,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from larkflow.knowledge import (
+    ENTERPRISE_KNOWLEDGE_AUTHORIZATION_POLICY_V1,
+    ENTERPRISE_KNOWLEDGE_AUTHORIZATION_STATEMENT_V1,
+    EnterpriseKnowledgeAuthorizationProof,
     EnterpriseKnowledgePublication,
     EnterpriseKnowledgeRef,
     EnterpriseKnowledgeSelection,
@@ -36,11 +39,35 @@ def _ref(
     )
 
 
-def test_publication_returns_runtime_safe_ref_while_published() -> None:
-    publication = EnterpriseKnowledgePublication(
-        ref=_ref(),
-        published_by_person_id="admin-person",
+def _authorized_publication() -> EnterpriseKnowledgePublication:
+    proof = EnterpriseKnowledgeAuthorizationProof(
+        tenant_id="tenant-a",
+        source_id="enterprise:release_policy",
+        version_id="v1",
+        content_sha256="a" * 64,
+        authorized_by_person_id="admin-person",
+        authorized_at=NOW,
     )
+    return EnterpriseKnowledgePublication(
+        ref=EnterpriseKnowledgeRef(
+            tenant_id="tenant-a",
+            source_id="enterprise:release_policy",
+            version_id="v1",
+            display_label="发布流程规范",
+            media_type="text/markdown",
+            size_bytes=128,
+            content_sha256="a" * 64,
+            published_at=NOW,
+            authorization_proof_id=proof.proof_id,
+            authorization_fingerprint=proof.fingerprint,
+        ),
+        published_by_person_id="admin-person",
+        authorization_proof=proof,
+    )
+
+
+def test_publication_returns_runtime_safe_ref_while_published() -> None:
+    publication = _authorized_publication()
 
     authorized = publication.authorized_ref()
 
@@ -50,6 +77,49 @@ def test_publication_returns_runtime_safe_ref_while_published() -> None:
     assert "published_by_person_id" not in manifest
     assert "object_key" not in manifest
     assert "content" not in manifest
+    assert manifest["authorization_proof_id"].startswith("kp_")
+
+
+def test_metadata_only_publication_cannot_authorize_content() -> None:
+    publication = EnterpriseKnowledgePublication(
+        ref=_ref(),
+        published_by_person_id="admin-person",
+    )
+
+    with pytest.raises(ValueError, match="lacks authorization proof"):
+        publication.authorized_ref()
+
+
+def test_authorization_proof_is_server_bound_and_hides_actor() -> None:
+    publication = _authorized_publication()
+    proof = publication.authorization_proof
+
+    assert proof is not None
+    assert proof.policy_version == ENTERPRISE_KNOWLEDGE_AUTHORIZATION_POLICY_V1
+    assert ENTERPRISE_KNOWLEDGE_AUTHORIZATION_STATEMENT_V1
+    assert "admin-person" not in repr(proof)
+    safe = proof.safe_value()
+    assert "authorized_by_person_id" not in safe
+    assert "statement" not in safe
+    assert safe["proof_id"] == publication.ref.authorization_proof_id
+
+
+def test_authorization_proof_binding_is_fail_closed() -> None:
+    publication = _authorized_publication()
+    proof = publication.authorization_proof
+    assert proof is not None
+
+    with pytest.raises(ValueError, match="proof binding"):
+        EnterpriseKnowledgePublication(
+            ref=EnterpriseKnowledgeRef(
+                **{
+                    **publication.ref.__dict__,
+                    "content_sha256": "b" * 64,
+                }
+            ),
+            published_by_person_id="admin-person",
+            authorization_proof=proof,
+        )
 
 
 def test_revoked_publication_cannot_authorize_new_context() -> None:

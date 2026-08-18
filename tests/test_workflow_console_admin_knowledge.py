@@ -1,11 +1,17 @@
-"""Server-authorized metadata-only enterprise knowledge API tests."""
+"""Server-authorized immutable enterprise knowledge API tests."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 
 import pytest
 
+from larkflow.knowledge import (
+    ENTERPRISE_KNOWLEDGE_AUTHORIZATION_POLICY_V1,
+    ENTERPRISE_KNOWLEDGE_AUTHORIZATION_STATEMENT_V1,
+)
+from larkflow.knowledge.blob import InMemoryEnterpriseKnowledgeBlobStore
 from larkflow.knowledge.repository import InMemoryEnterpriseKnowledgeRepository
 from larkflow.workflow.console import (
     ConsoleAuthentication,
@@ -22,6 +28,7 @@ from larkflow.workflow.console_admin_knowledge import (
     ConsoleAdminKnowledgeService,
 )
 from larkflow.workflow.console_http import ConsoleHttpApplication
+from larkflow.workflow.console_http import _request_body_limit
 from larkflow.workflow.repository import InMemoryWorkflowRepository
 
 
@@ -66,7 +73,7 @@ class PublicOriginOnly:
     public_base_url = PUBLIC_ORIGIN
 
 
-def _services(*, principal_person_id: str = ADMIN):
+def _services(*, principal_person_id: str = ADMIN, content_enabled: bool = True):
     authorizer = ConsoleAdminReadService(
         EmptyAdminRepository(),
         tenant_id=TENANT,
@@ -74,24 +81,33 @@ def _services(*, principal_person_id: str = ADMIN):
         clock=lambda: NOW,
     )
     repository = InMemoryEnterpriseKnowledgeRepository()
+    blob_store = InMemoryEnterpriseKnowledgeBlobStore()
     service = ConsoleAdminKnowledgeService(
         repository,
         authorizer,
+        blob_store if content_enabled else None,
         clock=lambda: NOW,
     )
     principal = ConsolePrincipal(TENANT, principal_person_id)
-    return authorizer, repository, service, principal
+    return authorizer, repository, blob_store, service, principal
 
 
 def _publication_body(**overrides) -> bytes:
+    content = "# 发布流程规范\n\n仅用于合成测试。"
     document = {
         "source_id": SOURCE_ID,
         "version_id": VERSION_ID,
         "display_label": "发布流程规范",
         "media_type": "text/markdown",
-        "size_bytes": 128,
-        "content_sha256": "a" * 64,
+        "content": content,
+        "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
         "egress_decision": "deny",
+        "authorization_statement": (
+            ENTERPRISE_KNOWLEDGE_AUTHORIZATION_STATEMENT_V1
+        ),
+        "authorization_policy_version": (
+            ENTERPRISE_KNOWLEDGE_AUTHORIZATION_POLICY_V1
+        ),
     }
     document.update(overrides)
     return json.dumps(document, ensure_ascii=False).encode("utf-8")
@@ -107,7 +123,7 @@ def _headers(body: bytes, *, action: str = "knowledge-governance-v1"):
 
 
 def _app(*, principal_person_id: str = ADMIN) -> ConsoleHttpApplication:
-    authorizer, _, service, principal = _services(
+    authorizer, _, _, service, principal = _services(
         principal_person_id=principal_person_id
     )
     return ConsoleHttpApplication(
@@ -119,7 +135,8 @@ def _app(*, principal_person_id: str = ADMIN) -> ConsoleHttpApplication:
 
 
 def test_service_keeps_tenant_actor_and_time_server_owned() -> None:
-    _, repository, service, principal = _services()
+    _, repository, blob_store, service, principal = _services()
+    content = "# 发布流程规范\n\n仅用于合成测试。"
 
     published = service.publish(
         principal,
@@ -127,9 +144,11 @@ def test_service_keeps_tenant_actor_and_time_server_owned() -> None:
         version_id=VERSION_ID,
         display_label=" 发布流程规范 ",
         media_type="text/markdown",
-        size_bytes=128,
-        content_sha256="a" * 64,
+        content=content,
+        content_sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
         egress_decision="deny",
+        authorization_statement=ENTERPRISE_KNOWLEDGE_AUTHORIZATION_STATEMENT_V1,
+        authorization_policy_version=ENTERPRISE_KNOWLEDGE_AUTHORIZATION_POLICY_V1,
     )
     listing = service.list_versions(principal)
     audit = service.audit(principal, SOURCE_ID, VERSION_ID)
@@ -137,10 +156,11 @@ def test_service_keeps_tenant_actor_and_time_server_owned() -> None:
 
     assert published["version"]["published_at"] == NOW.isoformat()
     assert published["version"]["display_label"] == "发布流程规范"
-    assert listing["metadata_only"] is True
     assert listing["versions"][0]["status"] == "published"
     assert audit["events"][0]["actor_relation"] == "you"
-    assert audit["events"][0]["snapshot"]["content_sha256"] == "a" * 64
+    assert audit["events"][0]["snapshot"]["content_sha256"] == hashlib.sha256(
+        content.encode("utf-8")
+    ).hexdigest()
     assert revoked["version"]["status"] == "revoked"
     encoded = json.dumps(
         {"published": published, "listing": listing, "audit": audit},
@@ -151,12 +171,15 @@ def test_service_keeps_tenant_actor_and_time_server_owned() -> None:
     assert "published_by_person_id" not in encoded
     assert "object_key" not in encoded
     assert "content\"" not in encoded
-    stored = repository.list_versions(TENANT, limit=10)[0]
+    assert ADMIN not in repr(stored := repository.list_versions(TENANT, limit=10)[0])
+    assert stored.authorization_proof is not None
+    assert blob_store.retained_usage() == (1, len(content.encode("utf-8")))
     assert stored.published_by_person_id == ADMIN
 
 
 def test_non_admin_and_cross_tenant_are_hidden_before_repository_access() -> None:
-    _, repository, service, _ = _services()
+    _, repository, _, service, _ = _services()
+    content = "synthetic"
 
     for principal in (
         ConsolePrincipal(TENANT, MEMBER),
@@ -171,9 +194,15 @@ def test_non_admin_and_cross_tenant_are_hidden_before_repository_access() -> Non
                 version_id=VERSION_ID,
                 display_label="规范",
                 media_type="text/plain",
-                size_bytes=1,
-                content_sha256="a" * 64,
+                content=content,
+                content_sha256=hashlib.sha256(content.encode()).hexdigest(),
                 egress_decision="deny",
+                authorization_statement=(
+                    ENTERPRISE_KNOWLEDGE_AUTHORIZATION_STATEMENT_V1
+                ),
+                authorization_policy_version=(
+                    ENTERPRISE_KNOWLEDGE_AUTHORIZATION_POLICY_V1
+                ),
             )
 
     assert repository.list_versions(TENANT, limit=10) == ()
@@ -223,6 +252,7 @@ def test_http_catalog_publish_list_audit_revoke_and_conflict() -> None:
     )
 
     assert auth["capabilities"]["enterprise_knowledge_catalog"] is True
+    assert auth["capabilities"]["enterprise_knowledge_content_publication"] is True
     assert publish.status == 201
     assert conflict.status == 409
     assert json.loads(conflict.body)["error"]["code"] == "knowledge_conflict"
@@ -286,7 +316,7 @@ def test_http_non_admin_catalog_matches_unknown_route() -> None:
 
 
 def test_feishu_knowledge_write_requires_exact_origin() -> None:
-    authorizer, _, service, principal = _services()
+    authorizer, _, _, service, principal = _services()
     app = ConsoleHttpApplication(
         ConsoleReadService(InMemoryWorkflowRepository()),
         FixedFeishuAuthenticator(principal),
@@ -322,12 +352,14 @@ def test_feishu_knowledge_write_requires_exact_origin() -> None:
 
 
 def test_service_rejects_naive_clock_and_invalid_json_types() -> None:
-    authorizer, _, _, principal = _services()
+    authorizer, _, _, _, principal = _services()
     service = ConsoleAdminKnowledgeService(
         InMemoryEnterpriseKnowledgeRepository(),
         authorizer,
+        InMemoryEnterpriseKnowledgeBlobStore(),
         clock=lambda: datetime(2026, 8, 19, 2, 0),
     )
+    content = "synthetic"
 
     with pytest.raises(ValueError, match="timezone-aware"):
         service.publish(
@@ -336,12 +368,14 @@ def test_service_rejects_naive_clock_and_invalid_json_types() -> None:
             version_id=VERSION_ID,
             display_label="规范",
             media_type="text/plain",
-            size_bytes=1,
-            content_sha256="a" * 64,
+            content=content,
+            content_sha256=hashlib.sha256(content.encode()).hexdigest(),
             egress_decision="deny",
+            authorization_statement=ENTERPRISE_KNOWLEDGE_AUTHORIZATION_STATEMENT_V1,
+            authorization_policy_version=ENTERPRISE_KNOWLEDGE_AUTHORIZATION_POLICY_V1,
         )
     app = _app()
-    body = _publication_body(size_bytes=True)
+    body = _publication_body(content=True)
     response = app.handle(
         "POST",
         "/console/api/v1/admin/knowledge/publications",
@@ -349,3 +383,94 @@ def test_service_rejects_naive_clock_and_invalid_json_types() -> None:
         body=body,
     )
     assert response.status == 400
+
+
+def test_publication_requires_exact_authorization_and_matching_hash() -> None:
+    app = _app()
+
+    boolean = _publication_body(authorization_statement=True)
+    wrong_hash = _publication_body(content_sha256="a" * 64)
+
+    assert app.handle(
+        "POST",
+        "/console/api/v1/admin/knowledge/publications",
+        headers=_headers(boolean),
+        body=boolean,
+    ).status == 400
+    mismatch = app.handle(
+        "POST",
+        "/console/api/v1/admin/knowledge/publications",
+        headers=_headers(wrong_hash),
+        body=wrong_hash,
+    )
+    assert mismatch.status == 400
+    assert json.loads(mismatch.body)["error"]["code"] == "invalid_request"
+
+
+def test_identical_publication_retry_reuses_version_and_blob() -> None:
+    _, repository, blob_store, service, principal = _services()
+    content = "synthetic tenant-wide policy"
+    arguments = {
+        "source_id": SOURCE_ID,
+        "version_id": VERSION_ID,
+        "display_label": "Synthetic policy",
+        "media_type": "text/plain",
+        "content": content,
+        "content_sha256": hashlib.sha256(content.encode()).hexdigest(),
+        "egress_decision": "allow",
+        "authorization_statement": (
+            ENTERPRISE_KNOWLEDGE_AUTHORIZATION_STATEMENT_V1
+        ),
+        "authorization_policy_version": (
+            ENTERPRISE_KNOWLEDGE_AUTHORIZATION_POLICY_V1
+        ),
+    }
+
+    first = service.publish(principal, **arguments)
+    second = service.publish(principal, **arguments)
+
+    assert second == first
+    assert blob_store.retained_usage() == (1, len(content.encode()))
+    assert len(repository.list_audit(TENANT, SOURCE_ID, VERSION_ID)) == 1
+
+
+def test_disabled_content_store_rejects_before_publication() -> None:
+    authorizer, repository, _, service, principal = _services(
+        content_enabled=False
+    )
+    app = ConsoleHttpApplication(
+        ConsoleReadService(InMemoryWorkflowRepository()),
+        StaticConsoleAuthenticator(TOKEN, principal),
+        admin_service=authorizer,
+        admin_knowledge_service=service,
+    )
+    body = _publication_body()
+
+    auth = json.loads(
+        app.handle(
+            "GET",
+            "/console/api/v1/auth",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        ).body
+    )
+    response = app.handle(
+        "POST",
+        "/console/api/v1/admin/knowledge/publications",
+        headers=_headers(body),
+        body=body,
+    )
+
+    assert auth["capabilities"]["enterprise_knowledge_catalog"] is True
+    assert auth["capabilities"]["enterprise_knowledge_content_publication"] is False
+    assert response.status == 503
+    assert json.loads(response.body)["error"]["code"] == (
+        "knowledge_content_unavailable"
+    )
+    assert repository.list_versions(TENANT, limit=10) == ()
+
+
+def test_knowledge_publication_has_an_independent_body_budget() -> None:
+    assert _request_body_limit(
+        "/console/api/v1/admin/knowledge/publications"
+    ) == 262_144
+    assert _request_body_limit("/console/api/v1/admin/knowledge") == 65_536

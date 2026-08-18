@@ -13,6 +13,75 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SOURCE_ID = re.compile(r"^enterprise:[a-z][a-z0-9_.:-]{0,116}$")
 _VERSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _MEDIA_TYPES = frozenset({"text/plain", "text/markdown"})
+_PROOF_ID = re.compile(r"^kp_[0-9a-f]{32}$")
+ENTERPRISE_KNOWLEDGE_AUTHORIZATION_POLICY_V1 = "tenant_all_members_v1"
+ENTERPRISE_KNOWLEDGE_AUTHORIZATION_STATEMENT_V1 = (
+    "I confirm that this immutable content snapshot may be used by all "
+    "members of the current tenant in larkflow."
+)
+
+
+@dataclass(frozen=True)
+class EnterpriseKnowledgeAuthorizationProof:
+    """Server-owned proof of one administrator's tenant-wide authorization."""
+
+    tenant_id: str
+    source_id: str
+    version_id: str
+    content_sha256: str
+    authorized_by_person_id: str = field(repr=False)
+    authorized_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    scope: str = "tenant_all_members"
+    policy_version: str = ENTERPRISE_KNOWLEDGE_AUTHORIZATION_POLICY_V1
+    statement_sha256: str = ""
+    proof_id: str = ""
+    fingerprint: str = ""
+
+    def __post_init__(self) -> None:
+        _require_text(self.tenant_id, "enterprise knowledge proof tenant_id")
+        if _SOURCE_ID.fullmatch(self.source_id) is None:
+            raise ValueError("enterprise knowledge proof source_id is invalid")
+        if _VERSION_ID.fullmatch(self.version_id) is None:
+            raise ValueError("enterprise knowledge proof version_id is invalid")
+        if _SHA256.fullmatch(self.content_sha256) is None:
+            raise ValueError("enterprise knowledge proof content hash is invalid")
+        _require_text(
+            self.authorized_by_person_id,
+            "enterprise knowledge proof administrator",
+        )
+        if self.scope != "tenant_all_members":
+            raise ValueError("enterprise knowledge proof scope is invalid")
+        if self.policy_version != ENTERPRISE_KNOWLEDGE_AUTHORIZATION_POLICY_V1:
+            raise ValueError("enterprise knowledge proof policy is invalid")
+        expected_statement = hashlib.sha256(
+            ENTERPRISE_KNOWLEDGE_AUTHORIZATION_STATEMENT_V1.encode("utf-8")
+        ).hexdigest()
+        if self.statement_sha256 and self.statement_sha256 != expected_statement:
+            raise ValueError("enterprise knowledge proof statement is invalid")
+        object.__setattr__(self, "statement_sha256", expected_statement)
+        object.__setattr__(self, "authorized_at", _utc(self.authorized_at))
+        actual = enterprise_knowledge_authorization_fingerprint(self)
+        if self.fingerprint and self.fingerprint != actual:
+            raise ValueError("enterprise knowledge proof fingerprint is invalid")
+        object.__setattr__(self, "fingerprint", actual)
+        proof_id = f"kp_{actual[:32]}"
+        if self.proof_id and self.proof_id != proof_id:
+            raise ValueError("enterprise knowledge proof id is invalid")
+        object.__setattr__(self, "proof_id", proof_id)
+
+    def safe_value(self) -> dict[str, Any]:
+        """Return proof evidence without administrator identity or raw statement."""
+
+        return {
+            "proof_id": self.proof_id,
+            "fingerprint": self.fingerprint,
+            "scope": self.scope,
+            "policy_version": self.policy_version,
+            "statement_sha256": self.statement_sha256,
+            "authorized_at": self.authorized_at.isoformat(),
+        }
 
 
 @dataclass(frozen=True)
@@ -29,6 +98,8 @@ class EnterpriseKnowledgeRef:
     published_at: datetime
     data_classification: str = "internal"
     egress_decision: str = "deny"
+    authorization_proof_id: str | None = None
+    authorization_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.tenant_id, "enterprise knowledge tenant_id")
@@ -47,11 +118,30 @@ class EnterpriseKnowledgeRef:
             raise ValueError("enterprise knowledge classification must be internal")
         if self.egress_decision not in {"allow", "deny"}:
             raise ValueError("enterprise knowledge egress decision is invalid")
+        proof_values = (
+            self.authorization_proof_id,
+            self.authorization_fingerprint,
+        )
+        if any(value is None for value in proof_values) != all(
+            value is None for value in proof_values
+        ):
+            raise ValueError("enterprise knowledge authorization proof is incomplete")
+        if self.authorization_proof_id is not None:
+            if _PROOF_ID.fullmatch(self.authorization_proof_id) is None:
+                raise ValueError("enterprise knowledge authorization proof id is invalid")
+            if _SHA256.fullmatch(self.authorization_fingerprint or "") is None:
+                raise ValueError(
+                    "enterprise knowledge authorization fingerprint is invalid"
+                )
         object.__setattr__(self, "published_at", _utc(self.published_at))
+
+    @property
+    def content_authorized(self) -> bool:
+        return self.authorization_proof_id is not None
 
     def snapshot_value(self) -> dict[str, Any]:
         """Return the safe manifest value allowed outside the catalog."""
-        return {
+        value = {
             "source_id": self.source_id,
             "version_id": self.version_id,
             "display_label": self.display_label,
@@ -62,6 +152,10 @@ class EnterpriseKnowledgeRef:
             "data_classification": self.data_classification,
             "egress_decision": self.egress_decision,
         }
+        if self.authorization_proof_id is not None:
+            value["authorization_proof_id"] = self.authorization_proof_id
+            value["authorization_fingerprint"] = self.authorization_fingerprint
+        return value
 
 
 @dataclass(frozen=True)
@@ -72,6 +166,10 @@ class EnterpriseKnowledgePublication:
     published_by_person_id: str = field(repr=False)
     status: str = "published"
     revoked_at: datetime | None = None
+    authorization_proof: EnterpriseKnowledgeAuthorizationProof | None = field(
+        default=None,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         _require_text(
@@ -89,11 +187,27 @@ class EnterpriseKnowledgePublication:
             if revoked_at < self.ref.published_at:
                 raise ValueError("enterprise knowledge revocation precedes publication")
         object.__setattr__(self, "revoked_at", revoked_at)
+        proof = self.authorization_proof
+        if proof is None:
+            if self.ref.content_authorized:
+                raise ValueError("enterprise knowledge proof body is missing")
+        else:
+            if (
+                proof.tenant_id != self.ref.tenant_id
+                or proof.source_id != self.ref.source_id
+                or proof.version_id != self.ref.version_id
+                or proof.content_sha256 != self.ref.content_sha256
+                or proof.proof_id != self.ref.authorization_proof_id
+                or proof.fingerprint != self.ref.authorization_fingerprint
+            ):
+                raise ValueError("enterprise knowledge proof binding is invalid")
 
     def authorized_ref(self) -> EnterpriseKnowledgeRef:
         """Return the safe ref only while this exact version is published."""
         if self.status != "published":
             raise ValueError("enterprise knowledge publication is revoked")
+        if self.authorization_proof is None:
+            raise ValueError("enterprise knowledge publication lacks authorization proof")
         return self.ref
 
 
@@ -148,12 +262,38 @@ def enterprise_knowledge_fingerprint(
                 "content_sha256": source.content_sha256,
                 "data_classification": source.data_classification,
                 "egress_decision": source.egress_decision,
+                "authorization_proof_id": source.authorization_proof_id,
+                "authorization_fingerprint": source.authorization_fingerprint,
             }
             for source in selection.sources
         ],
     }
     canonical = json.dumps(
         manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def enterprise_knowledge_authorization_fingerprint(
+    proof: EnterpriseKnowledgeAuthorizationProof,
+) -> str:
+    """Bind authorization to tenant, actor, exact content, scope, and time."""
+
+    canonical = json.dumps(
+        {
+            "tenant_id": proof.tenant_id,
+            "source_id": proof.source_id,
+            "version_id": proof.version_id,
+            "content_sha256": proof.content_sha256,
+            "authorized_by_person_id": proof.authorized_by_person_id,
+            "authorized_at": proof.authorized_at.isoformat(),
+            "scope": proof.scope,
+            "policy_version": proof.policy_version,
+            "statement_sha256": proof.statement_sha256,
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -173,8 +313,12 @@ def _utc(value: datetime) -> datetime:
 
 
 __all__ = [
+    "ENTERPRISE_KNOWLEDGE_AUTHORIZATION_POLICY_V1",
+    "ENTERPRISE_KNOWLEDGE_AUTHORIZATION_STATEMENT_V1",
+    "EnterpriseKnowledgeAuthorizationProof",
     "EnterpriseKnowledgePublication",
     "EnterpriseKnowledgeRef",
     "EnterpriseKnowledgeSelection",
+    "enterprise_knowledge_authorization_fingerprint",
     "enterprise_knowledge_fingerprint",
 ]

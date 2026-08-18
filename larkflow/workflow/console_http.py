@@ -32,7 +32,10 @@ from .console_auth import (
     FeishuConsoleOAuthFlow,
 )
 from .console_admin import ConsoleAdminReadService
-from .console_admin_knowledge import ConsoleAdminKnowledgeService
+from .console_admin_knowledge import (
+    ConsoleAdminKnowledgeService,
+    EnterpriseKnowledgeContentUnavailableError,
+)
 from .console_admin_sessions import (
     ConsoleAdminSessionConflictError,
     ConsoleAdminSessionPreviewExpiredError,
@@ -131,6 +134,7 @@ _ADMIN_ACTION_VALUE = "session-governance-v1"
 _KNOWLEDGE_ACTION_VALUE = "knowledge-governance-v1"
 _WORKFLOW_ACTION_VALUE = "workflow-action-v1"
 _MAX_TASK_BODY_BYTES = 65_536
+_MAX_KNOWLEDGE_PUBLICATION_BODY_BYTES = 262_144
 _CONSOLE_RESOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
@@ -270,6 +274,11 @@ class ConsoleHttpApplication:
                         "enterprise_knowledge_catalog": bool(
                             admin
                             and self.admin_knowledge_service is not None
+                        ),
+                        "enterprise_knowledge_content_publication": bool(
+                            admin
+                            and self.admin_knowledge_service is not None
+                            and self.admin_knowledge_service.content_publication_enabled
                         ),
                     },
                 },
@@ -924,6 +933,7 @@ class ConsoleHttpApplication:
                     headers,
                     body,
                     action_value=_KNOWLEDGE_ACTION_VALUE,
+                    max_body_bytes=_MAX_KNOWLEDGE_PUBLICATION_BODY_BYTES,
                 )
                 document = _json_object_body(body)
                 if set(document) != {
@@ -931,9 +941,11 @@ class ConsoleHttpApplication:
                     "version_id",
                     "display_label",
                     "media_type",
-                    "size_bytes",
+                    "content",
                     "content_sha256",
                     "egress_decision",
+                    "authorization_statement",
+                    "authorization_policy_version",
                 }:
                     raise ValueError("knowledge publication fields are invalid")
                 return self._json(
@@ -944,9 +956,15 @@ class ConsoleHttpApplication:
                         version_id=document["version_id"],
                         display_label=document["display_label"],
                         media_type=document["media_type"],
-                        size_bytes=document["size_bytes"],
+                        content=document["content"],
                         content_sha256=document["content_sha256"],
                         egress_decision=document["egress_decision"],
+                        authorization_statement=document[
+                            "authorization_statement"
+                        ],
+                        authorization_policy_version=document[
+                            "authorization_policy_version"
+                        ],
                     ),
                 )
             knowledge_revoke = _ADMIN_KNOWLEDGE_REVOKE_ROUTE.fullmatch(path)
@@ -1030,6 +1048,8 @@ class ConsoleHttpApplication:
             )
         except EnterpriseKnowledgeConflictError as exc:
             return self._error(409, "knowledge_conflict", str(exc))
+        except EnterpriseKnowledgeContentUnavailableError as exc:
+            return self._error(503, "knowledge_content_unavailable", str(exc))
         except (TypeError, ValueError) as exc:
             return self._error(400, "invalid_request", str(exc))
         except Exception:
@@ -1215,6 +1235,7 @@ class ConsoleHttpApplication:
         body: bytes,
         *,
         action_value: str,
+        max_body_bytes: int = _MAX_TASK_BODY_BYTES,
     ) -> None:
         if query:
             raise ValueError("admin action query is not accepted")
@@ -1229,7 +1250,7 @@ class ConsoleHttpApplication:
             raise ValueError("admin action content length is invalid") from exc
         if (
             content_length < 1
-            or content_length > _MAX_TASK_BODY_BYTES
+            or content_length > max_body_bytes
             or content_length != len(body)
         ):
             raise ValueError("admin action body size is invalid")
@@ -1573,6 +1594,8 @@ def _request_body_limit(target: str) -> int:
     path = urlsplit(target).path
     if _DRAFT_ATTACHMENTS_ROUTE.fullmatch(path) is not None:
         return MAX_ATTACHMENT_UPLOAD_BODY_BYTES
+    if path == "/console/api/v1/admin/knowledge/publications":
+        return _MAX_KNOWLEDGE_PUBLICATION_BODY_BYTES
     return _MAX_TASK_BODY_BYTES
 
 

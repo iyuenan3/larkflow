@@ -81,6 +81,7 @@ from larkflow.workflow.console_attachments import (
 )
 from larkflow.workflow.directory import DirectoryPerson
 from larkflow.knowledge import (
+    EnterpriseKnowledgeAuthorizationProof,
     EnterpriseKnowledgePublication,
     EnterpriseKnowledgeRef,
 )
@@ -202,7 +203,9 @@ def test_postgres_admin_overview_reads_all_tenant_scoped_operational_lanes():
         "role_progress",
     }
     assert all(lane.total == 0 for lane in snapshot.queue_lanes)
-    assert snapshot.applied_migrations[-1] == "0025_enterprise_knowledge_catalog"
+    assert snapshot.applied_migrations[-1] == (
+        "0026_enterprise_knowledge_content_authorization"
+    )
 
 
 def test_postgres_console_draft_request_is_idempotent_and_claimed_once():
@@ -2569,3 +2572,116 @@ def test_postgres_enterprise_knowledge_catalog_is_versioned_and_append_only():
                 """,
                 (tenant_id, source_id),
             )
+
+
+def test_postgres_enterprise_knowledge_authorization_is_content_bound_and_append_only():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_knowledge_proof_{suffix}"
+    source_id = f"enterprise:proof_{suffix}"
+    now = datetime(2026, 8, 19, 2, 0, tzinfo=timezone.utc)
+    proof = EnterpriseKnowledgeAuthorizationProof(
+        tenant_id=tenant_id,
+        source_id=source_id,
+        version_id="v1",
+        content_sha256="e" * 64,
+        authorized_by_person_id="admin-proof",
+        authorized_at=now,
+    )
+    publication = EnterpriseKnowledgePublication(
+        ref=EnterpriseKnowledgeRef(
+            tenant_id=tenant_id,
+            source_id=source_id,
+            version_id="v1",
+            display_label="Synthetic authorized policy",
+            media_type="text/plain",
+            size_bytes=64,
+            content_sha256="e" * 64,
+            published_at=now,
+            authorization_proof_id=proof.proof_id,
+            authorization_fingerprint=proof.fingerprint,
+        ),
+        published_by_person_id="admin-proof",
+        authorization_proof=proof,
+    )
+    repository = PostgresEnterpriseKnowledgeRepository(connection_factory)
+
+    stored = repository.publish(publication)
+    assert repository.get_version(tenant_id, source_id, "v1") == stored
+    assert repository.list_published(tenant_id) == (stored.ref,)
+    assert repository.retained_usage(tenant_id) == (1, 64)
+    revoked = repository.revoke(
+        tenant_id,
+        source_id,
+        "v1",
+        actor_person_id="admin-proof",
+        now=now + timedelta(minutes=1),
+    )
+    assert revoked.authorization_proof == proof
+    assert repository.retained_usage(tenant_id) == (1, 64)
+
+    with connection_factory() as connection:
+        row = connection.execute(
+            """
+            SELECT count(*) AS proof_count, min(content_sha256) AS content_sha256
+            FROM workflow_enterprise_knowledge_authorizations
+            WHERE tenant_id = %s AND source_id = %s AND version_id = 'v1'
+            """,
+            (tenant_id, source_id),
+        ).fetchone()
+        assert int(row["proof_count"]) == 1
+        assert row["content_sha256"] == "e" * 64
+        with pytest.raises(RaiseException, match="append-preserved"):
+            connection.execute(
+                """
+                UPDATE workflow_enterprise_knowledge_authorizations
+                SET authorized_by_person_id = 'mutated'
+                WHERE tenant_id = %s AND source_id = %s AND version_id = 'v1'
+                """,
+                (tenant_id, source_id),
+            )
+
+
+def test_postgres_enterprise_knowledge_tenant_quota_serializes_competing_sources():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_knowledge_quota_{suffix}"
+    now = datetime(2026, 8, 19, 3, 0, tzinfo=timezone.utc)
+    barrier = Barrier(2)
+
+    def publish(index: int) -> str:
+        candidate = EnterpriseKnowledgePublication(
+            ref=EnterpriseKnowledgeRef(
+                tenant_id=tenant_id,
+                source_id=f"enterprise:quota_{index}_{suffix}",
+                version_id="v1",
+                display_label=f"Synthetic quota policy {index}",
+                media_type="text/plain",
+                size_bytes=64,
+                content_sha256=str(index) * 64,
+                published_at=now,
+            ),
+            published_by_person_id="admin-quota",
+        )
+        barrier.wait()
+        try:
+            PostgresEnterpriseKnowledgeRepository(
+                connection_factory,
+                max_retained_versions=1,
+                max_retained_bytes=64,
+            ).publish(candidate)
+            return "published"
+        except EnterpriseKnowledgeConflictError:
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(publish, (1, 2)))
+
+    assert sorted(results) == ["conflict", "published"]
+    assert PostgresEnterpriseKnowledgeRepository(connection_factory).retained_usage(
+        tenant_id
+    ) == (1, 64)
