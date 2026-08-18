@@ -351,6 +351,33 @@ def test_postgres_console_attachment_contract_matches_owner_scoped_freeze():
         uploaded["id"]
     ]
     instance_id = f"console_draft_{request_id}"
+    workflow = WorkflowService(
+        PostgresWorkflowRepository(connection_factory),
+        clock=lambda: now,
+    )
+    workflow.create_draft(
+        instance_id=instance_id,
+        tenant_id=tenant_id,
+        owner_person_id=owner_id,
+        actor_person_id=owner_id,
+        snapshot=InstanceSnapshot(
+            goal="Attachment promotion contract",
+            nodes=(
+                NodeSpec(
+                    "confirm",
+                    "Confirm",
+                    owner_id,
+                    "human",
+                    work={
+                        "objective": "Confirm the attachment boundary",
+                        "inputs": [],
+                        "outputs": [{"id": "content", "type": "text"}],
+                        "acceptance": ["The attachment boundary is confirmed"],
+                    },
+                ),
+            ),
+        ),
+    )
     metadata.promote(frozen, instance_id=instance_id, now=now)
     resolved = metadata.resolve_for_agent(
         tenant_id,
