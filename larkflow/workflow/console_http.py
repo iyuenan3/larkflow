@@ -14,6 +14,11 @@ import secrets
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlsplit
 
+from larkflow.knowledge.repository import (
+    EnterpriseKnowledgeConflictError,
+    EnterpriseKnowledgeNotFoundError,
+)
+
 from .console import (
     ConsoleAuthentication,
     ConsoleReadService,
@@ -27,6 +32,7 @@ from .console_auth import (
     FeishuConsoleOAuthFlow,
 )
 from .console_admin import ConsoleAdminReadService
+from .console_admin_knowledge import ConsoleAdminKnowledgeService
 from .console_admin_sessions import (
     ConsoleAdminSessionConflictError,
     ConsoleAdminSessionPreviewExpiredError,
@@ -110,8 +116,19 @@ _ADMIN_SESSION_PREVIEW_ROUTE = re.compile(
 _ADMIN_SESSION_CONFIRM_ROUTE = re.compile(
     r"^/console/api/v1/admin/session-revocations/([0-9a-f]{32})/confirm$"
 )
+_ADMIN_KNOWLEDGE_REVOKE_ROUTE = re.compile(
+    r"^/console/api/v1/admin/knowledge/sources/"
+    r"(enterprise:[a-z][a-z0-9_.:-]{0,116})/versions/"
+    r"([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/revoke$"
+)
+_ADMIN_KNOWLEDGE_AUDIT_ROUTE = re.compile(
+    r"^/console/api/v1/admin/knowledge/sources/"
+    r"(enterprise:[a-z][a-z0-9_.:-]{0,116})/versions/"
+    r"([A-Za-z0-9][A-Za-z0-9_.:-]{0,127})/audit$"
+)
 _ADMIN_ACTION_HEADER = "x-larkflow-console-action"
 _ADMIN_ACTION_VALUE = "session-governance-v1"
+_KNOWLEDGE_ACTION_VALUE = "knowledge-governance-v1"
 _WORKFLOW_ACTION_VALUE = "workflow-action-v1"
 _MAX_TASK_BODY_BYTES = 65_536
 _CONSOLE_RESOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -176,6 +193,7 @@ class ConsoleHttpApplication:
         oauth: FeishuConsoleOAuthFlow | None = None,
         admin_service: ConsoleAdminReadService | None = None,
         admin_session_service: ConsoleAdminSessionService | None = None,
+        admin_knowledge_service: ConsoleAdminKnowledgeService | None = None,
         action_service: ConsoleActionService | None = None,
         task_service: ConsoleTaskService | None = None,
         draft_service: ConsoleDraftService | None = None,
@@ -186,6 +204,7 @@ class ConsoleHttpApplication:
         self.oauth = oauth
         self.admin_service = admin_service
         self.admin_session_service = admin_session_service
+        self.admin_knowledge_service = admin_knowledge_service
         self.action_service = action_service
         self.task_service = task_service
         self.draft_service = draft_service
@@ -196,6 +215,8 @@ class ConsoleHttpApplication:
             raise ValueError("Feishu authentication requires one OAuth flow")
         if admin_session_service is not None and admin_service is None:
             raise ValueError("admin session governance requires admin overview")
+        if admin_knowledge_service is not None and admin_service is None:
+            raise ValueError("admin knowledge governance requires admin overview")
 
     def handle(
         self,
@@ -246,6 +267,10 @@ class ConsoleHttpApplication:
                     "logout_available": self.authenticator.mode == "feishu",
                     "capabilities": {
                         "attachment_planning": self._attachment_planning_enabled(),
+                        "enterprise_knowledge_catalog": bool(
+                            admin
+                            and self.admin_knowledge_service is not None
+                        ),
                     },
                 },
             )
@@ -337,6 +362,7 @@ class ConsoleHttpApplication:
                 parsed.path,
                 parsed.query,
                 request_headers,
+                body,
             )
 
         if method == "POST" and parsed.path.startswith(
@@ -456,6 +482,37 @@ class ConsoleHttpApplication:
                     self.admin_session_service.list_sessions(
                         principal,
                         current_session_id=authentication.session_id,
+                        limit=limit,
+                    ),
+                )
+            if parsed.path == "/console/api/v1/admin/knowledge":
+                if self.admin_knowledge_service is None:
+                    raise ConsoleResourceNotFoundError(
+                        "enterprise knowledge catalog"
+                    )
+                limit = _single_limit(parsed.query, default=100)
+                return self._json(
+                    200,
+                    self.admin_knowledge_service.list_versions(
+                        principal,
+                        limit=limit,
+                    ),
+                )
+            knowledge_audit = _ADMIN_KNOWLEDGE_AUDIT_ROUTE.fullmatch(
+                parsed.path
+            )
+            if knowledge_audit is not None:
+                if self.admin_knowledge_service is None:
+                    raise ConsoleResourceNotFoundError(
+                        "enterprise knowledge catalog"
+                    )
+                limit = _single_limit(parsed.query, default=20)
+                return self._json(
+                    200,
+                    self.admin_knowledge_service.audit(
+                        principal,
+                        knowledge_audit.group(1),
+                        knowledge_audit.group(2),
                         limit=limit,
                     ),
                 )
@@ -850,14 +907,68 @@ class ConsoleHttpApplication:
         path: str,
         query: str,
         headers: Mapping[str, str],
+        body: bytes,
     ) -> ConsoleHttpResponse:
         try:
             authentication = self.authenticator.authenticate_context(headers)
             principal = authentication.principal
-            if (
-                self.admin_session_service is None
-                or not self.admin_session_service.authorizer.is_admin(principal)
-            ):
+            if self.admin_service is None or not self.admin_service.is_admin(principal):
+                raise ConsoleResourceNotFoundError("admin governance")
+            if path == "/console/api/v1/admin/knowledge/publications":
+                if self.admin_knowledge_service is None:
+                    raise ConsoleResourceNotFoundError(
+                        "enterprise knowledge catalog"
+                    )
+                self._validate_admin_json_write_request(
+                    query,
+                    headers,
+                    body,
+                    action_value=_KNOWLEDGE_ACTION_VALUE,
+                )
+                document = _json_object_body(body)
+                if set(document) != {
+                    "source_id",
+                    "version_id",
+                    "display_label",
+                    "media_type",
+                    "size_bytes",
+                    "content_sha256",
+                    "egress_decision",
+                }:
+                    raise ValueError("knowledge publication fields are invalid")
+                return self._json(
+                    201,
+                    self.admin_knowledge_service.publish(
+                        principal,
+                        source_id=document["source_id"],
+                        version_id=document["version_id"],
+                        display_label=document["display_label"],
+                        media_type=document["media_type"],
+                        size_bytes=document["size_bytes"],
+                        content_sha256=document["content_sha256"],
+                        egress_decision=document["egress_decision"],
+                    ),
+                )
+            knowledge_revoke = _ADMIN_KNOWLEDGE_REVOKE_ROUTE.fullmatch(path)
+            if knowledge_revoke is not None:
+                if self.admin_knowledge_service is None:
+                    raise ConsoleResourceNotFoundError(
+                        "enterprise knowledge catalog"
+                    )
+                self._validate_admin_write_request(
+                    query,
+                    headers,
+                    action_value=_KNOWLEDGE_ACTION_VALUE,
+                )
+                return self._json(
+                    200,
+                    self.admin_knowledge_service.revoke(
+                        principal,
+                        knowledge_revoke.group(1),
+                        knowledge_revoke.group(2),
+                    ),
+                )
+            if self.admin_session_service is None:
                 raise ConsoleResourceNotFoundError("admin session governance")
             self._validate_admin_write_request(query, headers)
             preview_match = _ADMIN_SESSION_PREVIEW_ROUTE.fullmatch(path)
@@ -895,6 +1006,8 @@ class ConsoleHttpApplication:
             )
         except ConsoleResourceNotFoundError:
             return self._error(404, "not_found", "resource does not exist")
+        except EnterpriseKnowledgeNotFoundError:
+            return self._error(404, "not_found", "resource does not exist")
         except _AdminWriteRequestError:
             return self._error(
                 403,
@@ -915,6 +1028,8 @@ class ConsoleHttpApplication:
                 "preview_stale",
                 "session changed after revocation preview",
             )
+        except EnterpriseKnowledgeConflictError as exc:
+            return self._error(409, "knowledge_conflict", str(exc))
         except (TypeError, ValueError) as exc:
             return self._error(400, "invalid_request", str(exc))
         except Exception:
@@ -1067,6 +1182,8 @@ class ConsoleHttpApplication:
         self,
         query: str,
         headers: Mapping[str, str],
+        *,
+        action_value: str = _ADMIN_ACTION_VALUE,
     ) -> None:
         if query:
             raise ValueError("admin action query is not accepted")
@@ -1077,7 +1194,54 @@ class ConsoleHttpApplication:
             raise ValueError("admin action body is not accepted")
         if not secrets.compare_digest(
             _header(headers, _ADMIN_ACTION_HEADER) or "",
-            _ADMIN_ACTION_VALUE,
+            action_value,
+        ):
+            raise _AdminWriteRequestError(
+                "admin action request header is invalid"
+            )
+        if self.authenticator.mode == "feishu":
+            if self.oauth is None or not secrets.compare_digest(
+                _header(headers, "origin") or "",
+                self.oauth.public_base_url,
+            ):
+                raise _AdminWriteRequestError(
+                    "admin action origin is invalid"
+                )
+
+    def _validate_admin_json_write_request(
+        self,
+        query: str,
+        headers: Mapping[str, str],
+        body: bytes,
+        *,
+        action_value: str,
+    ) -> None:
+        if query:
+            raise ValueError("admin action query is not accepted")
+        if _header(headers, "transfer-encoding") is not None:
+            raise ValueError("admin action transfer encoding is not accepted")
+        raw_length = _header(headers, "content-length")
+        if raw_length is None:
+            raise ValueError("admin action content length is required")
+        try:
+            content_length = int(raw_length)
+        except ValueError as exc:
+            raise ValueError("admin action content length is invalid") from exc
+        if (
+            content_length < 1
+            or content_length > _MAX_TASK_BODY_BYTES
+            or content_length != len(body)
+        ):
+            raise ValueError("admin action body size is invalid")
+        content_type = (_header(headers, "content-type") or "").lower()
+        if content_type not in {
+            "application/json",
+            "application/json; charset=utf-8",
+        }:
+            raise ValueError("admin action content type must be application/json")
+        if not secrets.compare_digest(
+            _header(headers, _ADMIN_ACTION_HEADER) or "",
+            action_value,
         ):
             raise _AdminWriteRequestError(
                 "admin action request header is invalid"

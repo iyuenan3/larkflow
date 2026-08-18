@@ -54,6 +54,22 @@ class EnterpriseKnowledgeRepository(Protocol):
     def list_published(self, tenant_id: str) -> tuple[EnterpriseKnowledgeRef, ...]:
         ...
 
+    def list_versions(
+        self,
+        tenant_id: str,
+        *,
+        limit: int,
+    ) -> tuple[EnterpriseKnowledgePublication, ...]:
+        ...
+
+    def list_audit(
+        self,
+        tenant_id: str,
+        source_id: str,
+        version_id: str,
+    ) -> tuple[EnterpriseKnowledgeAuditEvent, ...]:
+        ...
+
 
 class InMemoryEnterpriseKnowledgeRepository:
     def __init__(self) -> None:
@@ -142,6 +158,29 @@ class InMemoryEnterpriseKnowledgeRepository:
                     ),
                 )
             )
+
+    def list_versions(
+        self,
+        tenant_id: str,
+        *,
+        limit: int,
+    ) -> tuple[EnterpriseKnowledgePublication, ...]:
+        _validate_limit(limit)
+        with self._lock:
+            items = sorted(
+                (
+                    publication
+                    for publication in self._items.values()
+                    if publication.ref.tenant_id == tenant_id
+                ),
+                key=lambda publication: (
+                    publication.ref.published_at,
+                    publication.ref.source_id,
+                    publication.ref.version_id,
+                ),
+                reverse=True,
+            )
+            return tuple(items[:limit])
 
     def list_audit(
         self,
@@ -328,6 +367,25 @@ class PostgresEnterpriseKnowledgeRepository:
             ).fetchall()
         return tuple(_publication_from_row(row).ref for row in rows)
 
+    def list_versions(
+        self,
+        tenant_id: str,
+        *,
+        limit: int,
+    ) -> tuple[EnterpriseKnowledgePublication, ...]:
+        _validate_limit(limit)
+        with self.connection_factory() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM workflow_enterprise_knowledge_versions
+                WHERE tenant_id = %s
+                ORDER BY published_at DESC, source_id DESC, version_id DESC
+                LIMIT %s
+                """,
+                (tenant_id, limit),
+            ).fetchall()
+        return tuple(_publication_from_row(row) for row in rows)
+
     def list_audit(
         self,
         tenant_id: str,
@@ -351,6 +409,11 @@ def _publication_key(
 ) -> tuple[str, str, str]:
     ref = publication.ref
     return (ref.tenant_id, ref.source_id, ref.version_id)
+
+
+def _validate_limit(limit: int) -> None:
+    if isinstance(limit, bool) or limit < 1 or limit > 1_000:
+        raise ValueError("enterprise knowledge version limit is invalid")
 
 
 def _lock_source(connection: Any, tenant_id: str, source_id: str) -> None:

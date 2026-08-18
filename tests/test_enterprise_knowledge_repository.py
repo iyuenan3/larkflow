@@ -86,6 +86,7 @@ def test_revoke_is_idempotent_and_allows_a_new_version() -> None:
     assert repository.list_published("tenant-a") == ()
     second = repository.publish(_publication("v2"))
     assert repository.list_published("tenant-a") == (second.ref,)
+    assert repository.list_versions("tenant-a", limit=10) == (second, revoked)
     assert [
         event.event_type
         for event in repository.list_audit(
@@ -117,6 +118,10 @@ def test_catalog_is_tenant_isolated_and_missing_revoke_is_hidden() -> None:
     assert {ref.tenant_id for ref in repository.list_published("tenant-a")} == {
         "tenant-a"
     }
+    assert {
+        item.ref.tenant_id
+        for item in repository.list_versions("tenant-a", limit=10)
+    } == {"tenant-a"}
     with pytest.raises(EnterpriseKnowledgeNotFoundError):
         repository.revoke(
             "tenant-b",
@@ -141,3 +146,11 @@ def test_competing_versions_publish_only_one_active_version() -> None:
 
     assert results.count("conflict") == 1
     assert len(repository.list_published("tenant-a")) == 1
+
+
+@pytest.mark.parametrize("limit", [0, 1001, True])
+def test_version_listing_rejects_unbounded_limits(limit) -> None:
+    repository = InMemoryEnterpriseKnowledgeRepository()
+
+    with pytest.raises(ValueError, match="limit"):
+        repository.list_versions("tenant-a", limit=limit)

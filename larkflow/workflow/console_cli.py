@@ -11,6 +11,7 @@ from threading import Event, Thread
 from typing import Any
 
 from larkflow.config import load_dotenv
+from larkflow.knowledge.repository import PostgresEnterpriseKnowledgeRepository
 
 from .console import ConsolePrincipal, ConsoleReadService, StaticConsoleAuthenticator
 from .console_auth import (
@@ -19,6 +20,7 @@ from .console_auth import (
     PostgresConsoleSessionAuthenticator,
 )
 from .console_admin import ConsoleAdminReadService, PostgresConsoleAdminRepository
+from .console_admin_knowledge import ConsoleAdminKnowledgeService
 from .console_admin_sessions import (
     ConsoleAdminSessionService,
     PostgresConsoleAdminSessionRepository,
@@ -119,6 +121,14 @@ def _run(namespace: argparse.Namespace) -> int:
         if admin_service is not None
         else None
     )
+    admin_knowledge_service = (
+        ConsoleAdminKnowledgeService(
+            PostgresEnterpriseKnowledgeRepository(connection_factory),
+            admin_service,
+        )
+        if admin_service is not None
+        else None
+    )
     rate_limiter = None
     if namespace.auth_mode == "static":
         person_id = _required(
@@ -137,6 +147,7 @@ def _run(namespace: argparse.Namespace) -> int:
             ),
             admin_service=admin_service,
             admin_session_service=admin_session_service,
+            admin_knowledge_service=admin_knowledge_service,
             action_service=action_service,
             task_service=task_service,
             draft_service=draft_service,
@@ -201,6 +212,7 @@ def _run(namespace: argparse.Namespace) -> int:
             oauth=oauth,
             admin_service=admin_service,
             admin_session_service=admin_session_service,
+            admin_knowledge_service=admin_knowledge_service,
             action_service=action_service,
             task_service=task_service,
             draft_service=draft_service,
@@ -229,7 +241,7 @@ def _run(namespace: argparse.Namespace) -> int:
             "principal": "configured_server_side",
             "access": access,
             "auth_mode": namespace.auth_mode,
-            "mode": "owner_actions_admin_session_governance",
+            "mode": "owner_actions_admin_governance",
             "admin_overview": "enabled" if admin_service is not None else "disabled",
             "rate_limit": "enabled" if rate_limiter is not None else "disabled",
         }

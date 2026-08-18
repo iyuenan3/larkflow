@@ -2489,6 +2489,8 @@ def test_postgres_enterprise_knowledge_catalog_is_versioned_and_append_only():
     second = repository.publish(publication("v2", "b"))
     assert repository.list_published(tenant_id) == (second.ref,)
     assert repository.list_published(f"other_{tenant_id}") == ()
+    assert repository.list_versions(tenant_id, limit=10) == (second, revoked)
+    assert repository.list_versions(f"other_{tenant_id}", limit=10) == ()
     assert [
         event.event_type
         for event in repository.list_audit(tenant_id, source_id, "v1")

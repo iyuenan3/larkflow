@@ -691,7 +691,10 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
         "admin": False,
         "login_url": None,
         "logout_available": False,
-        "capabilities": {"attachment_planning": False},
+        "capabilities": {
+            "attachment_planning": False,
+            "enterprise_knowledge_catalog": False,
+        },
     }
     assert missing_auth.status == 401
     assert missing_auth.headers["WWW-Authenticate"] == "Bearer"

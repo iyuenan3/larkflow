@@ -350,7 +350,10 @@ def test_http_oauth_login_session_data_and_logout_are_same_origin():
         "admin": False,
         "login_url": "/console/auth/login",
         "logout_available": True,
-        "capabilities": {"attachment_planning": False},
+        "capabilities": {
+            "attachment_planning": False,
+            "enterprise_knowledge_catalog": False,
+        },
     }
     assert login.status == 302
     assert login.headers["Location"].startswith(
