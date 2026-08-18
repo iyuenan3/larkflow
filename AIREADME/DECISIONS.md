@@ -1077,3 +1077,15 @@
 - Tradeoff：固定声明和全员共享范围牺牲灵活 ACL，独立 Blob port 与 proof 表增加一次 migration 和 orphan 清理责任；换来的是可确定复验、可审计授权、不可变版本和不依赖模型或源系统猜测的权限边界。若企业无法作出全员授权声明，该来源保持不可发布，产品继续只使用项目上传件。
 
 - Status addendum · 2026-08-19：`17aba5ae35261bc915d2dd6d6f4c272273d2da89` 把正文读取和完整性校验后的仓储原子复验定义为最终授权线性化点。PostgreSQL 通过与撤销相同的 source advisory transaction lock 重读精确版本、完整 ref、published、proof 与外发决定：撤销在最终授权点前提交时当前 bundle 拒绝，最终授权先完成时 bundle 视为已发行，撤销只阻断后续 bundle；这不撤销已经发生的模型外发。原 Merge 条目中的确定性排序按 canonical v1 解释为分区规则：项目附件保留冻结 manifest 顺序，企业资料内部按 source/version 排序，合并时项目区块在前、企业区块在后。不得为追求全局重排而改变已有冻结 fingerprint；未来若调整顺序必须引入显式 fingerprint schema 版本。
+
+## ADR-119 · 2026-08-19 · 企业资料由 Console 发起人显式选择并在生成边界冻结版本
+
+- **Status：Accepted，implementation pending。**
+- Problem：规划服务当前会自动加载 tenant 内全部有效 published 企业资料。资料数量增长后，无关正文会进入规划上下文，成本和字符预算不可预测，发起人也无法解释某份资料为何参与候选图。飞书向导等入口又没有资料选择界面，继续自动全选会把“可访问”误当成“本次明确使用”。
+- Constraint：首版只在 Console collecting 草稿入口提供显式选择；普通成员只能看到当前 tenant 的安全 published 元数据，不能看到正文、object key、管理员身份、授权声明、数据库字段或跨 tenant 信息。浏览器只能提交有界、去重的 `source_id` 和服务端选择版本，不能声明 tenant、version、hash、proof、egress、正文或存储位置。PostgreSQL 继续是选择与冻结版本真相；PlannerRuntime 和 AgentRuntime 仍只能获得 Knowledge Context Service 生成的有界 ContextBundle。
+- Decision：collecting `DraftRequest` 保存 Owner-only 的 source 选择和单调选择版本，默认空清单。成员目录端点返回 `source_id / version_id / display_label / media_type / size_bytes / published_at / classification / egress_decision / authorization_proof_id`；proof 只返回安全 ID，不返回 fingerprint、声明或管理员。更新选择要求 `expected_version`，同值重放幂等，不同值并发写入返回稳定冲突；不存在、非 Owner 和跨 tenant 统一 404。开始生成时，服务端在单个事务中锁定草稿与按 source 排序的企业资料，重新解析每个 source 当时唯一 published、正文已授权的精确版本，复验 proof 与外发决定，并与项目附件清单一起原子冻结到草稿后转为 pending。任一来源撤销、缺失、外发 deny、重复、超限或版本竞态均整体 fail closed，不静默丢弃。
+- Retry and runtime：生成重试只使用草稿已冻结的精确 `EnterpriseKnowledgeRef` 与 selection fingerprint，不重新解析后来发布的版本。成功创建 Instance 后，安全 manifest 与既有 canonical v1 Context fingerprint 一起冻结；Agent Attempt 继续对同一精确 ref 执行最终授权线性化复验。没有选择企业资料时不建立企业 bundle；只有项目附件时保持既有行为；两者都有时仍按“项目冻结顺序区块在前、企业 source/version 规范顺序区块在后”合并。飞书 wizard 与其他没有选择 UI 的入口默认不使用企业资料。
+- UI：collecting 页面只显示安全元数据、已选择状态和外发不可用原因，不提供正文预览。生成前明确列出本次将使用的资料；发起人可以在 collecting 阶段修改选择，pending 后冻结且不可更改。
+- Compatibility：新增字段以空选择和空 manifest 作为既有请求默认值，不重写已冻结 Instance、历史 Attempt 或既有 Context fingerprint。旧入口不因 tenant 中存在企业资料而改变输出。未来若增加其他入口，必须先提供等价的显式选择与服务端冻结合同，不能复用自动全选。
+- Alternatives(否决)：自动使用全部 published 资料；让模型自行挑选；让浏览器提交 version 或 proof；保存 live 查询而不冻结；因撤销静默跳过某份资料；在飞书向导没有 UI 时继续默认全选；把企业选择混入项目附件 ID 清单。
+- Tradeoff：发起人需要多一步选择，且首版只支持 source 级选择，不提供正文预览、检索、推荐或语义排序。服务端需要一次 migration 和跨草稿、附件、企业目录的事务协调，但选择可解释、重试稳定，权限与成本边界不再依赖 tenant 资料总量。
