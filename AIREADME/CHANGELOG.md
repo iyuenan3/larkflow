@@ -1,5 +1,11 @@
 # CHANGELOG · larkflow
 
+## v0.90.2-draft · 2026-08-19 · 企业知识撤销与 ContextBundle 发行竞态修复候选
+
+- Fixed：内容提交 `17aba5ae35261bc915d2dd6d6f4c272273d2da89` 在 Blob 读取、长度、SHA-256、UTF-8 与预算校验后增加仓储原子最终授权复验。PostgreSQL 使用与撤销相同的 source advisory transaction lock 形成发行线性化点；撤销先完成时 planning 与 Agent bundle 均拒绝，最终授权先完成时 bundle 视为已发行且撤销只阻断后续 bundle。版本、完整 ref、proof 与外发决定漂移同样 fail closed。
+- Verification：缺陷态 mutation 会使新增 planning 与 Agent 回归变红；聚焦测试 `26 passed`，完整离线合并证据 `1255 passed, 31 skipped`。一次性真实 PostgreSQL 从完整 26 份 migration 启动，包含撤销与最终授权受控屏障的合同为 `31 passed`，ledger 为 `26 / 0026_enterprise_knowledge_content_authorization`，测试库已精确删除并回读不存在。
+- Compatibility：canonical v1 不做全局重排。项目附件继续保留冻结 manifest 顺序，企业资料内部按 source/version 排序，合并时项目区块在前、企业区块在后，既有 fingerprint 不漂移。该候选尚未部署，部署和安装态 synthetic 竞态探针仍待完成。
+
 ## v0.90.1-draft · 2026-08-19 · 企业共享正文开发部署验证
 
 - Deployment：企业共享正文与 ContextBundle wheel 已安装到 Target 与 legacy 开发环境，SHA-256 为 `16e1833fe05579661bfec72ccbd2fcfeee6fa8b86f7fe48eeb80fa3e60be00c4`；两个 venv 的 `pip check` 和关键安装态源码哈希回读通过。十个 larkflow Python 服务与 Caddy 均为 `active / running / NRestarts=0`，部署窗口 warning 为 0。

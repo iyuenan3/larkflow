@@ -1075,3 +1075,5 @@
 - Verification：实现门槛包括固定声明正向与布尔值、缺声明反例，Blob 缺失、非普通文件、哈希和长度错，跨 tenant、非管理员、撤销、版本漂移、外发 deny、统一预算、重复来源、并发发布、事务回滚、重入、DTO 与 repr 泄漏，以及旧历史仍可审计但新上下文不可读取。真实 PostgreSQL 必须验证 tenant/source 锁和 proof/version/audit 原子性；部署技术探针只用 synthetic/public 正文，不替代人工浏览器验收。
 - Alternatives(否决)：把 metadata-only 版本直接视为可读；让管理员只勾选一个布尔值；把 object key 存进版本表或快照；让 Runtime 直接读取 Blob；复用项目附件 namespace 与撤销生命周期；撤销时删除历史 manifest 或 Attempt；先做飞书 ACL 同步、向量库或通用知识平台。
 - Tradeoff：固定声明和全员共享范围牺牲灵活 ACL，独立 Blob port 与 proof 表增加一次 migration 和 orphan 清理责任；换来的是可确定复验、可审计授权、不可变版本和不依赖模型或源系统猜测的权限边界。若企业无法作出全员授权声明，该来源保持不可发布，产品继续只使用项目上传件。
+
+- Status addendum · 2026-08-19：`17aba5ae35261bc915d2dd6d6f4c272273d2da89` 把正文读取和完整性校验后的仓储原子复验定义为最终授权线性化点。PostgreSQL 通过与撤销相同的 source advisory transaction lock 重读精确版本、完整 ref、published、proof 与外发决定：撤销在最终授权点前提交时当前 bundle 拒绝，最终授权先完成时 bundle 视为已发行，撤销只阻断后续 bundle；这不撤销已经发生的模型外发。原 Merge 条目中的确定性排序按 canonical v1 解释为分区规则：项目附件保留冻结 manifest 顺序，企业资料内部按 source/version 排序，合并时项目区块在前、企业区块在后。不得为追求全局重排而改变已有冻结 fingerprint；未来若调整顺序必须引入显式 fingerprint schema 版本。

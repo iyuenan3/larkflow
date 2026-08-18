@@ -1,6 +1,6 @@
 # DEPLOYMENT · larkflow
 
-> 当前开发状态：企业共享正文与 ContextBundle 已部署到阿里云开发环境。内容由 `88fd70ea5a29bdf7c9f84573fd45a951f73da88c` 和 `d76a65faca027a558bfadc9b395e5807247705e3` 实现，完整离线合并证据为 `1248 passed, 30 skipped`；真实 PostgreSQL、0026 migration、Caddy、wheel、十个服务和 synthetic Runtime 探针均已回读。真实管理员浏览器验收尚未完成，本状态不代表生产就绪。
+> 当前开发状态：企业共享正文与 ContextBundle 已部署到阿里云开发环境。内容由 `88fd70ea5a29bdf7c9f84573fd45a951f73da88c` 和 `d76a65faca027a558bfadc9b395e5807247705e3` 实现。竞态修复 `17aba5ae35261bc915d2dd6d6f4c272273d2da89` 已通过完整离线合并证据 `1255 passed, 31 skipped` 和一次性真实 PostgreSQL `31 passed`，但尚未部署；当前开发服务仍运行下方已记录的旧 wheel。真实管理员浏览器验收尚未完成，本状态不代表生产就绪。
 
 > **As-built / Legacy Prototype + Target Runtime 开发部署。** 本文保存 legacy LangGraph + SQLite 服务、Target PostgreSQL Runtime 与 Owner 中央控制台在单台 ECS 上的真实部署记录。它不是目标 SaaS 拓扑：目标架构是 PostgreSQL 中央控制面的模块化单体。Personal Agent Edge 已完成 loopback 部署、SSH 隧道验收和 HTTPS 源站配置，但公网设备链路受 ICP 接入备案阻断，见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 >
