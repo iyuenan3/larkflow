@@ -166,7 +166,7 @@ migration `0025_enterprise_knowledge_catalog` 增加 tenant-first 企业共享�
 
 migration `0026_enterprise_knowledge_content_authorization` 增加 tenant-first、内容绑定且追加型的服务器授权证明。证明绑定 tenant、source、version、content SHA-256、授权管理员、固定 `tenant_all_members` scope、策略版本、声明摘要和授权时间；禁止更新和物理删除。版本行只保存 proof ID 与 fingerprint，不保存正文、object key、原始授权声明或存储路径。正文位于独立 `enterprise` namespace BlobStore，object key 由服务端根据 tenant、source、version 和内容哈希派生。
 
-migration `0027_console_enterprise_knowledge_selection` 为既有 DraftRequest 增加默认空 source 清单、单调 `selection_version`、冻结企业安全 manifest 与 selection fingerprint。约束函数只接受有界且无重复的 source ID 数组；选择只能在 collecting 状态修改，冻结 manifest 只能随 collecting 原子转为 pending 写入，写入后不可改。既有请求、已冻结 Instance、历史 Attempt 和 canonical v1 fingerprint 不被重写。该 migration 已随内容提交打包，但尚未在真实 PostgreSQL 应用或重入验证。
+migration `0027_console_enterprise_knowledge_selection` 为既有 DraftRequest 增加默认空 source 清单、单调 `selection_version`、冻结企业安全 manifest 与 selection fingerprint。约束函数只接受有界且无重复的 source ID 数组；选择只能在 collecting 状态修改，冻结 manifest 只能随 collecting 原子转为 pending 写入，写入后不可改。既有请求、已冻结 Instance、历史 Attempt 和 canonical v1 fingerprint 不被重写。该 migration 已完成真实 PostgreSQL 空库应用、重入、强制失败回滚和长期开发库增量部署。
 
 企业资料管理复用 `LARKFLOW_CONSOLE_ADMIN_PERSON_IDS` 与当前 Target tenant，不新增浏览器可声明的管理员身份。`GET /console/api/v1/admin/knowledge?limit=<1..100>` 返回当前 tenant 的 published 与 revoked 版本安全元数据；`GET /console/api/v1/admin/knowledge/sources/<source_id>/versions/<version_id>/audit?limit=<1..100>` 返回追加审计，但 actor 只表示 `you / member`。`POST /console/api/v1/admin/knowledge/publications` 只接受 `source_id / version_id / display_label / media_type / content / content_sha256 / egress_decision / authorization_statement / authorization_policy_version` 九个字段。正文必须为非空 UTF-8，媒体类型只能是 `text/plain` 或 `text/markdown`，正文最多 131072 bytes，提交哈希必须与正文相等；授权声明和策略版本必须精确等于服务端公开的当前合同。tenant、publisher、发布时间、分级、object key、proof ID 与状态全部由服务端产生。`POST /console/api/v1/admin/knowledge/sources/<source_id>/versions/<version_id>/revoke` 不接受 query 或正文，重复撤销保持幂等且不新增审计。两个写端点都要求 `X-Larkflow-Console-Action: knowledge-governance-v1`；发布还要求严格 JSON、精确 `Content-Length`、不超过 262144 bytes 和正确 `Content-Type`，`feishu` 模式继续要求精确同源 `Origin`。非管理员与跨 tenant 统一 404，版本冲突为 409 `knowledge_conflict`，内容存储不可用为 503 `knowledge_content_unavailable`。响应不含正文、object key、存储路径、tenant、管理员 person ID、原始授权声明、源系统 locator 或凭据。`GET /console/api/v1/auth` 只对已认证管理员返回 `capabilities.enterprise_knowledge_catalog=true`；仅当 BlobStore 已配置时同时返回 `enterprise_knowledge_content_publication=true`。
 
@@ -190,7 +190,7 @@ Target 自动节点按工作契约 kind 路由。Agent 当前只接受 `work.age
 
 `source_evidence.check` 是只读确定性 Tool，只接受 `claims` 与 `source_records` 两个直接依赖路径。每条 claim 必须有有界 `claim_id / text / source_url / supporting_excerpt`，source URL 规范化后仍须属于本次已提交 `web.search` Attempt，excerpt 必须是对应 provider snippet 的非空有界原文片段；所有必需 claim 都满足才标记 `support=supported`。替换 URL、重复 claim ID、伪造或扩写 excerpt、空来源、超长字段和结果预算超限均 fail closed。该结果只证明当前检索片段支持该表述，不证明页面可访问、官方域名事实正确、供应商摘要真实或结论在现实世界成立，最终判断仍留给 Human Gate。
 
-上述来源质量合同已由 `fba57583af164d5a39077d7979b751e604cc3382` 落码。默认出站 adapter 没有网络实现，开发部署前后都必须把 health unavailable/unknown 与搜索 provider 可用性分开回读；不得把尚未实现的安全 URL 抓取写成已验证。
+上述来源质量合同已由 `fba57583af164d5a39077d7979b751e604cc3382` 落码并部署到开发环境。默认出站 adapter 没有网络实现，安装态探针把 health unavailable/unknown 与搜索 provider 可用性分开回读；不得把尚未实现的安全 URL 抓取写成已验证。
 
 完成文档投影对普通 Markdown 使用服务端的安全子集转换，只接受标题、无序列表、有序列表、管道表格和粗体，并先转义原始 XML。支持的结构会写成飞书 Docx 原生块；未支持的 Markdown 继续作为普通段落文本，不执行模型提供的任意 XML。
 

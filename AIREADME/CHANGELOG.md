@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.92.1-draft · 2026-08-19 · 显式企业资料选择与搜索证据质量开发部署验证
+
+- Deployment：内容提交 `e663edfa2c54230b3b58bfc9e26ad046f95a3b51` 与 `fba57583af164d5a39077d7979b751e604cc3382` 已安装到 Target 与 legacy 开发环境。wheel SHA-256 为 `3615e455d5a7750981897cb00ada7e4ec7c41823c963d3315a15087fbc731800`；两个 venv 的 `pip check` 和六个关键安装态源码哈希与本地精确提交一致。
+- PostgreSQL：一次性空库完整应用 27 份 migration 并重入，`tests/test_workflow_postgres.py` 为 `32 passed`。并发选择更新只有一路成功，生成冻结与重复生成保持同一精确版本；强制让 0027 事务失败后 ledger 保持 `26 / 0026` 且新增字段为 0。两个一次性库均在核对名称、owner 与非模板属性后精确删除并回读不存在。长期开发库增量应用 `0027_console_enterprise_knowledge_selection` 并重入，当前 ledger 为 `27 / 0027`。
+- Probe：安装态 synthetic 企业资料探针回读安全目录不含正文和管理员身份，显式选择冻结 v1，重复生成不漂移到后来发布的 v2，撤销后新的 Planner 与 Agent Context 都被拒绝。搜索探针回读规范 URL、current freshness、unknown authority 与 health；合法 claim 绑定当前 provider 原文片段，伪造 excerpt 被拒绝；额度、超时和无证据分别得到稳定错误分类。
+- SSRF boundary：生产 `SafeOutboundFetcher` 仍为 unavailable，不对供应商返回 URL 发起请求；私网探针回读 unknown，不能写成可访问性验证通过。URL 结构、片段支持和供应商摘要都不证明页面内容或业务事实正确，语义真实性继续标记为未独立验证。
+- Operations：十个 larkflow Python 服务与 Caddy 均为 `active / running / NRestarts=0`，部署窗口 warning 为 0。Caddy live 配置未修改，SHA-256 保持 `fc24674c12ebe132c4fc10206f24ac71f6c510d32c0ba69c8cf6a6cf40527b19` 并再次通过 validate；Console loopback 为 200，能力端点显示显式企业资料选择已启用，未认证资料目录为 401。本轮没有访问、创建或修改飞书资源与业务实例。
+- Correction：本条把下方 v0.91.0 与 v0.92.0 的候选状态更新为已完成开发部署技术验证。真实浏览器显式选择、真实内部资料和人工产品验收仍未完成，不能描述为生产就绪。
+
 ## v0.92.0-draft · 2026-08-19 · 搜索来源质量候选
 
 - Added：ADR-120 合同提交 `05ad92ba26e85d649478a98f15cb70b2b26cb9c8` 与内容提交 `fba57583af164d5a39077d7979b751e604cc3382` 为搜索来源增加 URL 结构、health、发布时间、freshness、可解释 authority 与 support 分层状态；`web.search` 结果持久化质量摘要和明确证据边界，不再让“有 URL”暗示事实正确。

@@ -21,7 +21,7 @@
 
 在继续扩展执行器之前，先关闭云端 Agent 控制平面的四个合同：
 
-1. `Knowledge Context Service`：只支持管理员发布的企业共享资料与项目级上传，服务端在检索前完成 tenant、Instance、actor、数据分类和模型外发授权。企业资料的 tenant-first 目录、不可变正文 Blob、管理员全员授权证明、撤销门禁、规划和 Agent Attempt 重授权，以及两类来源的确定性 ContextBundle 合并已经部署。显式企业资料选择已经提交：Console collecting 草稿默认空选择，发起人保存 source 清单，生成边界冻结精确版本并由重试复用；飞书向导不再静默全选。`0027` 的真实 PostgreSQL、部署和安装态探针仍待完成，真实管理员浏览器验收、生产对象存储、语义检索、部门 ACL 与个人知识库后置。
+1. `Knowledge Context Service`：只支持管理员发布的企业共享资料与项目级上传，服务端在检索前完成 tenant、Instance、actor、数据分类和模型外发授权。企业资料的 tenant-first 目录、不可变正文 Blob、管理员全员授权证明、撤销门禁、规划和 Agent Attempt 重授权，以及两类来源的确定性 ContextBundle 合并已经部署。显式企业资料选择也已部署：Console collecting 草稿默认空选择，发起人保存 source 清单，生成边界冻结精确版本并由重试复用；飞书向导不再静默全选。`0027` 已完成真实 PostgreSQL、重入、回滚和安装态探针，真实管理员浏览器验收、生产对象存储、语义检索、部门 ACL 与个人知识库后置。
 2. `PlannerRuntime Port`：Refactor Phase 1 基线已落码。当前 bounded adapter 只返回候选图与最小运行时摘要，不写草稿、不启动流程；`PlanningService` 会覆盖候选中的服务端输入并通过统一 validator 强制最终复验。Phase 2A 项目附件规划与企业资料 ContextBundle 已部署；显式选择切片只让 Planner 获得生成边界冻结的企业版本，并与项目附件共享预算和 fingerprint。类型化只读工具、A/B 与真实管理员浏览器验收仍未完成。
 3. `AgentRuntime Port` 与 `Authorized Tool Gateway`：completion 基线端口与 Worker bridge 已落码，一次只执行一个节点的一个 Attempt，claim 和版本继续留在 Worker。Phase 2B 项目附件能力信封与企业资料切片均已部署；显式 `instance_inputs.enterprise_knowledge`、Node/Attempt 重新授权和 `context.read.enterprise_knowledge` 已通过 synthetic Runtime 探针。Tool Gateway 和候选 Runtime 仍未实现，所有业务写继续使用显式 Tool 节点。
 4. `NodeExecutionPolicy`：runtime、provider、model、allowed tools、knowledge scopes、data classification、egress、budget、timeout 和 retry 属于 NodeRun policy，不进入业务 DAG Contract。
@@ -60,7 +60,7 @@
 
 P0 结构能力已由 `6d2d9fa22b7e6926cfe5a1bcf714ccccd073b6d3` 与 `c7e7d901237a3b72d3d265382e1e2239a0626abd` 提交、推送和部署，来源声明与跨入口决定卡收口由 `ba708724b5095f9185aa894ec381151f4305b91d` 完成。页面新增节点不再要求用户填写内部 key，可选择插入到既有节点之前；Human、Agent 与 Tool 都按交付物合同完成；飞书 Task 原生完成不能绕过必填输出；旅游规划必须经过需求确认、并行 `web.search` 研究、Agent 综合和 Human 决定。完整离线套件为 `1060 passed, 24 skipped`。
 
-- 真实苏州样本已经关闭数据库调度、结构化 Human 提交、三个搜索 Tool、Agent 多上游消费、飞书 Task 完成投影、明确退回、局部返工、第二轮接受和两张决定卡收口。修复提交 `ba708724b5095f9185aa894ec381151f4305b91d` 只信任供应商结构化引用，并让消费搜索结果的 Agent 固定披露未独立核验边界。`fba57583af164d5a39077d7979b751e604cc3382` 已实现来源健康与 claim 支持的分层合同：生产默认不抓取任意返回 URL，health 保持 unknown；确定性支持只绑定当前搜索 Attempt 的规范化 URL 和 provider 原文片段。开发部署与安装态探针尚待完成，供应商引用可访问性、摘要真实性和旅游事实正确性均未关闭，因此继续保持不可邀请测试。
+- 真实苏州样本已经关闭数据库调度、结构化 Human 提交、三个搜索 Tool、Agent 多上游消费、飞书 Task 完成投影、明确退回、局部返工、第二轮接受和两张决定卡收口。修复提交 `ba708724b5095f9185aa894ec381151f4305b91d` 只信任供应商结构化引用，并让消费搜索结果的 Agent 固定披露未独立核验边界。`fba57583af164d5a39077d7979b751e604cc3382` 已实现并部署来源健康与 claim 支持的分层合同：生产默认不抓取任意返回 URL，health 保持 unknown；确定性支持只绑定当前搜索 Attempt 的规范化 URL 和 provider 原文片段。安装态 synthetic 探针已通过，但供应商引用可访问性、摘要真实性和旅游事实正确性均未关闭，因此继续保持不可邀请测试。
 
 - 开发工作区已在双备份后重置为空状态。Target 与 legacy 的流程测试数据、59 个数据库绑定飞书任务均已删除并回读；模板、migration 和当前登录会话保留。两份本次清理前备份随后按用户明确要求删除，当前不能再从它们恢复；其他历史与定时备份未动。另一次独立授权已将全部现存 Target 备份中可确认的 21 份 larkflow 完成文档移入飞书回收站，决定卡和消息仍保留。该清理关闭默认工作区历史噪音，不替代真实首次使用验收。
 
