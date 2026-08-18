@@ -86,7 +86,7 @@ larkflow 不会把整个企业飞书云盘都交给模型。
 
 Phase 2A 覆盖第二类资料的规划切片：Console 仅在存储和模型外发都已启用时展示 UTF-8 txt/md 入口，资料先绑定未生成的草稿请求，确认清单后才进入 Planner。能力未启用时，服务端在落库前拒绝附件模式，原有无附件流程继续可用。该切片已完成真实 PostgreSQL、Caddy 和开发环境部署验收；真实 Owner 浏览器上传与生成仍待手工验收。
 
-Phase 2B 已实现但尚未部署：larkflow 在候选落库前为附件支持的 Agent 节点追加显式 `instance_inputs.project_attachments` 输入。Node Worker 只在看到该声明时，才按 tenant、Instance、Node、Attempt、冻结 manifest、附件状态、内容指纹和模型外发策略重新授权正文。Runtime 得到的是有界 `ContextBundle` 与短时 `CapabilityEnvelope`，不会获得 object key、BlobStore、PostgreSQL 连接、claim token 或飞书凭据。每次成功 Attempt 会在结果中保存不含正文的上下文 manifest、能力信封和 runtime metadata，便于复核实际使用范围。
+Phase 2B 已提交并部署到单机开发环境：larkflow 在候选落库前为附件支持的 Agent 节点追加显式 `instance_inputs.project_attachments` 输入。Node Worker 只在看到该声明时，才按 tenant、Instance、Node、Attempt、冻结 manifest、附件状态、内容指纹和模型外发策略重新授权正文。Runtime 得到的是有界 `ContextBundle` 与短时 `CapabilityEnvelope`，不会获得 object key、BlobStore、PostgreSQL 连接、claim token 或飞书凭据。每次成功 Attempt 会在结果中保存不含正文的上下文 manifest、能力信封和 runtime metadata，便于复核实际使用范围。一次性真实 PostgreSQL 合同与安装态 synthetic Runtime 探针已通过；真实 Owner 浏览器附件交互仍是独立产品验收门槛。
 
 这里最重要的不是检索能力，而是授权顺序：
 
@@ -415,7 +415,7 @@ Edge 已经做过一个只读 Proof，代码和安全证据都保留。
 
 - 企业共享知识清单。
 - 企业共享资料与通用 Knowledge Context Service。
-- Phase 2B 的真实 PostgreSQL、开发部署与 synthetic Agent Attempt 回归。
+- Phase 2B 已完成真实 PostgreSQL、开发部署与 synthetic Agent Attempt 回归，下一步补真实 Owner 浏览器附件交互与受控内部试用。
 - PDF、DOCX、图片 OCR、飞书消息附件和生产对象存储。
 - Authorized Tool Gateway。
 - Attempt 级能力信封。
