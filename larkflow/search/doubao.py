@@ -11,12 +11,16 @@ from .contracts import (
     SearchEvidenceMissingError,
     SearchProviderError,
     SearchProtocolError,
+    SearchQuotaExhaustedError,
+    SearchRateLimitedError,
     SearchResult,
     SearchSource,
     SearchTransportError,
+    SearchTimeoutError,
     SearchUnavailableError,
     SearchUsage,
 )
+from .quality import normalize_source_url
 
 
 DOUBAO_SEARCH_ENDPOINT = "https://open.feedcoopapi.com/search_api/web_search"
@@ -149,6 +153,8 @@ class DoubaoSearchProvider:
                 )
             except SearchProviderError:
                 raise
+            except TimeoutError as exc:
+                raise SearchTimeoutError("Doubao Search request timed out") from exc
             except Exception as exc:
                 raise SearchTransportError(
                     f"Doubao Search request failed: {type(exc).__name__}"
@@ -169,11 +175,27 @@ class DoubaoSearchProvider:
                     headers=headers,
                     content=json.dumps(body, ensure_ascii=False).encode("utf-8"),
                 )
+                if response.status_code == 429:
+                    raise SearchRateLimitedError(
+                        "Doubao Search rate limit was reached"
+                    )
                 response.raise_for_status()
                 data = response.json()
-        except Exception as exc:
+        except SearchProviderError:
+            raise
+        except httpx.TimeoutException as exc:
+            raise SearchTimeoutError("Doubao Search request timed out") from exc
+        except httpx.HTTPStatusError as exc:
             raise SearchTransportError(
-                f"Doubao Search request failed: {type(exc).__name__}"
+                "Doubao Search returned an HTTP failure"
+            ) from exc
+        except httpx.TransportError as exc:
+            raise SearchTransportError(
+                "Doubao Search transport failed"
+            ) from exc
+        except (TypeError, ValueError) as exc:
+            raise SearchProtocolError(
+                "Doubao Search returned invalid JSON"
             ) from exc
         if not isinstance(data, Mapping):
             raise SearchProtocolError("Doubao Search returned non-object JSON")
@@ -185,9 +207,7 @@ def _normalize_response(
     *,
     query: str,
 ) -> SearchResult:
-    error_code = _response_error_code(data)
-    if error_code:
-        raise SearchProtocolError(f"Doubao Search rejected the request: {error_code}")
+    _raise_response_error(data)
     result = data.get("Result")
     if not isinstance(result, Mapping):
         raise SearchProtocolError("Doubao Search response has no Result object")
@@ -200,7 +220,7 @@ def _normalize_response(
     for item in raw_results:
         if not isinstance(item, Mapping):
             continue
-        url = _source_url(item.get("Url"))
+        url = normalize_source_url(item.get("Url"))
         if url is None or url in seen_urls:
             continue
         seen_urls.add(url)
@@ -279,18 +299,16 @@ def _response_error_code(data: Mapping[str, object]) -> str | None:
     return None
 
 
-def _source_url(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    candidate = value.strip()
-    if len(candidate) > 4_096:
-        return None
-    parsed = urlsplit(candidate)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        return None
-    if parsed.username is not None or parsed.password is not None:
-        return None
-    return candidate
+def _raise_response_error(data: Mapping[str, object]) -> None:
+    code = _response_error_code(data)
+    if not code:
+        return
+    normalized = code.casefold().replace("-", "_")
+    if any(term in normalized for term in ("quota", "insufficient", "exhaust")):
+        raise SearchQuotaExhaustedError("Doubao Search quota is exhausted")
+    if any(term in normalized for term in ("429", "rate", "throttl", "too_many")):
+        raise SearchRateLimitedError("Doubao Search rate limit was reached")
+    raise SearchProtocolError("Doubao Search rejected the request")
 
 
 def _published_at(item: Mapping[str, object]) -> str | None:

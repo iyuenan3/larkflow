@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from larkflow.search import SearchRateLimitedError
 from larkflow.workflow import (
     AgentResultIncomplete,
     AttemptStatus,
@@ -101,6 +102,11 @@ class FailingExecutor(AutomatedExecutor):
 class IncompleteAgentExecutor(AutomatedExecutor):
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         raise AgentResultIncomplete("provider stopped at output length")
+
+
+class RateLimitedSearchExecutor(AutomatedExecutor):
+    def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        raise SearchRateLimitedError("search rate limit was reached")
 
 
 class OverlengthCompletion:
@@ -570,6 +576,25 @@ def test_incomplete_agent_result_has_a_distinct_failure_code_and_never_completes
     assert failed.status == InstanceStatus.FAILED
     assert attempt.status == AttemptStatus.FAILED
     assert attempt.error_code == "agent_result_incomplete"
+    assert attempt.result is None
+
+
+def test_search_rate_limit_preserves_a_stable_worker_failure_code():
+    clock = Clock()
+    service, repository = build_runtime(clock=clock)
+
+    report = worker(
+        service,
+        repository,
+        RateLimitedSearchExecutor(),
+        clock=clock,
+        worker_id="worker_1",
+    ).run_once()
+
+    assert report.completed == 0
+    assert report.failed == 1
+    attempt = service.get(TENANT, "instance_runtime").current_attempt("generate")
+    assert attempt.error_code == "search_rate_limited"
     assert attempt.result is None
 
 

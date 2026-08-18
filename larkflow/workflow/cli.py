@@ -56,6 +56,7 @@ from .executors import (
     LLMAgentExecutor,
     SourceClaimsCheckToolExecutor,
     SourceDecisionCheckToolExecutor,
+    SourceEvidenceCheckToolExecutor,
     ToolExecutorRouter,
     WebSearchToolExecutor,
 )
@@ -1189,6 +1190,11 @@ def _executors(
         )
         tool_adapters.append(
             SourceDecisionCheckToolExecutor(
+                max_source_chars=settings.content_check_max_chars,
+            )
+        )
+        tool_adapters.append(
+            SourceEvidenceCheckToolExecutor(
                 max_source_chars=settings.content_check_max_chars,
             )
         )

@@ -162,6 +162,8 @@ class DraftDefinitionGenerator:
         tool_rules = (
             "Tool 节点只能使用 "
             '{"kind":"web.search","args":{"model_role":"default","instructions":"具体研究指令"}}'
+            "。如果节点有明确时效要求，可在 args 增加 1 到 3650 的整数 "
+            "freshness_max_age_days"
             "，必须依赖已确认的 Human 输入，outputs 必须且只能声明 "
             "content(text) 和 sources(string_list) 两个 required=true 交付物。"
             if self.allow_web_search

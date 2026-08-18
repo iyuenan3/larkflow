@@ -303,16 +303,27 @@ class GeneratedDraftValidator:
                 if tool.get("kind") != "web.search":
                     raise DraftGenerationRejected("生成流程只允许 web.search Tool")
                 args = tool.get("args")
-                if not isinstance(args, Mapping) or set(args) != {
-                    "model_role",
-                    "instructions",
-                }:
+                if (
+                    not isinstance(args, Mapping)
+                    or not {"model_role", "instructions"} <= set(args)
+                    or not set(args)
+                    <= {"model_role", "instructions", "freshness_max_age_days"}
+                ):
                     raise DraftGenerationRejected("web.search args 定义不完整")
                 if args.get("model_role") != "default":
                     raise DraftGenerationRejected("web.search 必须使用 default 模型角色")
                 instructions = args.get("instructions")
                 if not isinstance(instructions, str) or not instructions.strip():
                     raise DraftGenerationRejected("web.search 必须声明具体研究指令")
+                freshness_max_age_days = args.get("freshness_max_age_days")
+                if freshness_max_age_days is not None and (
+                    isinstance(freshness_max_age_days, bool)
+                    or not isinstance(freshness_max_age_days, int)
+                    or not 1 <= freshness_max_age_days <= 3650
+                ):
+                    raise DraftGenerationRejected(
+                        "web.search freshness_max_age_days 必须在 1 到 3650 之间"
+                    )
             if executor == "human":
                 if isinstance(deps, list) and any(dep in agent_ids for dep in deps):
                     has_human_after_agent = True

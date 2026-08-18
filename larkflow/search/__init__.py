@@ -3,14 +3,18 @@
 from .contracts import (
     SearchCapability,
     SearchEvidenceMissingError,
+    SearchQuotaExhaustedError,
+    SearchRateLimitedError,
     SearchProtocolError,
     SearchProvider,
     SearchProviderError,
     SearchResult,
     SearchSource,
     SearchTransportError,
+    SearchTimeoutError,
     SearchUnavailableError,
     SearchUsage,
+    SearchSourcesUnavailableError,
 )
 from .doubao import (
     DOUBAO_SEARCH_ENDPOINT,
@@ -18,6 +22,18 @@ from .doubao import (
     DoubaoSearchConfig,
     DoubaoSearchProvider,
     render_search_result,
+)
+from .outbound import (
+    DisabledSafeOutboundFetcher,
+    OutboundFetchResult,
+    SafeOutboundFetcher,
+)
+from .quality import (
+    SourceQualityPolicy,
+    normalize_source_records,
+    normalize_source_url,
+    source_freshness,
+    validate_claim_support,
 )
 
 __all__ = [
@@ -27,13 +43,25 @@ __all__ = [
     "DoubaoSearchProvider",
     "SearchCapability",
     "SearchEvidenceMissingError",
+    "SearchQuotaExhaustedError",
+    "SearchRateLimitedError",
     "SearchProtocolError",
     "SearchProvider",
     "SearchProviderError",
     "SearchResult",
     "SearchSource",
     "SearchTransportError",
+    "SearchTimeoutError",
     "SearchUnavailableError",
     "SearchUsage",
+    "SearchSourcesUnavailableError",
+    "DisabledSafeOutboundFetcher",
+    "OutboundFetchResult",
+    "SafeOutboundFetcher",
+    "SourceQualityPolicy",
+    "normalize_source_records",
+    "normalize_source_url",
+    "source_freshness",
+    "validate_claim_support",
     "render_search_result",
 ]

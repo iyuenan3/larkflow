@@ -11,9 +11,16 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from larkflow.search import (
+    DisabledSafeOutboundFetcher,
     SearchResult,
+    SearchSourcesUnavailableError,
     SearchUnavailableError,
+    SafeOutboundFetcher,
+    SourceQualityPolicy,
+    normalize_source_records,
+    normalize_source_url,
     render_search_result,
+    validate_claim_support,
 )
 
 from .model import ExecutorKind, QualityResult, QualityVerdict
@@ -525,6 +532,11 @@ class WebSearchToolExecutor:
     """Run one visible, source-preserving hosted web research step."""
 
     KIND = "web.search"
+    EVIDENCE_BOUNDARY = (
+        "来源质量边界：URL、发布时间和健康状态只是当前检索与可选安全探针的观测，"
+        "不证明页面内容、供应商摘要或现实事实正确。claim 只有经过 source_evidence.check "
+        "绑定当前 URL 与 provider 原文片段后，才能标记为 supported，且仍需 Human 复核。"
+    )
 
     def __init__(
         self,
@@ -532,6 +544,7 @@ class WebSearchToolExecutor:
         *,
         max_prompt_chars: int = 20_000,
         max_result_chars: int = 50_000,
+        source_fetcher: SafeOutboundFetcher | None = None,
     ) -> None:
         if max_prompt_chars < 1:
             raise ValueError("max_prompt_chars must be positive")
@@ -540,6 +553,7 @@ class WebSearchToolExecutor:
         self.client = client
         self.max_prompt_chars = max_prompt_chars
         self.max_result_chars = max_result_chars
+        self.source_fetcher = source_fetcher or DisabledSafeOutboundFetcher()
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         tool = request.work.get("tool")
@@ -549,7 +563,11 @@ class WebSearchToolExecutor:
         args = tool.get("args") or {}
         if not isinstance(args, Mapping):
             raise ValueError("web.search args must be an object")
-        if not set(args) <= {"instructions", "model_role"}:
+        if not set(args) <= {
+            "instructions",
+            "model_role",
+            "freshness_max_age_days",
+        }:
             raise ValueError("web.search args contain unsupported fields")
         instructions = args.get("instructions")
         if not isinstance(instructions, str) or not instructions.strip():
@@ -557,6 +575,15 @@ class WebSearchToolExecutor:
         model_role = args.get("model_role", "default")
         if not isinstance(model_role, str) or not model_role.strip():
             raise ValueError("web.search model_role must be text")
+        freshness_max_age_days = args.get("freshness_max_age_days")
+        if freshness_max_age_days is not None and (
+            isinstance(freshness_max_age_days, bool)
+            or not isinstance(freshness_max_age_days, int)
+            or not 1 <= freshness_max_age_days <= 3_650
+        ):
+            raise ValueError(
+                "web.search freshness_max_age_days must be between 1 and 3650"
+            )
         capability = getattr(self.client, "capability", None)
         if callable(capability):
             observed = capability()
@@ -612,10 +639,6 @@ class WebSearchToolExecutor:
         sources = raw.get("sources")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("web.search returned empty content")
-        if len(content) > self.max_result_chars:
-            raise ValueError(
-                f"web.search result exceeds {self.max_result_chars} characters"
-            )
         if (
             not isinstance(sources, Sequence)
             or isinstance(sources, (str, bytes))
@@ -627,7 +650,10 @@ class WebSearchToolExecutor:
             )
         ):
             raise ValueError("web.search returned no valid cited sources")
-        normalized_sources = list(dict.fromkeys(item.strip() for item in sources))
+        canonical_sources = [normalize_source_url(item) for item in sources]
+        if any(item is None for item in canonical_sources):
+            raise ValueError("web.search returned no valid cited sources")
+        normalized_sources = list(dict.fromkeys(canonical_sources))
         source_records = raw.get("source_records")
         if source_records is None:
             source_records = [
@@ -640,8 +666,50 @@ class WebSearchToolExecutor:
                 }
                 for url in normalized_sources
             ]
-        if not _valid_source_records(source_records, normalized_sources):
-            raise ValueError("web.search returned invalid source records")
+        try:
+            source_records = normalize_source_records(
+                source_records,
+                normalized_sources,
+                policy=SourceQualityPolicy(
+                    as_of=datetime.now(ZoneInfo("Asia/Shanghai")).date(),
+                    freshness_max_age_days=freshness_max_age_days,
+                ),
+                fetcher=self.source_fetcher,
+            )
+        except ValueError as exc:
+            raise ValueError("web.search returned invalid source records") from exc
+        if source_records and all(
+            item["health"] == "unreachable" for item in source_records
+        ):
+            raise SearchSourcesUnavailableError(
+                "all cited sources are currently unreachable"
+            )
+        health_available, health_reason = self.source_fetcher.capability()
+        rendered_content = f"{self.EVIDENCE_BOUNDARY}\n\n{content.strip()}"
+        if len(rendered_content) > self.max_result_chars:
+            raise ValueError(
+                f"web.search result exceeds {self.max_result_chars} characters"
+            )
+        quality_summary = {
+            "total": len(source_records),
+            "reachable": sum(
+                item["health"] == "reachable" for item in source_records
+            ),
+            "unreachable": sum(
+                item["health"] == "unreachable" for item in source_records
+            ),
+            "health_unknown": sum(
+                item["health"] == "unknown" for item in source_records
+            ),
+            "current": sum(
+                item["freshness"] == "current" for item in source_records
+            ),
+            "stale": sum(item["freshness"] == "stale" for item in source_records),
+            "freshness_unknown": sum(
+                item["freshness"] == "unknown" for item in source_records
+            ),
+            "support": "unknown",
+        }
         usage = raw.get("usage", {})
         if not isinstance(usage, Mapping):
             raise ValueError("web.search returned invalid usage")
@@ -655,9 +723,15 @@ class WebSearchToolExecutor:
         if error is not None:
             raise ValueError("web.search returned a provider error result")
         result = {
-            "content": content.strip(),
+            "content": rendered_content,
             "sources": normalized_sources,
             "source_records": source_records,
+            "source_health": {
+                "available": health_available,
+                "reason": health_reason,
+            },
+            "source_quality_summary": quality_summary,
+            "evidence_boundary": self.EVIDENCE_BOUNDARY,
             "tool_kind": self.KIND,
             "model_role": model_role.strip(),
             "request_id": request.idempotency_key,
@@ -743,6 +817,154 @@ def _valid_source_records(
             return False
         record_urls.append(url)
     return len(record_urls) == len(set(record_urls)) and set(record_urls) == set(sources)
+
+
+class SourceEvidenceCheckToolExecutor:
+    """Bind claims to exact snippets from one committed web.search dependency."""
+
+    KIND = "source_evidence.check"
+
+    def __init__(self, *, max_source_chars: int = 50_000) -> None:
+        if max_source_chars < 1:
+            raise ValueError("max_source_chars must be positive")
+        self.max_source_chars = max_source_chars
+
+    def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        tool = request.work.get("tool")
+        if not self.accepts(executor=request.executor, work=request.work):
+            raise ValueError(f"unsupported source evidence contract: {tool!r}")
+        assert isinstance(tool, Mapping)
+        args = tool.get("args") or {}
+        if not isinstance(args, Mapping) or set(args) != {
+            "claims",
+            "source_records",
+        }:
+            raise ValueError(
+                "source_evidence.check args require only claims and source_records"
+            )
+        claims = self._resolved_dependency(
+            request.input_snapshot,
+            args.get("claims"),
+            "claims",
+        )
+        source_path = args.get("source_records")
+        source_records = self._resolved_dependency(
+            request.input_snapshot,
+            source_path,
+            "source_records",
+        )
+        assert isinstance(source_path, str)
+        parent_path = source_path.rsplit(".", 1)[0]
+        found, parent = ContentCheckToolExecutor._lookup(
+            request.input_snapshot,
+            parent_path,
+        )
+        if (
+            not found
+            or not isinstance(parent, Mapping)
+            or parent.get("tool_kind") != "web.search"
+        ):
+            raise ValueError(
+                "source_evidence.check source_records must come from a direct web.search dependency"
+            )
+        persisted_sources = parent.get("sources")
+        if not isinstance(persisted_sources, Sequence) or isinstance(
+            persisted_sources, (str, bytes)
+        ):
+            raise ValueError("source_evidence.check search sources are missing")
+        record_urls = [
+            normalize_source_url(item.get("source_url"))
+            for item in source_records
+            if isinstance(item, Mapping)
+        ]
+        source_urls = [normalize_source_url(item) for item in persisted_sources]
+        if (
+            any(item is None for item in record_urls)
+            or any(item is None for item in source_urls)
+            or set(record_urls) != set(source_urls)
+            or len(record_urls) != len(set(record_urls))
+        ):
+            raise ValueError(
+                "source_evidence.check source records do not match the search Attempt"
+            )
+
+        claim_support, violations = validate_claim_support(claims, source_records)
+        if (
+            not violations
+            and len(json.dumps(claim_support, ensure_ascii=False))
+            > self.max_source_chars
+        ):
+            raise ValueError(
+                "source_evidence.check result exceeds the configured character budget"
+            )
+        passed = not violations
+        verdict = QualityVerdict.PASS if passed else QualityVerdict.FAIL
+        evidence = (
+            f"{len(claim_support)} 项 claim 均绑定当前搜索 Attempt 的 URL 与 provider 原文片段；"
+            "语义真实性未独立验证"
+            if passed
+            else "；".join(violations[:20])
+        )
+        suggestion = (
+            ""
+            if passed
+            else "仅引用当前搜索 Attempt 返回的 URL 和原文片段，修正后再交由节点 Owner 复核。"
+        )
+        return ExecutionResult(
+            result={
+                "verdict": verdict.value,
+                "evidence": evidence,
+                "suggestion": suggestion,
+                "claim_support": claim_support,
+                "support": "supported" if passed else "unsupported",
+                "semantic_verification": "not_independently_verified",
+                "violations": violations[:20],
+                "request_id": request.idempotency_key,
+            },
+            quality_result=QualityResult(
+                verdict=verdict,
+                evidence=evidence,
+                suggestion=suggestion,
+            ),
+        )
+
+    def accepts(self, *, executor: ExecutorKind, work: Mapping[str, object]) -> bool:
+        tool = work.get("tool")
+        return (
+            executor == ExecutorKind.TOOL
+            and isinstance(tool, Mapping)
+            and tool.get("kind") == self.KIND
+        )
+
+    def _resolved_dependency(
+        self,
+        root: Mapping[str, object],
+        path: object,
+        field_name: str,
+    ) -> Sequence[object]:
+        if (
+            not isinstance(path, str)
+            or not path.startswith("dependencies.")
+            or path.count(".") < 2
+        ):
+            raise ValueError(
+                f"source_evidence.check {field_name} must reference a direct dependency"
+            )
+        found, value = ContentCheckToolExecutor._lookup(root, path)
+        if not found:
+            raise ValueError(
+                f"source_evidence.check {field_name} was not found: {path}"
+            )
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            raise ValueError(
+                f"source_evidence.check {field_name} must resolve to an array"
+            )
+        length = len(json.dumps(to_json_value(value), ensure_ascii=False))
+        if length > self.max_source_chars:
+            raise ValueError(
+                f"source_evidence.check {field_name} exceeds {self.max_source_chars} characters"
+            )
+        return value
 
 
 class ContentCheckToolExecutor:

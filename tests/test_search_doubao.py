@@ -9,7 +9,10 @@ from larkflow.search import (
     DoubaoSearchProvider,
     SearchEvidenceMissingError,
     SearchProtocolError,
+    SearchQuotaExhaustedError,
+    SearchRateLimitedError,
     SearchTransportError,
+    SearchTimeoutError,
 )
 
 
@@ -84,6 +87,9 @@ def test_search_normalizes_source_evidence_usage_and_unknown_publish_time():
     assert result.sources[0].published_at_status == "known"
     assert result.sources[1].published_at is None
     assert result.sources[1].published_at_status == "unknown"
+    assert result.sources[0].health == "unknown"
+    assert result.sources[0].authority == "unknown"
+    assert result.sources[0].support == "unknown"
     assert result.usage.as_dict() == {
         "result_count": 2,
         "time_cost_ms": 37,
@@ -113,6 +119,17 @@ def test_search_deduplicates_urls_and_fails_closed_without_verifiable_sources():
     )
 
     assert len(provider.search(query="核对来源").sources) == 1
+
+    normalized_duplicate = DoubaoSearchProvider(
+        DoubaoSearchConfig(api_key="secret-key"),
+        transport=lambda *_args, **_kwargs: response(
+            results=[
+                {**duplicate, "Url": "HTTPS://EXAMPLE.COM:443/source#one"},
+                {**duplicate, "Url": "https://example.com/source"},
+            ]
+        ),
+    )
+    assert len(normalized_duplicate.search(query="核对来源").sources) == 1
 
     empty = DoubaoSearchProvider(
         DoubaoSearchConfig(api_key="secret-key"),
@@ -150,6 +167,41 @@ def test_provider_errors_are_classified_and_never_include_the_api_key():
         failed.search(query="核对来源")
     assert transport_error.value.error_code == "search_transport_error"
     assert key not in str(transport_error.value)
+
+
+@pytest.mark.parametrize(
+    ("response_code", "error_type", "error_code"),
+    [
+        ("QuotaExhausted", SearchQuotaExhaustedError, "search_quota_exhausted"),
+        ("TooManyRequests429", SearchRateLimitedError, "search_rate_limited"),
+    ],
+)
+def test_provider_rejections_have_stable_actionable_error_codes(
+    response_code,
+    error_type,
+    error_code,
+):
+    provider = DoubaoSearchProvider(
+        DoubaoSearchConfig(api_key="secret-key"),
+        transport=lambda *_args, **_kwargs: {
+            "ResponseMetadata": {"Error": {"Code": response_code}}
+        },
+    )
+
+    with pytest.raises(error_type) as error:
+        provider.search(query="核对来源")
+    assert error.value.error_code == error_code
+
+
+def test_provider_timeout_has_a_stable_error_code():
+    provider = DoubaoSearchProvider(
+        DoubaoSearchConfig(api_key="secret-key"),
+        transport=lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError()),
+    )
+
+    with pytest.raises(SearchTimeoutError) as error:
+        provider.search(query="核对来源")
+    assert error.value.error_code == "search_timeout"
 
 
 @pytest.mark.parametrize("query", ["", "x" * 101])

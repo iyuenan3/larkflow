@@ -6,6 +6,19 @@ from typing import Literal, Protocol
 
 
 PublishedAtStatus = Literal["known", "unknown"]
+UrlStatus = Literal["valid", "invalid"]
+SourceHealth = Literal["reachable", "unreachable", "unknown"]
+SourceFreshness = Literal["current", "stale", "unknown"]
+SourceAuthority = Literal[
+    "government",
+    "operator",
+    "academic",
+    "publisher",
+    "vendor",
+    "community",
+    "unknown",
+]
+SourceSupport = Literal["supported", "unsupported", "unknown"]
 
 
 @dataclass(frozen=True)
@@ -28,6 +41,13 @@ class SearchSource:
     source_url: str
     published_at: str | None
     published_at_status: PublishedAtStatus
+    url_status: UrlStatus = "valid"
+    health: SourceHealth = "unknown"
+    health_reason: str = "not_checked"
+    freshness: SourceFreshness = "unknown"
+    authority: SourceAuthority = "unknown"
+    authority_basis: str = "not_assessed"
+    support: SourceSupport = "unknown"
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -36,6 +56,13 @@ class SearchSource:
             "source_url": self.source_url,
             "published_at": self.published_at,
             "published_at_status": self.published_at_status,
+            "url_status": self.url_status,
+            "health": self.health,
+            "health_reason": self.health_reason,
+            "freshness": self.freshness,
+            "authority": self.authority,
+            "authority_basis": self.authority_basis,
+            "support": self.support,
         }
 
 
@@ -86,6 +113,18 @@ class SearchUnavailableError(SearchProviderError):
     error_code = "search_unavailable"
 
 
+class SearchRateLimitedError(SearchProviderError):
+    error_code = "search_rate_limited"
+
+
+class SearchQuotaExhaustedError(SearchProviderError):
+    error_code = "search_quota_exhausted"
+
+
+class SearchTimeoutError(SearchProviderError):
+    error_code = "search_timeout"
+
+
 class SearchTransportError(SearchProviderError):
     error_code = "search_transport_error"
 
@@ -96,3 +135,7 @@ class SearchProtocolError(SearchProviderError):
 
 class SearchEvidenceMissingError(SearchProviderError):
     error_code = "search_evidence_missing"
+
+
+class SearchSourcesUnavailableError(SearchProviderError):
+    error_code = "search_sources_unreachable"

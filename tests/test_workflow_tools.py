@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from larkflow.search import SearchResult, SearchSource, SearchUsage
+from larkflow.search import (
+    OutboundFetchResult,
+    SearchResult,
+    SearchSource,
+    SearchSourcesUnavailableError,
+    SearchUsage,
+)
 from larkflow.workflow import (
     ContentCheckToolExecutor,
     DevelopmentToolExecutor,
@@ -22,6 +28,7 @@ from larkflow.workflow import (
     QualityVerdict,
     SourceClaimsCheckToolExecutor,
     SourceDecisionCheckToolExecutor,
+    SourceEvidenceCheckToolExecutor,
     TargetRuntimeSettings,
     TemplateService,
     ToolExecutorRouter,
@@ -67,8 +74,9 @@ class UnavailableWebSearch:
 
 
 class StaticSearchProvider:
-    def __init__(self) -> None:
+    def __init__(self, *, published_at: str | None = None) -> None:
         self.calls = []
+        self.published_at = published_at
 
     def capability(self):
         class Capability:
@@ -86,11 +94,25 @@ class StaticSearchProvider:
                     title="苏州博物馆参观须知",
                     snippet="开放与预约信息。",
                     source_url="https://www.szmuseum.com/guide",
-                    published_at=None,
-                    published_at_status="unknown",
+                    published_at=self.published_at,
+                    published_at_status=(
+                        "known" if self.published_at is not None else "unknown"
+                    ),
                 ),
             ),
             usage=SearchUsage(result_count=1, time_cost_ms=12),
+        )
+
+
+class UnreachableSourceFetcher:
+    def capability(self):
+        return True, "stub_enabled"
+
+    def check(self, *, url: str):
+        return OutboundFetchResult(
+            health="unreachable",
+            reason="stub_unreachable",
+            final_url=url,
         )
 
 
@@ -172,6 +194,76 @@ def web_search_request(*, extra_args: dict | None = None) -> ExecutionRequest:
         },
         expected_node_version=1,
         claim_token="claim-search",
+        claim_expires_at=NOW + timedelta(minutes=5),
+    )
+
+
+def source_evidence_request(
+    *,
+    claims=None,
+    source_records=None,
+    source_tool_kind: str = "web.search",
+) -> ExecutionRequest:
+    records = source_records or [
+        {
+            "title": "苏州博物馆参观须知",
+            "snippet": "苏州博物馆实行预约参观。",
+            "source_url": "https://www.szmuseum.com/guide",
+            "published_at": None,
+            "published_at_status": "unknown",
+            "url_status": "valid",
+            "health": "unknown",
+            "health_reason": "safe_outbound_fetcher_unavailable",
+            "freshness": "unknown",
+            "authority": "unknown",
+            "authority_basis": "not_assessed",
+            "support": "unknown",
+        }
+    ]
+    claim_values = claims or [
+        {
+            "claim_id": "C1",
+            "text": "参观需要预约",
+            "source_url": "HTTPS://WWW.SZMUSEUM.COM:443/guide#notice",
+            "supporting_excerpt": "实行预约参观",
+        }
+    ]
+    return ExecutionRequest(
+        tenant_id="tenant_tools",
+        instance_id="instance_tools",
+        node_key="check_search_evidence",
+        attempt_id="attempt_search_evidence",
+        attempt_no=1,
+        owner_person_id="person_owner",
+        executor="tool",
+        work={
+            "objective": "检查搜索结论的证据绑定",
+            "inputs": [
+                "dependencies.research.source_records",
+                "dependencies.summary.claims",
+            ],
+            "outputs": [{"id": "verdict", "type": "data"}],
+            "acceptance": ["每个 claim 绑定当前搜索来源原文片段"],
+            "tool": {
+                "kind": "source_evidence.check",
+                "args": {
+                    "claims": "dependencies.summary.claims",
+                    "source_records": "dependencies.research.source_records",
+                },
+            },
+        },
+        input_snapshot={
+            "dependencies": {
+                "research": {
+                    "tool_kind": source_tool_kind,
+                    "sources": ["https://www.szmuseum.com/guide"],
+                    "source_records": records,
+                },
+                "summary": {"claims": claim_values},
+            }
+        },
+        expected_node_version=1,
+        claim_token="claim-search-evidence",
         claim_expires_at=NOW + timedelta(minutes=5),
     )
 
@@ -541,7 +633,8 @@ def test_web_search_executor_preserves_research_content_and_sources():
     client = StaticWebSearch()
     result = WebSearchToolExecutor(client).execute(web_search_request())
 
-    assert result.result["content"] == "景点开放信息与预约规则已核对。"
+    assert result.result["content"].endswith("景点开放信息与预约规则已核对。")
+    assert "不证明页面内容" in result.result["content"]
     assert result.result["sources"] == ("https://example.com/official-guide",)
     assert result.result["provider"] == "openai_responses_web_search"
     assert result.result["query"] == "优先核对景点官方开放时间和预约规则"
@@ -565,6 +658,26 @@ def test_web_search_executor_preserves_typed_provider_evidence_without_synthesiz
     assert result["sources"] == ("https://www.szmuseum.com/guide",)
     assert result["source_records"][0]["title"] == "苏州博物馆参观须知"
     assert result["source_records"][0]["published_at_status"] == "unknown"
+    assert result["source_records"][0]["url_status"] == "valid"
+    assert result["source_records"][0]["health"] == "unknown"
+    assert result["source_records"][0]["freshness"] == "unknown"
+    assert result["source_records"][0]["authority"] == "unknown"
+    assert result["source_records"][0]["support"] == "unknown"
+    assert result["source_health"] == {
+        "available": False,
+        "reason": "safe_outbound_fetcher_unavailable",
+    }
+    assert result["source_quality_summary"] == {
+        "total": 1,
+        "reachable": 0,
+        "unreachable": 0,
+        "health_unknown": 1,
+        "current": 0,
+        "stale": 0,
+        "freshness_unknown": 1,
+        "support": "unknown",
+    }
+    assert "Human 复核" in result["evidence_boundary"]
     assert result["usage"]["result_count"] == 1
     assert result["error"] is None
     assert "发布时间：时间不明" in result["content"]
@@ -595,12 +708,95 @@ def test_web_search_executor_preflights_provider_capability_without_remote_call(
     assert client.calls == []
 
 
+def test_web_search_marks_stale_sources_only_with_an_explicit_policy():
+    provider = StaticSearchProvider(published_at="2020-01-01")
+    result = WebSearchToolExecutor(provider).execute(
+        web_search_request(extra_args={"freshness_max_age_days": 30})
+    ).result
+
+    assert result["source_records"][0]["freshness"] == "stale"
+    assert result["source_quality_summary"]["stale"] == 1
+
+
+def test_web_search_result_budget_includes_the_visible_evidence_boundary():
+    with pytest.raises(ValueError, match="result exceeds"):
+        WebSearchToolExecutor(
+            StaticSearchProvider(),
+            max_result_chars=50,
+        ).execute(web_search_request())
+
+
+def test_web_search_fails_when_an_enabled_fetcher_observes_all_sources_unreachable():
+    with pytest.raises(SearchSourcesUnavailableError) as error:
+        WebSearchToolExecutor(
+            StaticSearchProvider(),
+            source_fetcher=UnreachableSourceFetcher(),
+        ).execute(web_search_request())
+
+    assert error.value.error_code == "search_sources_unreachable"
+
+
+def test_source_evidence_check_binds_claims_to_the_current_search_attempt():
+    result = SourceEvidenceCheckToolExecutor().execute(source_evidence_request())
+
+    assert result.result["verdict"] == "pass"
+    assert result.result["support"] == "supported"
+    assert result.result["semantic_verification"] == "not_independently_verified"
+    assert result.result["claim_support"] == (
+        {
+            "claim_id": "C1",
+            "source_url": "https://www.szmuseum.com/guide",
+            "supporting_excerpt": "实行预约参观",
+            "support": "supported",
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("claim_update", "message"),
+    [
+        (
+            {"source_url": "https://other.example/guide"},
+            "不属于当前搜索 Attempt",
+        ),
+        ({"supporting_excerpt": "免费且无需预约"}, "不是 provider 原文片段"),
+    ],
+)
+def test_source_evidence_check_rejects_replaced_urls_and_forged_excerpts(
+    claim_update,
+    message,
+):
+    valid = source_evidence_request().input_snapshot["dependencies"]["summary"][
+        "claims"
+    ][0]
+    result = SourceEvidenceCheckToolExecutor().execute(
+        source_evidence_request(claims=[{**valid, **claim_update}])
+    )
+
+    assert result.result["verdict"] == "fail"
+    assert result.result["support"] == "unsupported"
+    assert message in result.result["evidence"]
+
+
+def test_source_evidence_check_rejects_non_search_dependencies_and_budgets():
+    with pytest.raises(ValueError, match="direct web.search dependency"):
+        SourceEvidenceCheckToolExecutor().execute(
+            source_evidence_request(source_tool_kind="content.check")
+        )
+
+    with pytest.raises(ValueError, match="exceeds"):
+        SourceEvidenceCheckToolExecutor(max_source_chars=10).execute(
+            source_evidence_request()
+        )
+
+
 def test_tool_router_selects_one_explicit_adapter_and_rejects_unknown_kinds():
     router = ToolExecutorRouter(
         [
             ContentCheckToolExecutor(),
             SourceClaimsCheckToolExecutor(),
             SourceDecisionCheckToolExecutor(),
+            SourceEvidenceCheckToolExecutor(),
             DevelopmentToolExecutor(sleep=lambda _: None),
             WebSearchToolExecutor(StaticWebSearch()),
         ]
@@ -610,6 +806,7 @@ def test_tool_router_selects_one_explicit_adapter_and_rejects_unknown_kinds():
     assert router.execute(request()).result["verdict"] == "pass"
     assert router.execute(source_claims_request()).result["verdict"] == "pass"
     assert router.execute(source_decision_request()).result["verdict"] == "pass"
+    assert router.execute(source_evidence_request()).result["verdict"] == "pass"
     assert router.execute(web_search_request()).result["sources"]
     with pytest.raises(ValueError, match="unsupported Tool contract"):
         router.execute(request(kind="unknown.tool"))
