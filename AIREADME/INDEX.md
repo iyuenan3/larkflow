@@ -4,9 +4,9 @@
 
 当前产品处于开发试用阶段，不是生产就绪版本。Target 中央工作流、飞书责任投影和员工工作台已经形成可运行闭环；`PlannerRuntime` 与 `AgentRuntime` 基线端口已落码并部署到开发环境。项目级 UTF-8 txt/md 上传参与 DAG 规划已完成真实 PostgreSQL、Caddy、migration、服务端部署和 Owner 作用域 HTTPS API 验收；完整附件加明确 no-web 的新疆 8 日流程已经走完 Human、Agent、Human 决定闭环。No-web 旅游候选图现在必须把包含完整来源交付物的 Human 根节点直接连到被复核 Agent，并以可解析的正向出发地、日期、人数、预算、景点和交通证据做 fail-closed 校验，旁路根节点或“待定、未确认、没有”类否定文本不能放行；日期、人数和总预算还必须绑定到对应业务字段，无关的资料更新时间、酒店限住人数或酒店单项预算不能替代未确认的出行参数。日期标签还必须经过明确赋值边界，复合字段名和说明文字中的资料更新时间不能借用“出行日期”前缀放行。Agent 完成性同时校验供应商结束原因、结构化完成标记、验收证据锚点和服务端长度上限，任一条件失败都以 `agent_result_incomplete` 结束 Automated Attempt。薄 Python 豆包 `SearchProvider`、静态 capability preflight 和规范化来源证据已部署，开发环境真实公开查询回读 10 条带 URL 的来源与 provider request ID。新建文本交付物已统一为飞书原生 Docx，并完成真实创建、同一 document_id 覆盖、正文和原生标题、列表、表格回读。Phase 2B 的项目附件 Agent Attempt 上下文也已部署：只有显式声明服务器拥有输入的 Agent 节点，才会在 tenant、Instance、Node、Attempt 和外发策略复验后获得有界正文与短时只读能力信封，Attempt 只持久化安全 manifest、fingerprint 和运行证据，不保存正文、object key、claim 或凭据；一次性真实 PostgreSQL 合同与安装态 synthetic Runtime 探针已通过。真实浏览器附件交互仍待手工验收；企业共享知识、Tool Gateway、生产对象存储、PDF/DOCX/OCR 和向量检索仍未实现或后置，Personal Agent Edge 已暂停。最新实现与验收历史只记录在 [CHANGELOG.md](CHANGELOG.md)，当前推进边界见 [ROADMAP.md](ROADMAP.md)。
 
-企业共享资料目前只完成运行时中立的本地合同：不可变发布版本、安全引用、撤销门禁、tenant 绑定选择和 canonical fingerprint。持久化清单、管理员授权、管理 API、内容读取、ContextBundle 合并、检索和 Runtime 接入均未实现，不能描述为已接入企业知识库。
+企业共享资料已完成运行时中立合同与 tenant-first PostgreSQL 版本目录：不可变发布版本、安全引用、撤销门禁、每来源单一当前版本、追加审计和 canonical fingerprint 已通过真库与开发部署验证。管理员授权、管理 API、内容 Blob、ContextBundle 合并、检索和 Runtime 接入仍未实现，不能描述为已接入企业知识库。
 
-last-synced: ccf04c820b92cd74968ccb25ec7126990ba6fe17 · 2026-08-19
+last-synced: 7d26b2b0afb258affb7254e82254ee6c19d2c046 · 2026-08-19
 
 ## 阅读顺序
 

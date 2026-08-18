@@ -21,7 +21,7 @@
 
 在继续扩展执行器之前，先关闭云端 Agent 控制平面的四个合同：
 
-1. `Knowledge Context Service`：只支持管理员发布的企业共享资料与项目级上传，服务端在检索前完成 tenant、Instance、actor、数据分类和模型外发授权。企业共享资料的不可变发布版本、安全引用、撤销门禁、tenant 选择和 canonical fingerprint 合同已落码；持久化清单、管理员授权、正文读取和 ContextBundle 合并仍未实现。
+1. `Knowledge Context Service`：只支持管理员发布的企业共享资料与项目级上传，服务端在检索前完成 tenant、Instance、actor、数据分类和模型外发授权。企业共享资料的不可变发布版本、安全引用、撤销门禁、tenant 选择和 canonical fingerprint 合同已落码；tenant-first PostgreSQL 目录、每来源单一 published 版本、逻辑撤销和追加审计也已部署。管理员授权、管理 API、正文读取和 ContextBundle 合并仍未实现。
 2. `PlannerRuntime Port`：Refactor Phase 1 基线已落码。当前 bounded adapter 只返回候选图与最小运行时摘要，不写草稿、不启动流程；`PlanningService` 会覆盖候选中的服务端输入并通过统一 validator 强制最终复验。真实网页与飞书草稿入口已经传入非空 tenant、actor 与耐久 request ID。Phase 2A 让 Console 草稿可携带服务端授权的 txt/md `ContextBundle`，附件正文位于独立 BlobStore，只把安全 refs 与 fingerprint 冻结到 Instance；真实 PostgreSQL、Caddy、migration、开发部署和 Owner 作用域 HTTPS API 已通过，真实 Owner 浏览器附件交互仍待手工验收。类型化只读工具、企业共享资料和 A/B 仍未实现。
 3. `AgentRuntime Port` 与 `Authorized Tool Gateway`：completion 基线端口与 Worker bridge 已落码，一次只执行一个节点的一个 Attempt，claim 和版本继续留在 Worker。Phase 2B 项目附件只读能力信封和 Node/Attempt 绑定的 ContextBundle 已部署，并完成真实 PostgreSQL 合同与安装态 synthetic Runtime 探针；Tool Gateway 和候选 Runtime 仍未实现，所有业务写继续使用显式 Tool 节点。
 4. `NodeExecutionPolicy`：runtime、provider、model、allowed tools、knowledge scopes、data classification、egress、budget、timeout 和 retry 属于 NodeRun policy，不进入业务 DAG Contract。
@@ -116,7 +116,7 @@ P0 结构能力已由 `6d2d9fa22b7e6926cfe5a1bcf714ccccd073b6d3` 与 `c7e7d90123
 
 - Phase 2A 已完成离线、真实 PostgreSQL、Caddy、开发部署和 Owner 作用域 HTTPS API 验收。Phase 2B 的 Agent Attempt 附件引用和可审计能力信封也已完成开发部署、真实 PostgreSQL 合同与 synthetic Runtime 技术探针。真实 Owner 浏览器 collecting、txt/md 上传、列表与显式生成的可见交互仍待手工验收；企业共享资料、生产对象存储、飞书消息附件、PDF/DOCX/OCR、向量检索和 Tool Gateway 继续后置。
 - 豆包 Custom `SearchProvider`、静态 capability preflight、来源 URL fail-closed、结构化来源记录和现有 `web.search` seam 已部署。真实 synthetic/public 查询已回读 10 条带 URL 的规范化来源、usage 与 provider request ID，Runtime 与 Draft Generation Worker 的安装态 preflight 均为 configured。下一关不再是安装，而是在受控内部试用中验证引用质量、额度耗尽和远端错误分类；既有托管 Responses 路线的逐线路能力声明继续保留，cited-sources 护栏不移除。
-- 企业共享资料的本地合同已由 `ccf04c820b92cd74968ccb25ec7126990ba6fe17` 冻结，聚焦测试为 `17 passed`，完整离线合并证据为 `1209 passed, 27 skipped`。下一切片只实现 tenant-first 发布清单、不可变版本、撤销和追加审计仓储；不同时引入管理 UI、部门或个人 ACL、语义检索、Runtime 正文读取或个人知识库。
+- 企业共享资料合同由 `ccf04c820b92cd74968ccb25ec7126990ba6fe17` 冻结，目录仓储与 `0025_enterprise_knowledge_catalog` 由 `a7f827f0f1bd4509d6c0f6cb69a8d3d404e3b33e` 落码并部署。完整离线合并证据为 `1214 passed, 28 skipped`，一次性真实 PostgreSQL 合同为 `28 passed`。下一切片只实现服务器管理员授权和不含正文的目录管理 API；不同时引入部门或个人 ACL、语义检索、Runtime 正文读取或个人知识库。
 - 自动 Agent 完成性已从 Human Gate 的单点兜底前移到 Automated Attempt 边界。后续真实业务继续观察首次结果可用率、`agent_result_incomplete` 比例、模型用量、返工次数和锚点质量；当前一次新疆样本与离线回归不能外推为模型内容质量稳定。
 - Owner 流程操作、普通 Human 任务页面、受控流程输入与受控 DAG 画板均已提交和部署。公网纯合成实例已覆盖运行中未来节点修改与新增、图编辑确认、节点返工、旧 Attempt 保留、循环依赖拒绝和 PostgreSQL 审计回读；草稿态又完成真实登录拖拽连接、两次预览确认、选边断开和恢复原图。最终实例保持 `draft / graph_revision 3 / 0 NodeInstance / 0 Attempt / 0 Projection`，草稿依赖连线可见手势门槛已经关闭。下一步回到项目自身的真实工作，继续观察首次结果可用性、退回率、人工干预和重复副作用，不再为该结构路径创建纯合成点击样本。
 - 飞书应用内员工工作台登录、PostgreSQL 耐久会话、最小管理员聚合、其他会话撤销、公网有界限流与安全响应头均已通过开发真栈。root 侧 allowlist 工具现提供活跃会话解析、十分钟预览、env 指纹栅栏、原子更新、健康回读、失败自动恢复、显式回滚和追加型运维审计；真实服务器已通过无变化确认与唯一管理员保护，但尚未在没有明确授权对象的情况下执行真实提权。包含 Console 会话表的二十一份 migration 异库恢复也已完成，并验证暴露前清空会话不会删除撤销审计或流程数据。下一步回到真实内部工作：由 Owner 独立使用待处理中心处理一项自然产生的工作，并在确有第二名管理员需求时完成一次真实添加、普通成员与管理员回读及撤销闭环。正式域名因近期不备案保持后置；公网 IP、静态开发 token、进程内限流和单机部署都不作为正式员工交付方案。

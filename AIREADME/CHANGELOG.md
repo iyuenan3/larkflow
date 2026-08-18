@@ -1,5 +1,14 @@
 # CHANGELOG · larkflow
 
+## v0.89.1-draft · 2026-08-19 · 企业共享资料版本目录
+
+- Added：内容提交 `a7f827f0f1bd4509d6c0f6cb69a8d3d404e3b33e` 增加内存与 PostgreSQL 企业资料目录仓储，以及 `0025_enterprise_knowledge_catalog`。版本主键以 tenant 为第一维度，同一 source 同时最多一个 published 版本；每来源 advisory transaction lock 保证竞争版本只有一路成功。
+- Safety：版本元数据除一次 `published -> revoked` 外不可更新，版本与审计都禁止物理删除。重复发布与重复撤销幂等且不重复审计；跨 tenant 列表为空。目录和审计只保存安全引用、版本、哈希、分级、外发决定和状态，不保存正文、object key 或源系统凭据。publisher 仍只是仓储参数，不被描述为已完成管理员授权。
+- Verified：仓储与 migration 聚焦离线套件为 `32 passed`；完整离线套件合并为 `1214 passed, 28 skipped`。一次性 PostgreSQL 首次应用 25 份 migration、重入 0，全部 PostgreSQL 合同 `28 passed`；回读 3 个测试版本、4 条审计、3 个索引和 3 个触发器后，测试库与临时目录精确删除。
+- Deployment：wheel SHA-256 为 `26cdfa46fcd61bddf03505f91b8704a07ef609df0b9d57f3f2e45c93c51c02c3`，Target 与 legacy 安装态仓储哈希一致，两个 venv 的 `pip check` 通过。长期库从 24 增量到 `25 / 0025` 并重入；十个服务为 `active / running / NRestarts=0`，部署窗口 warning 为 0。部署前 custom-format 备份已验证可读并保留。
+- Probe：synthetic 目录保留 2 个版本、1 个当前 published 版本和 3 条追加审计；v1 发布后撤销，v2 成为当前版本，审计不含正文或 object key。
+- Boundary：本轮没有管理员鉴权、管理 API、正文存储、ContextBundle 合并、检索、Runtime 接入或飞书入口，不能描述为企业知识库已经可用。下一切片只处理服务器管理员授权和不含正文的目录管理 API。
+
 ## v0.89.0-draft · 2026-08-19 · 企业共享资料合同基线
 
 - Added：内容提交 `ccf04c820b92cd74968ccb25ec7126990ba6fe17` 新增 provider-neutral 的 `EnterpriseKnowledgePublication / EnterpriseKnowledgeRef / EnterpriseKnowledgeSelection`。合同固定 tenant、`enterprise:` 来源 ID、不可变版本、UTF-8 txt/md、大小、SHA-256、发布时间、`internal` 分级和显式 allow/deny 外发决定。

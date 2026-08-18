@@ -1058,3 +1058,5 @@
 - Alternatives(否决)：直接把飞书 bot 可见文件当企业知识；先做向量召回再按模型输出过滤权限；把项目附件表泛化为个人知识库；把 live Docx URL 作为不可变版本；在首版同步部门或个人 ACL；让 Runtime 直接拿 BlobStore 或源系统 token。
 - Tradeoff：当前只有本地合同，用户还不能发布或选择企业资料。首个持久化切片仍需 tenant-first 主键、不可变版本、管理员授权、逻辑撤销、追加审计和并发幂等；首个正文切片还需在授权后验证哈希、大小、UTF-8、外发和字符预算。若企业无法维护清晰的全员发布清单，该能力保持关闭，产品继续只使用项目上传件。
 - Evidence：内容提交 `ccf04c820b92cd74968ccb25ec7126990ba6fe17`。聚焦测试 `17 passed`；完整离线合并证据 `1209 passed, 27 skipped`；wheel 收包、零 LangGraph 导入冒烟、Python compile 和 `git diff --check` 通过。没有 migration、部署、真实内容或外部副作用。
+
+- Status addendum · 2026-08-19：`a7f827f0f1bd4509d6c0f6cb69a8d3d404e3b33e` 已实现 tenant-first PostgreSQL 版本目录、每来源单一 published 版本、逻辑撤销、不可变 trigger、禁止物理删除和追加审计，并部署到开发环境。一次性 PostgreSQL 合同 `28 passed`，长期库 ledger 为 `25 / 0025`。管理员授权、管理 API、正文与 Runtime 边界保持未实现。
