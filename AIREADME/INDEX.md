@@ -6,7 +6,7 @@
 
 企业共享资料正文能力已经部署到阿里云开发环境：独立 create-once BlobStore 保存不可变 UTF-8 txt/md，管理员发布必须提交固定的 tenant 全员授权声明，服务端生成绑定 tenant、来源、版本、正文哈希、管理员身份和时间的追加型授权证明。Knowledge Context Service 在规划和每个 Agent Attempt 前重新验证 published 状态、撤销、哈希、大小、分级、外发、预算和 TTL，再按确定性顺序合并项目附件与企业资料；Runtime 只接收有界正文和安全引用。撤销不改写旧 Attempt 的 manifest 与审计，但阻断新 ContextBundle。代码提交 `17aba5ae35261bc915d2dd6d6f4c272273d2da89` 又把正文读取后的当前授权复验设为明确发行线性化点，关闭撤销与 Blob I/O 交错时仍返回新 bundle 的竞态；该修复已经部署，真实一次性 PostgreSQL 并发合同和安装态 planning、Agent synthetic 竞态探针均通过。内容提交 `e663edfa2c54230b3b58bfc9e26ad046f95a3b51` 已把自动全选收紧为 Console collecting 草稿的显式 source 选择，并在生成边界冻结精确版本；`0027` 已完成空库迁移、重入、强制失败回滚、真实 PostgreSQL 合同、开发部署和安装态 synthetic 探针。真实管理员浏览器发布、显式选择页面和真实内部资料验收仍待手工完成，不能描述为生产企业知识库。
 
-last-synced: fba57583af164d5a39077d7979b751e604cc3382 · 2026-08-19
+last-synced: cceed8d3093c28e3687f748fe872b6fd5f59f2ee · 2026-08-19
 
 ## 阅读顺序
 

@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.92.2-draft · 2026-08-19 · 服务端来源 provenance 与撤销选择恢复候选
+
+- Fixed：内容提交 `cceed8d3093c28e3687f748fe872b6fd5f59f2ee` 让 WorkflowRunner 从直接依赖 NodeSpec 和已提交 Attempt 冻结 `dependency_provenance`。`source_evidence.check` 不再信任结果自报的 `tool_kind`，只接受 provenance 为真实 `tool / web.search` 的直接 `source_records`；普通 Agent 的根级或嵌套伪造、跨依赖复制和缺 provenance 旧快照全部 fail closed。
+- Recovery：已选企业资料撤销后，Owner 读取到只含 source ID 和安全原因的 `unavailable_selected` 墓碑。页面显示不可用状态并允许明确取消，保存后选择版本递增，再以剩余有效来源或空选择生成；服务端不自动清空，也不泄漏正文、版本哈希、proof、管理员或 tenant。
+- Database：新增向前 migration `0028_console_enterprise_source_uniqueness`，不改写已部署 0027。0028 替换校验函数并重建检查约束，使既有行重新验证，数据库层拒绝重复 source ID；若历史行含重复值，migration 整体失败而不自动修改选择。
+- Verified：缺陷态聚焦回归分别得到 3、1、2 项失败；修复后运行时与 Tool、Console、持久化和重启聚焦套件合计 `215 passed`。完整离线套件为 `1283 passed, 33 skipped, 1 failed`，唯一失败是沙箱禁止读取进程树，同一既有用例在允许环境单独 `1 passed`，合并证据为 `1284 passed, 33 skipped`。Node 语法、Python compile 和 `git diff --check` 通过。
+- Boundary：本条只表示代码已提交并推送。真实 PostgreSQL 空库、重入、失败回滚、长期开发库 0028、wheel 部署和安装态 synthetic 探针尚未完成；没有飞书写入，也不改变真实浏览器人工验收仍后置的边界。
+
 ## v0.92.1-draft · 2026-08-19 · 显式企业资料选择与搜索证据质量开发部署验证
 
 - Deployment：内容提交 `e663edfa2c54230b3b58bfc9e26ad046f95a3b51` 与 `fba57583af164d5a39077d7979b751e604cc3382` 已安装到 Target 与 legacy 开发环境。wheel SHA-256 为 `3615e455d5a7750981897cb00ada7e4ec7c41823c963d3315a15087fbc731800`；两个 venv 的 `pip check` 和六个关键安装态源码哈希与本地精确提交一致。

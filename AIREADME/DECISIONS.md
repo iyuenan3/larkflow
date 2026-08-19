@@ -1113,3 +1113,5 @@
 - Database：不改写已经部署的 0027。0028 向前替换 source ID 校验函数，并通过重建检查约束重新验证既有行，在数据库层补齐重复 ID 拒绝。若存在历史重复行，migration 整体失败，不自动清理或改变用户选择。
 - Alternatives(否决)：继续信任结果中的 `tool_kind`；让模型签名 provenance；遇到撤销自动清空选择；只在页面隐藏失败；修改已部署 0027 SQL；保留应用层去重却继续宣称数据库也已拒绝重复。
 - Tradeoff：输入快照增加少量服务器元数据，旧的缺 provenance 快照不能重新通过新证据检查；撤销后 Owner 多一步显式移除。换来的边界是证据来源不可由交付结果伪造，选择恢复动作可见、可审计且不会替用户作决定。
+
+- Status addendum · 2026-08-19：内容提交 `cceed8d3093c28e3687f748fe872b6fd5f59f2ee` 已落码服务端 dependency provenance、证据检查 fail-closed、安全墓碑恢复和 0028 向前约束。缺陷态回归分别得到 3、1、2 项失败；修复后聚焦套件为 `215 passed`。完整离线套件除唯一沙箱 `ps` 用例外为 `1283 passed, 33 skipped`，该用例在允许环境单独 `1 passed`，合并证据为 `1284 passed, 33 skipped`。真实 PostgreSQL、长期库 0028、wheel 部署和安装态 synthetic 探针仍待执行。
