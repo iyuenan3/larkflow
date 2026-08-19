@@ -1115,3 +1115,5 @@
 - Tradeoff：输入快照增加少量服务器元数据，旧的缺 provenance 快照不能重新通过新证据检查；撤销后 Owner 多一步显式移除。换来的边界是证据来源不可由交付结果伪造，选择恢复动作可见、可审计且不会替用户作决定。
 
 - Status addendum · 2026-08-19：内容提交 `cceed8d3093c28e3687f748fe872b6fd5f59f2ee` 已落码服务端 dependency provenance、证据检查 fail-closed、安全墓碑恢复和 0028 向前约束。缺陷态回归分别得到 3、1、2 项失败；修复后聚焦套件为 `215 passed`。完整离线套件除唯一沙箱 `ps` 用例外为 `1283 passed, 33 skipped`，该用例在允许环境单独 `1 passed`，合并证据为 `1284 passed, 33 skipped`。真实 PostgreSQL、长期库 0028、wheel 部署和安装态 synthetic 探针仍待执行。
+
+- Status addendum · 2026-08-19：真实 PostgreSQL 空库、重入、并发与强制回滚均通过，长期开发库已增量到 `28 / 0028`。wheel SHA-256 为 `75eac62b39295e255560c9c5be46d4c64203fb858eeca15d73f4d347b5a8289c`；Target 与 legacy 安装态源码、十个服务、在线静态资源和 synthetic provenance、墓碑恢复探针均回读通过。没有飞书写入，真实浏览器人工验收继续后置。

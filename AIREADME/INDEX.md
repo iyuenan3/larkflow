@@ -6,6 +6,8 @@
 
 企业共享资料正文能力已经部署到阿里云开发环境：独立 create-once BlobStore 保存不可变 UTF-8 txt/md，管理员发布必须提交固定的 tenant 全员授权声明，服务端生成绑定 tenant、来源、版本、正文哈希、管理员身份和时间的追加型授权证明。Knowledge Context Service 在规划和每个 Agent Attempt 前重新验证 published 状态、撤销、哈希、大小、分级、外发、预算和 TTL，再按确定性顺序合并项目附件与企业资料；Runtime 只接收有界正文和安全引用。撤销不改写旧 Attempt 的 manifest 与审计，但阻断新 ContextBundle。代码提交 `17aba5ae35261bc915d2dd6d6f4c272273d2da89` 又把正文读取后的当前授权复验设为明确发行线性化点，关闭撤销与 Blob I/O 交错时仍返回新 bundle 的竞态；该修复已经部署，真实一次性 PostgreSQL 并发合同和安装态 planning、Agent synthetic 竞态探针均通过。内容提交 `e663edfa2c54230b3b58bfc9e26ad046f95a3b51` 已把自动全选收紧为 Console collecting 草稿的显式 source 选择，并在生成边界冻结精确版本；`0027` 已完成空库迁移、重入、强制失败回滚、真实 PostgreSQL 合同、开发部署和安装态 synthetic 探针。真实管理员浏览器发布、显式选择页面和真实内部资料验收仍待手工完成，不能描述为生产企业知识库。
 
+来源 provenance 与撤销选择恢复也已部署到开发环境。`source_evidence.check` 现在只接受 WorkflowRunner 根据直接依赖 NodeSpec 与已提交 Attempt 冻结的真实 `tool / web.search` provenance，普通 Agent 的结果自报、嵌套复制和缺失 provenance 均 fail closed。撤销后的已选企业来源以安全墓碑继续可见，Owner 必须显式移除并保存，服务端不会自动清空。长期开发库已增量应用并重入 `0028_console_enterprise_source_uniqueness`，数据库层也拒绝重复 source ID；真实浏览器人工验收仍后置。
+
 last-synced: cceed8d3093c28e3687f748fe872b6fd5f59f2ee · 2026-08-19
 
 ## 阅读顺序

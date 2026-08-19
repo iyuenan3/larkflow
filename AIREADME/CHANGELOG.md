@@ -1,5 +1,13 @@
 # CHANGELOG · larkflow
 
+## v0.92.3-draft · 2026-08-19 · provenance 与撤销选择恢复开发部署验证
+
+- Deployment：内容提交 `cceed8d3093c28e3687f748fe872b6fd5f59f2ee` 已安装到 Target 与 legacy 开发环境。wheel SHA-256 为 `75eac62b39295e255560c9c5be46d4c64203fb858eeca15d73f4d347b5a8289c`；两个 venv 的 `pip check`、五个关键源码哈希与在线 app.js 哈希一致。
+- PostgreSQL：一次性空库完整应用 28 份 migration 并重入。数据库层拒绝重复 source ID，撤销墓碑由 Owner 清除后选择版本从 1 增至 2，并发选择只有一路成功。包含重复历史行的故障库使 0028 整体回滚，ledger 保持 `27 / 0027` 且重复行未被自动修改。两座一次性库随后精确删除并回读不存在；长期库增量应用并重入后为 `28 / 0028_console_enterprise_source_uniqueness`。
+- Probe：安装态 synthetic 探针回读 `forged_agent_rejected=true`、真实搜索 `verdict=pass / support=supported`，撤销墓碑只含 `selectable / source_id / unavailable_reason`，显式清除后 source 数为 0、选择版本为 2。
+- Operations：首次误用服务身份安装时因 root 管理的 `direct_url.json` 拒绝写入，服务尚未迁移。随后按既有共享 venv 规则改由 root 完整重装，两个无效 `~arkflow` 临时目录经精确识别后删除；`pip check`、0028 migration、重入和服务回读均通过。十个服务为 `active / running / NRestarts=0`，部署窗口 warning 为 0；Console loopback 为 200，未认证目录为 401，Caddy 未修改且保持 active。
+- Boundary：本轮没有访问或修改飞书 Task、Doc、消息和既有业务实例。真实浏览器撤销墓碑交互仍未人工验收，生产 SafeOutboundFetcher 仍 unavailable，不能描述为生产就绪。
+
 ## v0.92.2-draft · 2026-08-19 · 服务端来源 provenance 与撤销选择恢复候选
 
 - Fixed：内容提交 `cceed8d3093c28e3687f748fe872b6fd5f59f2ee` 让 WorkflowRunner 从直接依赖 NodeSpec 和已提交 Attempt 冻结 `dependency_provenance`。`source_evidence.check` 不再信任结果自报的 `tool_kind`，只接受 provenance 为真实 `tool / web.search` 的直接 `source_records`；普通 Agent 的根级或嵌套伪造、跨依赖复制和缺 provenance 旧快照全部 fail closed。
