@@ -1103,3 +1103,13 @@
 - Alternatives(否决)：有 URL 即可靠；根据域名自动认定事实权威；由模型声明 claim 已支持；在 `web.search` 内直接抓取任意 URL；把搜索服务变成 Planner、业务 DAG 或权限真相；无健康 adapter 时伪造 reachable。
 - Tradeoff：生产环境首版会显示 health unknown，不能自动关闭事实质量风险，但不会为了表面完整度引入 SSRF。Human 得到的是可解释的证据状态，后续 Provider、Planner A/B 和受控 fetcher 可以复用同一指标而不改写历史语义。
 - Evidence：内容提交新增 provider-neutral 质量字段、默认禁用且不含网络客户端的 `SafeOutboundFetcher` Port、ISO 日期时效分类、规范 URL 去重、`source_evidence.check` 片段绑定，以及额度、429、超时、无来源和全部不可达的稳定分类。聚焦测试 `109 passed`；完整离线套件排除唯一沙箱 `ps` 用例为 `1279 passed, 32 skipped, 1 deselected`，该用例在允许环境单独 `1 passed`，合并证据为 `1280 passed, 32 skipped`。安装态 synthetic 探针确认合法片段绑定、伪造片段拒绝和稳定错误分类。生产 URL 健康 adapter 仍未启用，health 保持 unknown，语义真实性未独立验证。
+
+## ADR-121 · 2026-08-19 · 证据来源采用服务端 provenance，撤销后的选择采用可移除墓碑
+
+- **Status：Accepted，contract frozen，implementation pending。**
+- Problem：直接依赖结果是 Human、Agent 或 Tool 都可以写入的业务交付物，不能证明它由哪类 NodeSpec 和哪次 Attempt 产生。若 `source_evidence.check` 信任结果自报的 `tool_kind`，普通 Agent 可以伪装成 `web.search`。另一方面，企业资料撤销后，选择真相仍保留 source ID，但 published 目录不再返回该来源，页面会形成用户看不见且无法移除的幽灵选择。
+- Constraint：PostgreSQL 继续保存业务状态与选择真相。结果正文不能获得 executor 或 tool kind 的声明权。历史 Attempt 和冻结 fingerprint 不改写；缺少新 provenance 的旧快照必须 fail closed，而不是根据结果猜测。撤销不能静默替用户改选择，安全墓碑又不能泄漏正文、版本哈希、授权证明指纹、管理员或 tenant。
+- Decision：WorkflowRunner 在领取当前节点时，把每个直接依赖的 NodeSpec executor、服务端 tool kind 和已提交 Attempt 标识冻结到独立 `dependency_provenance` 区域。`source_evidence.check` 只认可该区域中真实 `tool / web.search` 的直接依赖，并要求 `source_records` 路径停留在该直接依赖内；根级自报、嵌套自报、复制其他依赖结果和缺失 provenance 全部拒绝。Console 选择读取把仍可选项与 `unavailable_selected` 墓碑分开；Owner 明确移除墓碑并保存后选择版本递增，才可继续生成。
+- Database：不改写已经部署的 0027。0028 向前替换 source ID 校验函数，并通过重建检查约束重新验证既有行，在数据库层补齐重复 ID 拒绝。若存在历史重复行，migration 整体失败，不自动清理或改变用户选择。
+- Alternatives(否决)：继续信任结果中的 `tool_kind`；让模型签名 provenance；遇到撤销自动清空选择；只在页面隐藏失败；修改已部署 0027 SQL；保留应用层去重却继续宣称数据库也已拒绝重复。
+- Tradeoff：输入快照增加少量服务器元数据，旧的缺 provenance 快照不能重新通过新证据检查；撤销后 Owner 多一步显式移除。换来的边界是证据来源不可由交付结果伪造，选择恢复动作可见、可审计且不会替用户作决定。
