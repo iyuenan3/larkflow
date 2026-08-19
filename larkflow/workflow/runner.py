@@ -401,13 +401,28 @@ class NodeRunner:
     ) -> FrozenDict:
         spec = instance.snapshot.node(node_key)
         pending_snapshot = instance.current_attempt(node_key).input_snapshot
-        dependencies = {
-            dependency: instance.current_attempt(dependency).result
-            for dependency in spec.deps
-        }
+        dependencies: dict[str, Any] = {}
+        dependency_provenance: dict[str, dict[str, Any]] = {}
+        for dependency in spec.deps:
+            dependency_spec = instance.snapshot.node(dependency)
+            dependency_attempt = instance.current_attempt(dependency)
+            tool_kind = None
+            if dependency_spec.executor == ExecutorKind.TOOL:
+                tool = dependency_spec.work.get("tool")
+                if isinstance(tool, Mapping) and isinstance(tool.get("kind"), str):
+                    tool_kind = tool["kind"]
+            dependencies[dependency] = dependency_attempt.result
+            dependency_provenance[dependency] = {
+                "node_key": dependency,
+                "executor": dependency_spec.executor.value,
+                "tool_kind": tool_kind,
+                "attempt_id": dependency_attempt.id,
+                "attempt_no": dependency_attempt.attempt_no,
+            }
         captured: dict[str, Any] = {
             "instance_inputs": instance.snapshot.inputs,
             "dependencies": dependencies,
+            "dependency_provenance": dependency_provenance,
             "work": spec.work,
         }
         rework_feedback = pending_snapshot.get("rework_feedback")

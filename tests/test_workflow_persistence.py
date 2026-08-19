@@ -110,6 +110,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0025_enterprise_knowledge_catalog",
         "0026_enterprise_knowledge_content_authorization",
         "0027_console_enterprise_knowledge_selection",
+        "0028_console_enterprise_source_uniqueness",
     ]
     sql = migrations[0][1]
     for table in (
@@ -139,6 +140,11 @@ def test_packaged_migration_contains_required_tables_and_guards():
     assert "enterprise_source_selection jsonb" in selection_sql
     assert "enterprise_knowledge_manifest jsonb" in selection_sql
     assert "workflow_console_draft_enterprise_selection_guard" in selection_sql
+    uniqueness_sql = dict(migrations)[
+        "0028_console_enterprise_source_uniqueness"
+    ]
+    assert "COUNT(DISTINCT source_id)" in uniqueness_sql
+    assert "DROP CONSTRAINT workflow_console_draft_enterprise_selection_array" in uniqueness_sql
     assert "CREATE TABLE workflow_inbox_events" in migrations[2][1]
     assert "CREATE TABLE workflow_console_draft_requests" in migrations[22][1]
     assert "workflow_console_draft_worker_wakeup" in migrations[22][1]

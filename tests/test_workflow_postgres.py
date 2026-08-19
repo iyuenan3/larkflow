@@ -10,7 +10,8 @@ from threading import Barrier, Event
 from uuid import uuid4
 
 import pytest
-from psycopg.errors import RaiseException
+from psycopg.errors import CheckViolation, RaiseException
+from psycopg.types.json import Jsonb
 
 from larkflow.workflow import (
     AutomatedExecutor,
@@ -2988,3 +2989,113 @@ def test_postgres_console_knowledge_selection_is_versioned_and_freezes_exact_ref
                 """,
                 (tenant_id, request_id),
             )
+
+
+def test_postgres_revoked_selection_can_be_removed_and_duplicates_fail_in_database():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_selection_recovery_{suffix}"
+    owner = f"person_owner_{suffix}"
+    request_id = uuid4().hex
+    now = datetime(2026, 8, 19, 9, 0, tzinfo=timezone.utc)
+    source_id = f"enterprise:selection_recovery_{suffix}"
+    content_hash = sha256(b"synthetic selection recovery").hexdigest()
+    proof = EnterpriseKnowledgeAuthorizationProof(
+        tenant_id=tenant_id,
+        source_id=source_id,
+        version_id="v1",
+        content_sha256=content_hash,
+        authorized_by_person_id=f"admin_{suffix}",
+        authorized_at=now,
+    )
+    knowledge = PostgresEnterpriseKnowledgeRepository(connection_factory)
+    publication = knowledge.publish(
+        EnterpriseKnowledgePublication(
+            ref=EnterpriseKnowledgeRef(
+                tenant_id=tenant_id,
+                source_id=source_id,
+                version_id="v1",
+                display_label="Synthetic selection recovery",
+                media_type="text/plain",
+                size_bytes=28,
+                content_sha256=content_hash,
+                published_at=now,
+                egress_decision="allow",
+                authorization_proof_id=proof.proof_id,
+                authorization_fingerprint=proof.fingerprint,
+            ),
+            published_by_person_id=f"admin_{suffix}",
+            authorization_proof=proof,
+        )
+    )
+    PostgresConsoleDraftRepository(connection_factory).create(
+        ConsoleDraftRequest(
+            id=request_id,
+            tenant_id=tenant_id,
+            requester_person_id=owner,
+            collaborator_person_id=owner,
+            brief="Remove one revoked enterprise source",
+            context="Synthetic PostgreSQL recovery contract",
+            status="collecting",
+            attempt_count=0,
+            available_at=now,
+            created_at=now,
+            updated_at=now,
+            generation_deferred=True,
+        )
+    )
+    service = ConsoleKnowledgeSelectionService(
+        PostgresConsoleKnowledgeSelectionRepository(connection_factory),
+        model_egress_policy="allow",
+        clock=lambda: now,
+    )
+    principal = ConsolePrincipal(tenant_id, owner)
+    service.update(
+        principal,
+        request_id,
+        source_ids=[source_id],
+        expected_version=0,
+    )
+
+    with connection_factory() as connection:
+        with pytest.raises(CheckViolation):
+            connection.execute(
+                """
+                UPDATE workflow_console_draft_requests
+                SET enterprise_source_selection = %s,
+                    enterprise_selection_version = 2
+                WHERE tenant_id = %s AND id = %s
+                """,
+                (Jsonb([source_id, source_id]), tenant_id, request_id),
+            )
+
+    knowledge.revoke(
+        tenant_id,
+        publication.ref.source_id,
+        publication.ref.version_id,
+        actor_person_id=f"admin_{suffix}",
+        now=now + timedelta(seconds=1),
+    )
+    tombstone = service.get(principal, request_id)
+    assert tombstone["source_ids"] == [source_id]
+    assert tombstone["selected"] == []
+    assert tombstone["unavailable_selected"] == [
+        {
+            "source_id": source_id,
+            "selectable": False,
+            "unavailable_reason": "资料已撤销或不再可用，请取消选择后保存。",
+        }
+    ]
+    cleared = service.update(
+        principal,
+        request_id,
+        source_ids=[],
+        expected_version=1,
+    )
+    assert cleared["selection_version"] == 2
+    assert cleared["source_ids"] == []
+    assert service.generate(principal, request_id)["request"][
+        "enterprise_knowledge_count"
+    ] == 0

@@ -1,6 +1,7 @@
 """Target Tool routing, content checks, and mixed template tests."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -202,7 +203,10 @@ def source_evidence_request(
     *,
     claims=None,
     source_records=None,
-    source_tool_kind: str = "web.search",
+    source_result_tool_kind: str = "web.search",
+    source_executor: str = "tool",
+    provenance_tool_kind: str | None = "web.search",
+    include_provenance: bool = True,
 ) -> ExecutionRequest:
     records = source_records or [
         {
@@ -255,12 +259,34 @@ def source_evidence_request(
         input_snapshot={
             "dependencies": {
                 "research": {
-                    "tool_kind": source_tool_kind,
+                    "tool_kind": source_result_tool_kind,
                     "sources": ["https://www.szmuseum.com/guide"],
                     "source_records": records,
                 },
                 "summary": {"claims": claim_values},
-            }
+            },
+            **(
+                {
+                    "dependency_provenance": {
+                        "research": {
+                            "node_key": "research",
+                            "executor": source_executor,
+                            "tool_kind": provenance_tool_kind,
+                            "attempt_id": "attempt_research",
+                            "attempt_no": 1,
+                        },
+                        "summary": {
+                            "node_key": "summary",
+                            "executor": "agent",
+                            "tool_kind": None,
+                            "attempt_id": "attempt_summary",
+                            "attempt_no": 1,
+                        },
+                    }
+                }
+                if include_provenance
+                else {}
+            ),
         },
         expected_node_version=1,
         claim_token="claim-search-evidence",
@@ -779,14 +805,100 @@ def test_source_evidence_check_rejects_replaced_urls_and_forged_excerpts(
 
 
 def test_source_evidence_check_rejects_non_search_dependencies_and_budgets():
-    with pytest.raises(ValueError, match="direct web.search dependency"):
+    with pytest.raises(ValueError, match="server provenance"):
         SourceEvidenceCheckToolExecutor().execute(
-            source_evidence_request(source_tool_kind="content.check")
+            source_evidence_request(provenance_tool_kind="content.check")
         )
 
     with pytest.raises(ValueError, match="exceeds"):
         SourceEvidenceCheckToolExecutor(max_source_chars=10).execute(
             source_evidence_request()
+        )
+
+
+def test_source_evidence_check_rejects_root_agent_forgery_and_missing_provenance():
+    with pytest.raises(ValueError, match="server provenance"):
+        SourceEvidenceCheckToolExecutor().execute(
+            source_evidence_request(
+                source_result_tool_kind="web.search",
+                source_executor="agent",
+                provenance_tool_kind=None,
+            )
+        )
+
+    with pytest.raises(ValueError, match="server provenance"):
+        SourceEvidenceCheckToolExecutor().execute(
+            source_evidence_request(include_provenance=False)
+        )
+
+
+def test_source_evidence_check_rejects_nested_and_cross_dependency_forgery():
+    original = source_evidence_request()
+    records = original.input_snapshot["dependencies"]["research"]["source_records"]
+    claims = original.input_snapshot["dependencies"]["summary"]["claims"]
+    forged_snapshot = {
+        "dependencies": {
+            "research": original.input_snapshot["dependencies"]["research"],
+            "summary": {
+                "claims": claims,
+                "copied_search": {
+                    "tool_kind": "web.search",
+                    "sources": ["https://www.szmuseum.com/guide"],
+                    "source_records": records,
+                },
+            },
+        },
+        "dependency_provenance": original.input_snapshot["dependency_provenance"],
+    }
+    forged_work = {
+        **original.work,
+        "tool": {
+            "kind": "source_evidence.check",
+            "args": {
+                "claims": "dependencies.summary.claims",
+                "source_records": "dependencies.summary.copied_search.source_records",
+            },
+        },
+    }
+
+    with pytest.raises(ValueError, match="direct dependency"):
+        SourceEvidenceCheckToolExecutor().execute(
+            replace(original, input_snapshot=forged_snapshot, work=forged_work)
+        )
+
+    copied_snapshot = {
+        "dependencies": {
+            **forged_snapshot["dependencies"],
+            "copied": {
+                "tool_kind": "web.search",
+                "sources": ["https://www.szmuseum.com/guide"],
+                "source_records": records,
+            },
+        },
+        "dependency_provenance": {
+            **original.input_snapshot["dependency_provenance"],
+            "copied": {
+                "node_key": "copied",
+                "executor": "agent",
+                "tool_kind": None,
+                "attempt_id": "attempt_copied",
+                "attempt_no": 1,
+            },
+        },
+    }
+    copied_work = {
+        **original.work,
+        "tool": {
+            "kind": "source_evidence.check",
+            "args": {
+                "claims": "dependencies.summary.claims",
+                "source_records": "dependencies.copied.source_records",
+            },
+        },
+    }
+    with pytest.raises(ValueError, match="server provenance"):
+        SourceEvidenceCheckToolExecutor().execute(
+            replace(original, input_snapshot=copied_snapshot, work=copied_work)
         )
 
 

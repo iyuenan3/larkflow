@@ -74,6 +74,7 @@ const state = {
   attachmentPlanningEnabled: false,
   enterpriseKnowledgeSelectionEnabled: false,
   knowledgeCandidates: [],
+  unavailableKnowledgeSelections: [],
   selectedKnowledgeSourceIds: new Set(),
   knowledgeSelectionVersion: 0,
   view: "owner",
@@ -563,37 +564,52 @@ function renderDraftAttachments() {
       knowledge.append(node("p", "", `• ${item.display_label} · ${item.version_id}`));
     });
   }
+  if (state.unavailableKnowledgeSelections.length) {
+    knowledge.append(node("p", "", "以下已选资料当前不可用，请取消选择并保存："));
+    state.unavailableKnowledgeSelections.forEach((item) => {
+      knowledge.append(node("p", "", `• ${item.source_id} · ${item.unavailable_reason}`));
+    });
+  }
   const saveKnowledge = el("draft-knowledge-save");
   saveKnowledge.hidden = !state.enterpriseKnowledgeSelectionEnabled;
   saveKnowledge.disabled = false;
   saveKnowledge.textContent = "保存企业资料选择";
-  el("draft-generate").disabled = false;
+  el("draft-generate").disabled = state.unavailableKnowledgeSelections.length > 0;
 }
 
 function renderKnowledgeCandidates() {
   const list = el("draft-knowledge-list");
   list.replaceChildren();
-  if (!state.knowledgeCandidates.length) {
+  const unavailable = state.unavailableKnowledgeSelections.filter((item) => (
+    !state.knowledgeCandidates.some((candidate) => candidate.source_id === item.source_id)
+  ));
+  if (!state.knowledgeCandidates.length && !unavailable.length) {
     list.append(node("p", "draft-recent-empty", "当前没有可选择的企业共享资料。"));
   }
-  state.knowledgeCandidates.forEach((item) => {
+  [...state.knowledgeCandidates, ...unavailable].forEach((item) => {
     const label = node("label", "draft-knowledge-option");
     label.dataset.unavailable = item.selectable ? "false" : "true";
     const input = document.createElement("input");
     input.type = "checkbox";
     input.value = item.source_id;
-    input.disabled = !item.selectable;
-    input.checked = state.selectedKnowledgeSourceIds.has(item.source_id);
+    const selected = state.selectedKnowledgeSourceIds.has(item.source_id);
+    input.disabled = !item.selectable && !selected;
+    input.checked = selected;
     input.addEventListener("change", () => {
-      if (input.checked) state.selectedKnowledgeSourceIds.add(item.source_id);
-      else state.selectedKnowledgeSourceIds.delete(item.source_id);
+      if (input.checked && item.selectable) {
+        state.selectedKnowledgeSourceIds.add(item.source_id);
+      } else {
+        input.checked = false;
+        state.selectedKnowledgeSourceIds.delete(item.source_id);
+        if (!item.selectable) input.disabled = true;
+      }
       el("draft-knowledge-selection").textContent = state.selectedKnowledgeSourceIds.size
         ? `已选择 ${state.selectedKnowledgeSourceIds.size} 份资料，创建草稿后会再次确认。`
         : "默认不使用企业资料。";
     });
     const copy = document.createElement("div");
     copy.append(
-      node("strong", "", item.display_label),
+      node("strong", "", item.display_label || item.source_id),
       node(
         "small",
         "",
@@ -619,6 +635,7 @@ async function loadDraftKnowledgeSelection(requestId) {
     `/console/api/v1/drafts/${encodeURIComponent(requestId)}/knowledge-selection`,
   );
   state.selectedKnowledgeSourceIds = new Set(payload.source_ids || []);
+  state.unavailableKnowledgeSelections = payload.unavailable_selected || [];
   state.knowledgeSelectionVersion = payload.selection_version || 0;
   renderKnowledgeCandidates();
   renderDraftAttachments();
@@ -645,6 +662,7 @@ async function saveCurrentKnowledgeSelection() {
     );
     state.knowledgeSelectionVersion = payload.selection_version;
     state.selectedKnowledgeSourceIds = new Set(payload.source_ids || []);
+    state.unavailableKnowledgeSelections = payload.unavailable_selected || [];
     renderKnowledgeCandidates();
     renderDraftAttachments();
     showToast("企业资料选择已保存");
@@ -684,6 +702,12 @@ async function generateCurrentDraft() {
   button.disabled = true;
   button.textContent = "正在冻结资料清单";
   errorNode.textContent = "";
+  if (state.unavailableKnowledgeSelections.length) {
+    button.disabled = true;
+    button.textContent = "请先移除不可用资料";
+    errorNode.textContent = "已选企业资料中有内容已撤销或不再可用，请取消选择并保存。";
+    return;
+  }
   try {
     const payload = await request(
       `/console/api/v1/drafts/${encodeURIComponent(state.currentDraft.id)}/generate`,

@@ -261,6 +261,65 @@ def test_generation_fails_closed_when_selected_source_is_revoked_or_egress_denie
     assert rejected.value.code == "knowledge_egress_denied"
 
 
+def test_revoked_selection_is_visible_as_safe_tombstone_and_owner_can_remove_it():
+    drafts, knowledge, publication, service = _fixture()
+    service.update(
+        _principal(),
+        REQUEST_ID,
+        source_ids=[publication.ref.source_id],
+        expected_version=0,
+    )
+    knowledge.revoke(
+        TENANT,
+        publication.ref.source_id,
+        publication.ref.version_id,
+        actor_person_id="private-admin-id",
+        now=NOW + timedelta(seconds=1),
+    )
+
+    payload = service.get(_principal(), REQUEST_ID)
+    assert payload["source_ids"] == [publication.ref.source_id]
+    assert payload["selected"] == []
+    assert payload["unavailable_selected"] == [
+        {
+            "source_id": publication.ref.source_id,
+            "selectable": False,
+            "unavailable_reason": "资料已撤销或不再可用，请取消选择后保存。",
+        }
+    ]
+    encoded = json.dumps(payload, ensure_ascii=False)
+    for forbidden in (
+        publication.ref.version_id,
+        publication.ref.content_sha256,
+        publication.ref.authorization_fingerprint,
+        "private-admin-id",
+        TENANT,
+    ):
+        assert forbidden not in encoded
+    with pytest.raises(ConsoleKnowledgeSelectionNotFoundError):
+        service.get(_principal(OTHER), REQUEST_ID)
+
+    cleared = service.update(
+        _principal(),
+        REQUEST_ID,
+        source_ids=[],
+        expected_version=1,
+    )
+    assert cleared["source_ids"] == []
+    assert cleared["selection_version"] == 2
+    assert cleared["unavailable_selected"] == []
+    assert service.generate(_principal(), REQUEST_ID)["request"] == {
+        "id": REQUEST_ID,
+        "status": "queued",
+        "enterprise_knowledge_count": 0,
+    }
+    assert drafts.get_for_owner(
+        TENANT,
+        REQUEST_ID,
+        requester_person_id=OWNER,
+    ).status == "pending"
+
+
 def test_empty_selection_does_not_auto_load_tenant_knowledge_or_feishu_identity():
     drafts, knowledge, publication, service = _fixture()
     service.generate(_principal(), REQUEST_ID)
@@ -285,7 +344,7 @@ def test_empty_selection_does_not_auto_load_tenant_knowledge_or_feishu_identity(
 
 
 def test_http_selection_contract_and_static_ui_are_safe():
-    drafts, _knowledge, publication, service = _fixture()
+    drafts, knowledge, publication, service = _fixture()
     application = ConsoleHttpApplication(
         ConsoleReadService(InMemoryWorkflowRepository()),
         StaticConsoleAuthenticator(TOKEN, _principal()),
@@ -316,15 +375,45 @@ def test_http_selection_contract_and_static_ui_are_safe():
         },
         body=body,
     )
+    knowledge.revoke(
+        TENANT,
+        publication.ref.source_id,
+        publication.ref.version_id,
+        actor_person_id="private-admin-id",
+        now=NOW + timedelta(seconds=1),
+    )
+    tombstone = application.handle(
+        "GET",
+        f"/console/api/v1/drafts/{REQUEST_ID}/knowledge-selection",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    clear_body = json.dumps({"source_ids": [], "expected_version": 1}).encode()
+    cleared = application.handle(
+        "POST",
+        f"/console/api/v1/drafts/{REQUEST_ID}/knowledge-selection",
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": "application/json",
+            "Content-Length": str(len(clear_body)),
+            "X-Larkflow-Console-Action": "knowledge-selection-v1",
+        },
+        body=clear_body,
+    )
     page = application.handle("GET", "/console/")
     script = application.handle("GET", "/console/app.js")
 
     assert json.loads(auth.body)["capabilities"]["enterprise_knowledge_selection"] is True
     assert catalog.status == 200
     assert selected.status == 200
+    assert json.loads(tombstone.body)["unavailable_selected"][0]["source_id"] == (
+        publication.ref.source_id
+    )
+    assert json.loads(cleared.body)["selection_version"] == 2
     assert "content_sha256" not in catalog.body.decode()
     assert "authorization_fingerprint" not in catalog.body.decode()
     assert b"draft-knowledge-list" in page.body
     assert b"loadKnowledgeCatalog" in script.body
     assert b"knowledge-selection-v1" in script.body
+    assert "已选企业资料中有内容已撤销或不再可用" in script.body.decode()
+    assert b"unavailable_selected" in script.body
     assert b"content_preview" not in script.body

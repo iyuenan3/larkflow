@@ -135,9 +135,13 @@ class InMemoryConsoleKnowledgeSelectionRepository:
                 requester_person_id=requester_person_id,
             )
             _require_collecting(request)
-            _require_visible_sources(source_ids, self.list_candidates(tenant_id))
             if request.enterprise_source_selection == source_ids:
                 return request
+            _require_visible_sources(
+                source_ids,
+                self.list_candidates(tenant_id),
+                existing_source_ids=request.enterprise_source_selection,
+            )
             if request.enterprise_selection_version != expected_version:
                 raise ConsoleKnowledgeSelectionConflictError(
                     "selection_version_conflict",
@@ -282,6 +286,8 @@ class PostgresConsoleKnowledgeSelectionRepository:
                     raise ConsoleKnowledgeSelectionNotFoundError(request_id)
                 request = _request_from_row(row)
                 _require_collecting(request)
+                if request.enterprise_source_selection == source_ids:
+                    return request
                 candidate_rows = connection.execute(
                     _PUBLISHED_SQL + " AND v.source_id = ANY(%s)",
                     (tenant_id, list(source_ids)),
@@ -289,9 +295,8 @@ class PostgresConsoleKnowledgeSelectionRepository:
                 _require_visible_sources(
                     source_ids,
                     tuple(_ref_from_row(item) for item in candidate_rows),
+                    existing_source_ids=request.enterprise_source_selection,
                 )
-                if request.enterprise_source_selection == source_ids:
-                    return request
                 if request.enterprise_selection_version != expected_version:
                     raise ConsoleKnowledgeSelectionConflictError(
                         "selection_version_conflict",
@@ -613,9 +618,15 @@ def _normalized_source_ids(value: Any) -> tuple[str, ...]:
 def _require_visible_sources(
     source_ids: tuple[str, ...],
     candidates: tuple[EnterpriseKnowledgeRef, ...],
+    *,
+    existing_source_ids: tuple[str, ...] = (),
 ) -> None:
     visible = {item.source_id for item in candidates}
-    if any(source_id not in visible for source_id in source_ids):
+    existing = set(existing_source_ids)
+    if any(
+        source_id not in visible and source_id not in existing
+        for source_id in source_ids
+    ):
         raise ConsoleKnowledgeSelectionNotFoundError("knowledge source")
 
 
@@ -659,11 +670,21 @@ def _selection_payload(
         for source_id in request.enterprise_source_selection
         if source_id in candidates
     ]
+    unavailable_selected = [
+        {
+            "source_id": source_id,
+            "selectable": False,
+            "unavailable_reason": "资料已撤销或不再可用，请取消选择后保存。",
+        }
+        for source_id in request.enterprise_source_selection
+        if source_id not in candidates
+    ]
     return {
         "request_id": request.id,
         "source_ids": list(request.enterprise_source_selection),
         "selection_version": request.enterprise_selection_version,
         "selected": selected,
+        "unavailable_selected": unavailable_selected,
     }
 
 

@@ -349,8 +349,84 @@ def test_worker_receives_committed_upstream_results_in_the_input_snapshot():
     request = executor.requests[0]
     assert request.input_snapshot["instance_inputs"]["topic"] == "launch"
     assert request.input_snapshot["dependencies"]["review"]["approved"] is True
+    assert request.input_snapshot["dependency_provenance"]["review"] == {
+        "node_key": "review",
+        "executor": "human",
+        "tool_kind": None,
+        "attempt_id": request.input_snapshot["dependency_provenance"]["review"][
+            "attempt_id"
+        ],
+        "attempt_no": 1,
+    }
+    assert request.input_snapshot["dependency_provenance"]["review"][
+        "attempt_id"
+    ] == "instance_runtime:review:attempt:1"
     with pytest.raises(TypeError):
         request.input_snapshot["dependencies"]["review"]["approved"] = False
+
+
+def test_dependency_provenance_uses_node_spec_instead_of_result_claims():
+    clock = Clock()
+    snapshot = InstanceSnapshot(
+        inputs={"topic": "source provenance"},
+        nodes=(
+            NodeSpec(
+                "research",
+                "Research",
+                "person_owner",
+                "tool",
+                work=node_work(tool_kind="web.search"),
+            ),
+            NodeSpec(
+                "summarize",
+                "Summarize",
+                "person_owner",
+                "agent",
+                deps=("research",),
+                work={**node_work(), "prompt": "Use the evidence"},
+            ),
+        ),
+    )
+    service, _repository = build_runtime(clock=clock, snapshot=snapshot)
+    activation = service.dispatch_due(
+        TENANT,
+        "instance_runtime",
+        worker_id="worker_1",
+        max_automated=1,
+    )[0]
+    service.complete_automated(
+        TENANT,
+        "instance_runtime",
+        "research",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        claim_token=activation.claim_token or "",
+        worker_id="worker_1",
+        result={
+            "result": "synthetic search output",
+            "tool_kind": "content.check",
+            "sources": ["https://example.com"],
+        },
+    )
+
+    service.dispatch_due(
+        TENANT,
+        "instance_runtime",
+        worker_id="worker_1",
+        max_automated=1,
+    )
+    captured = service.get(TENANT, "instance_runtime").current_attempt(
+        "summarize"
+    ).input_snapshot
+
+    assert captured["dependencies"]["research"]["tool_kind"] == "content.check"
+    assert captured["dependency_provenance"]["research"] == {
+        "node_key": "research",
+        "executor": "tool",
+        "tool_kind": "web.search",
+        "attempt_id": "instance_runtime:research:attempt:1",
+        "attempt_no": 1,
+    }
 
 
 def test_crash_after_claim_is_recovered_with_same_attempt_and_new_token():

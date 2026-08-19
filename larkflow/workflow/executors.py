@@ -854,18 +854,30 @@ class SourceEvidenceCheckToolExecutor:
             "source_records",
         )
         assert isinstance(source_path, str)
-        parent_path = source_path.rsplit(".", 1)[0]
-        found, parent = ContentCheckToolExecutor._lookup(
-            request.input_snapshot,
-            parent_path,
+        source_dependency = self._direct_dependency_key(
+            source_path,
+            "source_records",
         )
-        if (
-            not found
-            or not isinstance(parent, Mapping)
-            or parent.get("tool_kind") != "web.search"
+        provenance_root = request.input_snapshot.get("dependency_provenance")
+        provenance = (
+            provenance_root.get(source_dependency)
+            if isinstance(provenance_root, Mapping)
+            else None
+        )
+        if not self._is_committed_search_provenance(
+            provenance,
+            source_dependency,
         ):
             raise ValueError(
-                "source_evidence.check source_records must come from a direct web.search dependency"
+                "source_evidence.check source_records requires direct web.search server provenance"
+            )
+        found, parent = ContentCheckToolExecutor._lookup(
+            request.input_snapshot,
+            f"dependencies.{source_dependency}",
+        )
+        if not found or not isinstance(parent, Mapping):
+            raise ValueError(
+                "source_evidence.check source_records must come from a direct dependency"
             )
         persisted_sources = parent.get("sources")
         if not isinstance(persisted_sources, Sequence) or isinstance(
@@ -945,7 +957,7 @@ class SourceEvidenceCheckToolExecutor:
         if (
             not isinstance(path, str)
             or not path.startswith("dependencies.")
-            or path.count(".") < 2
+            or path.count(".") != 2
         ):
             raise ValueError(
                 f"source_evidence.check {field_name} must reference a direct dependency"
@@ -965,6 +977,40 @@ class SourceEvidenceCheckToolExecutor:
                 f"source_evidence.check {field_name} exceeds {self.max_source_chars} characters"
             )
         return value
+
+    @staticmethod
+    def _direct_dependency_key(path: str, field_name: str) -> str:
+        parts = path.split(".")
+        if (
+            len(parts) != 3
+            or parts[0] != "dependencies"
+            or not parts[1]
+            or parts[2] != field_name
+        ):
+            raise ValueError(
+                f"source_evidence.check {field_name} must reference a direct dependency"
+            )
+        return parts[1]
+
+    @staticmethod
+    def _is_committed_search_provenance(
+        provenance: object,
+        dependency_key: str,
+    ) -> bool:
+        if not isinstance(provenance, Mapping):
+            return False
+        attempt_id = provenance.get("attempt_id")
+        attempt_no = provenance.get("attempt_no")
+        return bool(
+            provenance.get("node_key") == dependency_key
+            and provenance.get("executor") == ExecutorKind.TOOL.value
+            and provenance.get("tool_kind") == "web.search"
+            and isinstance(attempt_id, str)
+            and attempt_id.strip()
+            and isinstance(attempt_no, int)
+            and not isinstance(attempt_no, bool)
+            and attempt_no > 0
+        )
 
 
 class ContentCheckToolExecutor:
