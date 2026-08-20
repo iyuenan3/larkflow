@@ -905,6 +905,7 @@ class WorkflowService:
             now=now,
         )
         quality_result = validate_automated_quality_result(quality_result)
+        spec = None
         try:
             spec = instance.snapshot.node(node_key)
         except KeyError:
@@ -927,6 +928,16 @@ class WorkflowService:
             now=now,
         )
         self.scheduler.unlock_after(instance, node_key, now=now)
+        audit_payload: dict[str, Any] = {"worker_id": worker_id}
+        if (
+            spec is not None
+            and spec.executor == ExecutorKind.TOOL
+            and isinstance(spec.work.get("tool"), Mapping)
+            and spec.work["tool"].get("kind") == "web.search"
+        ):
+            search_query = result.get("query")
+            if isinstance(search_query, str) and 0 < len(search_query) <= 100:
+                audit_payload["search_query"] = search_query
         audit_events = self._completion_audits(
             instance,
             "node.automated_completed",
@@ -936,7 +947,7 @@ class WorkflowService:
             correlation_id=correlation_id or self.id_factory(),
             aggregate_version=expected_version + 1,
             now=now,
-            payload={"worker_id": worker_id},
+            payload=audit_payload,
         )
         outbox = self._completion_outboxes(instance, node_key, now=now)
         self.repository.save(

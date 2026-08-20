@@ -290,6 +290,72 @@ def test_required_automated_deliverable_is_validated_before_commit():
     }
 
 
+def test_web_search_completion_audit_preserves_the_server_query():
+    clock = Clock()
+    snapshot = InstanceSnapshot(
+        goal="audit one search query",
+        nodes=(
+            NodeSpec(
+                "research",
+                "Research",
+                "person_owner",
+                "tool",
+                work={
+                    "objective": "Research public travel information",
+                    "inputs": [],
+                    "outputs": [
+                        {"id": "content", "type": "text", "required": True},
+                        {
+                            "id": "sources",
+                            "type": "string_list",
+                            "required": True,
+                        },
+                    ],
+                    "acceptance": ["Cited sources exist"],
+                    "tool": {
+                        "kind": "web.search",
+                        "args": {"instructions": "Research the destination"},
+                    },
+                },
+            ),
+        ),
+    )
+    service, repository = build_runtime(clock=clock, snapshot=snapshot)
+    activation = service.dispatch_due(
+        TENANT,
+        "instance_runtime",
+        worker_id="worker_1",
+        max_automated=1,
+    )[0]
+    query = "新疆 国际大巴扎 交河故城 那拉提 景点开放"
+
+    service.complete_automated(
+        TENANT,
+        "instance_runtime",
+        "research",
+        attempt_no=activation.attempt_no,
+        expected_node_version=activation.expected_node_version,
+        claim_token=activation.claim_token or "",
+        result={
+            "content": "Public evidence",
+            "sources": ["https://example.com/xinjiang"],
+            "query": query,
+            "tool_kind": "web.search",
+        },
+        worker_id="worker_1",
+    )
+
+    completed = tuple(
+        event
+        for event in repository.audit_log(TENANT, "instance_runtime")
+        if event.event_type == "node.automated_completed"
+    )
+    assert completed[-1].payload == {
+        "worker_id": "worker_1",
+        "search_query": query,
+    }
+
+
 def test_cancellation_during_execution_discards_the_late_worker_result():
     clock = Clock()
     service, repository = build_runtime(clock=clock)

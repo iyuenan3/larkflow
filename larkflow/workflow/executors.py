@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from larkflow.search import (
     DisabledSafeOutboundFetcher,
+    SearchEvidenceMissingError,
     SearchEvidenceTooLargeError,
     SearchResult,
     SearchSourcesUnavailableError,
@@ -70,6 +71,298 @@ class PublicSearchProvider(Protocol):
 
     def search(self, *, query: str) -> SearchResult:
         ...
+
+
+MAX_TYPED_SEARCH_QUERY_CHARS = 100
+_SEARCH_DEPENDENCY_PATH = re.compile(r"^dependencies\.([a-z][a-z0-9_]*)$")
+_SEARCH_SPACE = re.compile(r"\s+")
+_SEARCH_CONSTRAINT_SPLIT = re.compile(r"[、,，;；。\n]+")
+_SEARCH_CONSTRAINT_PREFIX = re.compile(
+    r"^(?:必游|重点|希望|计划|优先|必须|需要|请|包含|包括|安排|游览|参观|"
+    r"前往|途经|交通|景点|路线|限制|偏好)[:：]?\s*"
+)
+_SEARCH_SENSITIVE_MARKERS = (
+    "api_key",
+    "apikey",
+    "cookie",
+    "password",
+    "secret",
+    "token",
+    "密码",
+    "密钥",
+    "身份证",
+    "手机号",
+    "电话号码",
+    "邮箱",
+)
+_SEARCH_UNKNOWN_VALUES = frozenset(
+    {"", "未知", "待定", "未确认", "缺失", "没有", "无", "不详"}
+)
+_SEARCH_TRANSPORT_TERMS = (
+    "航班",
+    "飞机",
+    "铁路",
+    "高铁",
+    "火车",
+    "包车",
+    "机场",
+    "车站",
+)
+_SEARCH_ATTRACTION_TERMS = (
+    "大巴扎",
+    "故城",
+    "那拉提",
+    "景区",
+    "景点",
+    "博物馆",
+    "公园",
+    "古城",
+    "草原",
+    "峡谷",
+    "沙漠",
+)
+
+
+def _compile_typed_search_query(
+    request: ExecutionRequest,
+    *,
+    instructions: str,
+) -> tuple[str, tuple[str, ...]]:
+    """Build one bounded query from server-captured direct dependencies only."""
+
+    fields, constraints = _authorized_search_fields(request)
+    focus_text = " ".join(
+        (
+            request.node_key,
+            str(request.work.get("objective", "")),
+            instructions,
+        )
+    ).casefold()
+    focus = (
+        "transport"
+        if "transport" in focus_text or "交通" in focus_text
+        else "attractions"
+        if "attraction" in focus_text or "景点" in focus_text
+        else "generic"
+    )
+    origin = _search_scalar(fields, ("origin", "departure"), max_chars=14)
+    destination = _search_scalar(
+        fields,
+        ("destination", "travel_destination"),
+        max_chars=14,
+    )
+    start_date = _search_date(
+        fields,
+        ("travel_start_date", "start_date", "departure_date"),
+    )
+    end_date = _search_date(
+        fields,
+        ("travel_end_date", "end_date", "return_date"),
+    )
+    tokens = _search_constraint_tokens(constraints)
+    dates = (
+        f"{start_date}至{end_date}"
+        if start_date and end_date
+        else start_date or end_date
+    )
+
+    if focus == "attractions":
+        candidates = tuple(
+            token
+            for token in tokens
+            if not any(term in token for term in _SEARCH_TRANSPORT_TERMS)
+        )
+        entities = tuple(
+            dict.fromkeys(
+                (
+                    *(
+                        token
+                        for token in candidates
+                        if any(
+                            term in token for term in _SEARCH_ATTRACTION_TERMS
+                        )
+                    ),
+                    *candidates,
+                )
+            )
+        )[:3]
+        components = (
+            destination,
+            *entities,
+            dates,
+            "景点开放 预约 游玩限制",
+        )
+        relevance = _unique_search_terms((destination, *entities))
+    elif focus == "transport":
+        hubs = _transport_context_tokens(tokens)
+        components = (
+            origin,
+            destination,
+            *hubs,
+            dates,
+            "航班 铁路 合规包车 交通衔接",
+        )
+        relevance = _unique_search_terms((origin, destination, *hubs))
+    else:
+        components = (
+            destination,
+            origin,
+            dates,
+            _safe_search_text(instructions, max_chars=48),
+        )
+        relevance = _unique_search_terms((destination, origin))
+
+    query = _bounded_search_query(components)
+    if not query:
+        query = _safe_search_text(
+            instructions,
+            max_chars=MAX_TYPED_SEARCH_QUERY_CHARS,
+        )
+    if not query:
+        raise ValueError("web.search could not compile a safe query")
+    return query, relevance
+
+
+def _authorized_search_fields(
+    request: ExecutionRequest,
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    dependencies = request.input_snapshot.get("dependencies")
+    raw_inputs = request.work.get("inputs")
+    if not isinstance(dependencies, Mapping) or not isinstance(raw_inputs, Sequence):
+        return {}, ()
+    names: list[str] = []
+    for raw_path in raw_inputs:
+        if not isinstance(raw_path, str):
+            continue
+        matched = _SEARCH_DEPENDENCY_PATH.fullmatch(raw_path.strip())
+        if matched and matched.group(1) not in names:
+            names.append(matched.group(1))
+    fields: dict[str, object] = {}
+    constraints: list[str] = []
+    for name in names:
+        value = dependencies.get(name)
+        if not isinstance(value, Mapping):
+            continue
+        for key, raw_value in value.items():
+            if not isinstance(key, str):
+                continue
+            normalized_key = key.strip().casefold()
+            if normalized_key == "constraints" and isinstance(raw_value, str):
+                constraints.append(raw_value)
+            elif normalized_key not in fields:
+                fields[normalized_key] = raw_value
+    return fields, tuple(constraints)
+
+
+def _search_scalar(
+    fields: Mapping[str, object],
+    aliases: Sequence[str],
+    *,
+    max_chars: int,
+) -> str:
+    for alias in aliases:
+        value = fields.get(alias)
+        if not isinstance(value, str):
+            continue
+        safe = _safe_search_text(value, max_chars=max_chars)
+        if safe and safe.casefold() not in _SEARCH_UNKNOWN_VALUES:
+            return safe
+    return ""
+
+
+def _search_date(fields: Mapping[str, object], aliases: Sequence[str]) -> str:
+    for alias in aliases:
+        value = fields.get(alias)
+        if not isinstance(value, str):
+            continue
+        candidate = value.strip()
+        if re.fullmatch(
+            r"20\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])",
+            candidate,
+        ):
+            return candidate
+    return ""
+
+
+def _search_constraint_tokens(values: Sequence[str]) -> tuple[str, ...]:
+    tokens: list[str] = []
+    for value in values:
+        for raw_token in _SEARCH_CONSTRAINT_SPLIT.split(value[:1_000]):
+            token = _safe_search_text(raw_token, max_chars=16)
+            previous = None
+            while token and token != previous:
+                previous = token
+                token = _SEARCH_CONSTRAINT_PREFIX.sub("", token).strip()
+            if not 2 <= len(token) <= 14 or _contains_sensitive_marker(token):
+                continue
+            if token.casefold() in _SEARCH_UNKNOWN_VALUES or token in tokens:
+                continue
+            tokens.append(token)
+            if len(tokens) >= 12:
+                return tuple(tokens)
+    return tuple(tokens)
+
+
+def _transport_context_tokens(tokens: Sequence[str]) -> tuple[str, ...]:
+    result: list[str] = []
+    for index, token in enumerate(tokens):
+        if any(term in token for term in _SEARCH_TRANSPORT_TERMS):
+            if index > 0:
+                previous = tokens[index - 1]
+                if (
+                    previous not in result
+                    and len(previous) <= 10
+                    and not any(
+                        term in previous for term in _SEARCH_TRANSPORT_TERMS
+                    )
+                ):
+                    result.append(previous)
+            if (
+                any(suffix in token for suffix in ("机场", "车站", "火车站"))
+                and token not in result
+                and len(token) <= 12
+            ):
+                result.append(token)
+    for token in tokens:
+        if re.search(r"(?:到|至|飞往|前往)[\u4e00-\u9fff]{2,8}", token):
+            result.append(token[-10:])
+    return tuple(dict.fromkeys(result))[:3]
+
+
+def _bounded_search_query(components: Sequence[str]) -> str:
+    selected: list[str] = []
+    for component in components:
+        safe = _safe_search_text(component, max_chars=40)
+        if not safe or safe in selected:
+            continue
+        candidate = " ".join((*selected, safe))
+        if len(candidate) <= MAX_TYPED_SEARCH_QUERY_CHARS:
+            selected.append(safe)
+    return " ".join(selected)
+
+
+def _safe_search_text(value: object, *, max_chars: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    normalized = _SEARCH_SPACE.sub(" ", value.strip())
+    if not normalized or _contains_sensitive_marker(normalized):
+        return ""
+    return normalized[:max_chars].strip()
+
+
+def _contains_sensitive_marker(value: str) -> bool:
+    folded = value.casefold()
+    return any(marker in folded for marker in _SEARCH_SENSITIVE_MARKERS)
+
+
+def _unique_search_terms(values: Sequence[str]) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            value
+            for value in values
+            if isinstance(value, str) and len(value) >= 2
+        )
+    )[:6]
 
 
 class LLMAgentExecutor:
@@ -827,10 +1120,17 @@ class WebSearchToolExecutor:
             )
         search = getattr(self.client, "search", None)
         typed_provider = callable(search)
+        relevance_terms: tuple[str, ...] = ()
         if typed_provider:
-            raw_result = search(query=instructions.strip())
+            compiled_query, relevance_terms = _compile_typed_search_query(
+                request,
+                instructions=instructions.strip(),
+            )
+            raw_result = search(query=compiled_query)
             if not isinstance(raw_result, SearchResult):
                 raise ValueError("web.search provider returned an invalid result")
+            if raw_result.query.strip() != compiled_query:
+                raise ValueError("web.search provider returned a mismatched query")
             raw: Mapping[str, object] = {
                 "content": render_search_result(raw_result),
                 "sources": tuple(
@@ -899,6 +1199,19 @@ class WebSearchToolExecutor:
             )
         except ValueError as exc:
             raise ValueError("web.search returned invalid source records") from exc
+        if typed_provider and relevance_terms:
+            source_records = tuple(
+                item
+                for item in source_records
+                if self._source_matches_context(item, relevance_terms)
+            )
+            if not source_records:
+                raise SearchEvidenceMissingError(
+                    "web.search sources do not match the confirmed request context"
+                )
+            normalized_sources = [
+                str(item["source_url"]) for item in source_records
+            ]
         if source_records and all(
             item["health"] == "unreachable" for item in source_records
         ):
@@ -1049,6 +1362,20 @@ class WebSearchToolExecutor:
             ),
             "support": "unknown",
         }
+
+    @staticmethod
+    def _source_matches_context(
+        record: Mapping[str, object],
+        terms: Sequence[str],
+    ) -> bool:
+        haystack = unicodedata.normalize(
+            "NFKC",
+            f"{record.get('title', '')} {record.get('snippet', '')}",
+        ).casefold()
+        return any(
+            unicodedata.normalize("NFKC", term).casefold() in haystack
+            for term in terms
+        )
 
     def accepts(self, *, executor: ExecutorKind, work: Mapping[str, object]) -> bool:
         tool = work.get("tool")

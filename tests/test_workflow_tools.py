@@ -83,9 +83,17 @@ class UnavailableWebSearch:
 
 
 class StaticSearchProvider:
-    def __init__(self, *, published_at: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        published_at: str | None = None,
+        title: str = "苏州博物馆参观须知",
+        snippet: str = "苏州博物馆开放与预约信息。",
+    ) -> None:
         self.calls = []
         self.published_at = published_at
+        self.title = title
+        self.snippet = snippet
 
     def capability(self):
         class Capability:
@@ -100,8 +108,8 @@ class StaticSearchProvider:
             query=query,
             sources=(
                 SearchSource(
-                    title="苏州博物馆参观须知",
-                    snippet="开放与预约信息。",
+                    title=self.title,
+                    snippet=self.snippet,
                     source_url="https://www.szmuseum.com/guide",
                     published_at=self.published_at,
                     published_at_status=(
@@ -126,8 +134,8 @@ class OversizedSearchProvider:
             query=query,
             sources=tuple(
                 SearchSource(
-                    title=f"来源 {index}",
-                    snippet=(f"证据片段{index} " + "公开资料" * 990),
+                    title=f"苏州来源 {index}",
+                    snippet=(f"苏州证据片段{index} " + "公开资料" * 990),
                     source_url=f"https://example.com/source/{index}",
                     published_at=None,
                     published_at_status="unknown",
@@ -220,11 +228,15 @@ def web_search_request(*, extra_args: dict | None = None) -> ExecutionRequest:
             "dependencies": {
                 "confirm_requirements": {
                     "origin": "上海",
+                    "destination": "苏州",
                     "start_date": "2026-08-20",
+                    "end_date": "2026-08-22",
                     "travelers": 2,
                     "budget": 3000,
+                    "constraints": "重点参观苏州博物馆、拙政园",
                 }
-            }
+            },
+            "instance_inputs": {"private_token": "must-not-leak"},
         },
         expected_node_version=1,
         claim_token="claim-search",
@@ -711,7 +723,14 @@ def test_web_search_executor_preserves_typed_provider_evidence_without_synthesiz
 
     result = WebSearchToolExecutor(provider).execute(web_search_request()).result
 
-    assert provider.calls == ["优先核对景点官方开放时间和预约规则"]
+    assert len(provider.calls) == 1
+    assert provider.calls[0] != "优先核对景点官方开放时间和预约规则"
+    assert "苏州" in provider.calls[0]
+    assert "苏州博物馆" in provider.calls[0]
+    assert "拙政园" in provider.calls[0]
+    assert "2026-08-20" in provider.calls[0]
+    assert len(provider.calls[0]) <= 100
+    assert "must-not-leak" not in provider.calls[0]
     assert result["provider"] == "stub_search"
     assert result["query"] == provider.calls[0]
     assert result["sources"] == ("https://www.szmuseum.com/guide",)
@@ -740,6 +759,92 @@ def test_web_search_executor_preserves_typed_provider_evidence_without_synthesiz
     assert result["usage"]["result_count"] == 1
     assert result["error"] is None
     assert "发布时间：时间不明" in result["content"]
+
+
+def test_typed_web_search_compiles_authorized_travel_queries_with_priority():
+    attractions = web_search_request()
+    attractions = replace(
+        attractions,
+        input_snapshot={
+            "dependencies": {
+                "confirm_requirements": {
+                    "origin": "上海",
+                    "destination": "新疆",
+                    "travel_start_date": "2026-09-10",
+                    "travel_end_date": "2026-09-17",
+                    "travelers": 2,
+                    "total_budget": 12000,
+                    "constraints": (
+                        "重点游览国际大巴扎、交河故城、那拉提；"
+                        "交通包含乌鲁木齐、航班、铁路、合规包车"
+                    ),
+                    "api_key": "forbidden-secret",
+                },
+                "unrelated_node": {"notes": "must-not-appear"},
+            },
+            "instance_inputs": {"cookie": "must-not-appear"},
+        },
+    )
+    attraction_provider = StaticSearchProvider(
+        title="新疆景点预约指南",
+        snippet="国际大巴扎、交河故城和那拉提开放信息。",
+    )
+
+    WebSearchToolExecutor(attraction_provider).execute(attractions)
+
+    attraction_query = attraction_provider.calls[0]
+    assert len(attraction_query) <= 100
+    for term in ("新疆", "国际大巴扎", "交河故城", "那拉提"):
+        assert term in attraction_query
+    assert "forbidden-secret" not in attraction_query
+    assert "must-not-appear" not in attraction_query
+
+    transport_provider = StaticSearchProvider(
+        title="新疆交通出行提示",
+        snippet="上海至乌鲁木齐航班、铁路和合规包车信息。",
+    )
+    transport = replace(
+        attractions,
+        node_key="research_transport",
+        work={
+            **attractions.work,
+            "objective": "检索出发地到目的地及目的地内部交通的公开信息",
+            "tool": {
+                "kind": "web.search",
+                "args": {
+                    "model_role": "default",
+                    "instructions": "检索往返交通、区域内交通、衔接时间和限制条件",
+                },
+            },
+        },
+    )
+
+    WebSearchToolExecutor(transport_provider).execute(transport)
+
+    transport_query = transport_provider.calls[0]
+    assert len(transport_query) <= 100
+    for term in (
+        "上海",
+        "乌鲁木齐",
+        "2026-09-10",
+        "2026-09-17",
+        "航班",
+        "铁路",
+        "合规包车",
+    ):
+        assert term in transport_query
+
+
+def test_typed_web_search_filters_unrelated_sources_and_fails_closed():
+    provider = StaticSearchProvider(
+        title="黄山今天开放吗？",
+        snippet="黄山已恢复迎客但需提前三天预约。",
+    )
+
+    with pytest.raises(RuntimeError, match="confirmed request context") as error:
+        WebSearchToolExecutor(provider).execute(web_search_request())
+
+    assert error.value.error_code == "search_evidence_missing"
 
 
 def test_web_search_executor_rejects_unsourced_or_provider_controlled_results():
@@ -802,7 +907,7 @@ def test_typed_web_search_compacts_ten_large_sources_into_node_contract():
         assert record["source_url"] in result["sources"]
         assert record["snippet"]
         source_index = int(record["source_url"].rsplit("/", 1)[-1])
-        original = f"证据片段{source_index} " + "公开资料" * 990
+        original = f"苏州证据片段{source_index} " + "公开资料" * 990
         assert original.startswith(record["snippet"])
     assert validate_node_deliverable(
         request.work,
