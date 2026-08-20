@@ -1,5 +1,7 @@
 # DEPLOYMENT · larkflow
 
+- 2026-08-21 真实 Human Gate 与完成投影已验收。实例 `console_draft_cc16a99b9b79e282488ec8453658e8e2` 为 `done / version 20 / 5 of 5`，`review_travel_plan` Attempt 3 已由真实参与者接受；最后两条领域审计为 `node.human_decision_accepted` 与 `instance.completed`，聚合版本均为 20。关联 outbox 共 19 条，全部 published；最终 `feishu_document` 投影绑定 Docx `HcNfdT2oaolOI3xa9HzcK8ERnid`。bot 只读回查 revision 5 和五节点目录成功，飞书任务助手与 larkflow 卡片的可见终态由 Computer Use 人工验收确认。本条没有再次替换 wheel 或重启服务，继续使用下方 v0.94.2 部署件。
+
 - 2026-08-20 交通复合约束实体绑定已部署。内容提交为 `83d6cfa71d7aa0d01227cedbce6989fe630b3548`，wheel SHA-256 为 `95d5ecb72098ae1b1fe2f24059efb86903ef4d3288ccc38e9877f69f6cc913c5`，保存在 `/srv/larkflow/target/releases/transport_query_20260820_233615_83d6cfa/`。Target 与 legacy 安装态 `workflow/executors.py` 哈希均为 `b6ddee117df16ba05197958d532c35b08d175546595be6408bf30c74ad922ab7`，两个 venv 的 `pip check` 通过；migration 重入为空，长期库保持 `29 / 0029_console_draft_cancellation`。
 - 统一门禁于北京时间 23:38:45 至 23:39:03 重启全部十个共享 wheel 服务；正式节点 restart 期间 Runtime 于 23:44:04 再次安全启动，最终均为 `active / running / NRestarts=0`，启动窗口 warning 和 error 匹配为 0。Target 仍使用 `deepseek-v4-flash`，typed 豆包 SearchProvider 保持 configured，搜索结果正文上限为 12000 字符。真实 provider 探针确认景点 query 为 63 字并保留 9 条来源，交通 query 为 48 字并保留 10 条来源；实例 `console_draft_cc16a99b9b79e282488ec8453658e8e2` 的两个 search Attempt 2 与 Agent Attempt 3 已完成，Human Attempt 3 等待人工。本轮没有修改 schema 或 Caddy，也没有接受 Human Gate。
 

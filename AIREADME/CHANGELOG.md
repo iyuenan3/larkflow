@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.94.3-draft · 2026-08-21 · 复合交通查询真实流程验收通过
+
+- Accepted：真实参与者通过 Computer Use 复核并接受实例 `console_draft_cc16a99b9b79e282488ec8453658e8e2` 的 `review_travel_plan` Attempt 3。PostgreSQL 随后回读实例为 `done / version 20 / 5 of 5`，当前决定为 `accepted`；最终两条审计依次为 `node.human_decision_accepted / aggregate_version 20` 与 `instance.completed / aggregate_version 20`。本条更新 v0.94.2 中“等待人工”的阶段状态，不改写下方历史记录。
+- Projection：该实例关联 outbox 为 `instance.projection_completed_requested published 1`、`node.projection_create_requested published 5` 和 `node.projection_sync_requested published 13`，合计 19 条全部 published，没有 pending、processing 或 failed。飞书任务助手显示“确认出行需求与资料边界”已完成，larkflow 决定卡显示 Attempt 3 已接受且流程完成。
+- Document：最终 Docx 为 `HcNfdT2oaolOI3xa9HzcK8ERnid`，bot 身份只读回查 revision 5；目录包含流程信息、五个节点结果和“新疆8日企业调研项目旅行规划方案（2026-09-10 至 2026-09-17）”原生标题。可读链接为 `https://rcnmyfwlip5z.feishu.cn/docx/HcNfdT2oaolOI3xa9HzcK8ERnid`。
+- Boundary：代码、wheel、migration 与服务仍沿用 v0.94.2 的已验证部署，本条只同步真实 Human Gate 和最终投影证据，没有修改业务代码、schema、Caddy 或历史 Attempt。单个真实流程通过不代表生产容量、来源事实真实性或完整邀请测试已经验收。
+
 ## v0.94.2-draft · 2026-08-20 · 交通复合约束实体绑定修复
 
 - Fixed：`83d6cfa71d7aa0d01227cedbce6989fe630b3548` 把交通实体抽取限制在包含交通词的同一分号语义组内，并从“上海往返乌鲁木齐航班”这类复合短语提取目的交通枢纽。全局 token 的前驱不再参与交通查询，因此前一景点组中的“伊犁那拉提”不能借位成为交通枢纽；查询仍只读取 NodeSpec 明确声明的直接依赖，保持 100 字上限、敏感标记拒绝、相关性门禁和 result、审计同 query 合同。
