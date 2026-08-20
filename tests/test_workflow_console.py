@@ -707,6 +707,63 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert _json(authorized)["attention"]["total"] == 1
 
 
+def test_console_feishu_authentication_failures_keep_a_safe_retry_path():
+    script = _application().handle("GET", "/console/app.js").body.decode("utf-8")
+
+    unauthorized = script[
+        script.index("if (response.status === 401)") : script.index(
+            "if (!response.ok)",
+            script.index("if (response.status === 401)"),
+        )
+    ]
+    assert "error.authentication = true" in unauthorized
+    assert 'showFeishuLogin(error.message, { reauthorize: true })' in unauthorized
+
+    restart = script[
+        script.index("async function beginFeishuLogin()") : script.index(
+            "async function logoutConsole()"
+        )
+    ]
+    logout_request = restart.index('fetch("/console/auth/logout"')
+    oauth_navigation = restart.index("window.location.assign(state.loginUrl)")
+    assert logout_request < restart.index("finally") < oauth_navigation
+    assert 'method: "POST"' in restart
+    assert 'credentials: "same-origin"' in restart
+
+    oauth_error = script[
+        script.index("if (authError)") : script.index(
+            "if (!auth.authenticated)",
+            script.index("if (authError)"),
+        )
+    ]
+    assert 'showFeishuLogin(message, { reauthorize: true })' in oauth_error
+    assert 'reauthorize ? "重新授权飞书"' in script
+
+    fresh_login = script[
+        script.index("if (!auth.authenticated)") : script.index(
+            'el("lock").textContent = "锁定"'
+        )
+    ]
+    assert fresh_login.index("showFeishuLogin()") < fresh_login.index(
+        "beginFeishuLogin()"
+    )
+
+    static_start = script.index('el("lock").textContent = "锁定"')
+    static_login = script[
+        static_start:script.index("function showWorkspaceError", static_start)
+    ]
+    assert "showStaticLogin()" in static_login
+    assert "beginFeishuLogin()" not in static_login
+
+    fallback = script[script.index("bootstrap().catch((error) => {") :]
+    preserve_retry = fallback.index(
+        'state.authMode === "feishu" && error.authentication === true'
+    )
+    generic_hide = fallback.index("feishuLogin.hidden = true")
+    assert preserve_retry < fallback.index("showFeishuLogin", preserve_retry)
+    assert preserve_retry < fallback.index("return;", preserve_retry) < generic_hide
+
+
 def test_console_http_rejects_writes_bad_queries_and_resource_enumeration():
     application = _application()
     headers = {"Authorization": f"Bearer {TOKEN}"}

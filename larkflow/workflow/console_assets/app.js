@@ -294,8 +294,11 @@ async function request(path, options = {}) {
         : "访问令牌无效或已经更新",
     );
     error.authentication = true;
-    if (state.authMode === "feishu") showFeishuLogin(error.message);
-    else lockConsole();
+    if (state.authMode === "feishu") {
+      showFeishuLogin(error.message, { reauthorize: true });
+    } else {
+      lockConsole();
+    }
     throw error;
   }
   if (!response.ok) {
@@ -2898,7 +2901,8 @@ function showStaticLogin(message = "") {
   tokenInput.focus();
 }
 
-function showFeishuLogin(message = "") {
+function showFeishuLogin(message = "", options = {}) {
+  const reauthorize = options.reauthorize === true;
   clearTimeout(pollDraftRequest.timer);
   state.authMode = "feishu";
   state.token = "";
@@ -2920,7 +2924,7 @@ function showFeishuLogin(message = "") {
   unlockForm.hidden = true;
   feishuLogin.hidden = false;
   feishuLogin.disabled = false;
-  feishuLogin.textContent = "使用飞书身份进入";
+  feishuLogin.textContent = reauthorize ? "重新授权飞书" : "使用飞书身份进入";
   unlockError.textContent = message;
   el("admin-session-preview").hidden = true;
   el("admin-session-preview").replaceChildren();
@@ -2937,10 +2941,20 @@ function showConsole() {
   if (state.view === "owner") showOwnerSection(state.ownerSection);
 }
 
-function beginFeishuLogin() {
+async function beginFeishuLogin() {
   feishuLogin.disabled = true;
   feishuLogin.textContent = "正在连接飞书";
-  window.location.assign(state.loginUrl);
+  try {
+    await fetch("/console/auth/logout", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+  } catch (_error) {
+    // OAuth recovery must remain available when session cleanup is unavailable.
+  } finally {
+    window.location.assign(state.loginUrl);
+  }
 }
 
 async function logoutConsole() {
@@ -3007,7 +3021,7 @@ async function bootstrap() {
       const message = authError === "access_denied"
         ? "你已取消飞书授权，可以重新进入"
         : "飞书登录没有完成，请重试";
-      showFeishuLogin(message);
+      showFeishuLogin(message, { reauthorize: true });
       window.history.replaceState({}, "", "/console/");
       return;
     }
@@ -3183,6 +3197,10 @@ window.addEventListener("resize", () => {
 });
 
 bootstrap().catch((error) => {
+  if (state.authMode === "feishu" && error.authentication === true) {
+    showFeishuLogin(error.message, { reauthorize: true });
+    return;
+  }
   unlockCopy.textContent = "工作台暂时无法初始化。";
   unlockForm.hidden = true;
   feishuLogin.hidden = true;
