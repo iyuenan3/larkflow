@@ -64,6 +64,22 @@ class ObservedCompletion:
         )
 
 
+class SequencedObservedCompletion:
+    def __init__(self, *contents: str) -> None:
+        self.contents = list(contents)
+        self.calls = []
+
+    def complete_with_metadata(self, *, prompt: str, model_role: str):
+        self.calls.append({"prompt": prompt, "model_role": model_role})
+        content = self.contents.pop(0)
+        return CompletionResult(
+            content=content,
+            finish_reason="stop",
+            usage={"prompt_tokens": 120, "completion_tokens": 80},
+            model="deepseek-v4-flash",
+        )
+
+
 def completion_envelope(
     content: str = "结论：可以继续。",
     *,
@@ -292,6 +308,124 @@ def test_agent_executor_requires_an_anchor_for_each_acceptance_item():
 
     with pytest.raises(AgentResultIncomplete, match="evidence is incomplete: a2"):
         LLMAgentExecutor(completion).execute(execution_request)
+
+
+def test_agent_executor_matches_deepseek_style_anchors_after_markdown_rendering():
+    rendered = (
+        "## 景点和交通结论\n\n"
+        "本方案将**景点结论**与**交通结论**逐项绑定来源。"
+    )
+    completion = ObservedCompletion(
+        completion_envelope(
+            rendered,
+            evidence={
+                "a1": {
+                    "status": "satisfied",
+                    "content_anchors": ["景点结论与交通结论"],
+                }
+            },
+        )
+    )
+
+    result = LLMAgentExecutor(completion).execute(request())
+
+    assert result.result["content"] == rendered
+
+
+def test_agent_executor_repairs_only_anchor_metadata_once_and_keeps_content():
+    rendered = "## 景点与交通结论\n\n景点和交通结论均保留对应来源。"
+    first = completion_envelope(
+        rendered,
+        evidence={
+            "a1": {
+                "status": "satisfied",
+                "content_anchors": ["景点及交通来源结论"],
+            }
+        },
+    )
+    repaired = completion_envelope(
+        rendered,
+        evidence={
+            "a1": {
+                "status": "satisfied",
+                "content_anchors": ["景点与交通结论"],
+            }
+        },
+    )
+    completion = SequencedObservedCompletion(first, repaired)
+
+    result = LLMAgentExecutor(completion).execute(request())
+
+    assert result.result["content"] == rendered
+    assert result.result["provider_model"] == "deepseek-v4-flash"
+    assert result.result["format_repair_count"] == 1
+    assert result.result["usage"] == {
+        "prompt_tokens": 240,
+        "completion_tokens": 160,
+    }
+    assert len(completion.calls) == 2
+    assert "不得修改 content" in completion.calls[1]["prompt"]
+    assert "Agent completion anchor is not present in content" in (
+        completion.calls[1]["prompt"]
+    )
+    assert "不得增加、删除或改写任何事实" in completion.calls[1]["prompt"]
+
+
+def test_agent_executor_rejects_anchor_repair_that_changes_content():
+    rendered = "## 原正文\n\n原始内容。"
+    first = completion_envelope(
+        rendered,
+        evidence={
+            "a1": {
+                "status": "satisfied",
+                "content_anchors": ["不存在的锚点"],
+            }
+        },
+    )
+    changed = completion_envelope(
+        "## 被修改的正文\n\n不同内容。",
+        evidence={
+            "a1": {
+                "status": "satisfied",
+                "content_anchors": ["被修改的正文"],
+            }
+        },
+    )
+    completion = SequencedObservedCompletion(first, changed)
+
+    with pytest.raises(AgentResultIncomplete, match="changed content"):
+        LLMAgentExecutor(completion).execute(request())
+
+    assert len(completion.calls) == 2
+
+
+def test_agent_executor_fails_after_one_invalid_anchor_repair():
+    rendered = "## 旅行方案\n\n逐日安排已经完成。"
+    invalid = completion_envelope(
+        rendered,
+        evidence={
+            "a1": {
+                "status": "satisfied",
+                "content_anchors": ["正文没有这个锚点"],
+            }
+        },
+    )
+    completion = SequencedObservedCompletion(invalid, invalid)
+
+    with pytest.raises(AgentResultIncomplete, match="anchor is not present"):
+        LLMAgentExecutor(completion).execute(request())
+
+    assert len(completion.calls) == 2
+
+
+def test_agent_prompt_declares_the_persistable_content_budget():
+    completion = ObservedCompletion(completion_envelope())
+
+    LLMAgentExecutor(completion, max_result_chars=12000).execute(request())
+
+    prompt = completion.calls[0]["prompt"]
+    assert "content 严格不超过 12000 个字符" in prompt
+    assert "从 content 的可见正文中逐字复制" in prompt
 
 
 @pytest.mark.parametrize(

@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 import re
 import time
+import unicodedata
 from typing import Protocol
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -44,6 +45,10 @@ class AgentResultIncomplete(ValueError):
     """A provider response cannot satisfy the automated completion contract."""
 
     error_code = "agent_result_incomplete"
+
+
+class _CompletionAnchorMismatch(AgentResultIncomplete):
+    """A structurally valid completion needs one bounded evidence repair."""
 
 
 class WebSearchClient(Protocol):
@@ -130,11 +135,50 @@ class LLMAgentExecutor:
             raise AgentResultIncomplete("Agent returned an empty result")
         if observed:
             self._validate_finish_reason(finish_reason)
+        format_repair_count = 0
+        format_repair_provider_model = None
         if result_format == "plain_text" and observed:
-            content = self._completed_plain_text(
-                content,
-                acceptance=request.work.get("acceptance", ()),
-            )
+            acceptance = request.work.get("acceptance", ())
+            try:
+                content = self._completed_plain_text(
+                    content,
+                    acceptance=acceptance,
+                )
+            except _CompletionAnchorMismatch as exc:
+                rendered = self._completion_rendered(content)
+                content_budget = self._content_char_budget(
+                    uses_web_research=uses_web_research,
+                )
+                if len(rendered.strip()) > content_budget:
+                    raise AgentResultIncomplete(
+                        f"Agent result exceeds {content_budget} characters"
+                    )
+                repair_prompt = self._anchor_repair_prompt(
+                    rendered=rendered,
+                    acceptance=acceptance,
+                    error=str(exc),
+                )
+                if len(repair_prompt) > self.max_prompt_chars:
+                    raise AgentResultIncomplete(
+                        "Agent completion anchor repair exceeds the prompt budget"
+                    )
+                repaired, repair_finish, repair_usage, repair_model, _ = self._complete(
+                    prompt=repair_prompt,
+                    model_role=model_role.strip(),
+                )
+                self._validate_finish_reason(repair_finish)
+                if self._completion_rendered(repaired) != rendered:
+                    raise AgentResultIncomplete(
+                        "Agent completion anchor repair changed content"
+                    )
+                content = self._completed_plain_text(
+                    repaired,
+                    acceptance=acceptance,
+                )
+                usage = self._merge_usage(usage, repair_usage)
+                finish_reason = repair_finish
+                format_repair_count = 1
+                format_repair_provider_model = repair_model
         else:
             content = self._plain_text(content)
         if not content:
@@ -156,6 +200,12 @@ class LLMAgentExecutor:
             result["usage"] = usage
             if provider_model:
                 result["provider_model"] = provider_model
+            if format_repair_count:
+                result["format_repair_count"] = format_repair_count
+                if format_repair_provider_model:
+                    result["format_repair_provider_model"] = (
+                        format_repair_provider_model
+                    )
         if result_format == self.SOURCE_CLAIMS_FORMAT:
             claims = self._source_claims(content)
             result["content"] = render_source_claims(claims)
@@ -293,14 +343,51 @@ class LLMAgentExecutor:
                     or len(anchor) > 80
                     or cls._normalized_excerpt(anchor) not in searchable
                 ):
-                    raise AgentResultIncomplete(
+                    raise _CompletionAnchorMismatch(
                         f"Agent completion anchor is not present in content: {item_id}"
                     )
         return rendered.strip()
 
+    @classmethod
+    def _completion_rendered(cls, content: str) -> str:
+        try:
+            envelope = cls._strict_json_object(content, label="completion envelope")
+        except ValueError as exc:
+            raise AgentResultIncomplete("Agent completion marker is missing") from exc
+        rendered = envelope.get("content")
+        if not isinstance(rendered, str) or not rendered.strip():
+            raise AgentResultIncomplete("Agent completion envelope has empty content")
+        return rendered
+
     @staticmethod
     def _normalized_excerpt(value: str) -> str:
-        return " ".join(value.casefold().split())
+        normalized = unicodedata.normalize("NFKC", value)
+        normalized = re.sub(
+            r"\[([^\]\n]+)\]\([^\)\n]+\)",
+            r"\1",
+            normalized,
+        )
+        normalized = re.sub(
+            r"\\([\\`*_{}\[\]()#+\-.!|>~])",
+            r"\1",
+            normalized,
+        )
+        normalized = re.sub(
+            r"(?m)^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+",
+            "",
+            normalized,
+        )
+        normalized = normalized.translate(str.maketrans("", "", "`*_~"))
+        normalized = normalized.replace("|", " ")
+        return " ".join(normalized.casefold().split())
+
+    @staticmethod
+    def _merge_usage(*records: Mapping[str, int]) -> dict[str, int]:
+        merged: dict[str, int] = {}
+        for record in records:
+            for key, value in record.items():
+                merged[key] = merged.get(key, 0) + value
+        return merged
 
     def accepts(self, *, executor: ExecutorKind, work: Mapping[str, object]) -> bool:
         agent = work.get("agent")
@@ -310,8 +397,42 @@ class LLMAgentExecutor:
             and agent.get("kind") == self.KIND
         )
 
+    def _content_char_budget(self, *, uses_web_research: bool) -> int:
+        reserved = len(self.WEB_RESEARCH_NOTICE) + 2 if uses_web_research else 0
+        return max(1, self.max_result_chars - reserved)
+
     @staticmethod
+    def _anchor_repair_prompt(
+        *,
+        rendered: str,
+        acceptance: object,
+        error: str,
+    ) -> str:
+        items = (
+            tuple(acceptance)
+            if isinstance(acceptance, Sequence)
+            and not isinstance(acceptance, (str, bytes))
+            else ()
+        )
+        contract = {
+            f"a{index}": str(item)
+            for index, item in enumerate(items, start=1)
+        }
+        return (
+            "你只修复完成证据格式，不得修改 content 的任何字符。"
+            "不得增加、删除或改写任何事实，也不得补充原正文没有的判断。"
+            "只返回一个严格包含 content 和 completion 的 JSON 对象，不要代码块或额外文字。"
+            "content 必须原样复制下方正文。completion.status 必须是 complete；"
+            "acceptance_evidence 必须恰好覆盖全部验收 ID。每项 status 必须是 satisfied，"
+            "content_anchors 必须从 content 的可见正文中逐字复制 1 到 12 个短标题或关键字段名，"
+            "不得改写同义词，不要包含 Markdown 格式符号，每个 anchor 不超过 80 字。"
+            f"原始校验错误：{error}\n"
+            f"验收 ID：{json.dumps(contract, ensure_ascii=False, sort_keys=True)}\n"
+            f"不得修改的 content：{json.dumps(rendered, ensure_ascii=False)}"
+        )
+
     def _prompt(
+        self,
         request: ExecutionRequest,
         *,
         instructions: str,
@@ -368,7 +489,10 @@ class LLMAgentExecutor:
                 "每个验收项的 status 必须是 satisfied；content_anchors 必须包含 1 到 12 个"
                 "在 content 中逐字出现且不超过 80 字的短标题或关键字段名。若一个验收项要求"
                 "多个章节或字段，必须为每个必需章节或字段各给一个 anchor；不要用概括验收"
-                "条件的长句代替正文锚点。"
+                "条件的长句代替正文锚点。content_anchors 必须从 content 的可见正文中逐字复制，"
+                "不得改写同义词，不要包含 Markdown 格式符号，并在返回前逐项机械检查。"
+                "content 严格不超过 "
+                f"{self._content_char_budget(uses_web_research=self._contains_web_research(request.input_snapshot))} 个字符。"
                 "只有正文全部生成完毕后才能写 status=complete；不得在表格、列表或句子中途结束。"
                 f"验收 ID：{json.dumps(acceptance_contract, ensure_ascii=False, sort_keys=True)}"
             )
