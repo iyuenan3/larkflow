@@ -8,6 +8,7 @@ import socket
 from collections.abc import Mapping
 
 from .daemon import WorkerLoopSettings
+from .deliverables import MAX_DELIVERABLE_TEXT_CHARS
 
 
 @dataclass(frozen=True)
@@ -33,7 +34,7 @@ class TargetRuntimeSettings:
     enterprise_knowledge_model_egress_policy: str = "deny"
     content_check_max_chars: int = 50_000
     web_search_max_prompt_chars: int = 20_000
-    web_search_max_result_chars: int = 50_000
+    web_search_max_result_chars: int = MAX_DELIVERABLE_TEXT_CHARS
 
     def __post_init__(self) -> None:
         if not self.dsn.strip():
@@ -78,6 +79,10 @@ class TargetRuntimeSettings:
             raise ValueError("web_search_max_prompt_chars must be positive")
         if self.web_search_max_result_chars < 1:
             raise ValueError("web_search_max_result_chars must be positive")
+        if self.web_search_max_result_chars > MAX_DELIVERABLE_TEXT_CHARS:
+            raise ValueError(
+                "web_search_max_result_chars exceeds the text deliverable contract"
+            )
         if self.agent_runtime != "completion":
             raise ValueError("Target agent_runtime must be completion")
 
@@ -193,7 +198,7 @@ class TargetRuntimeSettings:
             web_search_max_result_chars=_positive_int(
                 values,
                 "LARKFLOW_TARGET_WEB_SEARCH_MAX_RESULT_CHARS",
-                50_000,
+                MAX_DELIVERABLE_TEXT_CHARS,
             ),
         )
 

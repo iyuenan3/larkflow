@@ -41,7 +41,9 @@ def test_development_restart_asset_covers_all_python_services():
 
     assert declared == expected
     assert "ExecMainStartTimestamp" in script
+    assert "ExecMainStartTimestampMonotonic" in script
     assert "NRestarts" in script
+    assert "did not reload the shared wheel" in script
 
 
 def test_development_role_binding_grants_are_narrow_and_explicit():

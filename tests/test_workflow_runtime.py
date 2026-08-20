@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from larkflow.search import SearchRateLimitedError
+from larkflow.search import SearchEvidenceTooLargeError, SearchRateLimitedError
 from larkflow.workflow import (
     AgentResultIncomplete,
     AttemptStatus,
@@ -107,6 +107,24 @@ class IncompleteAgentExecutor(AutomatedExecutor):
 class RateLimitedSearchExecutor(AutomatedExecutor):
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         raise SearchRateLimitedError("search rate limit was reached")
+
+
+class OversizedSearchExecutor(AutomatedExecutor):
+    def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        raise SearchEvidenceTooLargeError("search evidence cannot fit the contract")
+
+
+class InvalidSerializedResultExecutor(AutomatedExecutor):
+    def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        return ExecutionResult(result={"content": object()})
+
+
+class InvalidQualityResultExecutor(AutomatedExecutor):
+    def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        return ExecutionResult(
+            result={"content": "valid"},
+            quality_result=object(),
+        )
 
 
 class OverlengthCompletion:
@@ -486,6 +504,149 @@ def test_crash_after_claim_is_recovered_with_same_attempt_and_new_token():
         for event in repository.audit_log(TENANT, "instance_runtime")
     ]
     assert "node.claim_recovered" in audit_types
+
+
+def test_recovered_claim_that_fails_deliverable_validation_is_settled():
+    clock = Clock()
+    snapshot = InstanceSnapshot(
+        goal="recover one bounded result",
+        nodes=(
+            NodeSpec(
+                "generate",
+                "Generate",
+                "person_owner",
+                "agent",
+                work={
+                    "objective": "Generate",
+                    "inputs": [],
+                    "outputs": [
+                        {
+                            "id": "content",
+                            "type": "text",
+                            "label": "Bounded content",
+                            "required": True,
+                        }
+                    ],
+                    "acceptance": ["Content exists"],
+                    "prompt": "Generate",
+                },
+            ),
+        ),
+    )
+    service, repository = build_runtime(clock=clock, snapshot=snapshot)
+    first = service.dispatch_due(
+        TENANT,
+        "instance_runtime",
+        worker_id="worker_1",
+        max_automated=1,
+    )[0]
+    clock.now += timedelta(minutes=5)
+
+    report = worker(
+        service,
+        repository,
+        RecordingExecutor(result={"content": "x" * 12_001}),
+        clock=clock,
+        worker_id="worker_2",
+    ).run_once()
+
+    assert report.recovered == 1
+    assert report.completed == 0
+    assert report.failed == 1
+    assert report.stale_results == 0
+    failed = service.get(TENANT, "instance_runtime")
+    attempt = failed.current_attempt("generate")
+    assert attempt.id == first.attempt_id
+    assert attempt.attempt_no == 1
+    assert attempt.status == AttemptStatus.FAILED
+    assert attempt.error_code == "deliverable_invalid"
+    assert attempt.claim_token is None
+    clock.now += timedelta(minutes=5)
+    assert repository.runnable_instance_ids(TENANT, now=clock.now) == ()
+
+
+def test_serialization_rejection_after_execute_settles_the_current_claim():
+    clock = Clock()
+    snapshot = InstanceSnapshot(
+        goal="reject an unserializable result",
+        nodes=(
+            NodeSpec(
+                "generate",
+                "Generate",
+                "person_owner",
+                "agent",
+                work={
+                    "objective": "Generate",
+                    "inputs": [],
+                    "outputs": [
+                        {
+                            "id": "content",
+                            "type": "text",
+                            "required": True,
+                        }
+                    ],
+                    "acceptance": ["Content exists"],
+                    "prompt": "Generate",
+                },
+            ),
+        ),
+    )
+    service, repository = build_runtime(clock=clock, snapshot=snapshot)
+
+    report = worker(
+        service,
+        repository,
+        InvalidSerializedResultExecutor(),
+        clock=clock,
+        worker_id="worker_1",
+    ).run_once()
+
+    assert report.failed == 1
+    assert report.stale_results == 0
+    attempt = service.get(TENANT, "instance_runtime").current_attempt("generate")
+    assert attempt.status == AttemptStatus.FAILED
+    assert attempt.error_code == "deliverable_invalid"
+    assert attempt.claim_token is None
+
+
+def test_quality_rejection_after_execute_settles_the_current_claim():
+    clock = Clock()
+    service, repository = build_runtime(clock=clock)
+
+    report = worker(
+        service,
+        repository,
+        InvalidQualityResultExecutor(),
+        clock=clock,
+        worker_id="worker_1",
+    ).run_once()
+
+    assert report.failed == 1
+    assert report.stale_results == 0
+    attempt = service.get(TENANT, "instance_runtime").current_attempt("generate")
+    assert attempt.status == AttemptStatus.FAILED
+    assert attempt.error_code == "deliverable_invalid"
+    assert attempt.claim_token is None
+
+
+def test_uncompactable_search_result_fails_with_a_stable_error_code():
+    clock = Clock()
+    service, repository = build_runtime(clock=clock)
+
+    report = worker(
+        service,
+        repository,
+        OversizedSearchExecutor(),
+        clock=clock,
+        worker_id="worker_1",
+    ).run_once()
+
+    assert report.failed == 1
+    assert report.stale_results == 0
+    attempt = service.get(TENANT, "instance_runtime").current_attempt("generate")
+    assert attempt.status == AttemptStatus.FAILED
+    assert attempt.error_code == "search_evidence_too_large"
+    assert attempt.claim_token is None
 
 
 def test_recovery_invalidates_the_old_worker_before_accepting_new_result():

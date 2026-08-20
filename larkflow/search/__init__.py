@@ -3,6 +3,7 @@
 from .contracts import (
     SearchCapability,
     SearchEvidenceMissingError,
+    SearchEvidenceTooLargeError,
     SearchQuotaExhaustedError,
     SearchRateLimitedError,
     SearchProtocolError,
@@ -43,6 +44,7 @@ __all__ = [
     "DoubaoSearchProvider",
     "SearchCapability",
     "SearchEvidenceMissingError",
+    "SearchEvidenceTooLargeError",
     "SearchQuotaExhaustedError",
     "SearchRateLimitedError",
     "SearchProtocolError",

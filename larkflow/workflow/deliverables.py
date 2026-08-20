@@ -7,6 +7,8 @@ import json
 import re
 from typing import Any
 
+from .model import QualityResult
+
 
 OUTPUT_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 SUPPORTED_OUTPUT_TYPES = {
@@ -36,6 +38,8 @@ class DeliverableContractError(ValueError):
 
 class DeliverableValidationError(ValueError):
     """A submitted node result does not satisfy its output contract."""
+
+    error_code = "deliverable_invalid"
 
 
 def validate_output_contract(outputs: object, *, node_key: str) -> None:
@@ -172,6 +176,23 @@ def validate_human_deliverable(
     """Backward-compatible name for Human submission callers."""
 
     return validate_node_deliverable(work, result)
+
+
+def validate_automated_quality_result(
+    quality_result: QualityResult | None,
+) -> QualityResult | None:
+    """Reject malformed quality metadata before any persistence mutation."""
+
+    if quality_result is None:
+        return None
+    if not isinstance(quality_result, QualityResult):
+        raise DeliverableValidationError("自动执行质量结果结构无效")
+    if not isinstance(quality_result.evidence, str) or not isinstance(
+        quality_result.suggestion,
+        str,
+    ):
+        raise DeliverableValidationError("自动执行质量结果必须使用文本字段")
+    return quality_result
 
 
 def _validate_value(declaration: Mapping[str, object], value: Any) -> Any:

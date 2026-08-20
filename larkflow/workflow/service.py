@@ -25,7 +25,11 @@ from .decision import (
     human_decision_config,
     normalize_human_decision_feedback,
 )
-from .deliverables import validate_human_deliverable, validate_node_deliverable
+from .deliverables import (
+    validate_automated_quality_result,
+    validate_human_deliverable,
+    validate_node_deliverable,
+)
 from .events import AuditEvent, OutboxEvent
 from .graph import validate_snapshot
 from .lifecycle import (
@@ -900,6 +904,7 @@ class WorkflowService:
             worker_id=worker_id,
             now=now,
         )
+        quality_result = validate_automated_quality_result(quality_result)
         try:
             spec = instance.snapshot.node(node_key)
         except KeyError:

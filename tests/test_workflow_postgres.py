@@ -130,6 +130,11 @@ class RecordingExecutor(AutomatedExecutor):
         return ExecutionResult(result={"value": "recovered"})
 
 
+class OverlengthDeliverableExecutor(AutomatedExecutor):
+    def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        return ExecutionResult(result={"content": "x" * 12_001})
+
+
 class RecordingProjectionTasks:
     def __init__(self) -> None:
         self.tasks = {}
@@ -2393,6 +2398,81 @@ def test_postgres_worker_recovers_an_expired_automated_claim():
             ).fetchall()
         }
     assert "node.claim_recovered" in audit_types
+
+
+def test_postgres_recovered_claim_settles_deliverable_rejection():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+
+    suffix = uuid4().hex
+    tenant_id = f"tenant_runtime_rejected_{suffix}"
+    instance_id = f"instance_runtime_rejected_{suffix}"
+    repository = PostgresWorkflowRepository(connection_factory)
+    clock = Clock(datetime(2026, 8, 1, 11, 0, tzinfo=timezone.utc))
+    service = WorkflowService(
+        repository,
+        runner=NodeRunner(claim_ttl=timedelta(minutes=5)),
+        clock=clock,
+    )
+    service.create_draft(
+        instance_id=instance_id,
+        tenant_id=tenant_id,
+        owner_person_id="person_owner",
+        actor_person_id="person_owner",
+        snapshot=InstanceSnapshot(
+            nodes=(
+                NodeSpec(
+                    "generate",
+                    "Generate",
+                    "person_owner",
+                    "agent",
+                    work={
+                        "objective": "Generate",
+                        "inputs": [],
+                        "outputs": [
+                            {
+                                "id": "content",
+                                "type": "text",
+                                "required": True,
+                            }
+                        ],
+                        "acceptance": ["Content exists"],
+                        "prompt": "Generate",
+                    },
+                ),
+            )
+        ),
+    )
+    service.confirm_draft(tenant_id, instance_id, actor_person_id="person_owner")
+    stranded = service.dispatch_due(
+        tenant_id,
+        instance_id,
+        worker_id="worker_1",
+        max_automated=1,
+    )[0]
+    clock.now += timedelta(minutes=5)
+
+    report = WorkflowWorker(
+        service,
+        repository,
+        tenant_id=tenant_id,
+        worker_id="worker_2",
+        executors={ExecutorKind.AGENT: OverlengthDeliverableExecutor()},
+        clock=clock,
+    ).run_once()
+
+    assert report.recovered == 1
+    assert report.failed == 1
+    assert report.stale_results == 0
+    failed = repository.get(tenant_id, instance_id)
+    attempt = failed.current_attempt("generate")
+    assert attempt.id == stranded.attempt_id
+    assert attempt.status.value == "failed"
+    assert attempt.error_code == "deliverable_invalid"
+    assert attempt.claim_token is None
+    clock.now += timedelta(minutes=5)
+    assert repository.runnable_instance_ids(tenant_id, now=clock.now) == ()
 
 
 def test_postgres_allows_only_one_worker_to_claim_the_same_node():

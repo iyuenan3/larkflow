@@ -137,5 +137,9 @@ class SearchEvidenceMissingError(SearchProviderError):
     error_code = "search_evidence_missing"
 
 
+class SearchEvidenceTooLargeError(SearchProviderError):
+    error_code = "search_evidence_too_large"
+
+
 class SearchSourcesUnavailableError(SearchProviderError):
     error_code = "search_sources_unreachable"

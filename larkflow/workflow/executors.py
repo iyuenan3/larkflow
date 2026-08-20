@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from larkflow.search import (
     DisabledSafeOutboundFetcher,
+    SearchEvidenceTooLargeError,
     SearchResult,
     SearchSourcesUnavailableError,
     SearchUnavailableError,
@@ -24,6 +25,10 @@ from larkflow.search import (
 )
 
 from .model import ExecutorKind, QualityResult, QualityVerdict
+from .deliverables import (
+    MAX_DELIVERABLE_JSON_BYTES,
+    MAX_DELIVERABLE_TEXT_CHARS,
+)
 from .runtime import ExecutionRequest, ExecutionResult
 from .serde import to_json_value
 
@@ -537,19 +542,25 @@ class WebSearchToolExecutor:
         "不证明页面内容、供应商摘要或现实事实正确。claim 只有经过 source_evidence.check "
         "绑定当前 URL 与 provider 原文片段后，才能标记为 supported，且仍需 Human 复核。"
     )
+    MIN_COMPACT_SNIPPET_CHARS = 80
+    MIN_COMPACT_TITLE_CHARS = 80
 
     def __init__(
         self,
         client: WebSearchClient | PublicSearchProvider,
         *,
         max_prompt_chars: int = 20_000,
-        max_result_chars: int = 50_000,
+        max_result_chars: int = MAX_DELIVERABLE_TEXT_CHARS,
         source_fetcher: SafeOutboundFetcher | None = None,
     ) -> None:
         if max_prompt_chars < 1:
             raise ValueError("max_prompt_chars must be positive")
         if max_result_chars < 1:
             raise ValueError("max_result_chars must be positive")
+        if max_result_chars > MAX_DELIVERABLE_TEXT_CHARS:
+            raise ValueError(
+                "max_result_chars cannot exceed the text deliverable contract"
+            )
         self.client = client
         self.max_prompt_chars = max_prompt_chars
         self.max_result_chars = max_result_chars
@@ -606,7 +617,8 @@ class WebSearchToolExecutor:
                 f"web.search prompt exceeds {self.max_prompt_chars} characters"
             )
         search = getattr(self.client, "search", None)
-        if callable(search):
+        typed_provider = callable(search)
+        if typed_provider:
             raw_result = search(query=instructions.strip())
             if not isinstance(raw_result, SearchResult):
                 raise ValueError("web.search provider returned an invalid result")
@@ -685,31 +697,6 @@ class WebSearchToolExecutor:
                 "all cited sources are currently unreachable"
             )
         health_available, health_reason = self.source_fetcher.capability()
-        rendered_content = f"{self.EVIDENCE_BOUNDARY}\n\n{content.strip()}"
-        if len(rendered_content) > self.max_result_chars:
-            raise ValueError(
-                f"web.search result exceeds {self.max_result_chars} characters"
-            )
-        quality_summary = {
-            "total": len(source_records),
-            "reachable": sum(
-                item["health"] == "reachable" for item in source_records
-            ),
-            "unreachable": sum(
-                item["health"] == "unreachable" for item in source_records
-            ),
-            "health_unknown": sum(
-                item["health"] == "unknown" for item in source_records
-            ),
-            "current": sum(
-                item["freshness"] == "current" for item in source_records
-            ),
-            "stale": sum(item["freshness"] == "stale" for item in source_records),
-            "freshness_unknown": sum(
-                item["freshness"] == "unknown" for item in source_records
-            ),
-            "support": "unknown",
-        }
         usage = raw.get("usage", {})
         if not isinstance(usage, Mapping):
             raise ValueError("web.search returned invalid usage")
@@ -722,6 +709,11 @@ class WebSearchToolExecutor:
         error = raw.get("error")
         if error is not None:
             raise ValueError("web.search returned a provider error result")
+        rendered_content = (
+            self._render_source_records(source_records)
+            if typed_provider
+            else f"{self.EVIDENCE_BOUNDARY}\n\n{content.strip()}"
+        )
         result = {
             "content": rendered_content,
             "sources": normalized_sources,
@@ -730,7 +722,7 @@ class WebSearchToolExecutor:
                 "available": health_available,
                 "reason": health_reason,
             },
-            "source_quality_summary": quality_summary,
+            "source_quality_summary": self._quality_summary(source_records),
             "evidence_boundary": self.EVIDENCE_BOUNDARY,
             "tool_kind": self.KIND,
             "model_role": model_role.strip(),
@@ -740,7 +732,114 @@ class WebSearchToolExecutor:
             "usage": dict(usage),
             "error": None,
         }
+        if typed_provider:
+            result = self._compact_typed_result(result)
+        elif not self._fits_deliverable(result):
+            raise SearchEvidenceTooLargeError(
+                f"web.search result exceeds {self.max_result_chars} characters "
+                f"or {MAX_DELIVERABLE_JSON_BYTES} bytes"
+            )
         return ExecutionResult(result=result)
+
+    def _compact_typed_result(
+        self,
+        result: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Fit typed provider evidence without breaking JSON or all citations."""
+
+        records = [dict(item) for item in result["source_records"]]
+        while records:
+            candidate = dict(result)
+            candidate["source_records"] = tuple(records)
+            candidate["sources"] = tuple(
+                str(item["source_url"]) for item in records
+            )
+            candidate["content"] = self._render_source_records(records)
+            candidate["source_quality_summary"] = self._quality_summary(records)
+            if self._fits_deliverable(candidate):
+                return candidate
+
+            longest_snippet = max(
+                range(len(records)),
+                key=lambda index: len(str(records[index].get("snippet", ""))),
+            )
+            snippet = str(records[longest_snippet].get("snippet", ""))
+            if len(snippet) > self.MIN_COMPACT_SNIPPET_CHARS:
+                next_length = max(
+                    self.MIN_COMPACT_SNIPPET_CHARS,
+                    len(snippet) // 2,
+                )
+                records[longest_snippet]["snippet"] = snippet[:next_length]
+                continue
+
+            longest_title = max(
+                range(len(records)),
+                key=lambda index: len(str(records[index].get("title", ""))),
+            )
+            title = str(records[longest_title].get("title", ""))
+            if len(title) > self.MIN_COMPACT_TITLE_CHARS:
+                next_length = max(
+                    self.MIN_COMPACT_TITLE_CHARS,
+                    len(title) // 2,
+                )
+                records[longest_title]["title"] = title[:next_length]
+                continue
+
+            if len(records) > 1:
+                records.pop()
+                continue
+            break
+        raise SearchEvidenceTooLargeError(
+            f"web.search result exceeds {self.max_result_chars} characters "
+            f"or {MAX_DELIVERABLE_JSON_BYTES} bytes"
+        )
+
+    def _fits_deliverable(self, result: Mapping[str, object]) -> bool:
+        content = result.get("content")
+        if not isinstance(content, str) or len(content) > self.max_result_chars:
+            return False
+        try:
+            encoded = json.dumps(
+                to_json_value(result),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            return False
+        return len(encoded) <= MAX_DELIVERABLE_JSON_BYTES
+
+    def _render_source_records(
+        self,
+        records: Sequence[Mapping[str, object]],
+    ) -> str:
+        lines = [self.EVIDENCE_BOUNDARY, "", "检索结果："]
+        for index, record in enumerate(records, 1):
+            lines.append(f"{index}. {record['title']}")
+            snippet = str(record.get("snippet", ""))
+            if snippet:
+                lines.append(f"   摘要：{snippet}")
+            lines.append(f"   来源：{record['source_url']}")
+            lines.append(
+                f"   发布时间：{record.get('published_at') or '时间不明'}"
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _quality_summary(
+        records: Sequence[Mapping[str, object]],
+    ) -> dict[str, object]:
+        return {
+            "total": len(records),
+            "reachable": sum(item["health"] == "reachable" for item in records),
+            "unreachable": sum(item["health"] == "unreachable" for item in records),
+            "health_unknown": sum(item["health"] == "unknown" for item in records),
+            "current": sum(item["freshness"] == "current" for item in records),
+            "stale": sum(item["freshness"] == "stale" for item in records),
+            "freshness_unknown": sum(
+                item["freshness"] == "unknown" for item in records
+            ),
+            "support": "unknown",
+        }
 
     def accepts(self, *, executor: ExecutorKind, work: Mapping[str, object]) -> bool:
         tool = work.get("tool")

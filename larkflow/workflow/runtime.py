@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from .deliverables import DeliverableValidationError
 from .model import (
     ExecutorKind,
     FrozenDict,
@@ -167,7 +168,21 @@ class WorkflowWorker:
                         stale_results += 1
                     errors.append(error)
                     continue
-                if self._complete(activation, result):
+                try:
+                    completed_result = self._complete(activation, result)
+                except DeliverableValidationError as exc:
+                    error = f"{type(exc).__name__}: {exc}"
+                    if self._fail(
+                        activation,
+                        exc.error_code,
+                        error,
+                    ):
+                        failed += 1
+                    else:
+                        stale_results += 1
+                    errors.append(error)
+                    continue
+                if completed_result:
                     completed += 1
                 else:
                     stale_results += 1

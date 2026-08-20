@@ -14,19 +14,39 @@ services=(
   larkflow@dev.service
 )
 
+# Every service above imports from a shared wheel installation. A component-local
+# code change still requires the entire process set to reload that wheel.
+
 if [[ ${EUID} -eq 0 ]]; then
   systemctl_command=(systemctl)
 else
   systemctl_command=(sudo systemctl)
 fi
 
+before_starts=()
+for service in "${services[@]}"; do
+  before_starts+=("$(
+    "${systemctl_command[@]}" show "${service}" \
+      --property=ExecMainStartTimestampMonotonic --value
+  )")
+done
+
 for service in "${services[@]}"; do
   "${systemctl_command[@]}" restart "${service}"
 done
 
-for service in "${services[@]}"; do
+for index in "${!services[@]}"; do
+  service="${services[$index]}"
   "${systemctl_command[@]}" is-active --quiet "${service}"
+  after_start="$(
+    "${systemctl_command[@]}" show "${service}" \
+      --property=ExecMainStartTimestampMonotonic --value
+  )"
+  if [[ -z "${after_start}" || "${after_start}" -le "${before_starts[$index]:-0}" ]]; then
+    echo "${service} did not reload the shared wheel" >&2
+    exit 1
+  fi
   "${systemctl_command[@]}" show "${service}" \
-    --property=Id,ActiveState,NRestarts,ExecMainStartTimestamp \
+    --property=Id,ActiveState,NRestarts,ExecMainStartTimestamp,ExecMainStartTimestampMonotonic \
     --no-pager
 done

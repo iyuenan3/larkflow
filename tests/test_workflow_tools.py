@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 
 import pytest
@@ -11,10 +12,17 @@ import yaml
 from larkflow.search import (
     OutboundFetchResult,
     SearchResult,
+    SearchEvidenceTooLargeError,
     SearchSource,
     SearchSourcesUnavailableError,
     SearchUsage,
 )
+from larkflow.workflow.deliverables import (
+    MAX_DELIVERABLE_JSON_BYTES,
+    MAX_DELIVERABLE_TEXT_CHARS,
+    validate_node_deliverable,
+)
+from larkflow.workflow.serde import to_json_value
 from larkflow.workflow import (
     ContentCheckToolExecutor,
     DevelopmentToolExecutor,
@@ -102,6 +110,31 @@ class StaticSearchProvider:
                 ),
             ),
             usage=SearchUsage(result_count=1, time_cost_ms=12),
+        )
+
+
+class OversizedSearchProvider:
+    def capability(self):
+        class Capability:
+            available = True
+
+        return Capability()
+
+    def search(self, *, query: str) -> SearchResult:
+        return SearchResult(
+            provider="oversized_stub_search",
+            query=query,
+            sources=tuple(
+                SearchSource(
+                    title=f"来源 {index}",
+                    snippet=(f"证据片段{index} " + "公开资料" * 990),
+                    source_url=f"https://example.com/source/{index}",
+                    published_at=None,
+                    published_at_status="unknown",
+                )
+                for index in range(10)
+            ),
+            usage=SearchUsage(result_count=10, time_cost_ms=12),
         )
 
 
@@ -745,11 +778,37 @@ def test_web_search_marks_stale_sources_only_with_an_explicit_policy():
 
 
 def test_web_search_result_budget_includes_the_visible_evidence_boundary():
-    with pytest.raises(ValueError, match="result exceeds"):
+    with pytest.raises(SearchEvidenceTooLargeError, match="result exceeds"):
         WebSearchToolExecutor(
             StaticSearchProvider(),
             max_result_chars=50,
         ).execute(web_search_request())
+
+
+def test_typed_web_search_compacts_ten_large_sources_into_node_contract():
+    request = web_search_request()
+    result = WebSearchToolExecutor(OversizedSearchProvider()).execute(request).result
+
+    assert len(result["sources"]) == 10
+    assert len(result["sources"]) == len(result["source_records"])
+    assert len(result["content"]) <= MAX_DELIVERABLE_TEXT_CHARS
+    encoded = json.dumps(
+        to_json_value(result),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert len(encoded) <= MAX_DELIVERABLE_JSON_BYTES
+    for record in result["source_records"]:
+        assert record["source_url"] in result["sources"]
+        assert record["snippet"]
+        source_index = int(record["source_url"].rsplit("/", 1)[-1])
+        original = f"证据片段{source_index} " + "公开资料" * 990
+        assert original.startswith(record["snippet"])
+    assert validate_node_deliverable(
+        request.work,
+        to_json_value(result),
+        allow_undeclared=True,
+    )["sources"] == list(result["sources"])
 
 
 def test_web_search_fails_when_an_enabled_fetcher_observes_all_sources_unreachable():
@@ -1001,6 +1060,27 @@ def test_runtime_prefers_configured_doubao_search_without_an_llm_route():
         executor=ExecutorKind.TOOL,
         work=web_search_request().work,
     )
+
+
+def test_web_search_runtime_budget_cannot_exceed_tool_deliverable_contract():
+    base = {
+        "LARKFLOW_TARGET_DSN": "postgresql:///test",
+        "LARKFLOW_TARGET_TENANT": "tenant_tools",
+    }
+    default = TargetRuntimeSettings.from_environ(
+        base,
+        worker_id="worker-search-default",
+    )
+    assert default.web_search_max_result_chars == MAX_DELIVERABLE_TEXT_CHARS
+
+    with pytest.raises(ValueError, match="text deliverable contract"):
+        TargetRuntimeSettings.from_environ(
+            {
+                **base,
+                "LARKFLOW_TARGET_WEB_SEARCH_MAX_RESULT_CHARS": "12001",
+            },
+            worker_id="worker-search-invalid",
+        )
 
 
 def test_runtime_rejects_an_incomplete_doubao_search_configuration():
