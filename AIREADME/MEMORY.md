@@ -4,6 +4,22 @@
 
 踩坑随开发追加，每条 = 现象（事实）+ 根因（标把握度：已复现 / 仅推测）+ 结论 / 避免。预期高发区：飞书事件订阅长连接稳定性、LangGraph interrupt / resume 与飞书卡片回调的时序、checkpointer 与飞书投影的一致性。
 
+## 2026-08-20 · 构造了完整 prompt 不等于类型化 Provider 收到了上下文
+
+- **现象，已复现**：新疆旅行流程的景点搜索首条来源是黄山，最终 Agent 明确缺少国际大巴扎、交河故城和那拉提资料。执行器虽然构造了含确认结果的完整 prompt，typed SearchProvider 实际只收到通用静态 instructions。
+- **根因**：同一执行器保留两条 provider seam。legacy hosted-search 路线消费完整 prompt，typed 路线直接调用 `search(query=instructions)`，测试只断言静态指令被传入，未验证服务端已确认依赖是否真正进入外部查询。
+- **修复**：typed 查询只读取 NodeSpec `work.inputs` 明确声明的直接 `dependencies.<node>`，按景点与交通任务选择白名单字段和有界约束词，再以组件优先级压缩到 100 字。provider 必须回显同一 query，实际 query 保存到 result 与完成审计；全部来源若与目的地和关键实体无交集就 fail closed。
+- **避免**：任何“上下文已加入 prompt”的验收都必须落到实际 adapter 调用参数、持久化 result 和审计三处回读。多 provider seam 应共享同一个服务器查询编译合同，并用明显异地来源反例证明相关性门禁能变红。
+
+## 2026-08-20 · 共享 wheel、供应商完成协议与三层预算必须一起部署
+
+- **现象，已复现**：部署新 wheel 后只重启 Draft Generator 与 Console，长期运行的主 Runtime 仍加载旧代码。两个过期 running Attempt 被反复恢复却无法稳定完成或失败；后续搜索结果、双搜索 fan-in、Agent 输出和 completion envelope 又逐层撞到彼此不一致的字符与字节上限。
+- **根因**：十个 Python 服务共享同一个 venv，组件局部改动不等于只影响同名 systemd unit。执行后的交付物校验若发生在 claim 的失败收口之外，会把异常留成 running；Planner 声明、Tool 输出、Agent 输入和持久化输出若各用独立预算，单层测试通过也不能证明组合路径可运行。
+- **修复**：部署脚本枚举十个确切服务并证明每个 `ExecMainStartTimestampMonotonic` 前移；Worker 用当前 claim 收口执行后校验失败；搜索结果保持合法 JSON 和来源引用后有界化；Agent fan-in、prompt 和输出与 12000 字符、32000 bytes 的交付物合同对齐。旧 Attempt 通过正式 restart 创建新 Attempt，禁止直接伪造完成。
+- **第二层现象，已复现**：DeepSeek thinking 模式可能只返回 reasoning 而标准 content 为空；关闭 thinking 后又出现锚点格式偏差、纯 Markdown 无 envelope，以及 Ark 默认 4096 completion tokens 产生 `finish_reason=length`。这些都是不同故障，不能用一个宽松 parser 掩盖。
+- **修复边界**：Target Agent 独立设置 thinking disabled；完整 envelope 的锚点可做最多一次 marker-only repair，服务端保存原正文并重新严格校验。明显纯 Markdown可以进入同一单次格式 repair，损坏 JSON 与 provider 截断结果必须直接失败。`LARKFLOW_TARGET_AGENT_MAX_COMPLETION_TOKENS=16384` 显式越过 Ark 默认 4096 上限，同时正文仍保持 12000 字符硬上限和 10200 字符紧凑目标。
+- **避免**：以后每次 Agent Runtime 变更都同时验证 provider `finish_reason / usage / standard content`、completion envelope、交付物字符与字节上限、fan-in 输入预算、claim TTL，以及全部共享 wheel 进程的安装态哈希和启动时间。Human Gate 继续独立保留，Automated Attempt 通过不等于业务结果已被人接受。
+
 ## 2026-07-23 · 第一段引擎对抗性审查（9 项确认，去重 6 根因）
 本地骨架跑通后做了一轮对抗性代码审查（多 agent 找 + 逐条复核）。**关键结论：全部不影响已交付的 seg-1 线性人工门禁流程**（e2e 真绿），都是「通用引擎」预埋隐患，只在并行 / 自动化门禁 / AI 生成图 / 崩溃时触发。
 

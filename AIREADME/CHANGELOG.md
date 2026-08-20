@@ -1,5 +1,22 @@
 # CHANGELOG · larkflow
 
+## v0.94.1-draft · 2026-08-20 · 联网研究查询绑定已确认上下文
+
+- Fixed：`7d79ce3b35bf09c4ad4478d71298ede2844971cb` 修复 typed `web.search` 虽构造完整 prompt，却只把静态 `instructions` 发送给豆包 SearchProvider 的旁路。查询现在只从 NodeSpec 明确声明消费的直接依赖中读取有界旅行字段，按景点或交通任务确定性压缩到 100 字以内；`instance_inputs`、未声明依赖、任意字段和敏感标记不会进入查询。
+- Safety：景点查询优先保留目的地、具体景点和日期，交通查询优先保留出发地、目的地、交通枢纽、日期和交通方式。typed provider 必须回显同一实际查询；来源标题与摘要若全部不包含目的地或本节点关键实体，Attempt 以 `search_evidence_missing` 失败，明显无关来源不能直接成为成功证据。实际查询同时保存在 Tool result 与服务端 `node.automated_completed` 审计的 `search_query` 字段。
+- Verified：Tool 与 Runtime 聚焦套件为 `65 passed`。完整离线套件排除沙箱进程树用例为 `1327 passed, 35 skipped, 1 deselected`，该既有用例在允许环境单独 `1 passed`，合并证据为 `1328 passed, 35 skipped`。安装态真实豆包 synthetic/public 探针生成 52 字景点查询和 48 字交通查询，各回读 10 条通过最小相关性门禁的来源；未授权哨兵未进入查询。
+- Deployment：wheel SHA-256 为 `6beac828729e2cf57cc480f40b30006b8034011f406cc85fc2483d561d3d70c2`，保存在 `/srv/larkflow/target/releases/search_query_20260820_230000_7d79ce3/`。Target 与 legacy 的 `executors.py`、`service.py` 安装态哈希与本地一致，`pip check` 与 migration 重入通过，ledger 保持 `29 / 0029_console_draft_cancellation`。十个共享 wheel 服务在北京时间 23:01:37 至 23:01:52 统一重启，均为 `active / running / NRestarts=0`，启动窗口 warning 为 0；Caddy 未修改并保持 active。
+- Correction：下方 v0.94.0 记录的实例后来完成 Human Gate，但最终 Docx 暴露景点搜索首条来源与新疆无关，因此真实产品验收仍未通过。本条修复部署只完成服务端与真实 provider 技术探针，旧结果和历史不改写；需要用新的流程或正式 restart 重新执行两个搜索节点和下游 Agent 后再做飞书端到端验收。
+
+## v0.94.0-draft · 2026-08-20 · Agent 运行时预算与完成协议恢复
+
+- Fixed：`cf4325ed4309b27ca93f174aa1c11ae06ed2d2b1` 与 `cb79a50dc41a33dec820946f605cf9c3822e26b1` 关闭过期 claim 恢复后的陈旧写回循环，把 `web.search` 结果有界化到声明的交付物合同，并让双搜索 fan-in、Agent 输入和输出预算一致。共享 wheel 部署脚本现在统一重启全部十个 Python 服务，避免旧 Worker 长期驻留。
+- Fixed：`8e9ff7b02cf900bfe189bcba8c2bba31f105651b`、`d007c889706a43404144bd830622162bf38ba6da` 与 `f90067173a73d0f2bb92c5fa4c21bf4774b13da1` 依次增加可见 Markdown 锚点归一化、最多一次格式修复、Target Agent 独立 thinking 控制和缺失 completion envelope 的安全修复。明显纯 Markdown 只作为候选正文，服务端逐字符保留并只让第二次调用生成 marker；损坏 JSON 不会被重新解释为正文，截断结果也不会进入修复或 done。
+- Fixed：`b43a8cb230bfa123dfcc0638de4589c4708da2f5` 为 Target Agent 增加显式 `LARKFLOW_TARGET_AGENT_MAX_COMPLETION_TOKENS=16384`，最大可配值为 32768，并把正文提示收紧为 12000 字符硬上限、10200 字符紧凑目标。Ark synthetic 探针在同一 DeepSeek 路线回读 `finish_reason=stop / completion_tokens=7199 / content_chars=12489`，证明显式预算可以越过原请求的 4096 token 默认截断点；该探针正文未进入业务 Attempt。
+- Verified：聚焦套件为 `100 passed`。完整离线套件排除沙箱进程树用例为 `1324 passed, 35 skipped, 1 deselected`，同一进程树用例在允许环境为 `1 passed`，合并证据为 `1325 passed, 35 skipped`。最终 wheel SHA-256 为 `a87f154666aaa631002d6ef2e0f4d7816d90168aa285e54d792834ed37dde5ce`，安装态四个关键源码哈希与本地一致，长期库保持 `29 / 0029_console_draft_cancellation`。
+- E2E：实例 `console_draft_769735935e884e67e89eb24a6674a67b` 保留全部失败与重启历史。Attempt 6 在原默认上限产生 `finish_reason=length / completion_tokens=4096`，以 `agent_result_incomplete` 安全失败且没有执行 marker repair。部署显式预算后，正式 restart 创建 Attempt 7；两次调用都使用 `max_tokens=16384` 与 `deepseek-v4-flash`，分别在 32.1 秒和 2.4 秒正常 stop。Agent Attempt 7 以实际 provider model `deepseek-v4-flash-ga-260731`、正文 5768 字符和一次格式 repair 完成，下游 `review_travel_plan` Attempt 7 已进入 `waiting_human`，决定卡与消息投影均存在。Human Gate 尚未接受或退回，本条不替代浏览器人工决定。
+- Deployment：最终 wheel 部署于 `/srv/larkflow/target/releases/b43a8cb_tokens_20260820_221201/`。十个共享 wheel 服务全部在北京时间 22:15:23 至 22:15:31 重新启动，均为 `active / running / NRestarts=0`；deployment window 的严重异常匹配为 0。本轮没有 migration、Caddy 或数据库结构变化，也没有直接改写 Attempt 状态。
+
 ## v0.93.0-draft · 2026-08-20 · 有界旅行 Planner 开发部署验证
 
 - Added：`90b14189cc43c67e919c480f1e4fa8f70cc934b5` 在通用 bounded Planner 前增加 `deterministic_travel_v1`。联网旅行且搜索 capability 可用时，larkflow 固定生成 Human 输入确认、景点与交通双 `web.search`、Agent 综合、Human 决策五节点候选，模型不再负责发明整张图；其他领域和明确 no-web 路径继续委托 bounded。

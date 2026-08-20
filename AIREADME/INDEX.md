@@ -12,7 +12,9 @@
 
 联网旅行草稿现在先经过 larkflow 自有的 `deterministic_travel_v1` Planner。明确的出发地、起止日期、人数和总预算缺一时，Console 返回安全的结构化缺字段提示；字段完整且豆包搜索 capability 可用时，不调用规划模型，直接生成 `Human 确认 -> 景点 web.search + 交通 web.search -> Agent 综合 -> Human 复核` 的受控 DAG，再由统一 validator 复验。DeepSeek 与 qwen 对同一复杂冻结输入均超过 120 秒的诊断不再进入该交互主路径。开发环境 synthetic smoke 使用一份冻结企业资料，在 0.58 秒内生成 5 节点 ready 草稿，豆包公开查询另行回读 10 条带 URL 的来源。该证据不替代真实飞书浏览器端到端，也不证明搜索事实正确。
 
-last-synced: fd37a18bfdbe18cd87346cb3861277ffc0f01a7c · 2026-08-20
+typed 豆包搜索现在从 NodeSpec 明确声明消费的已确认直接依赖编译实际 query，不再只发送通用静态指令。景点与交通字段按确定性优先级压缩到 100 字，未授权字段不进入查询；明显与目的地和关键实体完全无交集的来源以 `search_evidence_missing` 拒绝。实际 query 同时保存在 Tool result 和完成审计。该修复已完成真实 provider 安装态技术探针，旧新疆实例结果不改写，仍需新流程或正式 restart 完成真实飞书端到端复验。
+
+last-synced: 7d79ce3b35bf09c4ad4478d71298ede2844971cb · 2026-08-20
 
 ## 阅读顺序
 
