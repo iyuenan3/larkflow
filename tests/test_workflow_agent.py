@@ -238,6 +238,8 @@ def test_agent_executor_rejects_provider_truncation_or_unknown_finish(
     with pytest.raises(AgentResultIncomplete, match="finish reason|output length"):
         LLMAgentExecutor(completion).execute(request())
 
+    assert len(completion.calls) == 1
+
 
 @pytest.mark.parametrize(
     "content, message",
@@ -479,6 +481,7 @@ def test_agent_prompt_declares_the_persistable_content_budget():
 
     prompt = completion.calls[0]["prompt"]
     assert "content 严格不超过 12000 个字符" in prompt
+    assert "目标不超过 10200 个字符" in prompt
     assert "从 content 的可见正文中逐字复制" in prompt
 
 
@@ -689,6 +692,11 @@ def test_runtime_assembles_agent_only_with_a_safe_lease_budget():
         .runtime.executor.client.completion_thinking_type
         == "disabled"
     )
+    assert (
+        registry[ExecutorKind.AGENT]
+        .runtime.executor.client.completion_max_tokens
+        == 16_384
+    )
 
     unsafe = TargetRuntimeSettings(
         dsn="postgresql:///test",
@@ -732,6 +740,7 @@ def test_target_runtime_selection_is_explicit_and_bounded_to_baselines():
 
     assert runtime.agent_runtime == "completion"
     assert runtime.agent_thinking_type == "disabled"
+    assert runtime.agent_max_completion_tokens == 16_384
     assert runtime.agent_max_prompt_chars == 100_000
     assert runtime.agent_max_result_chars == 12_000
     assert planner.planner_runtime == "bounded"
@@ -739,6 +748,8 @@ def test_target_runtime_selection_is_explicit_and_bounded_to_baselines():
         replace(runtime, agent_runtime="unknown")
     with pytest.raises(ValueError, match="thinking_type"):
         replace(runtime, agent_thinking_type="provider_default")
+    with pytest.raises(ValueError, match="max_completion_tokens"):
+        replace(runtime, agent_max_completion_tokens=32_769)
     with pytest.raises(ValueError, match="text deliverable contract"):
         replace(runtime, agent_max_result_chars=12_001)
     with pytest.raises(ValueError, match="planner_runtime must be bounded"):

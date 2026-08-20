@@ -101,16 +101,26 @@ class OpenAICompatLLM(LLMClient):
     # 人看到的是「AI 那步失败了」，日志里只有一个 ReadTimeout。默认值要明显大于实测值，
     # 别卡在边界上；单个角色嫌慢就用 `LLM_<ROLE>_TIMEOUT` 单独收紧。
     DEFAULT_TIMEOUT = 300
+    MAX_COMPLETION_TOKENS = 32_768
 
     def __init__(self, roles: dict[str, dict], *, ca_bundle: str | None = None,
                  timeout: float | None = None, client_factory=None, on_failover=None,
                  trust_env: bool | None = None, http_factory=None,
                  openai_factory=None, on_call=None,
-                 completion_thinking_type: str | None = None):
+                 completion_thinking_type: str | None = None,
+                 completion_max_tokens: int | None = None):
         if not roles:
             raise RuntimeError("LLM 角色路由表为空（见 .env.example 的 LLM_* 三元组）")
         if completion_thinking_type not in {None, "disabled", "enabled", "auto"}:
             raise ValueError("unsupported completion thinking type")
+        if completion_max_tokens is not None and (
+            isinstance(completion_max_tokens, bool)
+            or not 1 <= completion_max_tokens <= self.MAX_COMPLETION_TOKENS
+        ):
+            raise ValueError(
+                "completion max tokens must be between 1 and "
+                f"{self.MAX_COMPLETION_TOKENS}"
+            )
         self.roles = roles
         self.ca_bundle = ca_bundle
         # 是否吃环境里的 http(s)_proxy / all_proxy。默认吃（有人的 LLM 在墙外，确实要走代理）。
@@ -127,6 +137,7 @@ class OpenAICompatLLM(LLMClient):
         self.client_factory = client_factory or self._build_client
         self.on_failover = on_failover
         self.completion_thinking_type = completion_thinking_type
+        self.completion_max_tokens = completion_max_tokens
         self.failovers: list[dict] = []
         self._clients: dict[str, object] = {}
 
@@ -197,6 +208,7 @@ class OpenAICompatLLM(LLMClient):
             self._note_call({"event": "start", "model_role": model_role, "link": i,
                              "model": cfg["model"], "base_url": cfg["base_url"],
                              "timeout": cfg.get("timeout") or self.timeout,
+                             "max_tokens": self.completion_max_tokens,
                              "operation": "completion"})
             try:
                 request = {
@@ -208,6 +220,8 @@ class OpenAICompatLLM(LLMClient):
                     request["extra_body"] = {
                         "thinking": {"type": self.completion_thinking_type}
                     }
+                if self.completion_max_tokens is not None:
+                    request["max_tokens"] = self.completion_max_tokens
                 resp = self._client(cfg).chat.completions.create(
                     **request,
                 )

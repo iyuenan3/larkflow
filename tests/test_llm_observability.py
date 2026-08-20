@@ -71,17 +71,19 @@ def test_completion_metadata_preserves_finish_reason_usage_and_model():
     assert result.model == "provider-model"
 
 
-def test_completion_thinking_mode_is_explicit_and_provider_scoped():
+def test_completion_controls_are_explicit_and_provider_scoped():
     fake = _FakeOK()
     llm = OpenAICompatLLM(
         ROLES,
         client_factory=lambda cfg: fake,
         completion_thinking_type="disabled",
+        completion_max_tokens=16_384,
     )
 
     llm.complete_with_metadata(prompt="p", model_role="writer")
 
     assert fake.kw["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert fake.kw["max_tokens"] == 16_384
 
 
 def test_unknown_completion_thinking_mode_is_rejected():
@@ -91,6 +93,18 @@ def test_unknown_completion_thinking_mode_is_rejected():
         assert "thinking type" in str(exc)
     else:
         raise AssertionError("invalid thinking mode was accepted")
+
+
+def test_completion_token_budget_is_bounded():
+    for value in (0, 32_769, True):
+        try:
+            OpenAICompatLLM(ROLES, completion_max_tokens=value)
+        except ValueError as exc:
+            assert "max tokens" in str(exc)
+        else:
+            raise AssertionError(
+                f"invalid completion token budget accepted: {value!r}"
+            )
 
 
 def test_a_failed_call_is_announced_too_with_the_reason():

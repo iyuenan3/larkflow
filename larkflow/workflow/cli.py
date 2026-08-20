@@ -1138,6 +1138,7 @@ def _executors(
             on_call=note_call,
             on_failover=note_failover,
             completion_thinking_type=settings.agent_thinking_type,
+            completion_max_tokens=settings.agent_max_completion_tokens,
         )
     if settings.enable_agent_executor:
         assert client is not None

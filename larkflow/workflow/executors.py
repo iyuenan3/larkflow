@@ -539,6 +539,12 @@ class LLMAgentExecutor:
                 f"a{index}": str(item)
                 for index, item in enumerate(acceptance_items, start=1)
             }
+            content_budget = self._content_char_budget(
+                uses_web_research=self._contains_web_research(
+                    request.input_snapshot
+                )
+            )
+            compact_target = max(1, content_budget * 85 // 100)
             final_instruction = (
                 "只返回一个 JSON 对象，不要代码块或额外文字。对象必须严格包含 content 和 "
                 "completion。content 是完整 Markdown 正文；completion 必须严格等于 "
@@ -551,7 +557,8 @@ class LLMAgentExecutor:
                 "条件的长句代替正文锚点。content_anchors 必须从 content 的可见正文中逐字复制，"
                 "不得改写同义词，不要包含 Markdown 格式符号，并在返回前逐项机械检查。"
                 "content 严格不超过 "
-                f"{self._content_char_budget(uses_web_research=self._contains_web_research(request.input_snapshot))} 个字符。"
+                f"{content_budget} 个字符；在满足全部验收项的前提下保持紧凑，"
+                f"目标不超过 {compact_target} 个字符。"
                 "只有正文全部生成完毕后才能写 status=complete；不得在表格、列表或句子中途结束。"
                 f"验收 ID：{json.dumps(acceptance_contract, ensure_ascii=False, sort_keys=True)}"
             )
