@@ -8,7 +8,7 @@
 
 - Target 中央工作流已具备 Human、固定 Agent、Tool 节点编排，PostgreSQL 持久化，飞书投影和追加型审计。
 - 员工工作台支持本人流程、普通 Human 待办、草稿确认、受控流程操作和 DAG 画板。
-- `PlannerRuntime` 与 `AgentRuntime` 基线端口已经落码，并随 Phase 2A wheel 部署到开发环境；默认仍是 bounded Planner 与 completion Agent。
+- `PlannerRuntime` 与 `AgentRuntime` 基线端口已经落码并部署；高风险领域可先由 larkflow 生成确定性骨架，其他请求使用 bounded Planner，节点执行仍使用 completion Agent。
 - Phase 2A 的项目级 UTF-8 txt/md 上传参与 DAG 规划已通过真实 PostgreSQL、Caddy 和开发部署验收。真实 Owner 浏览器上传与生成仍待手工验收，当前不是生产就绪版本。
 - Phase 2B 的 Agent Attempt 附件上下文与能力信封已部署到开发环境。节点必须显式声明附件输入，Runtime 只接收受限正文和安全引用；真实 PostgreSQL 合同与 synthetic Runtime 探针已通过。
 - 薄 Python 豆包 `SearchProvider` 已部署并完成一次公开信息检索回读；新建文本交付物已通过真实创建、同一 document_id 覆盖和原生 Docx 结构回读。两项证据仍只代表开发测试环境。
