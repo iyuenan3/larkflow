@@ -79,13 +79,17 @@ class LLMAgentExecutor:
         self,
         client: AgentCompletionClient,
         *,
-        max_prompt_chars: int = 20_000,
-        max_result_chars: int = 50_000,
+        max_prompt_chars: int = 100_000,
+        max_result_chars: int = MAX_DELIVERABLE_TEXT_CHARS,
     ) -> None:
         if max_prompt_chars < 1:
             raise ValueError("max_prompt_chars must be positive")
         if max_result_chars < 1:
             raise ValueError("max_result_chars must be positive")
+        if max_result_chars > MAX_DELIVERABLE_TEXT_CHARS:
+            raise ValueError(
+                "max_result_chars cannot exceed the text deliverable contract"
+            )
         self.client = client
         self.max_prompt_chars = max_prompt_chars
         self.max_result_chars = max_result_chars

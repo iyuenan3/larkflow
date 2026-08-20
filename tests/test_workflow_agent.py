@@ -538,9 +538,13 @@ def test_target_runtime_selection_is_explicit_and_bounded_to_baselines():
     )
 
     assert runtime.agent_runtime == "completion"
+    assert runtime.agent_max_prompt_chars == 100_000
+    assert runtime.agent_max_result_chars == 12_000
     assert planner.planner_runtime == "bounded"
     with pytest.raises(ValueError, match="agent_runtime must be completion"):
         replace(runtime, agent_runtime="unknown")
+    with pytest.raises(ValueError, match="text deliverable contract"):
+        replace(runtime, agent_max_result_chars=12_001)
     with pytest.raises(ValueError, match="planner_runtime must be bounded"):
         replace(planner, planner_runtime="unknown")
 

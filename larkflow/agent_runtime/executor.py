@@ -6,8 +6,10 @@ from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Any
 
+from larkflow.workflow.deliverables import validate_node_deliverable
 from larkflow.workflow.model import ExecutorKind
 from larkflow.workflow.runtime import ExecutionRequest, ExecutionResult
+from larkflow.workflow.serde import to_json_value
 
 from .contracts import (
     AgentContextRequest,
@@ -93,7 +95,13 @@ class AgentRuntimeExecutor:
                 policy=self.policy,
             )
             result = self.runtime.run(runtime_request)
-            return ExecutionResult(result=result.deliverables)
+            return ExecutionResult(
+                result=validate_node_deliverable(
+                    request.work,
+                    to_json_value(result.deliverables),
+                    allow_undeclared=True,
+                )
+            )
 
         now = self.clock()
         capabilities = []
@@ -150,7 +158,13 @@ class AgentRuntimeExecutor:
         if context_bundle is not None:
             runtime_evidence["context_manifest"] = context_bundle.snapshot_manifest()
         deliverables["_runtime_evidence"] = runtime_evidence
-        return ExecutionResult(result=deliverables)
+        return ExecutionResult(
+            result=validate_node_deliverable(
+                request.work,
+                to_json_value(deliverables),
+                allow_undeclared=True,
+            )
+        )
 
 
 def _declares_context(work: Mapping[str, Any]) -> bool:

@@ -132,6 +132,11 @@ class OverlengthCompletion:
         return "four"
 
 
+class MaximalLegalCompletion:
+    def complete(self, *, prompt: str, model_role: str) -> str:
+        return "x" * 12_000
+
+
 class SelectiveToolExecutor(RecordingExecutor):
     def accepts(self, *, executor, work):
         tool = work.get("tool") or {}
@@ -627,6 +632,53 @@ def test_quality_rejection_after_execute_settles_the_current_claim():
     assert attempt.status == AttemptStatus.FAILED
     assert attempt.error_code == "deliverable_invalid"
     assert attempt.claim_token is None
+
+
+def test_maximal_legal_agent_answer_can_be_persisted():
+    clock = Clock()
+    snapshot = InstanceSnapshot(
+        goal="persist one maximal Agent result",
+        nodes=(
+            NodeSpec(
+                "generate",
+                "Generate",
+                "person_owner",
+                "agent",
+                work={
+                    "objective": "Generate",
+                    "inputs": [],
+                    "outputs": [
+                        {
+                            "id": "content",
+                            "type": "text",
+                            "required": True,
+                        }
+                    ],
+                    "acceptance": ["Content exists"],
+                    "agent": {
+                        "kind": "llm.generate",
+                        "model_role": "default",
+                        "instructions": "Generate",
+                    },
+                },
+            ),
+        ),
+    )
+    service, repository = build_runtime(clock=clock, snapshot=snapshot)
+
+    report = worker(
+        service,
+        repository,
+        LLMAgentExecutor(MaximalLegalCompletion()),
+        clock=clock,
+        worker_id="worker_1",
+    ).run_once()
+
+    assert report.completed == 1
+    assert report.failed == 0
+    attempt = service.get(TENANT, "instance_runtime").current_attempt("generate")
+    assert attempt.status == AttemptStatus.DONE
+    assert len(attempt.result["content"]) == 12_000
 
 
 def test_uncompactable_search_result_fails_with_a_stable_error_code():

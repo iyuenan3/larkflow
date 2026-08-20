@@ -14,6 +14,7 @@ from larkflow.agent_runtime import AgentRunRequest, AgentRunResult
 from larkflow.agent_runtime.completion import CompletionAgentRuntime
 from larkflow.agent_runtime.executor import AgentRuntimeExecutor
 from larkflow.knowledge import EnterpriseKnowledgeRef
+from larkflow.search import SearchResult, SearchSource, SearchUsage
 from larkflow.planning import PlannerRequest, PlannerResult
 from larkflow.planning.bounded import BoundedPlannerRuntime
 from larkflow.planning.context import (
@@ -32,7 +33,10 @@ from larkflow.workflow import (
     ExecutionRequest,
     ExecutorKind,
     LLMAgentExecutor,
+    WebSearchToolExecutor,
 )
+from larkflow.workflow.deliverables import MAX_DELIVERABLE_JSON_BYTES
+from larkflow.workflow.serde import to_json_value
 
 
 NOW = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
@@ -537,6 +541,37 @@ class RecordingCompletion:
         return self.content
 
 
+class FanInSearchProvider:
+    def __init__(self, prefix: str) -> None:
+        self.prefix = prefix
+
+    def capability(self):
+        class Capability:
+            available = True
+
+        return Capability()
+
+    def search(self, *, query: str) -> SearchResult:
+        return SearchResult(
+            provider="fan_in_stub_search",
+            query=query,
+            sources=tuple(
+                SearchSource(
+                    title=f"{self.prefix} source {index}",
+                    snippet=(
+                        f"{self.prefix} evidence {index} "
+                        + "public source excerpt " * 180
+                    ),
+                    source_url=f"https://example.com/{self.prefix}/{index}",
+                    published_at=None,
+                    published_at_status="unknown",
+                )
+                for index in range(10)
+            ),
+            usage=SearchUsage(result_count=10, time_cost_ms=10),
+        )
+
+
 def agent_request(
     *,
     instructions: str = "生成摘要",
@@ -575,8 +610,8 @@ def agent_request(
 def completion_bridge(
     client: RecordingCompletion,
     *,
-    max_prompt_chars: int = 20_000,
-    max_result_chars: int = 50_000,
+    max_prompt_chars: int = 100_000,
+    max_result_chars: int = 12_000,
 ) -> AgentRuntimeExecutor:
     return AgentRuntimeExecutor(
         CompletionAgentRuntime(
@@ -586,6 +621,38 @@ def completion_bridge(
                 max_result_chars=max_result_chars,
             )
         )
+    )
+
+
+def fan_in_search_request(node_key: str, instructions: str) -> ExecutionRequest:
+    return ExecutionRequest(
+        tenant_id="tenant_agent",
+        instance_id="instance_agent",
+        node_key=node_key,
+        attempt_id=f"attempt_{node_key}",
+        attempt_no=1,
+        owner_person_id="person_owner",
+        executor="tool",
+        work={
+            "objective": instructions,
+            "inputs": ["dependencies.confirm"],
+            "outputs": [
+                {"id": "content", "type": "text", "required": True},
+                {"id": "sources", "type": "string_list", "required": True},
+            ],
+            "acceptance": ["保留来源"],
+            "tool": {
+                "kind": "web.search",
+                "args": {
+                    "model_role": "default",
+                    "instructions": instructions,
+                },
+            },
+        },
+        input_snapshot={"dependencies": {"confirm": {"approved": True}}},
+        expected_node_version=2,
+        claim_token=f"claim_{node_key}",
+        claim_expires_at=NOW + timedelta(minutes=5),
     )
 
 
@@ -624,6 +691,108 @@ def test_completion_runtime_preserves_source_notice() -> None:
     )
 
 
+def test_completion_runtime_accepts_two_maximal_search_results_and_enterprise_context():
+    attraction = WebSearchToolExecutor(FanInSearchProvider("attractions")).execute(
+        fan_in_search_request("research_attractions", "研究景点")
+    ).result
+    transport = WebSearchToolExecutor(FanInSearchProvider("transport")).execute(
+        fan_in_search_request("research_transport", "研究交通")
+    ).result
+    for search_result in (attraction, transport):
+        encoded = json.dumps(
+            to_json_value(search_result),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        assert len(encoded) <= MAX_DELIVERABLE_JSON_BYTES
+        assert len(search_result["sources"]) == 10
+
+    material = "E" * 12_000
+    digest = sha256_hex(material.encode("utf-8"))
+    knowledge = EnterpriseKnowledgeRef(
+        tenant_id="tenant_agent",
+        source_id="enterprise:travel_policy",
+        version_id="v1",
+        display_label="旅行政策",
+        media_type="text/plain",
+        size_bytes=len(material.encode("utf-8")),
+        content_sha256=digest,
+        published_at=NOW,
+        egress_decision="allow",
+        authorization_proof_id="kp_" + "1" * 32,
+        authorization_fingerprint="2" * 64,
+    )
+    bundle = ContextBundle(
+        tenant_id="tenant_agent",
+        scope_kind="workflow_instance",
+        scope_id="instance_agent",
+        purpose="agent_execution",
+        actor_person_id="person_owner",
+        node_key="draft",
+        attempt_id="attempt_agent",
+        sources=(
+            SourceRef(
+                source_id=knowledge.source_id,
+                kind="enterprise_knowledge",
+                label=knowledge.display_label,
+                content_sha256=digest,
+            ),
+        ),
+        chunks=(ContextChunk(knowledge.source_id, 0, material),),
+        enterprise_knowledge=(knowledge,),
+        created_at=NOW,
+        expires_at=NOW + timedelta(minutes=10),
+    )
+    client = RecordingCompletion()
+    runtime = CompletionAgentRuntime(LLMAgentExecutor(client))
+
+    result = runtime.run(
+        AgentRunRequest(
+            tenant_id="tenant_agent",
+            instance_id="instance_agent",
+            node_key="draft",
+            attempt_id="attempt_agent",
+            attempt_no=1,
+            owner_person_id="person_owner",
+            executor="agent",
+            work_contract={
+                "objective": "综合旅行方案",
+                "inputs": [
+                    "dependencies.confirm",
+                    "dependencies.research_attractions",
+                    "dependencies.research_transport",
+                    "instance_inputs.enterprise_knowledge",
+                ],
+                "outputs": [
+                    {"id": "content", "type": "text", "required": True}
+                ],
+                "acceptance": ["包含逐日行程和来源边界"],
+                "agent": {
+                    "kind": "llm.generate",
+                    "model_role": "default",
+                    "instructions": "综合输入生成完整方案",
+                },
+            },
+            input_snapshot={
+                "instance_inputs": {"brief": "新疆 8 日旅行"},
+                "dependencies": {
+                    "confirm": {"approved": True},
+                    "research_attractions": attraction,
+                    "research_transport": transport,
+                },
+            },
+            context_bundle=bundle,
+        )
+    )
+
+    assert result.deliverables["content"].endswith("结论：可以继续。")
+    prompt = client.calls[0][0]
+    assert 20_000 < len(prompt) <= 100_000
+    assert "https://example.com/attractions/0" in prompt
+    assert "https://example.com/transport/0" in prompt
+    assert material in prompt
+
+
 def test_completion_runtime_reports_minimal_runtime_metadata() -> None:
     execution_request = agent_request()
     runtime = CompletionAgentRuntime(LLMAgentExecutor(RecordingCompletion()))
@@ -651,10 +820,10 @@ def test_completion_runtime_reports_minimal_runtime_metadata() -> None:
 @pytest.mark.parametrize(
     "client_content,instructions,max_prompt,max_result",
     [
-        ("result", "", 20_000, 50_000),
-        ("  ", "generate", 20_000, 50_000),
+        ("result", "", 20_000, 12_000),
+        ("  ", "generate", 20_000, 12_000),
         ("four", "generate", 20_000, 3),
-        ("result", "generate", 10, 50_000),
+        ("result", "generate", 10, 12_000),
     ],
 )
 def test_completion_runtime_preserves_error_classification(

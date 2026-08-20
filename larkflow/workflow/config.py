@@ -25,8 +25,8 @@ class TargetRuntimeSettings:
     enable_web_search_executor: bool = False
     agent_runtime: str = "completion"
     agent_claim_safety: timedelta = timedelta(seconds=30)
-    agent_max_prompt_chars: int = 20_000
-    agent_max_result_chars: int = 50_000
+    agent_max_prompt_chars: int = 100_000
+    agent_max_result_chars: int = MAX_DELIVERABLE_TEXT_CHARS
     agent_context_max_chars: int = 12_000
     attachment_blob_root: str | None = None
     attachment_model_egress_policy: str = "deny"
@@ -53,6 +53,10 @@ class TargetRuntimeSettings:
             raise ValueError("agent_max_prompt_chars must be positive")
         if self.agent_max_result_chars < 1:
             raise ValueError("agent_max_result_chars must be positive")
+        if self.agent_max_result_chars > MAX_DELIVERABLE_TEXT_CHARS:
+            raise ValueError(
+                "agent_max_result_chars exceeds the text deliverable contract"
+            )
         if self.agent_context_max_chars < 1:
             raise ValueError("agent_context_max_chars must be positive")
         if self.agent_context_max_chars >= self.agent_max_prompt_chars:
@@ -154,12 +158,12 @@ class TargetRuntimeSettings:
             agent_max_prompt_chars=_positive_int(
                 values,
                 "LARKFLOW_TARGET_AGENT_MAX_PROMPT_CHARS",
-                20_000,
+                100_000,
             ),
             agent_max_result_chars=_positive_int(
                 values,
                 "LARKFLOW_TARGET_AGENT_MAX_RESULT_CHARS",
-                50_000,
+                MAX_DELIVERABLE_TEXT_CHARS,
             ),
             agent_context_max_chars=_positive_int(
                 values,
