@@ -835,6 +835,66 @@ def test_typed_web_search_compiles_authorized_travel_queries_with_priority():
         assert term in transport_query
 
 
+def test_typed_web_search_extracts_transport_hub_from_real_composite_constraints():
+    request = replace(
+        web_search_request(),
+        node_key="research_transport",
+        work={
+            **web_search_request().work,
+            "objective": "检索出发地到目的地及目的地内部交通的公开信息",
+            "tool": {
+                "kind": "web.search",
+                "args": {
+                    "model_role": "default",
+                    "instructions": "检索往返交通、区域内交通、衔接时间和限制条件",
+                },
+            },
+        },
+        input_snapshot={
+            "dependencies": {
+                "confirm_requirements": {
+                    "origin": "上海",
+                    "destination": "新疆",
+                    "travel_start_date": "2026-09-10",
+                    "travel_end_date": "2026-09-17",
+                    "constraints": (
+                        "景点必须覆盖乌鲁木齐国际大巴扎、吐鲁番交河故城、"
+                        "伊犁那拉提；交通必须覆盖上海往返乌鲁木齐航班、"
+                        "新疆境内铁路和合规包车；遵守北辰测试科技企业差旅政策；"
+                        "允许联网核验公开信息；不得自动预订、付款或绕过人工复核。"
+                    ),
+                    "api_key": "forbidden-secret",
+                },
+                "unrelated_node": {"notes": "must-not-appear"},
+            },
+            "instance_inputs": {"cookie": "must-not-appear"},
+        },
+    )
+    provider = StaticSearchProvider(
+        title="新疆综合交通出行提示",
+        snippet="上海至乌鲁木齐航班、新疆铁路和合规包车信息。",
+    )
+
+    result = WebSearchToolExecutor(provider).execute(request).result
+
+    query = provider.calls[0]
+    assert result["query"] == query
+    assert len(query) <= 100
+    for term in (
+        "上海",
+        "乌鲁木齐",
+        "2026-09-10",
+        "2026-09-17",
+        "航班",
+        "铁路",
+        "合规包车",
+    ):
+        assert term in query
+    assert "伊犁那拉提" not in query
+    assert "forbidden-secret" not in query
+    assert "must-not-appear" not in query
+
+
 def test_typed_web_search_filters_unrelated_sources_and_fails_closed():
     provider = StaticSearchProvider(
         title="黄山今天开放吗？",

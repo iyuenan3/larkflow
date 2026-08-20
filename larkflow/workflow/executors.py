@@ -77,9 +77,15 @@ MAX_TYPED_SEARCH_QUERY_CHARS = 100
 _SEARCH_DEPENDENCY_PATH = re.compile(r"^dependencies\.([a-z][a-z0-9_]*)$")
 _SEARCH_SPACE = re.compile(r"\s+")
 _SEARCH_CONSTRAINT_SPLIT = re.compile(r"[、,，;；。\n]+")
+_SEARCH_CONSTRAINT_GROUP_SPLIT = re.compile(r"[;；。\n]+")
 _SEARCH_CONSTRAINT_PREFIX = re.compile(
     r"^(?:必游|重点|希望|计划|优先|必须|需要|请|包含|包括|安排|游览|参观|"
     r"前往|途经|交通|景点|路线|限制|偏好)[:：]?\s*"
+)
+_SEARCH_TRANSPORT_HUB = re.compile(
+    r"(?:往返|到|至|飞往|前往)"
+    r"([\u4e00-\u9fff]{2,10}?)"
+    r"(?=航班|飞机|铁路|高铁|火车|包车|机场|车站|[、,，]|$)"
 )
 _SEARCH_SENSITIVE_MARKERS = (
     "api_key",
@@ -194,7 +200,7 @@ def _compile_typed_search_query(
         )
         relevance = _unique_search_terms((destination, *entities))
     elif focus == "transport":
-        hubs = _transport_context_tokens(tokens)
+        hubs = _transport_context_tokens(constraints)
         components = (
             origin,
             destination,
@@ -303,29 +309,42 @@ def _search_constraint_tokens(values: Sequence[str]) -> tuple[str, ...]:
     return tuple(tokens)
 
 
-def _transport_context_tokens(tokens: Sequence[str]) -> tuple[str, ...]:
+def _transport_context_tokens(values: Sequence[str]) -> tuple[str, ...]:
+    """Extract transport hubs without crossing constraint semantic groups."""
+
     result: list[str] = []
-    for index, token in enumerate(tokens):
-        if any(term in token for term in _SEARCH_TRANSPORT_TERMS):
-            if index > 0:
-                previous = tokens[index - 1]
-                if (
-                    previous not in result
-                    and len(previous) <= 10
-                    and not any(
-                        term in previous for term in _SEARCH_TRANSPORT_TERMS
-                    )
-                ):
-                    result.append(previous)
-            if (
-                any(suffix in token for suffix in ("机场", "车站", "火车站"))
-                and token not in result
-                and len(token) <= 12
+    for value in values:
+        for raw_group in _SEARCH_CONSTRAINT_GROUP_SPLIT.split(value[:1_000]):
+            group = _safe_search_text(raw_group, max_chars=240)
+            if not group or not any(
+                term in group for term in _SEARCH_TRANSPORT_TERMS
             ):
-                result.append(token)
-    for token in tokens:
-        if re.search(r"(?:到|至|飞往|前往)[\u4e00-\u9fff]{2,8}", token):
-            result.append(token[-10:])
+                continue
+            for match in _SEARCH_TRANSPORT_HUB.finditer(group):
+                hub = match.group(1).strip()
+                if (
+                    2 <= len(hub) <= 10
+                    and hub not in result
+                    and not _contains_sensitive_marker(hub)
+                ):
+                    result.append(hub)
+            for raw_token in re.split(r"[、,，]+", group):
+                token = _safe_search_text(raw_token, max_chars=24)
+                previous = None
+                while token and token != previous:
+                    previous = token
+                    token = _SEARCH_CONSTRAINT_PREFIX.sub("", token).strip()
+                if (
+                    2 <= len(token) <= 10
+                    and token not in result
+                    and not any(
+                        term in token for term in _SEARCH_TRANSPORT_TERMS
+                    )
+                    and not any(marker in token for marker in ("往返", "到", "至"))
+                    and token.casefold() not in _SEARCH_UNKNOWN_VALUES
+                    and not _contains_sensitive_marker(token)
+                ):
+                    result.append(token)
     return tuple(dict.fromkeys(result))[:3]
 
 
