@@ -71,6 +71,28 @@ def test_completion_metadata_preserves_finish_reason_usage_and_model():
     assert result.model == "provider-model"
 
 
+def test_completion_thinking_mode_is_explicit_and_provider_scoped():
+    fake = _FakeOK()
+    llm = OpenAICompatLLM(
+        ROLES,
+        client_factory=lambda cfg: fake,
+        completion_thinking_type="disabled",
+    )
+
+    llm.complete_with_metadata(prompt="p", model_role="writer")
+
+    assert fake.kw["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_unknown_completion_thinking_mode_is_rejected():
+    try:
+        OpenAICompatLLM(ROLES, completion_thinking_type="provider_default")
+    except ValueError as exc:
+        assert "thinking type" in str(exc)
+    else:
+        raise AssertionError("invalid thinking mode was accepted")
+
+
 def test_a_failed_call_is_announced_too_with_the_reason():
     seen = []
     llm = OpenAICompatLLM(ROLES, on_call=seen.append,
@@ -93,6 +115,9 @@ def test_the_reporter_never_takes_the_call_down_with_it():
 
 
 class _FakeOK:
+    def __init__(self):
+        self.kw = {}
+
     @property
     def chat(self):
         return self
@@ -102,6 +127,7 @@ class _FakeOK:
         return self
 
     def create(self, **kw):
+        self.kw = kw
         return type(
             "R",
             (),

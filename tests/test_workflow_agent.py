@@ -630,6 +630,11 @@ def test_runtime_assembles_agent_only_with_a_safe_lease_budget():
         registry[ExecutorKind.AGENT].runtime,
         CompletionAgentRuntime,
     )
+    assert (
+        registry[ExecutorKind.AGENT]
+        .runtime.executor.client.completion_thinking_type
+        == "disabled"
+    )
 
     unsafe = TargetRuntimeSettings(
         dsn="postgresql:///test",
@@ -672,11 +677,14 @@ def test_target_runtime_selection_is_explicit_and_bounded_to_baselines():
     )
 
     assert runtime.agent_runtime == "completion"
+    assert runtime.agent_thinking_type == "disabled"
     assert runtime.agent_max_prompt_chars == 100_000
     assert runtime.agent_max_result_chars == 12_000
     assert planner.planner_runtime == "bounded"
     with pytest.raises(ValueError, match="agent_runtime must be completion"):
         replace(runtime, agent_runtime="unknown")
+    with pytest.raises(ValueError, match="thinking_type"):
+        replace(runtime, agent_thinking_type="provider_default")
     with pytest.raises(ValueError, match="text deliverable contract"):
         replace(runtime, agent_max_result_chars=12_001)
     with pytest.raises(ValueError, match="planner_runtime must be bounded"):

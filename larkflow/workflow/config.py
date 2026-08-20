@@ -24,6 +24,7 @@ class TargetRuntimeSettings:
     enable_content_check_executor: bool = False
     enable_web_search_executor: bool = False
     agent_runtime: str = "completion"
+    agent_thinking_type: str = "disabled"
     agent_claim_safety: timedelta = timedelta(seconds=30)
     agent_max_prompt_chars: int = 100_000
     agent_max_result_chars: int = MAX_DELIVERABLE_TEXT_CHARS
@@ -89,6 +90,8 @@ class TargetRuntimeSettings:
             )
         if self.agent_runtime != "completion":
             raise ValueError("Target agent_runtime must be completion")
+        if self.agent_thinking_type not in {"disabled", "enabled", "auto"}:
+            raise ValueError("Target agent_thinking_type is invalid")
 
     @classmethod
     def from_environ(
@@ -147,6 +150,10 @@ class TargetRuntimeSettings:
             agent_runtime=values.get(
                 "LARKFLOW_TARGET_AGENT_RUNTIME",
                 "completion",
+            ).strip(),
+            agent_thinking_type=values.get(
+                "LARKFLOW_TARGET_AGENT_THINKING_TYPE",
+                "disabled",
             ).strip(),
             agent_claim_safety=timedelta(
                 seconds=_positive_float(

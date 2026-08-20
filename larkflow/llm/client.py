@@ -105,9 +105,12 @@ class OpenAICompatLLM(LLMClient):
     def __init__(self, roles: dict[str, dict], *, ca_bundle: str | None = None,
                  timeout: float | None = None, client_factory=None, on_failover=None,
                  trust_env: bool | None = None, http_factory=None,
-                 openai_factory=None, on_call=None):
+                 openai_factory=None, on_call=None,
+                 completion_thinking_type: str | None = None):
         if not roles:
             raise RuntimeError("LLM 角色路由表为空（见 .env.example 的 LLM_* 三元组）")
+        if completion_thinking_type not in {None, "disabled", "enabled", "auto"}:
+            raise ValueError("unsupported completion thinking type")
         self.roles = roles
         self.ca_bundle = ca_bundle
         # 是否吃环境里的 http(s)_proxy / all_proxy。默认吃（有人的 LLM 在墙外，确实要走代理）。
@@ -123,6 +126,7 @@ class OpenAICompatLLM(LLMClient):
         self.timeout = self.DEFAULT_TIMEOUT if timeout is None else timeout
         self.client_factory = client_factory or self._build_client
         self.on_failover = on_failover
+        self.completion_thinking_type = completion_thinking_type
         self.failovers: list[dict] = []
         self._clients: dict[str, object] = {}
 
@@ -195,10 +199,17 @@ class OpenAICompatLLM(LLMClient):
                              "timeout": cfg.get("timeout") or self.timeout,
                              "operation": "completion"})
             try:
+                request = {
+                    "model": cfg["model"],
+                    "temperature": 0,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
+                if self.completion_thinking_type is not None:
+                    request["extra_body"] = {
+                        "thinking": {"type": self.completion_thinking_type}
+                    }
                 resp = self._client(cfg).chat.completions.create(
-                    model=cfg["model"],
-                    temperature=0,
-                    messages=[{"role": "user", "content": prompt}],
+                    **request,
                 )
                 result = _completion_result(resp, configured_model=cfg["model"])
             except Exception as exc:
