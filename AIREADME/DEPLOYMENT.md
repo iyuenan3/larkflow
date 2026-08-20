@@ -1,5 +1,8 @@
 # DEPLOYMENT · larkflow
 
+- 2026-08-20 交通复合约束实体绑定已部署。内容提交为 `83d6cfa71d7aa0d01227cedbce6989fe630b3548`，wheel SHA-256 为 `95d5ecb72098ae1b1fe2f24059efb86903ef4d3288ccc38e9877f69f6cc913c5`，保存在 `/srv/larkflow/target/releases/transport_query_20260820_233615_83d6cfa/`。Target 与 legacy 安装态 `workflow/executors.py` 哈希均为 `b6ddee117df16ba05197958d532c35b08d175546595be6408bf30c74ad922ab7`，两个 venv 的 `pip check` 通过；migration 重入为空，长期库保持 `29 / 0029_console_draft_cancellation`。
+- 统一门禁于北京时间 23:38:45 至 23:39:03 重启全部十个共享 wheel 服务；正式节点 restart 期间 Runtime 于 23:44:04 再次安全启动，最终均为 `active / running / NRestarts=0`，启动窗口 warning 和 error 匹配为 0。Target 仍使用 `deepseek-v4-flash`，typed 豆包 SearchProvider 保持 configured，搜索结果正文上限为 12000 字符。真实 provider 探针确认景点 query 为 63 字并保留 9 条来源，交通 query 为 48 字并保留 10 条来源；实例 `console_draft_cc16a99b9b79e282488ec8453658e8e2` 的两个 search Attempt 2 与 Agent Attempt 3 已完成，Human Attempt 3 等待人工。本轮没有修改 schema 或 Caddy，也没有接受 Human Gate。
+
 - 2026-08-20 联网研究查询绑定已部署。内容提交为 `7d79ce3b35bf09c4ad4478d71298ede2844971cb`，wheel SHA-256 为 `6beac828729e2cf57cc480f40b30006b8034011f406cc85fc2483d561d3d70c2`，保存在 `/srv/larkflow/target/releases/search_query_20260820_230000_7d79ce3/`。Target 与 legacy 安装态 `workflow/executors.py` 和 `workflow/service.py` 哈希均与本地一致，两个 venv 的 `pip check` 通过；migration 重入为空，长期库保持 `29 / 0029_console_draft_cancellation`。
 - 统一门禁重启全部十个共享 wheel 服务，启动时间为北京时间 23:01:37 至 23:01:52，最终均为 `active / running / NRestarts=0`，启动窗口 warning 为 0。Target 仍使用 `deepseek-v4-flash`，typed 豆包 SearchProvider 保持 configured，结果正文上限为 12000 字符。安装态 synthetic/public 真实查询分别生成包含新疆、国际大巴扎、交河故城、那拉提和日期的 52 字景点查询，以及包含上海、乌鲁木齐、起止日期、航班、铁路、合规包车的 48 字交通查询，两次各保留 10 条相关来源；未授权哨兵未进入 query。本轮没有修改 schema、Caddy、旧业务实例或飞书资源，真实飞书端到端仍需重新执行后验收。
 

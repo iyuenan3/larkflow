@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.94.2-draft · 2026-08-20 · 交通复合约束实体绑定修复
+
+- Fixed：`83d6cfa71d7aa0d01227cedbce6989fe630b3548` 把交通实体抽取限制在包含交通词的同一分号语义组内，并从“上海往返乌鲁木齐航班”这类复合短语提取目的交通枢纽。全局 token 的前驱不再参与交通查询，因此前一景点组中的“伊犁那拉提”不能借位成为交通枢纽；查询仍只读取 NodeSpec 明确声明的直接依赖，保持 100 字上限、敏感标记拒绝、相关性门禁和 result、审计同 query 合同。
+- Verified：真实约束原句在缺陷态生成“上海 新疆 伊犁那拉提 …”并缺少乌鲁木齐，新增回归能够稳定变红。修复后搜索相关套件为 `61 passed`；完整离线套件排除沙箱进程树用例为 `1328 passed, 35 skipped, 1 deselected`，该既有用例在允许读取进程树的环境单独 `1 passed`，合并证据为 `1329 passed, 35 skipped`。
+- Deployment：wheel SHA-256 为 `95d5ecb72098ae1b1fe2f24059efb86903ef4d3288ccc38e9877f69f6cc913c5`，保存在 `/srv/larkflow/target/releases/transport_query_20260820_233615_83d6cfa/`。Target 与 legacy 安装态 `executors.py` 哈希均与本地一致，两个 venv 的 `pip check` 与 migration 重入通过，ledger 保持 `29 / 0029_console_draft_cancellation`。十个共享 wheel 服务在北京时间 23:38:45 至 23:39:03 统一重启；正式节点重启时 Runtime 又于 23:44:04 安全启动，最终十个服务均为 `active / running / NRestarts=0`，部署窗口 warning 和 error 匹配为 0，Caddy 未修改并保持 active。
+- E2E：安装态真实豆包 synthetic/public 探针生成 63 字景点查询和 48 字交通查询，分别保留 9 条与 10 条来源；交通 query 为“上海 新疆 乌鲁木齐 2026-09-10至2026-09-17 航班 铁路 合规包车 交通衔接”，未授权哨兵和“伊犁那拉提”均未进入交通 query。实例 `console_draft_cc16a99b9b79e282488ec8453658e8e2` 通过两个正式 restart preview/confirm 依次重启 `research_attractions` 与 `research_transport` 及其下游。两个 Tool Attempt 2 与 DeepSeek Agent Attempt 3 已完成，Human Attempt 3 为 `waiting_human`；旧搜索 Attempt 1、被取消的下游 Attempt 和两条 `instance.node_restarted` 审计全部保留。本条没有接受或退回 Human Gate。
+
 ## v0.94.1-draft · 2026-08-20 · 联网研究查询绑定已确认上下文
 
 - Fixed：`7d79ce3b35bf09c4ad4478d71298ede2844971cb` 修复 typed `web.search` 虽构造完整 prompt，却只把静态 `instructions` 发送给豆包 SearchProvider 的旁路。查询现在只从 NodeSpec 明确声明消费的直接依赖中读取有界旅行字段，按景点或交通任务确定性压缩到 100 字以内；`instance_inputs`、未声明依赖、任意字段和敏感标记不会进入查询。
