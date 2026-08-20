@@ -1117,3 +1117,13 @@
 - Status addendum · 2026-08-19：内容提交 `cceed8d3093c28e3687f748fe872b6fd5f59f2ee` 已落码服务端 dependency provenance、证据检查 fail-closed、安全墓碑恢复和 0028 向前约束。缺陷态回归分别得到 3、1、2 项失败；修复后聚焦套件为 `215 passed`。完整离线套件除唯一沙箱 `ps` 用例外为 `1283 passed, 33 skipped`，该用例在允许环境单独 `1 passed`，合并证据为 `1284 passed, 33 skipped`。真实 PostgreSQL、长期库 0028、wheel 部署和安装态 synthetic 探针仍待执行。
 
 - Status addendum · 2026-08-19：真实 PostgreSQL 空库、重入、并发与强制回滚均通过，长期开发库已增量到 `28 / 0028`。wheel SHA-256 为 `75eac62b39295e255560c9c5be46d4c64203fb858eeca15d73f4d347b5a8289c`；Target 与 legacy 安装态源码、十个服务、在线静态资源和 synthetic provenance、墓碑恢复探针均回读通过。没有飞书写入，真实浏览器人工验收继续后置。
+
+## ADR-122 · 2026-08-20 · 联网旅行规划使用确定性领域骨架
+
+- **Status：Accepted，implemented and deployed through `a5f39ded62a7ae880ac0a554f2f71a287e821715`。**
+- Problem：同一份包含企业资料、明确出行参数和双搜索要求的新疆 8 日输入，在 DeepSeek v4 Flash 单线路 120 秒与 qwen3.7-plus 单线路 120 秒探针中都没有返回合法候选。若继续把整张业务 DAG 交给模型，再叠加 route fallback 与 Worker outer retry，交互最坏时间不可接受，用户只能长时间看到生成中；把独立豆包搜索成功和简化 H-A-H 草稿拼成通过，又不能证明真实复杂路径可用。
+- Decision：联网旅行且 SearchProvider capability 可用时，Target 在 bounded Planner 前使用 `deterministic_travel_v1`。larkflow 先按字段绑定规则确认出发地、旅行起止日期、正整数人数和旅行总预算，再固定生成五节点 DAG：Human 确认输入，景点与交通两个并行 `web.search`，Agent 综合确认输入、两组搜索证据和服务器授权资料，最后 Human 接受或退回。缺失字段返回安全的结构化错误，不调用规划模型；完整请求的规划模型调用数为 0。
+- Boundary：确定性骨架只决定节点责任、依赖、交付物和 Tool kind，不写业务事实，不执行搜索，不启动流程，也不绕过 `PlanningService` 和 `GeneratedDraftValidator`。豆包 SearchProvider 仍只在 Tool Attempt 执行，PostgreSQL 仍是草稿与业务真相；企业资料仍由 Context Service 冻结和重新授权。Agent 只在自己的 Attempt 内综合已提交依赖，Human Gate 保持最终决定权。明确 no-web 的完整附件路径和其他领域继续委托 bounded Planner。
+- Compatibility：DAG Contract v0.2、Owner、Attempt、restart、审计、飞书投影和既有冻结实例不变。DeepSeek 保持配置主模型，qwen 保持可用 fallback，但它们不再阻塞联网旅行的草稿结构生成。未来调整旅行骨架必须引入新的 adapter version，不能静默改变既有草稿或 fingerprint。
+- Alternatives(否决)：提高单线路 timeout；把两条 route 在每次 Worker retry 中全部重复；只验证简化 H-A-H；让豆包搜索供应商直接生成业务 DAG；把临时模型程序或 LangGraph 作为业务真相；在没有来源 Tool 的情况下宣称联网旅行通过。
+- Evidence：聚焦套件 `131 passed`，完整离线合并证据 `1309 passed, 34 skipped`。开发 wheel SHA-256 为 `dccce10ec4f0922dec51829943af919405faa0b6e1811f04a0785e5609d7e46c`。synthetic 请求 `1b42e59f4d634f39b773900e24949e37` 冻结一份企业资料，0.58 秒内形成 5 节点 ready 草稿；两个 Tool 均为 `web.search`，Agent 显式消费企业资料，独立豆包查询回读 10 条带 URL 来源。草稿未启动且没有飞书写入，真实浏览器端到端仍待独立验收。

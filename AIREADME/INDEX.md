@@ -10,7 +10,9 @@
 
 飞书 Console 的过期会话恢复已部署到开发环境。认证 401 与 OAuth 失败页面现在保留“重新授权飞书”入口，点击后先清理当前 cookie 会话，再进入新的 OAuth；清理请求失败也不会阻断授权。安装态、loopback 与公网静态资源哈希一致，Console 与安全边界回读正常；真实浏览器按钮点击仍待 Maxwell 人工验收。
 
-last-synced: bc416252747963ba955568c8f5ff09aa33b13e65 · 2026-08-20
+联网旅行草稿现在先经过 larkflow 自有的 `deterministic_travel_v1` Planner。明确的出发地、起止日期、人数和总预算缺一时，Console 返回安全的结构化缺字段提示；字段完整且豆包搜索 capability 可用时，不调用规划模型，直接生成 `Human 确认 -> 景点 web.search + 交通 web.search -> Agent 综合 -> Human 复核` 的受控 DAG，再由统一 validator 复验。DeepSeek 与 qwen 对同一复杂冻结输入均超过 120 秒的诊断不再进入该交互主路径。开发环境 synthetic smoke 使用一份冻结企业资料，在 0.58 秒内生成 5 节点 ready 草稿，豆包公开查询另行回读 10 条带 URL 的来源。该证据不替代真实飞书浏览器端到端，也不证明搜索事实正确。
+
+last-synced: fd37a18bfdbe18cd87346cb3861277ffc0f01a7c · 2026-08-20
 
 ## 阅读顺序
 

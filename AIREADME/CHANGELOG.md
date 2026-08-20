@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.93.0-draft · 2026-08-20 · 有界旅行 Planner 开发部署验证
+
+- Added：`90b14189cc43c67e919c480f1e4fa8f70cc934b5` 在通用 bounded Planner 前增加 `deterministic_travel_v1`。联网旅行且搜索 capability 可用时，larkflow 固定生成 Human 输入确认、景点与交通双 `web.search`、Agent 综合、Human 决策五节点候选，模型不再负责发明整张图；其他领域和明确 no-web 路径继续委托 bounded。
+- Fixed：`a5f39ded62a7ae880ac0a554f2f71a287e821715` 要求旅行请求中的出发地、旅行起止日期、出行人数和旅行总预算全部通过字段绑定正向校验。缺失或否定值在任何规划模型调用前返回安全的 `missing_required_fields`，常见“两名员工”继续解析为人数。
+- Verified：聚焦套件为 `131 passed`；完整离线套件排除沙箱进程树文件为 `1306 passed, 34 skipped`，该文件在允许环境为 `3 passed`，合并为 `1309 passed, 34 skipped`。DeepSeek v4 Flash 与 qwen3.7-plus 对同一复杂冻结输入的单线路 120 秒探针均超时或不可用，证明模型 fallback 不是本次通过依据。
+- Deployment：最终 wheel SHA-256 为 `dccce10ec4f0922dec51829943af919405faa0b6e1811f04a0785e5609d7e46c`，开发库保持 `29 / 0029`，十个 Python 服务与 Caddy 均为 `active / running / NRestarts=0`，部署窗口 warning/error 为 0。synthetic 企业资料加联网旅行请求 `1b42e59f4d634f39b773900e24949e37` 在 0.58 秒内 ready，包含两个独立 `web.search`，豆包公开查询另行回读 10 条带 URL 来源；取消迟到写回与缺预算公开错误探针均通过。没有确认草稿或写入飞书，真实浏览器端到端仍待独立验收。
+
 ## v0.92.5-draft · 2026-08-20 · 飞书 Console 重新授权恢复开发部署验证
 
 - Deployment：内容提交 `bc416252747963ba955568c8f5ff09aa33b13e65` 已安装到 Target 开发环境。wheel SHA-256 为 `c583d1e729944086dffbd0c3922b8c5bfbfdb55768b120f86bc9890e1ba56182`，保存在 `/srv/larkflow/target/releases/console_login_recovery_20260820_165646_7d94879/`。本轮只改变 Console 静态资源，因此只重启 `larkflow-target-console.service`，不替换 legacy venv，不运行 migration，也不修改 Caddy。

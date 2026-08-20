@@ -1,6 +1,6 @@
 # ROADMAP · larkflow
 
-> 状态：Cloud-first Target Delivery Plan · 2026-08-19
+> 状态：Cloud-first Target Delivery Plan · 2026-08-20
 >
 > 原来的三级协作、Personal Agent Edge 产品化和完整能力治理路线已移出近期范围。当前主线是云端 Agent 控制平面；既有 Edge 代码与证据作为暂停的历史 Proof 保留。
 
@@ -22,9 +22,11 @@
 在继续扩展执行器之前，先关闭云端 Agent 控制平面的四个合同：
 
 1. `Knowledge Context Service`：只支持管理员发布的企业共享资料与项目级上传，服务端在检索前完成 tenant、Instance、actor、数据分类和模型外发授权。企业资料的 tenant-first 目录、不可变正文 Blob、管理员全员授权证明、撤销门禁、规划和 Agent Attempt 重授权，以及两类来源的确定性 ContextBundle 合并已经部署。显式企业资料选择也已部署：Console collecting 草稿默认空选择，发起人保存 source 清单，生成边界冻结精确版本并由重试复用；飞书向导不再静默全选。`0027` 已完成真实 PostgreSQL、重入、回滚和安装态探针，真实管理员浏览器验收、生产对象存储、语义检索、部门 ACL 与个人知识库后置。
-2. `PlannerRuntime Port`：Refactor Phase 1 基线已落码。当前 bounded adapter 只返回候选图与最小运行时摘要，不写草稿、不启动流程；`PlanningService` 会覆盖候选中的服务端输入并通过统一 validator 强制最终复验。Phase 2A 项目附件规划与企业资料 ContextBundle 已部署；显式选择切片只让 Planner 获得生成边界冻结的企业版本，并与项目附件共享预算和 fingerprint。类型化只读工具、A/B 与真实管理员浏览器验收仍未完成。
+2. `PlannerRuntime Port`：Refactor Phase 1 基线已落码。默认 bounded adapter 只返回候选图与最小运行时摘要，不写草稿、不启动流程；`PlanningService` 会覆盖候选中的服务端输入并通过统一 validator 强制最终复验。联网旅行请求在 bounded 前增加 `deterministic_travel_v1`：字段完整且搜索 capability 可用时，由 larkflow 直接生成固定的 Human、双搜索 Tool、Agent、Human 骨架，不再等待模型发明整张图；其他领域与明确 no-web 路径继续使用 bounded。Phase 2A 项目附件规划与企业资料 ContextBundle 已部署；显式选择切片只让 Planner 获得生成边界冻结的企业版本，并与项目附件共享预算和 fingerprint。更广的类型化只读工具、A/B 与真实管理员浏览器验收仍未完成。
 3. `AgentRuntime Port` 与 `Authorized Tool Gateway`：completion 基线端口与 Worker bridge 已落码，一次只执行一个节点的一个 Attempt，claim 和版本继续留在 Worker。Phase 2B 项目附件能力信封与企业资料切片均已部署；显式 `instance_inputs.enterprise_knowledge`、Node/Attempt 重新授权和 `context.read.enterprise_knowledge` 已通过 synthetic Runtime 探针。Tool Gateway 和候选 Runtime 仍未实现，所有业务写继续使用显式 Tool 节点。
 4. `NodeExecutionPolicy`：runtime、provider、model、allowed tools、knowledge scopes、data classification、egress、budget、timeout 和 retry 属于 NodeRun policy，不进入业务 DAG Contract。
+
+**2026-08-20 有界旅行规划证据：** 内容提交 `90b14189cc43c67e919c480f1e4fa8f70cc934b5` 增加确定性旅行 Planner，`a5f39ded62a7ae880ac0a554f2f71a287e821715` 进一步要求出发地、明确起止日期、出行人数和旅行总预算全部绑定到请求字段，缺失时在任何规划模型调用前返回结构化字段提示。DeepSeek v4 Flash 对同一复杂冻结输入在 120 秒超时，qwen3.7-plus 单独 120 秒也在 122.37 秒返回 `LLMUnavailable`，因此二者只作为诊断和其他领域的 bounded 路线，不能冒充旅行交互主路径。完整离线套件除沙箱进程树用例外为 `1306 passed, 34 skipped`，进程树套件在允许环境为 `3 passed`，合并为 `1309 passed, 34 skipped`。开发 wheel SHA-256 为 `dccce10ec4f0922dec51829943af919405faa0b6e1811f04a0785e5609d7e46c`，长期库保持 `29 / 0029`，十个 Python 服务与 Caddy 均为 `active / running / NRestarts=0`，部署窗口 warning/error 为 0。synthetic 请求 `1b42e59f4d634f39b773900e24949e37` 冻结一份企业资料并在 0.58 秒内生成 `Human / Tool / Tool / Agent / Human` ready 草稿，两个 Tool 均为 `web.search`，Agent 显式消费企业资料；独立豆包查询在 0.59 秒回读 10 条带 URL 来源。逻辑取消的迟到写回被拒绝，缺预算请求返回 `missing_required_fields / 预算` 且没有原始异常。草稿未确认启动，没有飞书写入；真实浏览器端到端继续由独立验收完成。
 
 **采用门槛：** Pi 或 DSH 适配器必须在相同输入、上下文、工具和校验器下，对首次硬校验通过率、用户改图次数、遗漏输入、无效依赖、节点冗余、一次接受率、耗时和成本产生可测改善。要求数据库或飞书凭据、绕过确定性校验、把运行时概念写进 DAG，或没有材料改善时，停止适配器。
 
