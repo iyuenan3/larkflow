@@ -1,5 +1,11 @@
 # CHANGELOG · larkflow
 
+## v0.92.4-draft · 2026-08-20 · 飞书 Console 过期会话恢复候选
+
+- Fixed：内容提交 `bc416252747963ba955568c8f5ff09aa33b13e65` 修复飞书模式请求收到 401 后，`request()` 已显示登录恢复入口却又被 `bootstrap().catch()` 隐藏的死路。认证失败与 OAuth `access_denied / login_failed` 现在保留“重新授权飞书”按钮；点击后先同源 POST 注销当前 cookie 会话，无论清理成功与否都继续进入服务器 `login_url`。首次无会话仍自动开始 OAuth，static token 模式不变。
+- Verified：Console 与 OAuth 聚焦套件为 `27 passed`，Node 语法检查通过。完整离线套件为 `1284 passed, 33 skipped, 1 failed`，唯一失败是沙箱禁止读取进程树，同一既有用例在允许环境单独 `1 passed`，合并证据为 `1285 passed, 33 skipped`。提交前版本的严格恢复契约为 `0 / 3`，证明回归能捕获旧缺陷。
+- Boundary：仓库当前没有前端 DOM 执行测试设施，本轮使用严格静态资源契约和 Node 语法检查，不引入新依赖。代码已提交并推送但尚未部署，仍需部署后用真实过期会话、OAuth 拒绝和清理失败路径完成浏览器人工验收。
+
 ## v0.92.3-draft · 2026-08-19 · provenance 与撤销选择恢复开发部署验证
 
 - Deployment：内容提交 `cceed8d3093c28e3687f748fe872b6fd5f59f2ee` 已安装到 Target 与 legacy 开发环境。wheel SHA-256 为 `75eac62b39295e255560c9c5be46d4c64203fb858eeca15d73f4d347b5a8289c`；两个 venv 的 `pip check`、五个关键源码哈希与在线 app.js 哈希一致。

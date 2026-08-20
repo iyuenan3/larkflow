@@ -8,7 +8,7 @@
 
 来源 provenance 与撤销选择恢复也已部署到开发环境。`source_evidence.check` 现在只接受 WorkflowRunner 根据直接依赖 NodeSpec 与已提交 Attempt 冻结的真实 `tool / web.search` provenance，普通 Agent 的结果自报、嵌套复制和缺失 provenance 均 fail closed。撤销后的已选企业来源以安全墓碑继续可见，Owner 必须显式移除并保存，服务端不会自动清空。长期开发库已增量应用并重入 `0028_console_enterprise_source_uniqueness`，数据库层也拒绝重复 source ID；真实浏览器人工验收仍后置。
 
-last-synced: cceed8d3093c28e3687f748fe872b6fd5f59f2ee · 2026-08-19
+last-synced: bc416252747963ba955568c8f5ff09aa33b13e65 · 2026-08-20
 
 ## 阅读顺序
 
