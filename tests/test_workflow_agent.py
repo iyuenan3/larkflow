@@ -106,6 +106,21 @@ def completion_envelope(
     )
 
 
+def completion_marker(
+    *,
+    evidence: dict[str, object],
+    fenced: bool = False,
+) -> str:
+    value = json.dumps(
+        {
+            "status": "complete",
+            "acceptance_evidence": evidence,
+        },
+        ensure_ascii=False,
+    )
+    return f"```json\n{value}\n```" if fenced else value
+
+
 def request(
     *,
     kind: str = "llm.generate",
@@ -227,7 +242,6 @@ def test_agent_executor_rejects_provider_truncation_or_unknown_finish(
 @pytest.mark.parametrize(
     "content, message",
     (
-        ("完整正文但没有完成标记", "completion marker"),
         (
             completion_envelope(evidence={}),
             "evidence is incomplete",
@@ -246,17 +260,6 @@ def test_agent_executor_rejects_provider_truncation_or_unknown_finish(
                 }
             ),
             "anchors are incomplete",
-        ),
-        (
-            completion_envelope(
-                evidence={
-                    "a1": {
-                        "status": "satisfied",
-                        "content_anchors": ["正文中不存在"],
-                    }
-                }
-            ),
-            "anchor is not present",
         ),
     ),
 )
@@ -343,14 +346,14 @@ def test_agent_executor_repairs_only_anchor_metadata_once_and_keeps_content():
             }
         },
     )
-    repaired = completion_envelope(
-        rendered,
+    repaired = completion_marker(
         evidence={
             "a1": {
                 "status": "satisfied",
                 "content_anchors": ["景点与交通结论"],
             }
         },
+        fenced=True,
     )
     completion = SequencedObservedCompletion(first, repaired)
 
@@ -364,14 +367,14 @@ def test_agent_executor_repairs_only_anchor_metadata_once_and_keeps_content():
         "completion_tokens": 160,
     }
     assert len(completion.calls) == 2
-    assert "不得修改 content" in completion.calls[1]["prompt"]
+    assert "不得重写或返回正文" in completion.calls[1]["prompt"]
     assert "Agent completion anchor is not present in content" in (
         completion.calls[1]["prompt"]
     )
     assert "不得增加、删除或改写任何事实" in completion.calls[1]["prompt"]
 
 
-def test_agent_executor_rejects_anchor_repair_that_changes_content():
+def test_agent_executor_rejects_anchor_repair_with_untrusted_content():
     rendered = "## 原正文\n\n原始内容。"
     first = completion_envelope(
         rendered,
@@ -382,18 +385,22 @@ def test_agent_executor_rejects_anchor_repair_that_changes_content():
             }
         },
     )
-    changed = completion_envelope(
-        "## 被修改的正文\n\n不同内容。",
-        evidence={
-            "a1": {
-                "status": "satisfied",
-                "content_anchors": ["被修改的正文"],
-            }
+    changed = json.dumps(
+        {
+            "content": "## 被修改的正文\n\n不同内容。",
+            "status": "complete",
+            "acceptance_evidence": {
+                "a1": {
+                    "status": "satisfied",
+                    "content_anchors": ["被修改的正文"],
+                }
+            },
         },
+        ensure_ascii=False,
     )
     completion = SequencedObservedCompletion(first, changed)
 
-    with pytest.raises(AgentResultIncomplete, match="changed content"):
+    with pytest.raises(AgentResultIncomplete, match="must contain status"):
         LLMAgentExecutor(completion).execute(request())
 
     assert len(completion.calls) == 2
@@ -410,12 +417,59 @@ def test_agent_executor_fails_after_one_invalid_anchor_repair():
             }
         },
     )
-    completion = SequencedObservedCompletion(invalid, invalid)
+    invalid_marker = completion_marker(
+        evidence={
+            "a1": {
+                "status": "satisfied",
+                "content_anchors": ["正文仍没有这个锚点"],
+            }
+        }
+    )
+    completion = SequencedObservedCompletion(invalid, invalid_marker)
 
     with pytest.raises(AgentResultIncomplete, match="anchor is not present"):
         LLMAgentExecutor(completion).execute(request())
 
     assert len(completion.calls) == 2
+
+
+def test_agent_executor_repairs_plain_markdown_missing_the_completion_marker():
+    rendered = "  ## 新疆八日方案\n\n逐日安排、预算和风险预案均已列出。\n"
+    repaired_marker = completion_marker(
+        evidence={
+            "a1": {
+                "status": "satisfied",
+                "content_anchors": ["新疆八日方案"],
+            }
+        },
+        fenced=True,
+    )
+    completion = SequencedObservedCompletion(rendered, repaired_marker)
+
+    result = LLMAgentExecutor(completion).execute(request())
+
+    assert result.result["content"] == rendered
+    assert result.result["format_repair_count"] == 1
+    assert len(completion.calls) == 2
+
+
+def test_agent_executor_does_not_reinterpret_malformed_json_as_plain_text():
+    completion = SequencedObservedCompletion(
+        '{"content":"正文","completion":',
+        completion_marker(
+            evidence={
+                "a1": {
+                    "status": "satisfied",
+                    "content_anchors": ["正文"],
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(AgentResultIncomplete, match="completion marker"):
+        LLMAgentExecutor(completion).execute(request())
+
+    assert len(completion.calls) == 1
 
 
 def test_agent_prompt_declares_the_persistable_content_budget():

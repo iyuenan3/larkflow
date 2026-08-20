@@ -51,6 +51,10 @@ class _CompletionAnchorMismatch(AgentResultIncomplete):
     """A structurally valid completion needs one bounded evidence repair."""
 
 
+class _CompletionEnvelopeMissing(AgentResultIncomplete):
+    """A normal provider response did not contain the required envelope."""
+
+
 class WebSearchClient(Protocol):
     """Minimal hosted-search port required by the explicit Tool adapter."""
 
@@ -139,6 +143,8 @@ class LLMAgentExecutor:
         format_repair_provider_model = None
         if result_format == "plain_text" and observed:
             acceptance = request.work.get("acceptance", ())
+            repair_error = None
+            rendered = None
             try:
                 content = self._completed_plain_text(
                     content,
@@ -146,6 +152,14 @@ class LLMAgentExecutor:
                 )
             except _CompletionAnchorMismatch as exc:
                 rendered = self._completion_rendered(content)
+                repair_error = exc
+            except _CompletionEnvelopeMissing as exc:
+                rendered = self._safe_plain_completion_candidate(content)
+                if rendered is None:
+                    raise
+                repair_error = exc
+            if repair_error is not None:
+                assert rendered is not None
                 content_budget = self._content_char_budget(
                     uses_web_research=uses_web_research,
                 )
@@ -156,7 +170,7 @@ class LLMAgentExecutor:
                 repair_prompt = self._anchor_repair_prompt(
                     rendered=rendered,
                     acceptance=acceptance,
-                    error=str(exc),
+                    error=str(repair_error),
                 )
                 if len(repair_prompt) > self.max_prompt_chars:
                     raise AgentResultIncomplete(
@@ -167,14 +181,15 @@ class LLMAgentExecutor:
                     model_role=model_role.strip(),
                 )
                 self._validate_finish_reason(repair_finish)
-                if self._completion_rendered(repaired) != rendered:
-                    raise AgentResultIncomplete(
-                        "Agent completion anchor repair changed content"
-                    )
-                content = self._completed_plain_text(
-                    repaired,
+                repaired_marker = self._completion_repair_marker(repaired)
+                self._completed_plain_text(
+                    json.dumps(
+                        {"content": rendered, "completion": repaired_marker},
+                        ensure_ascii=False,
+                    ),
                     acceptance=acceptance,
                 )
+                content = rendered
                 usage = self._merge_usage(usage, repair_usage)
                 finish_reason = repair_finish
                 format_repair_count = 1
@@ -281,9 +296,15 @@ class LLMAgentExecutor:
         """Validate a completion envelope and return its Markdown deliverable."""
 
         try:
-            envelope = cls._strict_json_object(content, label="completion envelope")
+            envelope = cls._strict_json_object(
+                content,
+                label="completion envelope",
+                allow_code_fence=True,
+            )
         except ValueError as exc:
-            raise AgentResultIncomplete("Agent completion marker is missing") from exc
+            raise _CompletionEnvelopeMissing(
+                "Agent completion marker is missing"
+            ) from exc
         if set(envelope) != {"content", "completion"}:
             raise AgentResultIncomplete(
                 "Agent completion envelope must contain content and completion"
@@ -351,13 +372,51 @@ class LLMAgentExecutor:
     @classmethod
     def _completion_rendered(cls, content: str) -> str:
         try:
-            envelope = cls._strict_json_object(content, label="completion envelope")
+            envelope = cls._strict_json_object(
+                content,
+                label="completion envelope",
+                allow_code_fence=True,
+            )
         except ValueError as exc:
             raise AgentResultIncomplete("Agent completion marker is missing") from exc
         rendered = envelope.get("content")
         if not isinstance(rendered, str) or not rendered.strip():
             raise AgentResultIncomplete("Agent completion envelope has empty content")
         return rendered
+
+    @staticmethod
+    def _safe_plain_completion_candidate(content: str) -> str | None:
+        """Accept obvious Markdown/text, never reinterpret broken JSON as a deliverable."""
+
+        inspected = content.strip()
+        if not inspected:
+            return None
+        if inspected[0] in "{[" or inspected.startswith("```"):
+            return None
+        if any(
+            ord(character) < 32 and character not in "\n\r\t"
+            for character in content
+        ):
+            return None
+        return content
+
+    @classmethod
+    def _completion_repair_marker(cls, content: str) -> Mapping[str, object]:
+        try:
+            marker = cls._strict_json_object(
+                content,
+                label="completion anchor repair",
+                allow_code_fence=True,
+            )
+        except ValueError as exc:
+            raise AgentResultIncomplete(
+                "Agent completion anchor repair marker is missing"
+            ) from exc
+        if set(marker) != {"status", "acceptance_evidence"}:
+            raise AgentResultIncomplete(
+                "Agent completion anchor repair must contain status and acceptance_evidence"
+            )
+        return marker
 
     @staticmethod
     def _normalized_excerpt(value: str) -> str:
@@ -419,11 +478,11 @@ class LLMAgentExecutor:
             for index, item in enumerate(items, start=1)
         }
         return (
-            "你只修复完成证据格式，不得修改 content 的任何字符。"
-            "不得增加、删除或改写任何事实，也不得补充原正文没有的判断。"
-            "只返回一个严格包含 content 和 completion 的 JSON 对象，不要代码块或额外文字。"
-            "content 必须原样复制下方正文。completion.status 必须是 complete；"
-            "acceptance_evidence 必须恰好覆盖全部验收 ID。每项 status 必须是 satisfied，"
+            "你只修复完成证据格式。不得重写或返回正文，不得增加、删除或改写任何事实，"
+            "也不得补充原正文没有的判断。只返回 completion marker 这个 JSON 对象，"
+            "不要代码块或额外文字。对象必须严格包含 status 和 acceptance_evidence；"
+            "status 必须是 complete；acceptance_evidence 必须恰好覆盖全部验收 ID。"
+            "每项 status 必须是 satisfied，"
             "content_anchors 必须从 content 的可见正文中逐字复制 1 到 12 个短标题或关键字段名，"
             "不得改写同义词，不要包含 Markdown 格式符号，每个 anchor 不超过 80 字。"
             f"原始校验错误：{error}\n"
@@ -596,7 +655,12 @@ class LLMAgentExecutor:
         )
 
     @staticmethod
-    def _strict_json_object(content: str, *, label: str) -> Mapping[str, object]:
+    def _strict_json_object(
+        content: str,
+        *,
+        label: str,
+        allow_code_fence: bool = False,
+    ) -> Mapping[str, object]:
         def strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
             value: dict[str, object] = {}
             for key, item in pairs:
@@ -607,9 +671,19 @@ class LLMAgentExecutor:
                 value[key] = item
             return value
 
+        candidate = content.strip()
+        if allow_code_fence and candidate.startswith("```"):
+            lines = candidate.splitlines()
+            opener = lines[0].strip().lower() if lines else ""
+            if (
+                len(lines) >= 3
+                and opener in {"```", "```json"}
+                and lines[-1].strip() == "```"
+            ):
+                candidate = "\n".join(lines[1:-1]).strip()
         try:
             value = json.loads(
-                content,
+                candidate,
                 object_pairs_hook=strict_object,
                 parse_constant=lambda item: (_ for _ in ()).throw(
                     ValueError(f"invalid JSON constant: {item}")
