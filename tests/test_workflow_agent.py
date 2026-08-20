@@ -14,6 +14,7 @@ from larkflow.agent_runtime.executor import AgentRuntimeExecutor
 from larkflow.llm import CompletionResult
 from larkflow.planning.bounded import BoundedPlannerRuntime
 from larkflow.planning.service import PlanningService
+from larkflow.planning.travel import TravelTemplatePlannerRuntime
 from larkflow.workflow import (
     AgentResultIncomplete,
     ExecutionRequest,
@@ -560,7 +561,8 @@ def test_draft_generator_budgets_both_model_attempts():
     )
     generator = _draft_generator(safe, environ=environment)
     assert isinstance(generator, PlanningService)
-    assert isinstance(generator.runtime, BoundedPlannerRuntime)
+    assert isinstance(generator.runtime, TravelTemplatePlannerRuntime)
+    assert isinstance(generator.runtime.fallback, BoundedPlannerRuntime)
 
     unsafe = TargetDraftGenerationSettings(
         dsn="postgresql:///test",
@@ -597,7 +599,8 @@ def test_draft_generator_disables_unverified_search_before_planning():
     )
 
     assert service.validator.allow_web_search is False
-    assert service.runtime.generator.allow_web_search is False
+    assert service.runtime.validator.allow_web_search is False
+    assert service.runtime.fallback.generator.allow_web_search is False
     assert (
         "draft_web_search_capability",
         {
@@ -634,7 +637,8 @@ def test_draft_generator_accepts_configured_doubao_search_capability():
     )
 
     assert service.validator.allow_web_search is True
-    assert service.runtime.generator.allow_web_search is True
+    assert service.runtime.validator.allow_web_search is True
+    assert service.runtime.fallback.generator.allow_web_search is True
     assert (
         "draft_web_search_capability",
         {
@@ -644,6 +648,53 @@ def test_draft_generator_accepts_configured_doubao_search_capability():
             "reason": "configured",
         },
     ) in observed
+
+
+def test_target_draft_generator_uses_travel_template_without_model_call(
+    monkeypatch,
+):
+    environment = {
+        "LLM_BASE_URL": "https://llm.example.invalid/v1",
+        "LLM_API_KEY": "test-key",
+        "LLM_MODEL": "test-model",
+        "LLM_TIMEOUT": "20",
+        "LARKFLOW_DOUBAO_SEARCH_API_KEY": "test-search-key",
+    }
+    settings = TargetDraftGenerationSettings(
+        dsn="postgresql:///test",
+        tenant_id="tenant_agent",
+        worker_id="draft_worker",
+        claim_ttl=timedelta(seconds=51),
+        claim_safety=timedelta(seconds=10),
+        enable_web_search=True,
+    )
+    service = _draft_generator(settings, environ=environment)
+    monkeypatch.setattr(
+        service.runtime.fallback.generator.client,
+        "complete",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("model route must not run")
+        ),
+    )
+
+    definition = service.generate(
+        tenant_id="tenant_agent",
+        actor_person_id="person_requester",
+        request_id="request_travel_template",
+        brief=(
+            "为2026年9月10日至17日从上海出发、2名员工、总预算20000元的"
+            "新疆8日旅行生成规划，允许联网核验公开信息"
+        ),
+        context="景点和交通分别搜索并保留来源。",
+    )
+
+    assert [node["executor"] for node in definition["nodes"]] == [
+        "human",
+        "tool",
+        "tool",
+        "agent",
+        "human",
+    ]
 
 
 def test_draft_generator_fails_closed_for_partial_doubao_configuration():
@@ -667,7 +718,8 @@ def test_draft_generator_fails_closed_for_partial_doubao_configuration():
     service = _draft_generator(settings, environ=environment)
 
     assert service.validator.allow_web_search is False
-    assert service.runtime.generator.allow_web_search is False
+    assert service.runtime.validator.allow_web_search is False
+    assert service.runtime.fallback.generator.allow_web_search is False
 
 
 def test_packaged_human_agent_human_template_matches_the_target_contract():

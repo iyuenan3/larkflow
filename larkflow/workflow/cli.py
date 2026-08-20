@@ -25,6 +25,7 @@ from larkflow.agent_runtime.executor import AgentRuntimeExecutor
 from larkflow.planning import DraftGenerator
 from larkflow.planning.bounded import BoundedPlannerRuntime
 from larkflow.planning.service import PlanningService
+from larkflow.planning.travel import TravelTemplatePlannerRuntime
 from larkflow.search import DoubaoSearchProvider, SearchCapability
 
 from .agent_context import AgentContextService
@@ -1267,13 +1268,17 @@ def _draft_generator(
                 ),
             },
         )
+    bounded_runtime = BoundedPlannerRuntime(
+        DraftDefinitionGenerator(
+            client,
+            max_result_chars=settings.max_result_chars,
+            allow_web_search=web_search_available,
+        )
+    )
     return PlanningService(
-        BoundedPlannerRuntime(
-            DraftDefinitionGenerator(
-                client,
-                max_result_chars=settings.max_result_chars,
-                allow_web_search=web_search_available,
-            )
+        TravelTemplatePlannerRuntime(
+            bounded_runtime,
+            allow_web_search=web_search_available,
         ),
         allow_web_search=web_search_available,
     )

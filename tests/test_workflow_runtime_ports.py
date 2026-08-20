@@ -13,9 +13,18 @@ import pytest
 from larkflow.agent_runtime import AgentRunRequest, AgentRunResult
 from larkflow.agent_runtime.completion import CompletionAgentRuntime
 from larkflow.agent_runtime.executor import AgentRuntimeExecutor
+from larkflow.knowledge import EnterpriseKnowledgeRef
 from larkflow.planning import PlannerRequest, PlannerResult
 from larkflow.planning.bounded import BoundedPlannerRuntime
+from larkflow.planning.context import (
+    ContextBundle,
+    ContextChunk,
+    SourceRef,
+    sha256_hex,
+)
+from larkflow.planning.contracts import to_mutable
 from larkflow.planning.service import PlanningService
+from larkflow.planning.travel import TravelTemplatePlannerRuntime
 from larkflow.workflow import (
     DraftCapabilityUnavailable,
     DraftDefinitionGenerator,
@@ -230,6 +239,147 @@ class StaticPlannerRuntime:
             candidate=self.candidate,
             runtime_metadata={"runtime": "untrusted-test-adapter"},
         )
+
+
+class FailingPlannerRuntime:
+    def __init__(self) -> None:
+        self.requests: list[PlannerRequest] = []
+
+    def plan(self, request, *, on_repair=None) -> PlannerResult:
+        del on_repair
+        self.requests.append(request)
+        raise AssertionError("fallback planner must not run")
+
+
+def test_travel_template_planner_builds_controlled_search_dag_without_llm() -> None:
+    fallback = FailingPlannerRuntime()
+    service = PlanningService(
+        TravelTemplatePlannerRuntime(
+            fallback,
+            allow_web_search=True,
+        ),
+        allow_web_search=True,
+    )
+
+    result = service.plan(
+        PlannerRequest(
+            tenant_id="tenant_planning",
+            actor_person_id="person_requester",
+            request_id="request_planning",
+            brief=(
+                "使用企业资料，为2026年9月10日至17日从上海出发、2名员工、"
+                "总预算20000元的新疆8日旅行生成可执行规划，允许联网核验公开信息"
+            ),
+            context="景点和交通必须分别搜索并保留来源。",
+        )
+    )
+
+    nodes = list(result.candidate["nodes"])
+    assert fallback.requests == []
+    assert [node["executor"] for node in nodes] == [
+        "human",
+        "tool",
+        "tool",
+        "agent",
+        "human",
+    ]
+    assert [node["work"]["tool"]["kind"] for node in nodes[1:3]] == [
+        "web.search",
+        "web.search",
+    ]
+    assert nodes[3]["deps"] == (
+        "confirm_travel_requirements",
+        "research_attractions",
+        "research_transport",
+    )
+    assert result.runtime_metadata == {
+        "runtime": "travel_template",
+        "adapter": "deterministic_travel_v1",
+        "adapter_version": "1",
+        "model_calls": 0,
+    }
+
+
+def test_travel_template_binds_enterprise_manifest_only_to_agent_input() -> None:
+    fallback = FailingPlannerRuntime()
+    raw = "合成企业旅行政策，不包含凭据。"
+    digest = sha256_hex(raw.encode("utf-8"))
+    knowledge = EnterpriseKnowledgeRef(
+        tenant_id="tenant_planning",
+        source_id="enterprise:travel_policy",
+        version_id="v1",
+        display_label="旅行政策",
+        media_type="text/markdown",
+        size_bytes=len(raw.encode("utf-8")),
+        content_sha256=digest,
+        published_at=NOW,
+        egress_decision="allow",
+        authorization_proof_id="kp_" + "1" * 32,
+        authorization_fingerprint="2" * 64,
+    )
+    bundle = ContextBundle(
+        tenant_id="tenant_planning",
+        scope_kind="console_draft_request",
+        scope_id="request_planning",
+        purpose="planning",
+        actor_person_id="person_requester",
+        sources=(
+            SourceRef(
+                source_id=knowledge.source_id,
+                kind="enterprise_knowledge",
+                label=knowledge.display_label,
+                content_sha256=digest,
+            ),
+        ),
+        chunks=(ContextChunk(knowledge.source_id, 0, raw),),
+        enterprise_knowledge=(knowledge,),
+        created_at=NOW,
+        expires_at=NOW + timedelta(minutes=10),
+    )
+    service = PlanningService(
+        TravelTemplatePlannerRuntime(fallback, allow_web_search=True),
+        allow_web_search=True,
+    )
+
+    result = service.plan(
+        PlannerRequest(
+            tenant_id="tenant_planning",
+            actor_person_id="person_requester",
+            request_id="request_planning",
+            brief="为新疆8日旅行制定可执行规划并联网核验公开信息",
+            context_bundle=bundle,
+        )
+    )
+
+    candidate = to_mutable(result.candidate)
+    agent = next(
+        node for node in candidate["nodes"] if node["executor"] == "agent"
+    )
+    assert "instance_inputs.enterprise_knowledge" in agent["work"]["inputs"]
+    assert candidate["inputs"]["enterprise_knowledge"] == [
+        knowledge.snapshot_value()
+    ]
+    assert raw not in json.dumps(candidate, ensure_ascii=False)
+
+
+def test_travel_template_planner_delegates_non_travel_requests() -> None:
+    runtime = StaticPlannerRuntime(valid_definition())
+    service = PlanningService(
+        TravelTemplatePlannerRuntime(runtime, allow_web_search=True),
+        allow_web_search=True,
+    )
+
+    result = service.plan(
+        PlannerRequest(
+            tenant_id="tenant_planning",
+            actor_person_id="person_requester",
+            request_id="request_planning",
+            brief="Summarize the supplied project notes",
+        )
+    )
+
+    assert len(runtime.requests) == 1
+    assert result.runtime_metadata == {"runtime": "untrusted-test-adapter"}
 
 
 @pytest.mark.parametrize(
