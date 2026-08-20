@@ -1,5 +1,12 @@
 # CHANGELOG · larkflow
 
+## v0.92.5-draft · 2026-08-20 · 飞书 Console 重新授权恢复开发部署验证
+
+- Deployment：内容提交 `bc416252747963ba955568c8f5ff09aa33b13e65` 已安装到 Target 开发环境。wheel SHA-256 为 `c583d1e729944086dffbd0c3922b8c5bfbfdb55768b120f86bc9890e1ba56182`，保存在 `/srv/larkflow/target/releases/console_login_recovery_20260820_165646_7d94879/`。本轮只改变 Console 静态资源，因此只重启 `larkflow-target-console.service`，不替换 legacy venv，不运行 migration，也不修改 Caddy。
+- Verified：Target venv 的 `pip check` 通过；本地源码、wheel 内资源、安装态资源、loopback 与公网 `app.js` SHA-256 均为 `4511fa84e050708874484f46b7990d8f78cfff4458faea9ee8947c0bdad2b7ff`。Console 为 `active / running / NRestarts=0`，启动时间为北京时间 `2026-08-20 16:59:17`；页面为 200，未登录业务 API 为 401，部署窗口 warning 为 0。OAuth 登录入口返回 302 到 `accounts.feishu.cn`，state cookie 继续包含 Secure、HttpOnly 与 SameSite=Lax。
+- Rollback：上一发布 wheel `/srv/larkflow/target/releases/provenance_recovery_20260819_141913_b6c52e3/larkflow-0.0.2-py3-none-any.whl` 仍以 `0640 root:lf_target_dev` 保留，SHA-256 为 `75eac62b39295e255560c9c5be46d4c64203fb858eeca15d73f4d347b5a8289c`。
+- Boundary：本轮没有修改数据库、飞书 Task、Doc、消息、企业资料和既有业务实例。服务端与静态资源部署证据已经完成，但真实浏览器点击“重新授权飞书”、OAuth 拒绝和 logout 网络失败三条交互仍需人工验收，不能描述为生产就绪。
+
 ## v0.92.4-draft · 2026-08-20 · 飞书 Console 过期会话恢复候选
 
 - Fixed：内容提交 `bc416252747963ba955568c8f5ff09aa33b13e65` 修复飞书模式请求收到 401 后，`request()` 已显示登录恢复入口却又被 `bootstrap().catch()` 隐藏的死路。认证失败与 OAuth `access_denied / login_failed` 现在保留“重新授权飞书”按钮；点击后先同源 POST 注销当前 cookie 会话，无论清理成功与否都继续进入服务器 `login_url`。首次无会话仍自动开始 OAuth，static token 模式不变。
