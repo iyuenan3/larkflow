@@ -41,6 +41,10 @@ class TravelTemplatePlannerRuntime:
             and policy.web_search_available
         ):
             return self.fallback.plan(request, on_repair=on_repair)
+        self.validator.validate_travel_template_request(
+            brief=request.brief,
+            context=request.context,
+        )
         return PlannerResult(
             candidate=_travel_definition(),
             planning_evidence={

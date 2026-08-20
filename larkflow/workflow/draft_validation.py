@@ -417,6 +417,31 @@ class GeneratedDraftValidator:
             )
         return policy
 
+    def validate_travel_template_request(
+        self,
+        *,
+        brief: str,
+        context: str,
+    ) -> None:
+        """Require explicit request fields before freezing the travel template."""
+
+        request_text = f"{brief} {context}".casefold()
+        checks = (
+            ("出发地", self._has_positive_origin(request_text)),
+            ("出行日期", self._has_valid_date(request_text)),
+            (
+                "出行人数",
+                self._has_positive_travelers(request_text)
+                or self._has_positive_request_travelers(request_text),
+            ),
+            ("预算", self._has_positive_budget(request_text)),
+        )
+        missing = [label for label, accepted in checks if not accepted]
+        if missing:
+            raise DraftGenerationRejected(
+                "旅游规划必须先收集必填需求：" + "、".join(missing)
+            )
+
     def _validate_domain_shape(
         self,
         definition: Mapping[str, Any],

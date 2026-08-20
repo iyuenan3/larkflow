@@ -267,8 +267,9 @@ def test_travel_template_planner_builds_controlled_search_dag_without_llm() -> N
             actor_person_id="person_requester",
             request_id="request_planning",
             brief=(
-                "使用企业资料，为2026年9月10日至17日从上海出发、2名员工、"
-                "总预算20000元的新疆8日旅行生成可执行规划，允许联网核验公开信息"
+                "使用企业资料规划新疆8日旅行。出发地：上海；"
+                "旅行开始日期：2026年9月10日；旅行结束日期：2026年9月17日；"
+                "出行人数：2名员工；旅行总预算：20000元；允许联网核验公开信息"
             ),
             context="景点和交通必须分别搜索并保留来源。",
         )
@@ -346,7 +347,11 @@ def test_travel_template_binds_enterprise_manifest_only_to_agent_input() -> None
             tenant_id="tenant_planning",
             actor_person_id="person_requester",
             request_id="request_planning",
-            brief="为新疆8日旅行制定可执行规划并联网核验公开信息",
+            brief=(
+                "为新疆8日旅行制定可执行规划。出发地：上海；"
+                "旅行开始日期：2026年9月10日；旅行结束日期：2026年9月17日；"
+                "出行人数：2名员工；旅行总预算：20000元；联网核验公开信息"
+            ),
             context_bundle=bundle,
         )
     )
@@ -380,6 +385,29 @@ def test_travel_template_planner_delegates_non_travel_requests() -> None:
 
     assert len(runtime.requests) == 1
     assert result.runtime_metadata == {"runtime": "untrusted-test-adapter"}
+
+
+def test_travel_template_rejects_missing_budget_before_fallback_or_model() -> None:
+    fallback = FailingPlannerRuntime()
+    service = PlanningService(
+        TravelTemplatePlannerRuntime(fallback, allow_web_search=True),
+        allow_web_search=True,
+    )
+
+    with pytest.raises(DraftGenerationRejected, match="必填需求：预算"):
+        service.plan(
+            PlannerRequest(
+                tenant_id="tenant_planning",
+                actor_person_id="person_requester",
+                request_id="request_planning",
+                brief=(
+                    "规划新疆旅行。出发地：上海；旅行开始日期：2026年9月10日；"
+                    "旅行结束日期：2026年9月17日；两名员工；预算未提供。"
+                ),
+            )
+        )
+
+    assert fallback.requests == []
 
 
 @pytest.mark.parametrize(
