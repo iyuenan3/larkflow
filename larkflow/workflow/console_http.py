@@ -119,6 +119,9 @@ _DRAFT_ATTACHMENT_REVOKE_ROUTE = re.compile(
 _DRAFT_GENERATE_ROUTE = re.compile(
     r"^/console/api/v1/drafts/([0-9a-f]{32})/generate$"
 )
+_DRAFT_CANCEL_ROUTE = re.compile(
+    r"^/console/api/v1/drafts/([0-9a-f]{32})/cancel$"
+)
 _DRAFT_KNOWLEDGE_SELECTION_ROUTE = re.compile(
     r"^/console/api/v1/drafts/([0-9a-f]{32})/knowledge-selection$"
 )
@@ -439,6 +442,10 @@ class ConsoleHttpApplication:
         asset = {
             "/console/": ("index.html", "text/html; charset=utf-8"),
             "/console/app.js": ("app.js", "text/javascript; charset=utf-8"),
+            "/console/draft-state.js": (
+                "draft_state.js",
+                "text/javascript; charset=utf-8",
+            ),
             "/console/canvas.js": ("canvas.js", "text/javascript; charset=utf-8"),
             "/console/canvas.css": ("canvas.css", "text/css; charset=utf-8"),
             "/console/styles.css": ("styles.css", "text/css; charset=utf-8"),
@@ -900,6 +907,7 @@ class ConsoleHttpApplication:
             upload = _DRAFT_ATTACHMENTS_ROUTE.fullmatch(path)
             revoke = _DRAFT_ATTACHMENT_REVOKE_ROUTE.fullmatch(path)
             generate = _DRAFT_GENERATE_ROUTE.fullmatch(path)
+            cancel = _DRAFT_CANCEL_ROUTE.fullmatch(path)
             knowledge_selection = _DRAFT_KNOWLEDGE_SELECTION_ROUTE.fullmatch(path)
             if upload is not None:
                 if self.attachment_service is None:
@@ -944,6 +952,13 @@ class ConsoleHttpApplication:
                     ),
                 )
             self._validate_workflow_write_request(query, headers, body)
+            if cancel is not None:
+                if self.draft_service is None:
+                    raise ConsoleDraftNotFoundError("draft request")
+                return self._json(
+                    200,
+                    self.draft_service.cancel(principal, cancel.group(1)),
+                )
             if revoke is not None:
                 if self.attachment_service is None:
                     raise ConsoleAttachmentNotFoundError("attachments")
@@ -997,6 +1012,7 @@ class ConsoleHttpApplication:
             )
         except (
             ConsoleAttachmentConflictError,
+            ConsoleDraftConflictError,
             ConsoleKnowledgeSelectionConflictError,
         ) as exc:
             return self._error(409, exc.code, str(exc))

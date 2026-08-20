@@ -409,11 +409,11 @@ class TargetDraftGenerationSettings:
     dsn: str
     tenant_id: str
     worker_id: str
-    claim_ttl: timedelta = timedelta(minutes=10)
+    claim_ttl: timedelta = timedelta(minutes=7)
     claim_limit: int = 1
     retry_base: timedelta = timedelta(seconds=5)
-    retry_max: timedelta = timedelta(minutes=5)
-    max_attempts: int = 5
+    retry_max: timedelta = timedelta(seconds=10)
+    max_attempts: int = 2
     claim_safety: timedelta = timedelta(seconds=30)
     max_result_chars: int = 30_000
     enable_web_search: bool = False
@@ -437,8 +437,8 @@ class TargetDraftGenerationSettings:
             raise ValueError("draft claim_limit must be 1")
         if self.retry_base <= timedelta(0) or self.retry_max < self.retry_base:
             raise ValueError("draft retry delays are invalid")
-        if self.max_attempts < 1 or self.max_attempts > 100:
-            raise ValueError("draft max_attempts must be between 1 and 100")
+        if self.max_attempts != 2:
+            raise ValueError("draft max_attempts must be 2")
         if self.claim_safety <= timedelta(0):
             raise ValueError("draft claim_safety must be positive")
         if self.max_result_chars < 1:
@@ -483,7 +483,7 @@ class TargetDraftGenerationSettings:
             worker_id=identity,
             claim_ttl=timedelta(
                 seconds=_positive_float(
-                    values, "LARKFLOW_TARGET_DRAFT_CLAIM_TTL_SECONDS", 600.0
+                    values, "LARKFLOW_TARGET_DRAFT_CLAIM_TTL_SECONDS", 420.0
                 )
             ),
             claim_limit=_positive_int(
@@ -496,11 +496,11 @@ class TargetDraftGenerationSettings:
             ),
             retry_max=timedelta(
                 seconds=_positive_float(
-                    values, "LARKFLOW_TARGET_DRAFT_RETRY_MAX_SECONDS", 300.0
+                    values, "LARKFLOW_TARGET_DRAFT_RETRY_MAX_SECONDS", 10.0
                 )
             ),
             max_attempts=_positive_int(
-                values, "LARKFLOW_TARGET_DRAFT_MAX_ATTEMPTS", 5
+                values, "LARKFLOW_TARGET_DRAFT_MAX_ATTEMPTS", 2
             ),
             claim_safety=timedelta(
                 seconds=_positive_float(

@@ -143,7 +143,15 @@ _TRAVELER_FIELD_PATTERN = re.compile(
     + _FIELD_VALUE,
     re.IGNORECASE,
 )
-_TRAVELER_VALUE_PATTERN = re.compile(r"(?<!\d)(\d+)\s*(?:人|位)?")
+_TRAVELER_VALUE_PATTERN = re.compile(
+    r"(?P<count>\d+|[零一二两三四五六七八九十]+)\s*"
+    r"(?:人|位|名)?\s*(?:员工|同事|旅客|游客)?"
+)
+_REQUEST_TRAVELER_PATTERN = re.compile(
+    r"(?<![\d零一二两三四五六七八九十])"
+    r"(?P<count>\d+|[零一二两三四五六七八九十]+)\s*"
+    r"(?:名|位)\s*(?:员工|同事|旅客|游客)"
+)
 _BUDGET_FIELD_PATTERN = re.compile(
     _FIELD_PREFIX
     + r"(?P<label>"
@@ -445,10 +453,17 @@ class GeneratedDraftValidator:
             for output in ((root.get("work") or {}).get("outputs") or [])
             if isinstance(output, Mapping)
         ).casefold()
+        request_text = " ".join(
+            str(inputs.get(key) or "") for key in ("brief", "context")
+        ).casefold()
+        request_evidence = {
+            "出行人数": self._has_positive_request_travelers(request_text),
+        }
         missing_requirements = [
             label
             for label, terms in _TRAVEL_REQUIREMENT_TERMS.items()
             if not any(term in root_outputs for term in terms)
+            and not request_evidence.get(label, False)
         ]
         if missing_requirements:
             raise DraftGenerationRejected(
@@ -688,9 +703,64 @@ class GeneratedDraftValidator:
             if cls._is_negative_source_value(value):
                 return False
             match = _TRAVELER_VALUE_PATTERN.fullmatch(value.strip())
-            if match is not None and int(match.group(1)) > 0:
-                values.add(int(match.group(1)))
+            count = cls._positive_traveler_count(match)
+            if count is not None:
+                values.add(count)
         return len(values) == 1
+
+    @classmethod
+    def _has_positive_request_travelers(cls, request_text: str) -> bool:
+        if any(
+            term in request_text
+            for term in (
+                "人数未知",
+                "人数待定",
+                "人数未定",
+                "人数未确认",
+                "人数待确认",
+            )
+        ):
+            return False
+        values = {
+            count
+            for match in _REQUEST_TRAVELER_PATTERN.finditer(request_text)
+            for count in [cls._positive_traveler_count(match)]
+            if count is not None
+        }
+        return len(values) == 1
+
+    @staticmethod
+    def _positive_traveler_count(match: re.Match[str] | None) -> int | None:
+        if match is None:
+            return None
+        raw = match.group("count")
+        if raw.isdigit():
+            value = int(raw)
+        else:
+            digits = {
+                "零": 0,
+                "一": 1,
+                "二": 2,
+                "两": 2,
+                "三": 3,
+                "四": 4,
+                "五": 5,
+                "六": 6,
+                "七": 7,
+                "八": 8,
+                "九": 9,
+            }
+            if raw == "十":
+                value = 10
+            elif "十" in raw:
+                tens, ones = raw.split("十", 1)
+                value = (digits.get(tens, 1) * 10) + digits.get(ones, 0)
+            elif len(raw) == 1 and raw in digits:
+                value = digits[raw]
+            else:
+                return None
+        return value if value > 0 else None
+
     @classmethod
     def _has_positive_budget(cls, source_text: str) -> bool:
         values: set[float] = set()

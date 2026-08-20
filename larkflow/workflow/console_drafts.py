@@ -17,6 +17,7 @@ from larkflow.planning.context import AttachmentRef, ContextBundle
 from .console import ConsolePrincipal
 from .directory import DirectoryValidationError
 from .draft_generation import (
+    DraftCapabilityUnavailable,
     DraftGenerationRejected,
     MAX_WIZARD_TEXT_CHARS,
 )
@@ -31,7 +32,17 @@ from .template_service import (
 
 ConnectionFactory = Callable[[], Any]
 _REQUEST_ID = re.compile(r"^[0-9a-f]{32}$")
-_TERMINAL_STATUSES = {"ready", "rejected", "exhausted"}
+CONSOLE_DRAFT_MAX_ATTEMPTS = 2
+_TERMINAL_STATUSES = {"ready", "rejected", "exhausted", "canceled"}
+_CANCELABLE_STATUSES = {"pending", "generating", "repairing", "failed"}
+_SAFE_ERROR_FIELDS = {
+    "出发地",
+    "出行日期",
+    "出行人数",
+    "预算",
+    "景点资料",
+    "交通资料",
+}
 
 
 class ConsoleDraftNotFoundError(KeyError):
@@ -67,6 +78,10 @@ class ConsoleDraftRequest:
     instance_id: str | None = None
     completed_at: datetime | None = None
     last_error: str | None = None
+    public_error_code: str | None = None
+    public_error_fields: tuple[str, ...] = ()
+    canceled_at: datetime | None = None
+    canceled_by_person_id: str | None = None
     generation_deferred: bool = False
     attachment_manifest: tuple[AttachmentRef, ...] = ()
     enterprise_source_selection: tuple[str, ...] = ()
@@ -153,6 +168,8 @@ class ConsoleDraftRepository(Protocol):
         *,
         claim_token: str,
         error: str,
+        public_error_code: str,
+        public_error_fields: tuple[str, ...],
         now: datetime,
     ) -> None:
         ...
@@ -164,9 +181,29 @@ class ConsoleDraftRepository(Protocol):
         *,
         claim_token: str,
         error: str,
+        public_error_code: str,
         now: datetime,
         retry_at: datetime,
         exhausted: bool,
+    ) -> None:
+        ...
+
+    def cancel(
+        self,
+        tenant_id: str,
+        request_id: str,
+        *,
+        requester_person_id: str,
+        now: datetime,
+    ) -> ConsoleDraftRequest:
+        ...
+
+    def assert_claim_active(
+        self,
+        tenant_id: str,
+        request_id: str,
+        *,
+        claim_token: str,
     ) -> None:
         ...
 
@@ -387,6 +424,8 @@ class InMemoryConsoleDraftRepository:
         *,
         claim_token: str,
         error: str,
+        public_error_code: str,
+        public_error_fields: tuple[str, ...],
         now: datetime,
     ) -> None:
         self._settle(
@@ -396,6 +435,8 @@ class InMemoryConsoleDraftRepository:
             status="rejected",
             now=now,
             last_error=error,
+            public_error_code=public_error_code,
+            public_error_fields=public_error_fields,
         )
 
     def mark_failed(
@@ -405,6 +446,7 @@ class InMemoryConsoleDraftRepository:
         *,
         claim_token: str,
         error: str,
+        public_error_code: str,
         now: datetime,
         retry_at: datetime,
         exhausted: bool,
@@ -419,9 +461,61 @@ class InMemoryConsoleDraftRepository:
                 updated_at=now,
                 completed_at=now if exhausted else None,
                 last_error=error,
+                public_error_code=public_error_code,
+                public_error_fields=(),
             )
             self._items[(tenant_id, request_id)] = updated
             self._claims.pop((tenant_id, request_id), None)
+
+    def cancel(
+        self,
+        tenant_id: str,
+        request_id: str,
+        *,
+        requester_person_id: str,
+        now: datetime,
+    ) -> ConsoleDraftRequest:
+        with self._lock:
+            key = (tenant_id, request_id)
+            item = self._items.get(key)
+            if item is None or not secrets.compare_digest(
+                item.requester_person_id,
+                requester_person_id,
+            ):
+                raise ConsoleDraftNotFoundError(request_id)
+            if item.status == "canceled":
+                return item
+            if item.status not in _CANCELABLE_STATUSES:
+                raise ConsoleDraftConflictError(
+                    "draft_not_cancelable",
+                    "当前草稿状态不能取消。",
+                )
+            updated = replace(
+                item,
+                status="canceled",
+                updated_at=now,
+                completed_at=now,
+                last_error=None,
+                public_error_code=None,
+                public_error_fields=(),
+                canceled_at=now,
+                canceled_by_person_id=requester_person_id,
+            )
+            self._items[key] = updated
+            self._claims.pop(key, None)
+            return updated
+
+    def assert_claim_active(
+        self,
+        tenant_id: str,
+        request_id: str,
+        *,
+        claim_token: str,
+    ) -> None:
+        with self._lock:
+            item = self._claimed(tenant_id, request_id, claim_token)
+            if item.status not in {"generating", "repairing", "creating"}:
+                raise InvalidConsoleDraftClaimError(request_id)
 
     def _claimed(
         self,
@@ -445,6 +539,8 @@ class InMemoryConsoleDraftRepository:
         now: datetime,
         instance_id: str | None = None,
         last_error: str | None = None,
+        public_error_code: str | None = None,
+        public_error_fields: tuple[str, ...] = (),
     ) -> None:
         with self._lock:
             item = self._claimed(tenant_id, request_id, claim_token)
@@ -455,6 +551,8 @@ class InMemoryConsoleDraftRepository:
                 updated_at=now,
                 completed_at=now,
                 last_error=last_error,
+                public_error_code=public_error_code,
+                public_error_fields=public_error_fields,
             )
             self._claims.pop((tenant_id, request_id), None)
 
@@ -659,7 +757,9 @@ class PostgresConsoleDraftRepository:
                 row = connection.execute(
                     """
                     UPDATE workflow_console_draft_requests
-                    SET status = 'creating', definition = %s, updated_at = %s
+                    SET status = 'creating', definition = %s, updated_at = %s,
+                        last_error = NULL, public_error_code = NULL,
+                        public_error_fields = '[]'::jsonb
                     WHERE tenant_id = %s AND id = %s
                       AND status IN ('generating', 'repairing')
                       AND definition IS NULL AND claim_token = %s
@@ -691,6 +791,8 @@ class PostgresConsoleDraftRepository:
             UPDATE workflow_console_draft_requests
             SET status = 'ready', instance_id = %s, completed_at = %s,
                 updated_at = %s, last_error = NULL,
+                public_error_code = NULL,
+                public_error_fields = '[]'::jsonb,
                 claimed_by = NULL, claim_token = NULL, claim_expires_at = NULL
             WHERE tenant_id = %s AND id = %s
               AND status = 'creating' AND definition IS NOT NULL
@@ -715,20 +817,32 @@ class PostgresConsoleDraftRepository:
         *,
         claim_token: str,
         error: str,
+        public_error_code: str,
+        public_error_fields: tuple[str, ...],
         now: datetime,
     ) -> None:
         self._settle_claim(
             """
             UPDATE workflow_console_draft_requests
             SET status = 'rejected', completed_at = %s, updated_at = %s,
-                last_error = %s,
+                last_error = %s, public_error_code = %s,
+                public_error_fields = %s,
                 claimed_by = NULL, claim_token = NULL, claim_expires_at = NULL
             WHERE tenant_id = %s AND id = %s
               AND status IN ('generating', 'repairing', 'creating')
               AND claim_token = %s
             RETURNING id
             """,
-            (now, now, error, tenant_id, request_id, claim_token),
+            (
+                now,
+                now,
+                error,
+                public_error_code,
+                Jsonb(list(public_error_fields)),
+                tenant_id,
+                request_id,
+                claim_token,
+            ),
             request_id,
         )
 
@@ -742,6 +856,7 @@ class PostgresConsoleDraftRepository:
         now: datetime,
         retry_at: datetime,
         exhausted: bool,
+        public_error_code: str,
     ) -> None:
         status = "exhausted" if exhausted else "failed"
         self._settle_claim(
@@ -749,7 +864,8 @@ class PostgresConsoleDraftRepository:
             UPDATE workflow_console_draft_requests
             SET status = %s, available_at = %s, updated_at = %s,
                 completed_at = CASE WHEN %s THEN %s ELSE NULL END,
-                last_error = %s,
+                last_error = %s, public_error_code = %s,
+                public_error_fields = '[]'::jsonb,
                 claimed_by = NULL, claim_token = NULL, claim_expires_at = NULL
             WHERE tenant_id = %s AND id = %s
               AND status IN ('generating', 'repairing', 'creating')
@@ -763,12 +879,93 @@ class PostgresConsoleDraftRepository:
                 exhausted,
                 now,
                 error,
+                public_error_code,
                 tenant_id,
                 request_id,
                 claim_token,
             ),
             request_id,
         )
+
+    def cancel(
+        self,
+        tenant_id: str,
+        request_id: str,
+        *,
+        requester_person_id: str,
+        now: datetime,
+    ) -> ConsoleDraftRequest:
+        with self.connection_factory() as connection:
+            with connection.transaction():
+                row = connection.execute(
+                    """
+                    SELECT status FROM workflow_console_draft_requests
+                    WHERE tenant_id = %s AND id = %s
+                      AND requester_person_id = %s
+                    FOR UPDATE
+                    """,
+                    (tenant_id, request_id, requester_person_id),
+                ).fetchone()
+                if row is None:
+                    raise ConsoleDraftNotFoundError(request_id)
+                if row["status"] == "canceled":
+                    current = connection.execute(
+                        """
+                        SELECT * FROM workflow_console_draft_requests
+                        WHERE tenant_id = %s AND id = %s
+                        """,
+                        (tenant_id, request_id),
+                    ).fetchone()
+                    return _request_from_row(current)
+                if row["status"] not in _CANCELABLE_STATUSES:
+                    raise ConsoleDraftConflictError(
+                        "draft_not_cancelable",
+                        "当前草稿状态不能取消。",
+                    )
+                current = connection.execute(
+                    """
+                    UPDATE workflow_console_draft_requests
+                    SET status = 'canceled', completed_at = %s, updated_at = %s,
+                        canceled_at = %s, canceled_by_person_id = %s,
+                        last_error = NULL, public_error_code = NULL,
+                        public_error_fields = '[]'::jsonb,
+                        claimed_by = NULL, claim_token = NULL,
+                        claim_expires_at = NULL
+                    WHERE tenant_id = %s AND id = %s
+                      AND requester_person_id = %s
+                    RETURNING *
+                    """,
+                    (
+                        now,
+                        now,
+                        now,
+                        requester_person_id,
+                        tenant_id,
+                        request_id,
+                        requester_person_id,
+                    ),
+                ).fetchone()
+        return _request_from_row(current)
+
+    def assert_claim_active(
+        self,
+        tenant_id: str,
+        request_id: str,
+        *,
+        claim_token: str,
+    ) -> None:
+        with self.connection_factory() as connection:
+            row = connection.execute(
+                """
+                SELECT id FROM workflow_console_draft_requests
+                WHERE tenant_id = %s AND id = %s
+                  AND status IN ('generating', 'repairing', 'creating')
+                  AND claim_token = %s
+                """,
+                (tenant_id, request_id, claim_token),
+            ).fetchone()
+        if row is None:
+            raise InvalidConsoleDraftClaimError(request_id)
 
     def _settle_claim(
         self,
@@ -792,10 +989,16 @@ class ConsoleDraftService:
         directory: Any = None,
         *,
         clock: Callable[[], datetime] | None = None,
+        max_attempts: int = CONSOLE_DRAFT_MAX_ATTEMPTS,
     ) -> None:
+        if max_attempts != CONSOLE_DRAFT_MAX_ATTEMPTS:
+            raise ValueError(
+                f"Console draft max_attempts must be {CONSOLE_DRAFT_MAX_ATTEMPTS}"
+            )
         self.repository = repository
         self.directory = directory
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.max_attempts = max_attempts
 
     def create(
         self,
@@ -834,7 +1037,13 @@ class ConsoleDraftService:
                 generation_deferred=defer_generation,
             )
         )
-        return {"request": _public_request(request, include_brief=True)}
+        return {
+            "request": _public_request(
+                request,
+                include_brief=True,
+                max_attempts=self.max_attempts,
+            )
+        }
 
     def get(
         self,
@@ -846,7 +1055,13 @@ class ConsoleDraftService:
             _normalized_request_id(request_id),
             requester_person_id=principal.person_id,
         )
-        return {"request": _public_request(request, include_brief=True)}
+        return {
+            "request": _public_request(
+                request,
+                include_brief=True,
+                max_attempts=self.max_attempts,
+            )
+        }
 
     def list(
         self,
@@ -863,10 +1078,34 @@ class ConsoleDraftService:
         )
         return {
             "requests": [
-                _public_request(item, include_brief=True) for item in requests
+                _public_request(
+                    item,
+                    include_brief=True,
+                    max_attempts=self.max_attempts,
+                )
+                for item in requests
             ],
             "total": len(requests),
             "limit": limit,
+        }
+
+    def cancel(
+        self,
+        principal: ConsolePrincipal,
+        request_id: str,
+    ) -> Mapping[str, Any]:
+        request = self.repository.cancel(
+            principal.tenant_id,
+            _normalized_request_id(request_id),
+            requester_person_id=principal.person_id,
+            now=_utc(self.clock()),
+        )
+        return {
+            "request": _public_request(
+                request,
+                include_brief=True,
+                max_attempts=self.max_attempts,
+            )
         }
 
     def _validate_collaborator(
@@ -900,6 +1139,7 @@ class ConsoleDraftWorkerReport:
     processed: int = 0
     rejected: int = 0
     failed: int = 0
+    canceled: int = 0
     errors: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -919,7 +1159,7 @@ class ConsoleDraftWorker:
         claim_ttl: timedelta = timedelta(minutes=10),
         retry_base: timedelta = timedelta(seconds=5),
         retry_max: timedelta = timedelta(minutes=5),
-        max_attempts: int = 5,
+        max_attempts: int = CONSOLE_DRAFT_MAX_ATTEMPTS,
         context_service: Any = None,
     ) -> None:
         _validate_claim(worker_id, claim_limit, claim_ttl)
@@ -927,8 +1167,10 @@ class ConsoleDraftWorker:
             raise ValueError("console draft worker tenant is required")
         if retry_base <= timedelta(0) or retry_max < retry_base:
             raise ValueError("console draft retry delays are invalid")
-        if max_attempts < 1:
-            raise ValueError("console draft max_attempts must be positive")
+        if max_attempts != CONSOLE_DRAFT_MAX_ATTEMPTS:
+            raise ValueError(
+                f"console draft max_attempts must be {CONSOLE_DRAFT_MAX_ATTEMPTS}"
+            )
         self.repository = repository
         self.service = service
         self.generator = generator
@@ -950,39 +1192,66 @@ class ConsoleDraftWorker:
             limit=self.claim_limit,
             claim_ttl=self.claim_ttl,
         )
-        processed = rejected = failed = 0
+        processed = rejected = failed = canceled = 0
         errors = []
         for claim in claims:
             try:
                 self._apply(claim)
             except (DraftGenerationRejected, TemplateValidationError) as exc:
+                code, fields = _actionable_draft_error(exc)
+                try:
+                    self.repository.mark_rejected(
+                        self.tenant_id,
+                        claim.request.id,
+                        claim_token=claim.claim_token,
+                        error=f"{type(exc).__name__}: {exc}",
+                        public_error_code=code,
+                        public_error_fields=fields,
+                        now=_utc(self.clock()),
+                    )
+                except InvalidConsoleDraftClaimError:
+                    if self._was_canceled(claim.request):
+                        canceled += 1
+                        continue
+                    raise
                 rejected += 1
-                self.repository.mark_rejected(
-                    self.tenant_id,
-                    claim.request.id,
-                    claim_token=claim.claim_token,
-                    error=f"{type(exc).__name__}: {exc}",
-                    now=_utc(self.clock()),
-                )
+            except InvalidConsoleDraftClaimError:
+                if self._was_canceled(claim.request):
+                    canceled += 1
+                    continue
+                raise
             except Exception as exc:
-                failed += 1
                 failed_at = _utc(self.clock())
                 error = f"{claim.request.id}: {type(exc).__name__}: {exc}"
                 errors.append(error)
-                self.repository.mark_failed(
-                    self.tenant_id,
-                    claim.request.id,
-                    claim_token=claim.claim_token,
-                    error=error,
-                    now=failed_at,
-                    retry_at=failed_at
-                    + _retry_delay(
-                        claim.request.attempt_count,
-                        self.retry_base,
-                        self.retry_max,
-                    ),
-                    exhausted=claim.request.attempt_count >= self.max_attempts,
-                )
+                exhausted = claim.request.attempt_count >= self.max_attempts
+                try:
+                    self.repository.mark_failed(
+                        self.tenant_id,
+                        claim.request.id,
+                        claim_token=claim.claim_token,
+                        error=error,
+                        now=failed_at,
+                        retry_at=failed_at
+                        + _retry_delay(
+                            claim.request.attempt_count,
+                            self.retry_base,
+                            self.retry_max,
+                        ),
+                        exhausted=exhausted,
+                        public_error_code=(
+                            "generation_failed"
+                            if exhausted
+                            else "generation_temporarily_unavailable"
+                        ),
+                    )
+                except InvalidConsoleDraftClaimError:
+                    if self._was_canceled(claim.request):
+                        errors.pop()
+                        canceled += 1
+                        continue
+                    raise
+                failed += 1
             else:
                 processed += 1
         return ConsoleDraftWorkerReport(
@@ -990,11 +1259,25 @@ class ConsoleDraftWorker:
             processed=processed,
             rejected=rejected,
             failed=failed,
+            canceled=canceled,
             errors=tuple(errors),
         )
 
+    def _was_canceled(self, request: ConsoleDraftRequest) -> bool:
+        current = self.repository.get_for_owner(
+            self.tenant_id,
+            request.id,
+            requester_person_id=request.requester_person_id,
+        )
+        return current.status == "canceled"
+
     def _apply(self, claim: ConsoleDraftClaim) -> None:
         request = claim.request
+        self.repository.assert_claim_active(
+            self.tenant_id,
+            request.id,
+            claim_token=claim.claim_token,
+        )
         context_bundle: ContextBundle | None = None
         if self.context_service is not None:
             context_bundle = self.context_service.build_for_planning(request)
@@ -1003,6 +1286,11 @@ class ConsoleDraftWorker:
         if request.attachment_manifest or request.enterprise_knowledge_manifest:
             if context_bundle is None:
                 raise DraftGenerationRejected("授权上下文未能构建")
+        self.repository.assert_claim_active(
+            self.tenant_id,
+            request.id,
+            claim_token=claim.claim_token,
+        )
         definition = request.definition
         if definition is None:
             generation: dict[str, Any] = {
@@ -1022,6 +1310,11 @@ class ConsoleDraftWorker:
                 generation["context_bundle"] = context_bundle
             definition = self.generator.generate(
                 **generation,
+            )
+            self.repository.assert_claim_active(
+                self.tenant_id,
+                request.id,
+                claim_token=claim.claim_token,
             )
             request = self.repository.save_candidate(
                 self.tenant_id,
@@ -1098,6 +1391,7 @@ def _public_request(
     request: ConsoleDraftRequest,
     *,
     include_brief: bool,
+    max_attempts: int = CONSOLE_DRAFT_MAX_ATTEMPTS,
 ) -> dict[str, Any]:
     status = {
         "collecting": "collecting",
@@ -1109,17 +1403,29 @@ def _public_request(
         "ready": "ready",
         "rejected": "rejected",
         "exhausted": "failed",
+        "canceled": "canceled",
     }[request.status]
+    if request.attempt_count > 1 and request.status in {
+        "generating",
+        "repairing",
+        "creating",
+        "failed",
+    }:
+        status = "retrying"
     message = {
         "collecting": "可上传或撤销附件，确认后再开始生成",
         "queued": "已进入生成队列",
         "generating": "中央 Agent 正在生成候选流程",
         "repairing": "候选未通过校验，正在安全重生成",
         "preparing": "候选已通过校验，正在保存草稿",
-        "retrying": "生成服务暂时不可用，系统将自动重试",
+        "retrying": (
+            f"正在进行第 {request.attempt_count}/{max_attempts} 次生成尝试，"
+            "你也可以立即取消"
+        ),
         "ready": "流程草稿已生成，等待你确认启动",
         "rejected": "当前描述未能生成安全草稿，请调整后重新提交",
         "failed": "生成服务多次失败，请稍后重新提交",
+        "canceled": "本次生成已取消，历史记录仍然保留",
     }[status]
     if status == "rejected" and (request.last_error or "").startswith(
         "DraftCapabilityUnavailable:"
@@ -1128,6 +1434,12 @@ def _public_request(
             "当前没有支持 URL 引用的联网搜索后端。请上传完整资料并明确要求不联网，"
             "或联系管理员配置已验证的搜索后端后重试"
         )
+    elif status == "rejected" and request.public_error_code in {
+        "missing_required_fields",
+        "missing_source_evidence",
+    }:
+        labels = "、".join(request.public_error_fields)
+        message = f"还缺少：{labels}。补充后可重新生成。"
     payload: dict[str, Any] = {
         "id": request.id,
         "status": status,
@@ -1151,7 +1463,17 @@ def _public_request(
         "attachment_count": len(request.attachment_manifest),
         "enterprise_knowledge_count": len(request.enterprise_knowledge_manifest),
         "enterprise_selection_version": request.enterprise_selection_version,
+        "attempt": {
+            "current": request.attempt_count,
+            "max": max_attempts,
+        },
+        "can_cancel": request.status in _CANCELABLE_STATUSES,
     }
+    if request.public_error_code is not None:
+        payload["actionable_error"] = {
+            "code": request.public_error_code,
+            "fields": list(request.public_error_fields),
+        }
     if include_brief:
         payload["brief"] = request.brief
     return payload
@@ -1179,6 +1501,14 @@ def _request_from_row(row: Mapping[str, Any] | None) -> ConsoleDraftRequest:
         instance_id=row.get("instance_id"),
         completed_at=row.get("completed_at"),
         last_error=row.get("last_error"),
+        public_error_code=row.get("public_error_code"),
+        public_error_fields=tuple(
+            field
+            for field in (row.get("public_error_fields") or [])
+            if isinstance(field, str) and field in _SAFE_ERROR_FIELDS
+        ),
+        canceled_at=row.get("canceled_at"),
+        canceled_by_person_id=row.get("canceled_by_person_id"),
         generation_deferred=bool(row.get("generation_deferred", False)),
         attachment_manifest=tuple(
             AttachmentRef(
@@ -1236,6 +1566,35 @@ def _same_request(left: ConsoleDraftRequest, right: ConsoleDraftRequest) -> bool
         and left.context == right.context
         and left.generation_deferred == right.generation_deferred
     )
+
+
+def _actionable_draft_error(
+    error: DraftGenerationRejected | TemplateValidationError,
+) -> tuple[str, tuple[str, ...]]:
+    message = str(error)
+    prefixes = (
+        (
+            "旅游规划必须先收集必填需求：",
+            "missing_required_fields",
+        ),
+        (
+            "附件资料不足，缺少可用证据：",
+            "missing_source_evidence",
+        ),
+    )
+    for prefix, code in prefixes:
+        if not message.startswith(prefix):
+            continue
+        fields = tuple(
+            item
+            for item in message.removeprefix(prefix).split("、")
+            if item in _SAFE_ERROR_FIELDS
+        )
+        if fields:
+            return code, fields
+    if isinstance(error, DraftCapabilityUnavailable):
+        return "search_capability_unavailable", ()
+    return "unsafe_draft", ()
 
 
 def _normalized_request_id(value: Any) -> str:

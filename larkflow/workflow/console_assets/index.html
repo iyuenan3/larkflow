@@ -205,6 +205,7 @@
                     <p id="draft-attachment-error" class="human-task-error" role="alert"></p>
                     <button id="draft-generate" class="draft-generate" type="button">确认资料并开始生成</button>
                   </div>
+                  <button id="draft-cancel" class="draft-cancel" type="button" hidden>取消本次生成</button>
                   <button id="draft-open-instance" class="draft-open-instance" type="button" hidden>查看流程并确认</button>
                 </section>
 
@@ -648,6 +649,7 @@
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <script src="/console/draft-state.js" defer></script>
     <script src="/console/app.js" defer></script>
   </body>
 </html>

@@ -5,6 +5,9 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from itertools import count
 import json
+from pathlib import Path
+import shutil
+import subprocess
 
 import pytest
 
@@ -532,6 +535,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
         "/console/?auth_error=access_denied",
     )
     script = application.handle("GET", "/console/app.js")
+    draft_state = application.handle("GET", "/console/draft-state.js")
     canvas_script = application.handle("GET", "/console/canvas.js")
     canvas_styles = application.handle("GET", "/console/canvas.css")
     styles = application.handle("GET", "/console/styles.css")
@@ -551,6 +555,7 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert "我的工作台".encode() in page.body
     assert "使用飞书身份进入".encode() in page.body
     assert script.status == 200
+    assert draft_state.status == 200
     assert b"innerHTML" not in script.body
     assert b"ensureCanvasBundle" in script.body
     assert b"LarkflowCanvas.render" in script.body
@@ -573,6 +578,8 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
     assert b"openDraftInstance" in script.body
     assert b"loadDraftAttachments" in script.body
     assert b"generateCurrentDraft" in script.body
+    assert b"cancelCurrentDraft" in script.body
+    assert b"beginDraftCompose" in script.body
     assert b"revokeDraftAttachment" in script.body
     assert b"loadAuthConfiguration" in script.body
     assert b"loadAdminOverview" in script.body
@@ -705,6 +712,60 @@ def test_console_http_assets_are_public_but_data_requires_authentication():
         "instance_owner"
     ]
     assert _json(authorized)["attention"]["total"] == 1
+
+
+def test_draft_generate_button_has_executable_idle_working_and_retry_states():
+    node_binary = shutil.which("node")
+    if node_binary is None:
+        pytest.skip("node is required for the Console state contract")
+    module_path = (
+        Path(__file__).parents[1]
+        / "larkflow/workflow/console_assets/draft_state.js"
+    )
+    probe = subprocess.run(
+        [
+            node_binary,
+            "-e",
+            (
+                "const state=require(process.argv[1]);"
+                "console.log(JSON.stringify(["
+                "state.generateButtonState({status:'collecting',busy:false,blocked:false}),"
+                "state.generateButtonState({status:'collecting',busy:true,blocked:false}),"
+                "state.generateButtonState({status:'collecting',busy:false,blocked:true})"
+                "]));"
+            ),
+            str(module_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(probe.stdout) == [
+        {"disabled": False, "label": "确认资料并开始生成"},
+        {"disabled": True, "label": "正在冻结资料清单"},
+        {"disabled": True, "label": "请先移除不可用资料"},
+    ]
+
+
+def test_start_draft_navigation_enters_clean_compose_without_deleting_history():
+    script = _application().handle("GET", "/console/app.js").body.decode("utf-8")
+    compose = script[
+        script.index("function beginDraftCompose()") : script.index(
+            "function readableBytes",
+            script.index("function beginDraftCompose()"),
+        )
+    ]
+    navigation = script[
+        script.index('draftNav.addEventListener("click"') : script.index(
+            "attentionNav.addEventListener",
+        )
+    ]
+
+    assert "state.currentDraft = null" in compose
+    assert 'el("draft-current").hidden = true' in compose
+    assert "state.draftRequests = []" not in compose
+    assert "beginDraftCompose()" in navigation
 
 
 def test_console_feishu_authentication_failures_keep_a_safe_retry_path():

@@ -1294,6 +1294,7 @@ class _CombinedDraftWorkers:
             processed=console.processed + role_binding.processed,
             rejected=console.rejected + role_binding.rejected,
             failed=console.failed + role_binding.failed,
+            canceled=console.canceled + getattr(role_binding, "canceled", 0),
             errors=tuple(console.errors) + tuple(role_binding.errors),
         )
 

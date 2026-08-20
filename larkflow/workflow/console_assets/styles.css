@@ -955,6 +955,19 @@ button { color: inherit; }
   font-weight: 700;
 }
 .draft-generate:disabled { cursor: wait; opacity: .7; }
+.draft-cancel {
+  width: 100%;
+  min-height: 42px;
+  margin-top: 12px;
+  border: 1px solid rgba(255, 122, 134, .32);
+  border-radius: 11px;
+  color: var(--danger);
+  cursor: pointer;
+  background: rgba(255, 122, 134, .08);
+  font-size: var(--font-control);
+  font-weight: 700;
+}
+.draft-cancel:disabled { cursor: wait; opacity: .7; }
 .draft-open-instance {
   width: 100%;
   min-height: 44px;

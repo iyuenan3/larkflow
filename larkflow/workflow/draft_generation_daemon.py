@@ -22,6 +22,7 @@ class DraftGenerationLoopSummary:
     processed: int = 0
     rejected: int = 0
     failed: int = 0
+    canceled: int = 0
 
 
 class DraftGenerationWorkerLoop:
@@ -57,8 +58,8 @@ class DraftGenerationWorkerLoop:
                 idle_seconds = min(self.settings.idle_max_seconds, idle_seconds * 2)
                 continue
             totals["ticks"] += 1
-            for name in ("claimed", "processed", "rejected", "failed"):
-                totals[name] += int(getattr(report, name))
+            for name in ("claimed", "processed", "rejected", "failed", "canceled"):
+                totals[name] += int(getattr(report, name, 0))
             if report.claimed or report.errors:
                 self._safe_log("draft_generation_tick", self.report_fields(report))
             if report.claimed:
@@ -81,6 +82,7 @@ class DraftGenerationWorkerLoop:
             "processed": report.processed,
             "rejected": report.rejected,
             "failed": report.failed,
+            "canceled": getattr(report, "canceled", 0),
             "errors": list(report.errors),
         }
 

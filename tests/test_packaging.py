@@ -111,6 +111,7 @@ def test_every_console_asset_is_covered_by_package_data():
         "app.js",
         "canvas.css",
         "canvas.js",
+        "draft_state.js",
         "styles.css",
     }
     for asset in assets:

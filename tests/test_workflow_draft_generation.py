@@ -706,6 +706,107 @@ def test_no_web_trip_accepts_explicitly_bound_travel_fields(source_text):
     assert len(completion.calls) == 1
 
 
+@pytest.mark.parametrize(
+    "traveler_value",
+    ("两名员工", "2名员工", "两位员工"),
+)
+def test_no_web_trip_accepts_common_chinese_employee_counts(traveler_value):
+    completion = Completion(json.dumps(no_web_trip_definition(), ensure_ascii=False))
+    source_text = (
+        "出发地：上海。出行日期：2026年9月10日。"
+        f"出行人数：{traveler_value}。旅行总预算：12000元。"
+        "景点资料包含喀纳斯和禾木，交通路线资料包含往返航班和包车段。"
+    )
+
+    DraftDefinitionGenerator(completion).generate(
+        brief="根据附件生成新疆8日旅行执行手册，不要联网",
+        context="",
+        context_bundle=attachment_context(source_text),
+    )
+
+    assert len(completion.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "traveler_value",
+    ("人数未知，可能有两名员工", "两名员工或三名员工", "零名员工"),
+)
+def test_no_web_trip_rejects_negative_ambiguous_or_zero_chinese_counts(
+    traveler_value,
+):
+    completion = Completion(json.dumps(no_web_trip_definition(), ensure_ascii=False))
+    source_text = (
+        "出发地：上海。出行日期：2026年9月10日。"
+        f"出行人数：{traveler_value}。旅行总预算：12000元。"
+        "景点资料包含喀纳斯和禾木，交通路线资料包含往返航班和包车段。"
+    )
+
+    with pytest.raises(DraftGenerationRejected) as exc_info:
+        DraftDefinitionGenerator(completion).generate(
+            brief="根据附件生成新疆8日旅行执行手册，不要联网",
+            context="",
+            context_bundle=attachment_context(source_text),
+        )
+
+    assert str(exc_info.value) == "附件资料不足，缺少可用证据：出行人数"
+    assert completion.calls == []
+
+
+@pytest.mark.parametrize("phrase", ("两名员工", "2名员工", "两位员工"))
+def test_generated_trip_shape_treats_common_employee_count_as_request_evidence(
+    phrase,
+):
+    candidate = no_web_trip_definition()
+    candidate["nodes"][0]["work"]["outputs"] = [
+        output
+        for output in candidate["nodes"][0]["work"]["outputs"]
+        if output["id"] not in {"travelers", "budget"}
+    ]
+    encoded = json.dumps(candidate, ensure_ascii=False)
+    completion = SequenceCompletion((encoded, encoded))
+    source_text = (
+        "出发地：上海。出行日期：2026年9月10日。出行人数：2人。"
+        "旅行总预算：12000元。景点资料包含喀纳斯和禾木，"
+        "交通路线资料包含往返航班和包车段。"
+    )
+
+    with pytest.raises(DraftGenerationRejected) as exc_info:
+        DraftDefinitionGenerator(completion).generate(
+            brief=f"请为{phrase}生成新疆8日旅行执行手册，不要联网",
+            context="",
+            context_bundle=attachment_context(source_text),
+        )
+
+    assert str(exc_info.value) == "旅游规划必须先收集必填需求：预算"
+    assert len(completion.calls) == 2
+
+
+@pytest.mark.parametrize("phrase", ("两名员工或三名员工", "人数未知，可能有两名员工"))
+def test_generated_trip_shape_rejects_ambiguous_or_negated_request_count(phrase):
+    candidate = no_web_trip_definition()
+    candidate["nodes"][0]["work"]["outputs"] = [
+        output
+        for output in candidate["nodes"][0]["work"]["outputs"]
+        if output["id"] != "travelers"
+    ]
+    encoded = json.dumps(candidate, ensure_ascii=False)
+    completion = SequenceCompletion((encoded, encoded))
+
+    with pytest.raises(DraftGenerationRejected) as exc_info:
+        DraftDefinitionGenerator(completion).generate(
+            brief=f"请为{phrase}生成新疆8日旅行执行手册，不要联网",
+            context="",
+            context_bundle=attachment_context(
+                "出发地：上海。出行日期：2026年9月10日。出行人数：2人。"
+                "旅行总预算：12000元。景点资料包含喀纳斯和禾木，"
+                "交通路线资料包含往返航班和包车段。"
+            ),
+        )
+
+    assert str(exc_info.value) == "旅游规划必须先收集必填需求：出行人数"
+    assert len(completion.calls) == 2
+
+
 def test_attachment_travel_intent_cannot_be_hidden_by_renaming_the_manual():
     completion = Completion(json.dumps(no_web_trip_definition()))
     bundle = attachment_context("新疆旅游路线和景点资料，但缺少日期、人数、预算和交通。")

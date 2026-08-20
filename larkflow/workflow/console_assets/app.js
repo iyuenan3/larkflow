@@ -66,6 +66,9 @@ const state = {
   humanTasks: [],
   draftRequests: [],
   currentDraft: null,
+  draftComposeMode: false,
+  draftGenerateBusy: false,
+  draftCancelBusy: false,
   draftAttachments: [],
   autoOpenDraftId: null,
   activeTask: null,
@@ -418,6 +421,7 @@ const DRAFT_STATUS = {
   ready: "待确认",
   rejected: "需要调整",
   failed: "生成失败",
+  canceled: "已取消",
 };
 
 const DRAFT_STARTERS = {
@@ -450,7 +454,7 @@ function syncDraftRequests(requests) {
   if (current) {
     state.currentDraft = current;
     renderCurrentDraft(current);
-  } else if (!state.currentDraft && active) {
+  } else if (!state.currentDraft && active && !state.draftComposeMode) {
     state.currentDraft = active;
     renderCurrentDraft(active);
     if (active.status === "collecting") loadDraftAttachments(active.id).catch(showWorkspaceError);
@@ -479,6 +483,7 @@ function renderDraftRequests() {
   const open = node("button", "", resumable.brief || "未命名草稿请求");
   open.type = "button";
   open.addEventListener("click", () => {
+    state.draftComposeMode = false;
     state.currentDraft = resumable;
     renderCurrentDraft(resumable);
     renderDraftRequests();
@@ -511,10 +516,16 @@ function renderCurrentDraft(requestItem) {
       ? "资料已暂存，等待你确认"
     : requestItem.status === "rejected"
       ? "当前描述需要调整"
-      : requestItem.status === "failed"
+    : requestItem.status === "failed"
         ? "本次生成没有完成"
+      : requestItem.status === "canceled"
+        ? "本次生成已取消"
         : "AI 正在准备候选流程";
   el("draft-current-message").textContent = requestItem.message;
+  const cancel = el("draft-cancel");
+  cancel.hidden = !requestItem.can_cancel;
+  cancel.disabled = state.draftCancelBusy;
+  cancel.textContent = state.draftCancelBusy ? "正在取消" : "取消本次生成";
   const open = el("draft-open-instance");
   open.hidden = requestItem.status !== "ready" || !requestItem.instance_id;
   open.disabled = false;
@@ -529,6 +540,38 @@ function renderCurrentDraft(requestItem) {
   const attachmentPanel = el("draft-attachment-panel");
   attachmentPanel.hidden = requestItem.status !== "collecting";
   if (requestItem.status === "collecting") renderDraftAttachments();
+}
+
+function beginDraftCompose() {
+  clearTimeout(pollDraftRequest.timer);
+  state.draftComposeMode = true;
+  state.currentDraft = null;
+  state.autoOpenDraftId = null;
+  state.draftAttachments = [];
+  state.selectedKnowledgeSourceIds = new Set();
+  state.unavailableKnowledgeSelections = [];
+  state.knowledgeSelectionVersion = 0;
+  state.draftGenerateBusy = false;
+  state.draftCancelBusy = false;
+  el("draft-current").hidden = true;
+  el("draft-brief").value = "";
+  el("draft-context").value = "";
+  el("draft-attachments").value = "";
+  el("draft-brief-count").textContent = "0";
+  el("draft-context-count").textContent = "0";
+  el("draft-form-error").textContent = "";
+  el("draft-attachment-error").textContent = "";
+  el("draft-attachment-selection").textContent = "未选择附件。无附件时仍按原方式直接生成。";
+  const submit = el("draft-submit");
+  submit.disabled = false;
+  submit.dataset.state = "idle";
+  submit.textContent = "生成流程草稿";
+  document.querySelectorAll("[data-draft-starter]").forEach((button) => {
+    button.dataset.active = "false";
+  });
+  renderKnowledgeCandidates();
+  renderDraftRequests();
+  el("draft-brief").focus();
 }
 
 function readableBytes(value) {
@@ -577,7 +620,14 @@ function renderDraftAttachments() {
   saveKnowledge.hidden = !state.enterpriseKnowledgeSelectionEnabled;
   saveKnowledge.disabled = false;
   saveKnowledge.textContent = "保存企业资料选择";
-  el("draft-generate").disabled = state.unavailableKnowledgeSelections.length > 0;
+  const generateState = LarkflowDraftState.generateButtonState({
+    status: state.currentDraft?.status,
+    busy: state.draftGenerateBusy,
+    blocked: state.unavailableKnowledgeSelections.length > 0,
+  });
+  const generate = el("draft-generate");
+  generate.disabled = generateState.disabled;
+  generate.textContent = generateState.label;
 }
 
 function renderKnowledgeCandidates() {
@@ -699,15 +749,18 @@ async function revokeDraftAttachment(attachmentId) {
 }
 
 async function generateCurrentDraft() {
-  if (!state.currentDraft?.id || state.currentDraft.status !== "collecting") return;
-  const button = el("draft-generate");
+  if (
+    state.draftGenerateBusy
+    || !state.currentDraft?.id
+    || state.currentDraft.status !== "collecting"
+  ) return;
   const errorNode = el("draft-attachment-error");
-  button.disabled = true;
-  button.textContent = "正在冻结资料清单";
+  state.draftGenerateBusy = true;
+  renderDraftAttachments();
   errorNode.textContent = "";
   if (state.unavailableKnowledgeSelections.length) {
-    button.disabled = true;
-    button.textContent = "请先移除不可用资料";
+    state.draftGenerateBusy = false;
+    renderDraftAttachments();
     errorNode.textContent = "已选企业资料中有内容已撤销或不再可用，请取消选择并保存。";
     return;
   }
@@ -716,13 +769,41 @@ async function generateCurrentDraft() {
       `/console/api/v1/drafts/${encodeURIComponent(state.currentDraft.id)}/generate`,
       { method: "POST" },
     );
+    state.draftGenerateBusy = false;
     state.currentDraft = { ...state.currentDraft, ...payload.request, message: "已进入生成队列" };
     renderCurrentDraft(state.currentDraft);
     pollDraftRequest(state.currentDraft.id);
   } catch (error) {
-    button.disabled = false;
-    button.textContent = "确认资料并开始生成";
+    state.draftGenerateBusy = false;
+    renderDraftAttachments();
     errorNode.textContent = error.message || "资料清单没有冻结，请重试。";
+  }
+}
+
+async function cancelCurrentDraft() {
+  if (
+    state.draftCancelBusy
+    || !state.currentDraft?.id
+    || !state.currentDraft.can_cancel
+  ) return;
+  state.draftCancelBusy = true;
+  renderCurrentDraft(state.currentDraft);
+  try {
+    const payload = await request(
+      `/console/api/v1/drafts/${encodeURIComponent(state.currentDraft.id)}/cancel`,
+      { method: "POST" },
+    );
+    state.currentDraft = payload.request;
+    const existing = state.draftRequests.findIndex((item) => item.id === payload.request.id);
+    if (existing >= 0) state.draftRequests.splice(existing, 1, payload.request);
+    state.draftCancelBusy = false;
+    renderCurrentDraft(payload.request);
+    renderDraftRequests();
+    showToast("本次生成已取消，历史记录仍然保留");
+  } catch (error) {
+    state.draftCancelBusy = false;
+    renderCurrentDraft(state.currentDraft);
+    showToast(error.message || "没有取消成功，请重试", "error");
   }
 }
 
@@ -826,6 +907,7 @@ async function submitDraftRequest(event) {
   const deferred = selectedFiles.length > 0 || selectedKnowledge.length > 0;
   button.textContent = deferred ? "正在创建资料工作区" : "正在进入生成队列";
   state.autoOpenDraftId = requestId;
+  state.draftComposeMode = false;
   const optimistic = {
     id: requestId,
     status: deferred ? "collecting" : "queued",
@@ -3074,6 +3156,7 @@ feishuLogin.addEventListener("click", beginFeishuLogin);
 
 draftNav.addEventListener("click", () => {
   showOwnerSection("drafts");
+  beginDraftCompose();
   loadDraftCollaborators().catch(showWorkspaceError);
 });
 attentionNav.addEventListener("click", () => showOwnerSection("attention"));
@@ -3084,6 +3167,7 @@ workflowNav.addEventListener("click", () => {
 el("detail-back").addEventListener("click", () => showOwnerSection(state.returnSection));
 el("draft-form").addEventListener("submit", submitDraftRequest);
 el("draft-generate").addEventListener("click", generateCurrentDraft);
+el("draft-cancel").addEventListener("click", cancelCurrentDraft);
 el("draft-knowledge-save").addEventListener("click", saveCurrentKnowledgeSelection);
 el("draft-attachments").addEventListener("change", (event) => {
   const files = Array.from(event.target.files || []);

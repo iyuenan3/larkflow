@@ -111,6 +111,7 @@ def test_packaged_migration_contains_required_tables_and_guards():
         "0026_enterprise_knowledge_content_authorization",
         "0027_console_enterprise_knowledge_selection",
         "0028_console_enterprise_source_uniqueness",
+        "0029_console_draft_cancellation",
     ]
     sql = migrations[0][1]
     for table in (
@@ -145,6 +146,10 @@ def test_packaged_migration_contains_required_tables_and_guards():
     ]
     assert "COUNT(DISTINCT source_id)" in uniqueness_sql
     assert "DROP CONSTRAINT workflow_console_draft_enterprise_selection_array" in uniqueness_sql
+    cancellation_sql = dict(migrations)["0029_console_draft_cancellation"]
+    assert "'canceled'" in cancellation_sql
+    assert "public_error_fields jsonb" in cancellation_sql
+    assert "canceled_by_person_id text" in cancellation_sql
     assert "CREATE TABLE workflow_inbox_events" in migrations[2][1]
     assert "CREATE TABLE workflow_console_draft_requests" in migrations[22][1]
     assert "workflow_console_draft_worker_wakeup" in migrations[22][1]

@@ -30,6 +30,7 @@ from larkflow.workflow import (
     IMCommandSignal,
     IMMention,
     InvalidInboxClaimError,
+    InvalidConsoleDraftClaimError,
     NodeRunner,
     NodeSpec,
     NodeStatus,
@@ -218,7 +219,7 @@ def test_postgres_admin_overview_reads_all_tenant_scoped_operational_lanes():
     }
     assert all(lane.total == 0 for lane in snapshot.queue_lanes)
     assert snapshot.applied_migrations[-1] == (
-        "0027_console_enterprise_knowledge_selection"
+        "0029_console_draft_cancellation"
     )
 
 
@@ -304,6 +305,8 @@ def test_postgres_console_draft_restores_internal_failure_classification():
         request_id,
         claim_token=claim.claim_token,
         error="DraftCapabilityUnavailable: citation search is unavailable",
+        public_error_code="search_capability_unavailable",
+        public_error_fields=(),
         now=now,
     )
 
@@ -317,6 +320,83 @@ def test_postgres_console_draft_restores_internal_failure_classification():
     assert restored.last_error == (
         "DraftCapabilityUnavailable: citation search is unavailable"
     )
+    assert restored.public_error_code == "search_capability_unavailable"
+
+
+def test_postgres_console_draft_cancel_invalidates_claim_and_late_result():
+    assert POSTGRES_DSN is not None
+    connection_factory = postgres_connection_factory(POSTGRES_DSN)
+    apply_migrations(connection_factory)
+    suffix = uuid4().hex
+    tenant_id = f"tenant_console_cancel_{suffix}"
+    request_id = uuid4().hex
+    owner_id = f"person_owner_{suffix}"
+    now = datetime(2026, 8, 20, 10, 0, tzinfo=timezone.utc)
+    repository = PostgresConsoleDraftRepository(connection_factory)
+    repository.create(
+        ConsoleDraftRequest(
+            id=request_id,
+            tenant_id=tenant_id,
+            requester_person_id=owner_id,
+            collaborator_person_id=owner_id,
+            brief="Generate a bounded workflow",
+            context="",
+            status="pending",
+            attempt_count=0,
+            available_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    claim = repository.claim(
+        tenant_id,
+        worker_id="draft-cancel-worker",
+        now=now,
+        limit=1,
+        claim_ttl=timedelta(minutes=7),
+    )[0]
+    cancellation_complete = Event()
+
+    def late_write():
+        assert cancellation_complete.wait(timeout=5)
+        with pytest.raises(InvalidConsoleDraftClaimError):
+            repository.save_candidate(
+                tenant_id,
+                request_id,
+                claim_token=claim.claim_token,
+                definition={"schema_version": "0.2"},
+                now=now + timedelta(seconds=2),
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        late = pool.submit(late_write)
+        canceled = repository.cancel(
+            tenant_id,
+            request_id,
+            requester_person_id=owner_id,
+            now=now + timedelta(seconds=1),
+        )
+        cancellation_complete.set()
+        late.result()
+
+    replay = repository.cancel(
+        tenant_id,
+        request_id,
+        requester_person_id=owner_id,
+        now=now + timedelta(seconds=3),
+    )
+
+    assert canceled.status == replay.status == "canceled"
+    assert canceled.definition is None
+    assert canceled.canceled_at == now + timedelta(seconds=1)
+    assert canceled.canceled_by_person_id == owner_id
+    assert repository.claim(
+        tenant_id,
+        worker_id="another-worker",
+        now=now + timedelta(minutes=10),
+        limit=1,
+        claim_ttl=timedelta(minutes=7),
+    ) == ()
 
 
 def test_postgres_console_attachment_contract_matches_owner_scoped_freeze():

@@ -566,8 +566,6 @@ def test_interactive_settings_enforce_one_claim_per_replica(monkeypatch):
                 "LARKFLOW_TARGET_INTERACTIVE_CLAIM_LIMIT": "2",
             }
         )
-
-
 def test_interactive_progress_lane_runs_before_the_terminal_reply_lane():
     order = []
 
@@ -624,7 +622,7 @@ def test_draft_generation_settings_are_single_claim_and_independent(monkeypatch)
     assert settings.claim_ttl == timedelta(seconds=700)
     assert settings.claim_limit == 1
     assert settings.claim_safety == timedelta(seconds=40)
-    assert settings.max_attempts == 5
+    assert settings.max_attempts == 2
     assert settings.loop == WorkerLoopSettings(0.5, 2.0)
     assert settings.attachment_blob_root == "/tmp/larkflow-attachments"
     assert settings.attachment_model_egress_policy == "allow"
@@ -639,6 +637,14 @@ def test_draft_generation_settings_are_single_claim_and_independent(monkeypatch)
                 "LARKFLOW_TARGET_DSN": "postgresql:///larkflow_target_dev",
                 "LARKFLOW_TARGET_TENANT": "dev",
                 "LARKFLOW_TARGET_DRAFT_CLAIM_LIMIT": "2",
+            }
+        )
+    with pytest.raises(ValueError, match="max_attempts must be 2"):
+        TargetDraftGenerationSettings.from_environ(
+            {
+                "LARKFLOW_TARGET_DSN": "postgresql:///larkflow_target_dev",
+                "LARKFLOW_TARGET_TENANT": "dev",
+                "LARKFLOW_TARGET_DRAFT_MAX_ATTEMPTS": "5",
             }
         )
     with pytest.raises(ValueError, match="blob root must be absolute"):

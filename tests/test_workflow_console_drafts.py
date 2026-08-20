@@ -156,6 +156,24 @@ class SearchUnavailableDraftGenerator:
         )
 
 
+class MissingTravelFieldsDraftGenerator:
+    def generate(self, **kwargs):
+        del kwargs
+        raise DraftGenerationRejected(
+            "旅游规划必须先收集必填需求：出行人数、预算"
+        )
+
+
+class CancelDuringGeneration:
+    def __init__(self, drafts):
+        self.drafts = drafts
+
+    def generate(self, **kwargs):
+        del kwargs
+        self.drafts.cancel(principal(), REQUEST_ID)
+        return definition()
+
+
 class Directory:
     def __init__(self, people=(OWNER, COLLABORATOR)):
         self.people = set(people)
@@ -477,6 +495,30 @@ def test_search_capability_rejection_returns_actionable_public_guidance():
     )
 
 
+def test_missing_fields_are_safe_structured_and_actionable_in_public_dto():
+    draft_repository, drafts = queued_service(directory=Directory())
+    create_request(drafts)
+    worker = ConsoleDraftWorker(
+        draft_repository,
+        WorkflowService(InMemoryWorkflowRepository(), clock=lambda: NOW),
+        MissingTravelFieldsDraftGenerator(),
+        tenant_id=TENANT,
+        worker_id="worker",
+        clock=lambda: NOW,
+    )
+
+    assert worker.run_once().rejected == 1
+    payload = drafts.get(principal(), REQUEST_ID)["request"]
+
+    assert payload["status"] == "rejected"
+    assert payload["message"] == "还缺少：出行人数、预算。补充后可重新生成。"
+    assert payload["actionable_error"] == {
+        "code": "missing_required_fields",
+        "fields": ["出行人数", "预算"],
+    }
+    assert "DraftGenerationRejected" not in json.dumps(payload, ensure_ascii=False)
+
+
 def test_infrastructure_failure_retries_then_reaches_bounded_terminal_state():
     clock = Clock()
     draft_repository, drafts = queued_service(directory=Directory(), clock=clock)
@@ -503,6 +545,81 @@ def test_infrastructure_failure_retries_then_reaches_bounded_terminal_state():
     assert second.failed == 1
     assert drafts.get(principal(), REQUEST_ID)["request"]["status"] == "failed"
     assert worker.run_once().claimed == 0
+
+
+def test_retry_progress_exposes_bounded_attempt_without_internal_error():
+    clock = Clock()
+    draft_repository, drafts = queued_service(directory=Directory(), clock=clock)
+    create_request(drafts)
+    worker = ConsoleDraftWorker(
+        draft_repository,
+        WorkflowService(InMemoryWorkflowRepository(), clock=clock),
+        Completion(error=RuntimeError("private provider detail")),
+        tenant_id=TENANT,
+        worker_id="worker",
+        clock=clock,
+        retry_base=timedelta(seconds=1),
+        retry_max=timedelta(seconds=1),
+        max_attempts=2,
+    )
+
+    worker.run_once()
+    payload = drafts.get(principal(), REQUEST_ID)["request"]
+
+    assert payload["status"] == "retrying"
+    assert payload["attempt"] == {"current": 1, "max": 2}
+    assert payload["can_cancel"] is True
+    assert "1/2" in payload["message"]
+    assert "provider" not in json.dumps(payload)
+
+
+def test_owner_cancel_is_durable_idempotent_and_late_generation_is_discarded():
+    draft_repository, drafts = queued_service(directory=Directory())
+    create_request(drafts)
+    workflows = InMemoryWorkflowRepository()
+    worker = ConsoleDraftWorker(
+        draft_repository,
+        WorkflowService(workflows, clock=lambda: NOW),
+        CancelDuringGeneration(drafts),
+        tenant_id=TENANT,
+        worker_id="worker",
+        clock=lambda: NOW,
+    )
+
+    report = worker.run_once()
+    first = drafts.get(principal(), REQUEST_ID)["request"]
+    replay = drafts.cancel(principal(), REQUEST_ID)["request"]
+
+    assert report.canceled == 1
+    assert report.processed == report.failed == report.rejected == 0
+    assert first == replay
+    assert first["status"] == "canceled"
+    assert first["can_cancel"] is False
+    assert "已取消" in first["message"]
+    with pytest.raises(InstanceNotFoundError):
+        workflows.get(TENANT, f"console_draft_{REQUEST_ID}")
+    stored = draft_repository.get_for_owner(
+        TENANT,
+        REQUEST_ID,
+        requester_person_id=OWNER,
+    )
+    assert stored.canceled_at == NOW
+    assert stored.canceled_by_person_id == OWNER
+
+
+def test_cancel_is_owner_only_and_ready_requests_cannot_be_rewritten():
+    repository, drafts = queued_service(directory=Directory())
+    create_request(drafts)
+    with pytest.raises(ConsoleDraftNotFoundError):
+        drafts.cancel(principal("person_foreign"), REQUEST_ID)
+    drafts.cancel(principal(), REQUEST_ID)
+    assert repository.claim(
+        TENANT,
+        worker_id="worker",
+        now=NOW,
+        limit=1,
+        claim_ttl=timedelta(minutes=1),
+    ) == ()
 
 
 def test_console_http_creates_and_reads_only_the_authenticated_owners_request():
@@ -556,6 +673,65 @@ def test_console_http_creates_and_reads_only_the_authenticated_owners_request():
         REQUEST_ID,
         requester_person_id=OWNER,
     ).brief == "Generate a release summary"
+
+
+def test_console_http_owner_can_cancel_without_exposing_identity():
+    _repository, draft_service = queued_service(directory=Directory())
+    create_request(draft_service)
+    application = ConsoleHttpApplication(
+        ConsoleReadService(InMemoryWorkflowRepository()),
+        StaticConsoleAuthenticator(TOKEN, principal()),
+        draft_service=draft_service,
+    )
+
+    canceled = application.handle(
+        "POST",
+        f"/console/api/v1/drafts/{REQUEST_ID}/cancel",
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Length": "0",
+            "X-Larkflow-Console-Action": "workflow-action-v1",
+        },
+        body=b"",
+    )
+
+    assert canceled.status == 200
+    payload = json.loads(canceled.body)["request"]
+    assert payload["status"] == "canceled"
+    assert payload["can_cancel"] is False
+    assert OWNER not in canceled.body.decode()
+
+
+def test_console_http_cancel_hides_request_from_non_owner_and_other_tenant():
+    _repository, draft_service = queued_service(directory=Directory())
+    create_request(draft_service)
+    cancel_path = f"/console/api/v1/drafts/{REQUEST_ID}/cancel"
+    headers = {
+        "Authorization": f"Bearer {TOKEN}",
+        "Content-Length": "0",
+        "X-Larkflow-Console-Action": "workflow-action-v1",
+    }
+
+    for foreign_principal in (
+        ConsolePrincipal(TENANT, "person_foreign"),
+        ConsolePrincipal("tenant_foreign", OWNER),
+    ):
+        application = ConsoleHttpApplication(
+            ConsoleReadService(InMemoryWorkflowRepository()),
+            StaticConsoleAuthenticator(TOKEN, foreign_principal),
+            draft_service=draft_service,
+        )
+
+        response = application.handle(
+            "POST",
+            cancel_path,
+            headers=headers,
+            body=b"",
+        )
+
+        assert response.status == 404
+
+    assert draft_service.get(principal(), REQUEST_ID)["request"]["status"] == "queued"
 
 
 @pytest.mark.parametrize(

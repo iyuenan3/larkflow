@@ -112,8 +112,11 @@ def test_draft_generator_is_credential_free_and_uses_a_two_call_lease():
     assert "generate-drafts" in unit
     assert "lark-cli" not in unit
     assert int(environment["LARKFLOW_TARGET_DRAFT_CLAIM_LIMIT"]) == 1
+    assert int(environment["LARKFLOW_TARGET_DRAFT_MAX_ATTEMPTS"]) == 2
+    assert int(environment["LARKFLOW_TARGET_DRAFT_RETRY_MAX_SECONDS"]) == 10
     assert int(environment["LARKFLOW_TARGET_DRAFT_CLAIM_TTL_SECONDS"]) > (
-        2 * 240 + int(environment["LARKFLOW_TARGET_DRAFT_CLAIM_SAFETY_SECONDS"])
+        2 * 2 * 90
+        + int(environment["LARKFLOW_TARGET_DRAFT_CLAIM_SAFETY_SECONDS"])
     )
 
 
