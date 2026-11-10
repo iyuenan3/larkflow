@@ -1,6 +1,10 @@
 # larkflow · 飞流 · AIREADME
 
-> 飞书原生的企业协作与 Agent 工作流控制平面，把项目目标变成可确认、可执行、可返工和可追溯的 DAG。生命周期：active development。
+> **已归档（2026-11-10）**：按用户决定，完整本地目录已迁至 `Projects/.archive/larkflow-2026-11-10/`，保留代码、Git 历史、现有未提交内容及本地环境。下方产品、开发和验收说明按归档前历史阅读，恢复开发或部署须由用户重新明确决定。
+
+> 飞书原生的企业协作与 Agent 工作流控制平面，把项目目标变成可确认、可执行、可返工和可追溯的 DAG。生命周期：archived。
+
+暂停第一阶段记录（2026-10-31，服务器恢复归档在同日后续清理中已删除）：用户暂停项目，alicloud-sh 开发部署已下线。应用服务、定时任务、公网入口和专用 PostgreSQL 均已停止并取消自动启动；部署归档与恢复边界见 [DEPLOYMENT.md](DEPLOYMENT.md)。下方实现与验收记录描述暂停前的能力，不表示服务当前在线。
 
 当前产品处于开发试用阶段，不是生产就绪版本。Target 中央工作流、飞书责任投影和员工工作台已经形成可运行闭环；`PlannerRuntime` 与 `AgentRuntime` 基线端口已落码并部署到开发环境。项目级 UTF-8 txt/md 上传参与 DAG 规划已完成真实 PostgreSQL、Caddy、migration、服务端部署和 Owner 作用域 HTTPS API 验收；完整附件加明确 no-web 的新疆 8 日流程已经走完 Human、Agent、Human 决定闭环。No-web 旅游候选图现在必须把包含完整来源交付物的 Human 根节点直接连到被复核 Agent，并以可解析的正向出发地、日期、人数、预算、景点和交通证据做 fail-closed 校验，旁路根节点或“待定、未确认、没有”类否定文本不能放行；日期、人数和总预算还必须绑定到对应业务字段，无关的资料更新时间、酒店限住人数或酒店单项预算不能替代未确认的出行参数。日期标签还必须经过明确赋值边界，复合字段名和说明文字中的资料更新时间不能借用“出行日期”前缀放行。Agent 完成性同时校验供应商结束原因、结构化完成标记、验收证据锚点和服务端长度上限，任一条件失败都以 `agent_result_incomplete` 结束 Automated Attempt。薄 Python 豆包 `SearchProvider`、静态 capability preflight 和规范化来源证据已部署，开发环境真实公开查询回读 10 条带 URL 的来源与 provider request ID。来源质量内容提交 `fba57583af164d5a39077d7979b751e604cc3382` 已部署，增加 URL 结构、health、freshness、authority 与 support 分层状态，并用 `source_evidence.check` 把 claim 绑定到当前搜索 Attempt 的规范 URL 与 provider 原文片段；生产 `SafeOutboundFetcher` 保持 unavailable，不会直接抓取任意返回 URL，安装态 synthetic 探针确认 health 为 unknown、伪造片段被拒绝且语义真实性仍未独立验证。新建文本交付物已统一为飞书原生 Docx，并完成真实创建、同一 document_id 覆盖、正文和原生标题、列表、表格回读。Phase 2B 的项目附件 Agent Attempt 上下文也已部署：只有显式声明服务器拥有输入的 Agent 节点，才会在 tenant、Instance、Node、Attempt 和外发策略复验后获得有界正文与短时只读能力信封，Attempt 只持久化安全 manifest、fingerprint 和运行证据，不保存正文、object key、claim 或凭据；一次性真实 PostgreSQL 合同与安装态 synthetic Runtime 探针已通过。企业共享正文、ContextBundle 和 Console 显式资料选择均已部署：发起人只在 collecting 草稿中选择 source，服务端于生成边界冻结精确版本，重试不漂移，撤销继续阻断新的 Planner 与 Agent Context。真实管理员浏览器发布、显式选择页面和真实内部资料验收仍待手工完成。Tool Gateway、生产对象存储、PDF/DOCX/OCR、语义检索和向量检索继续后置，Personal Agent Edge 已暂停。最新实现与验收历史只记录在 [CHANGELOG.md](CHANGELOG.md)，当前推进边界见 [ROADMAP.md](ROADMAP.md)。
 
@@ -26,6 +30,9 @@ last-synced: 83d6cfa71d7aa0d01227cedbce6989fe630b3548 · 2026-08-21
 
 既有设计的范围取舍见 [`research/design-simplification.md`](../research/design-simplification.md)。
 
+
+本次只更新归档状态与引用边界，保留既有内容审阅锚点，不代表重跑业务验收；原实现与历史证据继续留档。
+
 ## 状态
 
 | 文件 | 状态 | 摘要 |
@@ -36,9 +43,9 @@ last-synced: 83d6cfa71d7aa0d01227cedbce6989fe630b3548 · 2026-08-21
 | DAG_TEMPLATE_SPEC | ✅ | DAG Contract v0.2 与模板边界 |
 | ARCHITECTURE | ✅ | Target 组件、知识边界、可替换 Runtime、数据权威与实现差距 |
 | RELATIONS | ✅ | 飞书、企业资料、Pi、DSH、暂停 Edge 与外部依赖 |
-| ROADMAP | ✅ | Now、Next、Later 与明确搁置项 |
+| ROADMAP | ✅ | 归档前计划冻结保留，现状以归档决定为准 |
 | SPEC | ✅ | Target 与 legacy 的 CLI、HTTP、事件和数据契约 |
-| DEPLOYMENT | ✅ | 开发环境服务、迁移、备份、回滚和安全边界 |
+| DEPLOYMENT | ✅ | 本地已归档，上海原部署与服务器恢复归档已清理；保留两阶段历史及重新部署边界 |
 | CONVENTIONS | ✅ | 命名、状态、安全、文档治理和提交约定 |
 | DECISIONS | ✅ | Append-only ADR 历史 |
 | CHANGELOG | ✅ | Append-only 实现、发布和验收里程碑 |

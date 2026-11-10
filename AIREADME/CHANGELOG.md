@@ -1,5 +1,17 @@
 # CHANGELOG · larkflow
 
+## 2026-11-10 · 项目归档
+
+- 按用户决定将完整本地目录迁入 `Projects/.archive/larkflow-2026-11-10/`，迁移前后内容哈希、目录、符号链接、权限和 Git 历史核验一致。
+- 更新 AGENTS、生命周期、依赖、运行边界与历史规划标记，保留已有实现和验收记录；没有修改功能代码或执行业务写入。
+- 仓库外项目身份标为 `archived`，停止默认记忆召回，历史正文保留。
+- 补清 2026-10-31 先停用、后清理服务器恢复归档的两阶段状态，原有未提交文档与 `.DS_Store` 保留；本轮没有删除服务器或飞书数据。
+
+## 2026-10-31 · 项目暂停与开发部署下线
+
+- Changed：按用户要求暂停项目，停止并取消 alicloud-sh 上十个应用服务、两个专属定时任务，以及本项目独占的 Caddy 与 PostgreSQL 自动启动。
+- Removed：活动部署路径、专属服务注册、运维脚本、env 与公网代理配置已从原位置移至受限可恢复归档。数据库、证书、备份、业务历史与飞书资源继续保留。归档清单、验证结果与恢复入口统一记录在 [DEPLOYMENT.md](DEPLOYMENT.md)。
+
 ## v0.94.3-draft · 2026-08-21 · 复合交通查询真实流程验收通过
 
 - Accepted：真实参与者通过 Computer Use 复核并接受实例 `console_draft_cc16a99b9b79e282488ec8453658e8e2` 的 `review_travel_plan` Attempt 3。PostgreSQL 随后回读实例为 `done / version 20 / 5 of 5`，当前决定为 `accepted`；最终两条审计依次为 `node.human_decision_accepted / aggregate_version 20` 与 `instance.completed / aggregate_version 20`。本条更新 v0.94.2 中“等待人工”的阶段状态，不改写下方历史记录。

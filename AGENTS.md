@@ -1,5 +1,7 @@
 # Repository Guidelines
 
+> **已归档（2026-11-10）**：按用户决定，完整本地目录已迁至 `Projects/.archive/larkflow-2026-11-10/`，保留代码、Git 历史、现有未提交内容及本地环境。下方产品、开发和验收说明按归档前历史阅读，恢复开发或部署须由用户重新明确决定。
+
 ## Project Structure & Module Organization
 
 `larkflow/` is the Python package. Orchestration lives in `engine/`, workflow contracts in `model/`, Lark adapters in `io/`, and model routing in `llm/`. Business workflows belong in `larkflow/templates/*.yaml`, not new Python executor types. Tests live in `tests/`; deployment assets live in `deploy/`.

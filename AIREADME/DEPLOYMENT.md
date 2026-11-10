@@ -1,5 +1,23 @@
 # DEPLOYMENT · larkflow
 
+## 当前状态：本地项目已归档（2026-11-10）
+
+- 用户决定将完整本地仓库迁入 `Projects/.archive/larkflow-2026-11-10/`。代码、Git 历史、本地配置与虚拟环境保留，原有四份未提交停机文档也随目录保留。
+- 2026-10-31 分为两阶段：先可恢复停用，随后用户要求清理原服务器业务。后续记录确认应用、数据库、备份、证书与 `/srv/larkflow-retired` 恢复归档均已删除，因此不能再按早期 manifest 或 RESTORE.txt 恢复服务器。下方暂停记录保留原时点事实。
+- 2026-11-10 仅只读复核原宿主：`/srv/larkflow`、`/srv/larkflow-retired`、`/var/backups/larkflow-postgres` 均不存在，未发现 larkflow 运行单元或服务注册文件。本机也未发现项目服务进程或登录启动项；本次没有停止、删除或修改服务器上的其他业务。
+- 飞书历史资源沿用原保留决定，本轮没有连接飞书重验。恢复开发或重新部署需用户明确决定，并重新确定宿主、数据来源与凭据，不能把本地源代码留存等同于可恢复旧服务器数据。
+
+
+## 历史第一阶段：可恢复停用（2026-10-31，后续清理已取代恢复前提）
+
+- 用户暂停项目。alicloud-sh 上十个应用服务、证书续期与数据库备份两个定时任务均已停止并移除 systemd 注册文件和开机启动链接。专供本项目的 Caddy 与 PostgreSQL 14-main 均已停止并 disabled，PostgreSQL `start.conf` 改为 `manual`。软件包和数据库角色保留。
+- 57 个部署路径已可恢复移动到 `/srv/larkflow-retired/20261031_164401/original/`，包括 `/srv/larkflow`、专属 units/drop-ins、env 配置、运维脚本、Caddy 配置和本项目证书续期配置。归档父目录和本轮目录均为 `root:root 0700`；`manifest.json` 保存原始路径与归档路径，`service-baseline.json` 保存停用前状态，`RESTORE.txt` 保存恢复提示，原始 PostgreSQL `start.conf` 也已留存。
+- PostgreSQL 数据文件、角色、现有 `/var/backups/larkflow-postgres` 备份、TLS 证书及飞书历史资源均未删除。归档约 634 MB，原应用路径 `/srv/larkflow` 已不存在。服务停止后目标库应用连接为 0，随后才停止数据库。
+- 真实回读：没有 larkflow 应用进程或定时任务；80、443、2019、5432、8765、8780 均无监听；公网 Console 连接被拒绝；SSH 正常。归档未释放同机磁盘空间，用于保留恢复能力。
+- 恢复必须先重新获得用户授权。核对主机现状，按 manifest 恢复原路径和 PostgreSQL start.conf，再 daemon-reload；评估凭据、证书有效期和耐久队列后，按需启用服务。不要直接运行旧统一重启脚本，否则可能恢复模型调用与飞书投影。
+
+## 暂停前部署记录
+
 - 2026-08-21 真实 Human Gate 与完成投影已验收。实例 `console_draft_cc16a99b9b79e282488ec8453658e8e2` 为 `done / version 20 / 5 of 5`，`review_travel_plan` Attempt 3 已由真实参与者接受；最后两条领域审计为 `node.human_decision_accepted` 与 `instance.completed`，聚合版本均为 20。关联 outbox 共 19 条，全部 published；最终 `feishu_document` 投影绑定 Docx `HcNfdT2oaolOI3xa9HzcK8ERnid`。bot 只读回查 revision 5 和五节点目录成功，飞书任务助手与 larkflow 卡片的可见终态由 Computer Use 人工验收确认。本条没有再次替换 wheel 或重启服务，继续使用下方 v0.94.2 部署件。
 
 - 2026-08-20 交通复合约束实体绑定已部署。内容提交为 `83d6cfa71d7aa0d01227cedbce6989fe630b3548`，wheel SHA-256 为 `95d5ecb72098ae1b1fe2f24059efb86903ef4d3288ccc38e9877f69f6cc913c5`，保存在 `/srv/larkflow/target/releases/transport_query_20260820_233615_83d6cfa/`。Target 与 legacy 安装态 `workflow/executors.py` 哈希均为 `b6ddee117df16ba05197958d532c35b08d175546595be6408bf30c74ad922ab7`，两个 venv 的 `pip check` 通过；migration 重入为空，长期库保持 `29 / 0029_console_draft_cancellation`。
